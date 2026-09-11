@@ -150,7 +150,9 @@ Trino is the next intended source. ODBC or ADBC may become additional connector 
 
 ## Recommended next steps
 
-These are proposed validation steps. Implementation has not been requested yet.
+These were the proposed validation steps at the end of the design discussion.
+Implementation was subsequently requested. See `README.md` for the prototype's
+current capabilities, validation commands, and limitations.
 
 1. Build a small Rust connectivity proof against Kyuubi. Verify LDAP authentication, session properties, engine selection, execution, batched fetching, cancellation, concurrent sessions, and recovery from a dropped connection.
 2. Test a native Rust editor and results table with several restored tabs and incoming result batches. Measure startup and interaction latency before choosing the UI framework.

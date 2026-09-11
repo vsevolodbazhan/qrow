@@ -1,0 +1,15 @@
+Qrow
+
+The HiveServer2 interface in vendor/TCLIService.thrift is from Apache Hive 3.1.3:
+https://github.com/apache/hive/blob/rel/release-3.1.3/service-rpc/if/TCLIService.thrift
+Copyright The Apache Software Foundation. Licensed under the Apache License 2.0.
+
+src/connector/t_c_l_i_service.rs is generated from that interface using Apache
+Thrift 0.24.0, with reproducible generator corrections in scripts/generate-thrift.sh.
+
+The connection protocol follows the publicly documented HiveServer2 protocol and
+the behavior of Apache Kyuubi's PyHive client. Qrow does not bundle Python or Java.
+
+Rust dependencies retain their respective open-source licenses. See Cargo.lock
+for the resolved dependency list and each package's license metadata. This build
+is a personal prototype, not a prepared public distribution.
