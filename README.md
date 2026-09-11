@@ -2,6 +2,8 @@
 
 A native Rust SQL workbench for macOS. Connect to Spark through Kyuubi, edit SQL,
 run queries in parallel tabs, and inspect results without a local JVM or web UI.
+The interface uses GPUI (the Rust UI framework behind Zed), GPUI Component, and
+Metal rendering. SQL highlighting uses Tree-sitter.
 
 This is a personal prototype. The HiveServer2 connector has local wire-level
 tests, and the project owner has confirmed that it works against their real
@@ -27,7 +29,8 @@ python3 --version
 Run the commands below from the repository root, the directory containing
 `Cargo.toml`. The first build downloads dependencies and takes longer than
 subsequent builds. Java, Python database clients, ODBC drivers, and the Thrift
-compiler are not required to build or run Qrow.
+compiler are not required to build or run Qrow. GPUI is built with runtime Metal
+shader compilation, so the separate Xcode Metal compiler is not required either.
 
 ## Build and launch the macOS app
 
@@ -86,11 +89,12 @@ endpoint, then add a connection profile as described below.
 
 ## Connect and query
 
-1. Click **Add connection** or the **+** beside Connections.
+1. Click **+** beside Connections.
 2. Enter a name, Kyuubi host, port, LDAP username, password, and initial database.
-3. Add any session parameters, such as `kyuubi.engine.share.level.subdomain`.
+3. Enter session parameters as a JSON object, for example:
+   `{"kyuubi.engine.share.level.subdomain": "your-subdomain"}`.
 4. Save the connection. macOS may ask for Keychain access.
-5. Write SQL and click **Run query** or press **⌘Enter**.
+5. Write SQL and click **Run** or press **⌘Enter**.
 
 Passwords are stored in macOS Keychain under service `io.qrow.connection`, keyed
 by profile UUID. They are retrieved on a background thread when a tab connects.
@@ -117,15 +121,19 @@ and server-side idle/session timeouts remain responsible for abandoned resources
 
 Switch profiles using the toolbar or sidebar. SQL stays in the tab, while the
 old session and results are released. Switching and closing are disabled while
-the tab is busy. Right-click a connection to edit or duplicate it. Profile edits
-take effect on the next query if they require a new session.
+the tab is busy. Use the settings icon beside a connection to edit it; the editor
+also has a **Duplicate** button. Editing is disabled while that profile has a
+running query. Saving an edit disconnects idle sessions that use that profile;
+the next query opens a new session.
 
 Results arrive in batches of up to 250 rows, stopping at a 1,000-row preview.
 **Load 1,000 more** advances the cursor. The client does not add a SQL `LIMIT`.
 An empty fetch confirms exhaustion because some servers misreport `hasMoreRows`.
 Preview storage is capped at 100,000 rows or approximately 64 MiB per tab; an
 incoming batch that would exceed the cap is discarded and the cursor is closed.
-Frame size is also capped at 64 MiB. The table renders visible rows only.
+Frame size is also capped at 64 MiB. The table virtualizes rows and columns.
+Drag column boundaries to resize them. Drag the divider above Results to resize
+the editor, and the sidebar divider to change its width. **⌘B** toggles the sidebar.
 
 Decimals and textual timestamps retain their server representation. Binary
 values display as hexadecimal. Nulls display as `NULL`; empty strings remain
@@ -162,8 +170,8 @@ execution, result metadata, exact decimal/null handling, batched fetching,
 cancellation, and dropped connections. They do not prove server configuration,
 engine isolation, or cancellation behavior in a deployed Kyuubi instance.
 
-The first UI frame's elapsed startup time is printed to stderr. This is a useful
-local diagnostic, not a measurement of cold launch to first visible display.
+UI initialization time is printed to stderr. This is a local diagnostic, not
+a measurement of cold launch to first visible display.
 
 After saving a real connection in the app, verify session initialization and a
 read-only query with:
@@ -180,9 +188,10 @@ the result, and closes its session. It does not verify engine sharing or cancell
 - `src/connector/`: connector traits, HiveServer2 implementation, SASL transport,
   and generated Apache Thrift bindings.
 - `src/worker.rs`: per-tab query execution and cancellation coordination.
-- `src/ui.rs`: native egui/eframe interface and virtualized result table.
+- `src/ui.rs`: GPUI workspace, editor, tabs, and connection controls.
+- `src/ui/results.rs`: virtualized results, column metadata, and clipboard actions.
 - `src/storage.rs`: workspace persistence and macOS Keychain access.
-- `src/sql.rs`: SQL highlighting lexer and single-statement validation.
+- `src/sql.rs`: SQL lexer and single-statement validation.
 - `tests/hive_protocol.rs`: local protocol fixtures.
 - `PROJECT_PLAN.md`: agreed product scope and decisions.
 

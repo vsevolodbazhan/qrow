@@ -68,6 +68,9 @@ pub struct Saver {
 
 impl Saver {
     pub fn new(path: PathBuf) -> Self {
+        Self::with_wake(path, || {})
+    }
+    pub fn with_wake(path: PathBuf, wake: impl Fn() + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel();
         let (errors_tx, errors) = mpsc::channel();
         let handle = thread::spawn(move || {
@@ -88,6 +91,7 @@ impl Saver {
                 }
                 if let Err(e) = save(&path, &state) {
                     let _ = errors_tx.send(format!("Workspace save failed: {e:#}"));
+                    wake();
                 }
                 if finish {
                     break;
@@ -140,6 +144,29 @@ pub fn set_password(_: Uuid, _: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn background_save_error_wakes_the_ui() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_file = dir.path().join("not-a-directory");
+        fs::write(&parent_file, b"preserve").unwrap();
+        let (notify, wake) = mpsc::channel();
+        let mut saver = Saver::with_wake(parent_file.join("workspace.json"), move || {
+            let _ = notify.send(());
+        });
+        saver.save(Workspace::default());
+        wake.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            saver
+                .errors
+                .try_recv()
+                .unwrap()
+                .contains("Workspace save failed")
+        );
+        saver.finish(Workspace::default());
+        assert_eq!(fs::read(parent_file).unwrap(), b"preserve");
+    }
+
     #[test]
     fn workspace_roundtrip_and_corruption_preserved() {
         let dir = tempfile::tempdir().unwrap();

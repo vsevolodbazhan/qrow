@@ -139,7 +139,7 @@ Trino is the next intended source. ODBC or ADBC may become additional connector 
 
 ## Open technical questions
 
-- Which native Rust UI framework and editor component meet the performance and usability goals?
+- UI choice resolved: GPUI with GPUI Component for the native editor and virtualized table. The user requested this migration after using the initial egui prototype.
 - Which open-source Rust Thrift and SASL components can reproduce the working LDAP connection?
 - How does the deployed Kyuubi version handle session configuration, engine sharing, and session isolation?
 - Can cancellation proceed promptly while execution or fetching is in progress?

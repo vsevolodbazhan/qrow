@@ -10,7 +10,9 @@ case "$QROW_BUILD_PROFILE" in
 esac
 QROW_BUNDLE="dist/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
-cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow"
+# Replace the executable atomically, including when an older build is still running.
+cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
+mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
 cp NOTICE "$QROW_BUNDLE/Contents/Resources/NOTICE"
 cp LICENSE "$QROW_BUNDLE/Contents/Resources/LICENSE"
 python3 scripts/third-party-notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
