@@ -141,6 +141,37 @@ empty. Nested values use the textual representation returned by HiveServer2.
 Cells display a shortened preview, while right-click **Copy cell** or **Copy row**
 copies the full stored value. File export is not included.
 
+## Idle connections and reconnecting
+
+Each connection has a **When idle** choice in its settings:
+
+- **Disconnect after** releases each idle tab's session after the configured
+  number of seconds. The default is 900 seconds, including for existing profiles.
+  The timer starts after query or preview fetching finishes. Reading results or
+  editing SQL does not reset it, and a running query is never interrupted by it.
+- **Keep connected** replaces idle disconnection with periodic heartbeat SQL.
+  The editor suggests a 300-second interval and `SELECT 1`. Both are configurable.
+  Choose a lightweight, read-only statement. Heartbeats run only while the tab
+  is idle, use the same session, and preserve the user's result cursor. They do
+  not create new sessions or reconnect after failures. This mode is off by default.
+
+**Disconnect** in the query toolbar releases the active tab's session. It is
+unavailable while a query or heartbeat is running; Cancel remains available.
+Manual and idle disconnection preserve SQL and downloaded results. They release
+unfetched rows, temporary views, and session settings. The next explicit Run opens
+and initializes a new session with the profile's configured database and parameters.
+
+A dead connection, including a Kyuubi error wrapping an engine transport failure,
+is discarded. Qrow reports the error and reconnects on the next explicit Run;
+it never automatically resubmits the failed SQL. A failed heartbeat also disconnects
+and stops background queries until the user runs a query again.
+
+Qrow's idle timeout is separate from Kyuubi's engine idle timeout. Kyuubi's
+[engine shutdown check](https://github.com/apache/kyuubi/blob/master/kyuubi-common/src/main/scala/org/apache/kyuubi/session/SessionManager.scala)
+requires no active user sessions. Releasing Qrow's sessions allows that timeout
+to take effect, but other clients or tabs can still hold the engine open. There
+are no heartbeat requests when Keep connected is off.
+
 ## Workspace
 
 Tabs, SQL, selected profiles, and connection settings are saved automatically to:

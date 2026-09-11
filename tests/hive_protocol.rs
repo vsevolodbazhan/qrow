@@ -294,3 +294,143 @@ fn dropped_transport_returns_error_without_resubmitting_statement() {
     assert!(session.execute("SELECT 1").is_err());
     server.join().unwrap();
 }
+
+#[test]
+fn wrapped_engine_failure_reconnects_only_on_explicit_run() {
+    use qrow::worker::{Event, Worker};
+    use std::sync::Arc;
+    for during_poll in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let p = profile(listener.local_addr().unwrap().port());
+        let server = thread::spawn(move || {
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let req: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(req.statement, "SELECT original");
+            let message = "Error operating ExecuteStatement: org.apache.kyuubi.shaded.thrift.transport.TTransportException: Socket is closed by peer.";
+            if during_poll {
+                peer.reply(TExecuteStatementResp::new(
+                    success(),
+                    Some(operation(false)),
+                ));
+                let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+                let mut response = status(TOperationState::ERROR_STATE, false);
+                response.error_message = Some(message.into());
+                peer.reply(response);
+                let _: TCloseOperationReq = peer.read("CloseOperation");
+                peer.reply(TCloseOperationResp::new(success()));
+            } else {
+                peer.reply(TExecuteStatementResp::new(
+                    TStatus::new(
+                        TStatusCode::ERROR_STATUS,
+                        None,
+                        None,
+                        None,
+                        Some(message.to_owned()),
+                    ),
+                    None,
+                ));
+            }
+            let _: TCloseSessionReq = peer.read("CloseSession");
+            peer.reply(TCloseSessionResp::new(success()));
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let req: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(req.statement, "SELECT explicit_retry");
+            peer.reply(TExecuteStatementResp::new(
+                success(),
+                Some(operation(false)),
+            ));
+            let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+            peer.reply(status(TOperationState::FINISHED_STATE, false));
+            let _: TCloseOperationReq = peer.read("CloseOperation");
+            peer.reply(TCloseOperationResp::new(success()));
+            let _: TCloseSessionReq = peer.read("CloseSession");
+            peer.reply(TCloseSessionResp::new(success()));
+        });
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(HiveConnector),
+            Arc::new(|_| Ok(Zeroizing::new("test-password".into()))),
+        );
+        worker.run(p.clone(), "SELECT original".into());
+        loop {
+            if let Event::Error {
+                disconnected,
+                message,
+            } = worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
+            {
+                assert!(disconnected);
+                assert!(message.contains("Socket is closed by peer"));
+                break;
+            }
+        }
+        assert!(
+            worker
+                .events
+                .recv_timeout(Duration::from_millis(100))
+                .is_err()
+        );
+        worker.run(p, "SELECT explicit_retry".into());
+        loop {
+            match worker.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Event::Ready { .. } => break,
+                Event::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn heartbeat_closes_its_own_operation_and_preserves_the_preview_cursor() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let _: TExecuteStatementReq = peer.read("ExecuteStatement");
+        peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+        let req: TExecuteStatementReq = peer.read("ExecuteStatement");
+        assert_eq!(req.statement, "SELECT 42");
+        let heartbeat = operation(false);
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(heartbeat.clone()),
+        ));
+        let req: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        assert_eq!(req.operation_handle, heartbeat);
+        peer.reply(status(TOperationState::FINISHED_STATE, false));
+        let req: TCloseOperationReq = peer.read("CloseOperation");
+        assert_eq!(req.operation_handle, heartbeat);
+        peer.reply(TCloseOperationResp::new(success()));
+        let req: TFetchResultsReq = peer.read("FetchResults");
+        assert_eq!(req.operation_handle, operation(true));
+        peer.reply(TFetchResultsResp::new(
+            success(),
+            Some(false),
+            Some(TRowSet::new(0, vec![], Some(vec![]), None, None)),
+        ));
+        let req: TCloseOperationReq = peer.read("CloseOperation");
+        assert_eq!(req.operation_handle, operation(true));
+        peer.reply(TCloseOperationResp::new(success()));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let mut session = HiveConnector
+        .connect(&p, Zeroizing::new("test-password".into()))
+        .unwrap();
+    session.execute("SELECT data").unwrap();
+    session.execute_keep_alive("SELECT 42").unwrap();
+    assert_eq!(
+        session.poll().unwrap(),
+        QueryState::Finished { has_results: false }
+    );
+    session.close_keep_alive().unwrap();
+    assert!(!session.fetch(250).unwrap().more);
+    session.close().unwrap();
+    server.join().unwrap();
+}

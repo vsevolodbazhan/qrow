@@ -15,6 +15,44 @@ pub struct Profile {
     pub username: String,
     pub database: String,
     pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub lifecycle: ConnectionLifecycle,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ConnectionLifecycle {
+    pub idle_seconds: u64,
+    /// Zero disables keep-alive and enables idle disconnection.
+    pub keep_alive_seconds: u64,
+    pub keep_alive_sql: String,
+}
+
+impl Default for ConnectionLifecycle {
+    fn default() -> Self {
+        Self {
+            idle_seconds: 900,
+            keep_alive_seconds: 0,
+            keep_alive_sql: "SELECT 1".into(),
+        }
+    }
+}
+
+impl ConnectionLifecycle {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=604_800).contains(&self.idle_seconds),
+            "Idle timeout must be between 1 and 604800 seconds."
+        );
+        anyhow::ensure!(
+            self.keep_alive_seconds <= 604_800,
+            "Keep-alive interval must be between 0 and 604800 seconds."
+        );
+        if self.keep_alive_seconds > 0 {
+            crate::sql::validate_single(&self.keep_alive_sql)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Profile {
@@ -27,6 +65,7 @@ impl Default for Profile {
             username: String::new(),
             database: "avia".into(),
             parameters: BTreeMap::new(),
+            lifecycle: ConnectionLifecycle::default(),
         }
     }
 }
@@ -45,7 +84,7 @@ impl Profile {
             !self.database.trim().is_empty(),
             "Enter an initial database."
         );
-        Ok(())
+        self.lifecycle.validate()
     }
 }
 
@@ -99,4 +138,42 @@ pub type Row = Vec<Option<String>>;
 pub struct Batch {
     pub rows: Vec<Row>,
     pub more: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_profiles_restore_with_idle_disconnect_and_no_heartbeat() {
+        let original = Profile::default();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json.as_object_mut().unwrap().remove("lifecycle");
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.lifecycle, ConnectionLifecycle::default());
+        assert_eq!(restored.lifecycle.keep_alive_seconds, 0);
+    }
+
+    #[test]
+    fn lifecycle_rejects_invalid_timers_and_multiple_heartbeat_statements() {
+        let mut policy = ConnectionLifecycle {
+            idle_seconds: 0,
+            ..Default::default()
+        };
+        assert!(policy.validate().is_err());
+        policy.idle_seconds = 900;
+        policy.keep_alive_seconds = 604_801;
+        assert!(policy.validate().is_err());
+        policy.keep_alive_seconds = 300;
+        policy.keep_alive_sql = "SELECT 1; SELECT 2".into();
+        assert!(policy.validate().is_err());
+        policy.keep_alive_sql = "".into();
+        assert!(policy.validate().is_err());
+        policy.keep_alive_sql = "SELECT 42".into();
+        assert!(policy.validate().is_ok());
+        let restored: ConnectionLifecycle =
+            serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
+        assert_eq!(restored, policy);
+    }
 }
