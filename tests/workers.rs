@@ -16,9 +16,13 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Fixture {
     connects: AtomicUsize,
+    total_rows: usize,
+    value_bytes: usize,
     closes: Arc<AtomicUsize>,
 }
 struct FakeSession {
+    total_rows: usize,
+    value_bytes: usize,
     offset: usize,
     slow: bool,
     cancelled: Arc<AtomicBool>,
@@ -35,6 +39,12 @@ impl Connector for Fixture {
     fn connect(&self, _: &Profile, _: Zeroizing<String>) -> Result<Box<dyn Session>> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeSession {
+            total_rows: if self.total_rows == 0 {
+                1250
+            } else {
+                self.total_rows
+            },
+            value_bytes: self.value_bytes,
             offset: 0,
             slow: false,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -68,9 +78,15 @@ impl Session for FakeSession {
         }])
     }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
-        let end = (self.offset + count).min(1250);
+        let end = (self.offset + count).min(self.total_rows);
         let rows: Vec<_> = (self.offset..end)
-            .map(|n| vec![Some(n.to_string())])
+            .map(|n| {
+                vec![Some(if self.value_bytes == 0 {
+                    n.to_string()
+                } else {
+                    "x".repeat(self.value_bytes)
+                })]
+            })
             .collect();
         self.offset = end;
         Ok(Batch {
@@ -177,4 +193,77 @@ fn sql_error_does_not_destroy_the_session() {
     worker.run(profile, "select".into());
     assert_eq!(ready(&worker), (1000, true));
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn repeated_previews_stop_at_the_row_cap() {
+    use qrow::model::{MAX_RESULT_ROWS, PREVIEW_ROWS};
+    let fixture = Arc::new(Fixture {
+        total_rows: MAX_RESULT_ROWS + 1000,
+        ..Default::default()
+    });
+    let worker = worker(fixture);
+    worker.run(Profile::default(), "rows".into());
+    let mut total = 0;
+    loop {
+        match next(&worker) {
+            Event::Rows(rows) => {
+                total += rows.len();
+                assert!(rows.len() <= 250);
+                assert!(total <= MAX_RESULT_ROWS);
+            }
+            Event::Ready {
+                limited: true,
+                more,
+            } => {
+                assert!(!more);
+                break;
+            }
+            Event::Ready { more: true, .. } => {
+                assert!(total.is_multiple_of(PREVIEW_ROWS));
+                worker.more();
+            }
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(total, MAX_RESULT_ROWS);
+}
+
+#[test]
+fn oversized_preview_batches_are_discarded_at_the_memory_cap() {
+    use qrow::model::MAX_RESULT_BYTES;
+    let fixture = Arc::new(Fixture {
+        total_rows: 10_000,
+        value_bytes: 16 * 1024,
+        ..Default::default()
+    });
+    let worker = worker(fixture);
+    worker.run(Profile::default(), "bytes".into());
+    let mut retained_bytes = 0;
+    loop {
+        match next(&worker) {
+            Event::Rows(rows) => {
+                retained_bytes += rows
+                    .iter()
+                    .map(|row| {
+                        row.capacity() * std::mem::size_of::<Option<String>>()
+                            + row.iter().flatten().map(String::capacity).sum::<usize>()
+                    })
+                    .sum::<usize>();
+                assert!(retained_bytes <= MAX_RESULT_BYTES);
+            }
+            Event::Ready {
+                limited: true,
+                more,
+            } => {
+                assert!(!more);
+                break;
+            }
+            Event::Ready { more: true, .. } => worker.more(),
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert!(retained_bytes > MAX_RESULT_BYTES / 2);
 }

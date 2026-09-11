@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+repository="$(git rev-parse --show-toplevel)"
+# Verify the actual commits being pushed, including pushes from another branch.
+seen=' '
+while read -r local_ref local_oid _remote_ref _remote_oid; do
+    case "$local_oid" in 0000000000000000000000000000000000000000) continue ;; esac
+    case "$seen" in *" $local_oid "*) continue ;; esac
+    seen="$seen$local_oid "
+    printf 'Checking %s before push…\n' "$local_ref"
+    sh "$repository/scripts/check-snapshot.sh" "$local_oid" all </dev/null
+done

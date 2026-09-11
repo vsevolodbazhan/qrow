@@ -181,7 +181,6 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>) -> impl IntoElemen
     canvas(
         |_, _, _| (),
         move |bounds, _, window, _| {
-            let table = table.clone();
             window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
                 if !phase.capture() || !bounds.contains(&event.position) {
                     return;

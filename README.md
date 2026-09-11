@@ -159,6 +159,21 @@ in-memory workspace and never saves it.
 
 ## Validation
 
+Install and enable the development checks and Git hooks:
+
+```sh
+brew install shellcheck actionlint
+sh scripts/install-check-tools.sh
+sh scripts/install-hooks.sh
+sh scripts/check.sh
+```
+
+See [Quality checks](docs/QUALITY.md) for staged-snapshot hooks, CI, coverage,
+performance budgets, and dependency policy. The hooks do not replace the running
+application or access real connections.
+
+The basic Rust checks remain available individually:
+
 ```sh
 cargo test
 cargo clippy --all-targets -- -D warnings

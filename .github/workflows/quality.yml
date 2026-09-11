@@ -1,0 +1,93 @@
+name: Quality
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    name: Core / lint, tests, docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: core
+      - run: sh scripts/check.sh core
+      - name: Install script linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: sh scripts/check.sh scripts
+      - name: Install coverage tooling
+        run: |
+          cargo install --locked cargo-llvm-cov --version 0.9.1
+          rustup component add llvm-tools-preview
+      - run: sh scripts/check.sh coverage
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-coverage
+          path: target/coverage/core.lcov
+          retention-days: 14
+          if-no-files-found: error
+
+  native:
+    name: macOS ARM64 / native, performance, package
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: native
+      - run: sh scripts/check.sh native
+      - name: SQL performance budgets
+        shell: bash
+        run: |
+          set -o pipefail
+          sh scripts/check.sh performance | tee performance.txt
+      - run: sh scripts/package-macos.sh
+      - run: python3 scripts/check-size.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-package-and-performance
+          path: |
+            dist/Qrow-macos.zip
+            performance.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  dependencies:
+    name: Dependency policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - run: rustup show
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+        with:
+          shared-key: dependency-tools
+          cache-all-crates: true
+      - run: sh scripts/install-check-tools.sh
+      - run: python3 scripts/check-policy.py
+      - run: sh scripts/check.sh dependencies
