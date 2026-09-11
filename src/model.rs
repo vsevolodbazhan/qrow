@@ -59,7 +59,7 @@ impl Default for Profile {
     fn default() -> Self {
         Self {
             id: Uuid::new_v4(),
-            name: "Kyuubi".into(),
+            name: "Spark".into(),
             host: String::new(),
             port: 10009,
             username: String::new(),
@@ -143,6 +143,11 @@ pub struct Batch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_profile_uses_a_neutral_spark_name() {
+        assert_eq!(Profile::default().name, "Spark");
+    }
 
     #[test]
     fn old_profiles_restore_with_idle_disconnect_and_no_heartbeat() {
