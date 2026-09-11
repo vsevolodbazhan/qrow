@@ -1185,7 +1185,7 @@ impl Render for Qrow {
                 .text_size(px(13.))
                 .size_full(),
         );
-        let results = div()
+        let results = results::selection_boundary(&table)
             .size_full()
             .flex()
             .flex_col()
