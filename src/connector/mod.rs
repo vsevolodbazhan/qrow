@@ -35,6 +35,9 @@ pub trait Session: Send {
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
     fn close_operation(&mut self) -> Result<()>;
+    /// Start maintenance SQL without replacing the user's result cursor.
+    fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
+    fn close_keep_alive(&mut self) -> Result<()>;
     fn close(&mut self) -> Result<()>;
 }
 

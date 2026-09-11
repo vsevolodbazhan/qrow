@@ -32,6 +32,7 @@ pub struct HiveSession {
     credentials: Arc<Credentials>,
     session: Option<TSessionHandle>,
     operation: Option<TOperationHandle>,
+    preview_operation: Option<TOperationHandle>,
     column_count: usize,
 }
 
@@ -57,6 +58,7 @@ impl Connector for HiveConnector {
             }),
             session: Some(session),
             operation: None,
+            preview_operation: None,
             column_count: 0,
         };
         let setup = (|| -> Result<()> {
@@ -95,12 +97,55 @@ pub fn check(status: TStatus) -> Result<()> {
         .error_message
         .unwrap_or_else(|| format!("Kyuubi returned status {}", status.status_code.0));
     if status.status_code == TStatusCode::ERROR_STATUS {
-        return Err(QueryError(message).into());
+        let connection_failure = status
+            .sql_state
+            .as_deref()
+            .is_some_and(|state| state.starts_with("08"))
+            || status
+                .info_messages
+                .iter()
+                .flatten()
+                .any(|info| is_session_failure(info));
+        return Err(query_failure(message, connection_failure));
     }
     anyhow::bail!("{message}")
 }
 
+fn is_session_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    [
+        "ttransportexception",
+        "socket is closed by peer",
+        "invalid sessionhandle",
+        "invalid session handle",
+        "session is closed",
+    ]
+    .iter()
+    .any(|signature| message.contains(signature))
+}
+
+fn query_failure(message: String, connection_failure: bool) -> anyhow::Error {
+    // Kyuubi can wrap a dead engine transport in a successful Thrift response.
+    // Only query errors allow the worker to reuse the existing session.
+    if connection_failure || is_session_failure(&message) {
+        anyhow::anyhow!(message)
+    } else {
+        QueryError(message).into()
+    }
+}
+
 impl Session for HiveSession {
+    fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.preview_operation = self.operation.take();
+        self.execute(sql)
+    }
+
+    fn close_keep_alive(&mut self) -> Result<()> {
+        let result = self.close_operation();
+        self.operation = self.preview_operation.take();
+        result
+    }
+
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.close_operation()?;
         let response = self.client.execute_statement(TExecuteStatementReq::new(
@@ -138,12 +183,15 @@ impl Session for HiveSession {
             Ok(QueryState::Cancelled)
         } else if state == TOperationState::ERROR_STATE || state == TOperationState::TIMEDOUT_STATE
         {
-            Err(QueryError(
+            Err(query_failure(
                 response
                     .error_message
                     .unwrap_or_else(|| "Query failed or timed out".into()),
-            )
-            .into())
+                response
+                    .sql_state
+                    .as_deref()
+                    .is_some_and(|state| state.starts_with("08")),
+            ))
         } else if state == TOperationState::CLOSED_STATE || state == TOperationState::UKNOWN_STATE {
             anyhow::bail!("The operation is no longer available on Kyuubi")
         } else {
@@ -215,7 +263,12 @@ impl Session for HiveSession {
     }
 
     fn close(&mut self) -> Result<()> {
-        let operation_result = self.close_operation();
+        let operation_result = if self.preview_operation.is_some() {
+            let result = self.close_keep_alive();
+            result.and(self.close_operation())
+        } else {
+            self.close_operation()
+        };
         if let Some(session) = self.session.take() {
             check(
                 self.client
@@ -329,6 +382,55 @@ pub fn decode_columns(columns: Vec<TColumn>, expected: usize) -> Result<Vec<Row>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrapped_session_failures_do_not_preserve_the_connection() {
+        for (message, state, info) in [
+            ("Socket is closed by peer.", None, None),
+            ("Invalid SessionHandle [id]", None, None),
+            ("Invalid session handle", None, None),
+            ("Session is closed", None, None),
+            ("Connection lost", Some("08S01"), None),
+            (
+                "Error operating ExecuteStatement",
+                None,
+                Some(vec![
+                    "org.apache.kyuubi.shaded.thrift.transport.TTransportException".into(),
+                ]),
+            ),
+        ] {
+            let error = check(TStatus::new(
+                TStatusCode::ERROR_STATUS,
+                info,
+                state.map(str::to_owned),
+                None,
+                Some(message.to_owned()),
+            ))
+            .unwrap_err();
+            assert!(error.downcast_ref::<QueryError>().is_none(), "{message}");
+            assert_eq!(error.to_string(), message);
+        }
+    }
+
+    #[test]
+    fn ordinary_sql_errors_preserve_the_connection() {
+        for message in [
+            "Syntax error",
+            "Table not found",
+            "Query failed or timed out",
+        ] {
+            let error = check(TStatus::new(
+                TStatusCode::ERROR_STATUS,
+                None,
+                Some("42000".to_owned()),
+                None,
+                Some(message.to_owned()),
+            ))
+            .unwrap_err();
+            assert!(error.downcast_ref::<QueryError>().is_some());
+        }
+    }
+
     #[test]
     fn null_bitmap_and_binary_and_decimal_remain_exact() {
         let rows = decode_columns(

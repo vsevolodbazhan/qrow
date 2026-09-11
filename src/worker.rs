@@ -15,8 +15,10 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod lifecycle;
+
 pub enum Command {
-    Run(Profile, String),
+    Run(Box<Profile>, String),
     More,
     Disconnect,
     Shutdown,
@@ -32,6 +34,9 @@ pub enum Event {
     Error { message: String, disconnected: bool },
     CancelError(String),
     Disconnected,
+    IdleDisconnected,
+    KeepAliveStarted,
+    KeepAliveFinished,
 }
 
 type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
@@ -45,7 +50,7 @@ pub struct Worker {
     target: Target,
     wake: Arc<dyn Fn() + Send + Sync>,
     generation: Arc<AtomicU64>,
-    stopped: AtomicBool,
+    stopped: Arc<AtomicBool>,
     done: mpsc::Receiver<()>,
 }
 
@@ -68,6 +73,7 @@ impl Worker {
         let target = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
         let (done_tx, done) = mpsc::channel();
+        let stopped = Arc::new(AtomicBool::new(false));
         let mut runner = Runner {
             session: None,
             profile: None,
@@ -79,11 +85,26 @@ impl Worker {
             wake: wake.clone(),
             connector,
             passwords,
+            stopped: stopped.clone(),
         };
         thread::spawn(move || {
-            while let Ok(command) = rx.recv() {
+            loop {
+                let command = match runner.idle_interval() {
+                    Some(interval) => match rx.recv_timeout(interval) {
+                        Ok(command) => command,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {
+                            runner.maintain();
+                            continue;
+                        }
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    },
+                    None => match rx.recv() {
+                        Ok(command) => command,
+                        Err(_) => break,
+                    },
+                };
                 let result = match command {
-                    Command::Run(profile, sql) => runner.run(profile, sql),
+                    Command::Run(profile, sql) => runner.run(*profile, sql),
                     Command::More => runner.fetch_preview(),
                     Command::Disconnect => {
                         runner.disconnect();
@@ -122,7 +143,7 @@ impl Worker {
             target,
             wake,
             generation,
-            stopped: AtomicBool::new(false),
+            stopped,
             done,
         }
     }
@@ -130,7 +151,7 @@ impl Worker {
     pub fn run(&self, profile: Profile, sql: String) {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
-        let _ = self.tx.send(Command::Run(profile, sql));
+        let _ = self.tx.send(Command::Run(Box::new(profile), sql));
     }
     pub fn more(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -179,6 +200,7 @@ impl Drop for Worker {
 }
 
 struct Runner {
+    stopped: Arc<AtomicBool>,
     session: Option<Box<dyn Session>>,
     profile: Option<Profile>,
     rows: usize,
@@ -204,6 +226,7 @@ impl Runner {
         self.profile = None;
     }
     fn run(&mut self, profile: Profile, sql: String) -> Result<()> {
+        profile.lifecycle.validate()?;
         self.rows = 0;
         self.bytes = 0;
         if self.profile.as_ref() != Some(&profile) || self.session.is_none() {

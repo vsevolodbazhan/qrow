@@ -21,6 +21,7 @@ struct Fixture {
     closes: Arc<AtomicUsize>,
 }
 struct FakeSession {
+    preview_offset: Option<usize>,
     total_rows: usize,
     value_bytes: usize,
     offset: usize,
@@ -39,6 +40,7 @@ impl Connector for Fixture {
     fn connect(&self, _: &Profile, _: Zeroizing<String>) -> Result<Box<dyn Session>> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeSession {
+            preview_offset: None,
             total_rows: if self.total_rows == 0 {
                 1250
             } else {
@@ -53,6 +55,14 @@ impl Connector for Fixture {
     }
 }
 impl Session for FakeSession {
+    fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.preview_offset = Some(self.offset);
+        self.execute(sql)
+    }
+    fn close_keep_alive(&mut self) -> Result<()> {
+        self.offset = self.preview_offset.take().unwrap();
+        self.close_operation()
+    }
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.offset = 0;
         self.slow = sql == "slow";
@@ -266,4 +276,134 @@ fn oversized_preview_batches_are_discarded_at_the_memory_cap() {
         }
     }
     assert!(retained_bytes > MAX_RESULT_BYTES / 2);
+}
+
+#[test]
+fn idle_disconnect_releases_session_and_next_run_reconnects() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.idle_seconds = 1;
+    worker.run(profile.clone(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+    assert!(matches!(next(&worker), Event::IdleDisconnected));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+    worker.run(profile, "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn keep_alive_overrides_idle_disconnect_and_stops_after_manual_disconnect() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.idle_seconds = 1;
+    profile.lifecycle.keep_alive_seconds = 1;
+    worker.run(profile, "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+    for _ in 0..2 {
+        assert!(matches!(next(&worker), Event::KeepAliveStarted));
+        assert!(matches!(next(&worker), Event::KeepAliveFinished));
+    }
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+    worker.more();
+    assert_eq!(ready(&worker), (250, false));
+    worker.disconnect();
+    assert!(matches!(next(&worker), Event::Disconnected));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(1200))
+            .is_err()
+    );
+}
+
+#[test]
+fn failed_keep_alive_disconnects_without_background_retry() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 1;
+    profile.lifecycle.keep_alive_sql = "broken".into();
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    match next(&worker) {
+        Event::Error {
+            disconnected,
+            message,
+        } => {
+            assert!(disconnected);
+            assert!(message.starts_with("Keep-alive failed:"));
+        }
+        _ => panic!("Expected keep-alive failure"),
+    }
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(1200))
+            .is_err()
+    );
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn active_queries_are_not_interrupted_by_idle_timeout_or_heartbeat() {
+    for keep_alive_seconds in [0, 1] {
+        let fixture = Arc::new(Fixture::default());
+        let worker = worker(fixture.clone());
+        let mut profile = Profile::default();
+        profile.lifecycle.idle_seconds = 1;
+        profile.lifecycle.keep_alive_seconds = keep_alive_seconds;
+        worker.run(profile, "slow".into());
+        while !matches!(next(&worker), Event::Running) {}
+        assert!(
+            worker
+                .events
+                .recv_timeout(Duration::from_millis(1200))
+                .is_err()
+        );
+        assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+        worker.cancel();
+        assert!(matches!(next(&worker), Event::Cancelled));
+    }
+}
+
+#[test]
+fn shutdown_cancels_a_running_heartbeat_and_releases_the_session() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 1;
+    profile.lifecycle.keep_alive_sql = "slow".into();
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    worker.shutdown();
+    worker.wait_for_shutdown(Duration::from_secs(3));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn cancelling_a_query_does_not_disable_future_heartbeats() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture);
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 1;
+    worker.run(profile, "slow".into());
+    while !matches!(next(&worker), Event::Running) {}
+    worker.cancel();
+    assert!(matches!(next(&worker), Event::Cancelled));
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    assert!(matches!(next(&worker), Event::KeepAliveFinished));
 }

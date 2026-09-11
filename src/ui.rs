@@ -1,3 +1,4 @@
+mod connection_form;
 mod results;
 
 use gpui::prelude::FluentBuilder;
@@ -93,6 +94,7 @@ struct ProfileEditor {
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<Profile, String>>>,
     confirm_delete: bool,
+    keep_connected: bool,
 }
 pub struct Qrow {
     profiles: Vec<Profile>,
@@ -278,9 +280,24 @@ impl Qrow {
             changed |= !events.is_empty();
             for event in events {
                 match event {
-                    Event::Connecting => tab.status = "Connecting to Kyuubi…".into(),
+                    Event::Connecting => {
+                        tab.busy = true;
+                        tab.status = "Connecting to Kyuubi…".into();
+                    }
                     Event::Connected => tab.connected = true,
-                    Event::Running => tab.status = "Executing…".into(),
+                    Event::Running => {
+                        tab.busy = true;
+                        tab.status = "Executing…".into();
+                    }
+                    Event::KeepAliveStarted => {
+                        tab.busy = true;
+                        tab.status = "Sending keep-alive…".into();
+                    }
+                    Event::KeepAliveFinished => {
+                        tab.busy = false;
+                        tab.cancelling = false;
+                        tab.status = "Connected · keep-alive enabled".into();
+                    }
                     Event::Columns(columns) => {
                         tab.table.update(cx, |t, cx| {
                             t.delegate_mut().schema(columns);
@@ -336,11 +353,17 @@ impl Qrow {
                         tab.error = Some(message);
                         tab.cancelling = false;
                     }
-                    Event::Disconnected => {
+                    Event::Disconnected | Event::IdleDisconnected => {
                         tab.connected = false;
-                        if !tab.busy {
-                            tab.status = "Not connected".into();
+                        tab.more = false;
+                        tab.busy = false;
+                        tab.cancelling = false;
+                        tab.status = if matches!(event, Event::IdleDisconnected) {
+                            "Disconnected after idle timeout · run to reconnect"
+                        } else {
+                            "Disconnected · run to reconnect"
                         }
+                        .into();
                     }
                 }
             }
@@ -381,6 +404,9 @@ impl Qrow {
                                 worker.shutdown();
                             }
                             tab.connected = false;
+                            tab.busy = false;
+                            tab.cancelling = false;
+                            tab.more = false;
                             tab.status = "Not connected".into();
                         }
                     }
@@ -558,6 +584,18 @@ impl Qrow {
         }
         cx.notify();
     }
+    fn disconnect(&mut self, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[self.active];
+        if tab.busy || !tab.connected || self.form.is_some() {
+            return;
+        }
+        if let Some(worker) = &tab.worker {
+            worker.disconnect();
+            tab.busy = true;
+            tab.status = "Disconnecting…".into();
+        }
+        cx.notify();
+    }
     fn edit_profile(
         &mut self,
         profile: Profile,
@@ -584,6 +622,13 @@ impl Qrow {
             String::new(),
             profile.database.clone(),
             serde_json::to_string_pretty(&profile.parameters).unwrap(),
+            profile.lifecycle.idle_seconds.to_string(),
+            if profile.lifecycle.keep_alive_seconds == 0 {
+                "300".into()
+            } else {
+                profile.lifecycle.keep_alive_seconds.to_string()
+            },
+            profile.lifecycle.keep_alive_sql.clone(),
         ];
         let fields = values
             .into_iter()
@@ -607,6 +652,7 @@ impl Qrow {
             .collect::<Vec<_>>();
         fields[0].update(cx, |s, cx| s.focus(window, cx));
         self.form = Some(ProfileEditor {
+            keep_connected: profile.lifecycle.keep_alive_seconds > 0,
             profile,
             fields,
             is_new,
@@ -651,6 +697,11 @@ impl Qrow {
                         "Session parameters must be a JSON object with string values: {e}"
                     )
                 })?;
+            profile.lifecycle = connection_form::parse_lifecycle(
+                &values[7..],
+                form.keep_connected,
+                &profile.lifecycle,
+            )?;
             profile.validate()?;
             Ok(())
         })();
@@ -777,6 +828,9 @@ impl Qrow {
             "Password · macOS Keychain",
             "Default database",
             "Session parameters · JSON string values",
+            "Disconnect after · seconds",
+            "Heartbeat interval · seconds",
+            "Keep-alive SQL",
         ];
         div()
             .absolute()
@@ -812,7 +866,7 @@ impl Qrow {
                         div()
                             .text_size(px(12.))
                             .text_color(rgb(0x9ca6b5))
-                            .child("Kyuubi / Spark · HiveServer2 · LDAP"),
+                            .child("Disconnecting preserves SQL and downloaded results, but releases temporary views, session settings, and unfetched rows."),
                     )
                     .child(
                         div()
@@ -821,7 +875,7 @@ impl Qrow {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .children(form.fields.iter().enumerate().map(|(i, f)| {
+                            .children(form.fields.iter().take(7).enumerate().map(|(i, f)| {
                                 div()
                                     .flex()
                                     .flex_col()
@@ -838,7 +892,8 @@ impl Qrow {
                                             .disabled(saving)
                                             .when(i == 6, |input| input.h(px(90.))),
                                     )
-                            })),
+                            }))
+                            .child(connection_form::render_lifecycle(form, &labels, cx)),
                     )
                     .when_some(form.error.clone(), |el, error| {
                         el.child(
@@ -1149,6 +1204,14 @@ impl Render for Qrow {
                     .child(database),
             )
             .child(div().flex_1())
+            .child(
+                Button::new("disconnect")
+                    .ghost()
+                    .small()
+                    .label("Disconnect")
+                    .disabled(busy || !connected)
+                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+            )
             .child(
                 div()
                     .text_size(px(11.))
