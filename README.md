@@ -4,24 +4,34 @@ A native Rust SQL workbench for macOS. Connect to Spark through Kyuubi, edit SQL
 run queries in parallel tabs, and inspect results without a local JVM or web UI.
 
 This is a personal prototype. The HiveServer2 connector has local wire-level
-tests; compatibility with the real Kyuubi deployment still needs validation.
+tests, and the project owner has confirmed that it works against their real
+Kyuubi connection. That confirmation does not establish compatibility with all
+Kyuubi deployments or validate every cancellation and failure scenario.
 
-## Run
+## Prerequisites
 
-Install a current stable Rust toolchain and the Xcode command-line tools, then:
+- macOS. The prototype has been built and tested on Apple Silicon.
+- A current stable Rust toolchain, including `cargo` and `rustc`.
+- Xcode command-line tools. Install them with `xcode-select --install` if needed.
+- Python 3 for the packaging script's dependency-license collection.
+
+Check your tools:
 
 ```sh
-cargo run --bin qrow
+rustc --version
+cargo --version
+xcode-select -p
+python3 --version
 ```
 
-For a populated UI preview that does not connect to a server, access Keychain, or
-change the saved workspace:
+Run the commands below from the repository root, the directory containing
+`Cargo.toml`. The first build downloads dependencies and takes longer than
+subsequent builds. Java, Python database clients, ODBC drivers, and the Thrift
+compiler are not required to build or run Qrow.
 
-```sh
-cargo run --bin qrow -- --demo
-```
+## Build and launch the macOS app
 
-## Build the macOS application
+For normal use, build the optimized application bundle and launch it:
 
 ```sh
 sh scripts/package-macos.sh
@@ -32,6 +42,47 @@ The script builds for the current Mac's architecture and produces `dist/Qrow.app
 and `dist/Qrow-macos.zip`. On an Apple Silicon Mac these are ARM64 builds. The app
 is locally ad-hoc signed, not notarized for public distribution. No separately
 installed database driver is required.
+
+You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
+After changing the source, quit Qrow, rerun the packaging script, and reopen the
+app. The packaged app does not update automatically when you run `cargo build`.
+
+## Build and launch from the terminal
+
+For development, compile and launch the debug build in one command:
+
+```sh
+cargo run --locked --bin qrow
+```
+
+To build an optimized executable without creating an app bundle:
+
+```sh
+cargo build --locked --release --bin qrow
+./target/release/qrow
+```
+
+Use the release build when checking startup time and responsiveness. Running
+the executable from a terminal also shows startup timing and diagnostic output.
+
+## Preview without a database
+
+Launch the demo to inspect syntax highlighting, tabs, and a populated results
+table. It does not connect to a server, access Keychain, or change the saved
+workspace:
+
+```sh
+cargo run --locked --bin qrow -- --demo
+```
+
+Or, after building the release executable:
+
+```sh
+./target/release/qrow --demo
+```
+
+For live queries, connect to the network or VPN that can reach your Kyuubi
+endpoint, then add a connection profile as described below.
 
 ## Connect and query
 
