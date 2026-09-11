@@ -109,18 +109,15 @@ an isolated `QROW_DATA_DIR` for UI checks.
 ## Dependency maintenance exceptions
 
 The initial audit found no vulnerability advisories for the macOS dependency
-graph, but these seven transitive maintenance advisories have no compatible
+graph, but these four transitive maintenance advisories have no compatible
 fixed release in the selected GPUI stack. Each exception has a reason in
 `deny.toml` and expires on 2026-12-11. New advisory IDs still fail. Reassess the
 upstream migration and supported alternatives before extending a review date.
 
 | Dependency | Advisory | Dependency path |
 | --- | --- | --- |
-| async-std | [RUSTSEC-2025-0052](https://rustsec.org/advisories/RUSTSEC-2025-0052.html) | GPUI HTTP client / tar |
 | instant | [RUSTSEC-2024-0384](https://rustsec.org/advisories/RUSTSEC-2024-0384.html) | GPUI Component / notify |
 | paste | [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html) | GPUI Component / Metal |
-| proc-macro-error2 | [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html) | GPUI / stacksafe |
-| rustls-pemfile | [RUSTSEC-2025-0134](https://rustsec.org/advisories/RUSTSEC-2025-0134.html) | GPUI / zed-reqwest |
 | rustybuzz | [RUSTSEC-2026-0206](https://rustsec.org/advisories/RUSTSEC-2026-0206.html) | GPUI / SVG rendering |
 | ttf-parser | [RUSTSEC-2026-0192](https://rustsec.org/advisories/RUSTSEC-2026-0192.html) | GPUI / SVG fonts |
 
@@ -144,3 +141,9 @@ updates weekly, grouping the GPUI packages together.
 No remote is configured yet, so the hosted workflow has not run. After pushing
 to GitHub, make the three Quality jobs required checks in branch protection.
 Local checks cannot enforce remote branch protection.
+
+GPUI Kit 0.6.1 brings `libbz2-rs-sys` 0.2.5 through its HTTP compression stack.
+Its `bzip2-1.0.6` license has an exception for that exact version. The package
+includes the supplied license text. The reason and 2026-12-11 review deadline
+are in `docs/dependency-reviews.toml`; the policy check rejects missing, expired,
+or mismatched license reviews. This does not allow the license for other crates.

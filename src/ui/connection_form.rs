@@ -27,8 +27,8 @@ pub(super) fn parse_lifecycle(
 }
 
 use super::{ProfileEditor, Qrow};
-use gpui::{Context, IntoElement, div, prelude::*, px};
-use gpui_component::{Sizable, input::Input, radio::Radio};
+use gpui_kit::component::{input::Input, radio::Radio};
+use gpui_kit::{Context, IntoElement, div, prelude::*};
 
 pub(super) fn render_lifecycle(
     form: &ProfileEditor,
@@ -46,7 +46,7 @@ pub(super) fn render_lifecycle(
                 .label(label)
                 .checked(form.keep_connected == keep)
                 .disabled(saving)
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_change(cx.listener(move |this, _, _, cx| {
                     if let Some(form) = &mut this.form {
                         form.keep_connected = keep;
                     }
@@ -58,11 +58,11 @@ pub(super) fn render_lifecycle(
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(div().text_size(px(12.)).child(labels[i]))
-                .child(Input::new(&form.fields[i]).small().disabled(saving))
+                .child(div().text_sm().child(labels[i]))
+                .child(Input::new(&form.fields[i]).disabled(saving))
         }))
         .when(form.keep_connected, |el| {
-            el.child(div().text_size(px(12.)).child("Heartbeats run only while idle and keep the engine active. Use a lightweight, read-only query."))
+            el.child(div().text_sm().child("Heartbeats run only while idle and keep the engine active. Use a lightweight, read-only query."))
         })
 }
 

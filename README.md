@@ -2,8 +2,10 @@
 
 A native Rust SQL workbench for macOS. Connect to Spark through Kyuubi, edit SQL,
 run queries in parallel tabs, and inspect results without a local JVM or web UI.
-The interface uses GPUI (the Rust UI framework behind Zed), GPUI Component, and
-Metal rendering. SQL highlighting uses Tree-sitter.
+The interface uses GPUI Kit 0.6.1 with native Metal rendering. SQL highlighting
+uses Tree-sitter. The UI follows the system appearance, with query tabs, a
+connection sidebar, a resizable editor and results table, and connection settings
+in a sheet.
 
 This is a personal prototype. The HiveServer2 connector has local wire-level
 tests, and the project owner has confirmed that it works against their real
@@ -89,12 +91,14 @@ endpoint, then add a connection profile as described below.
 
 ## Connect and query
 
-1. Click **+** beside Connections.
+1. Click **+** beside Connections to open connection settings.
 2. Enter a name, Kyuubi host, port, LDAP username, password, and initial database.
 3. Enter session parameters as a JSON object, for example:
    `{"kyuubi.engine.share.level.subdomain": "your-subdomain"}`.
 4. Save the connection. macOS may ask for Keychain access.
 5. Write SQL and click **Run** or press **⌘Enter**.
+
+In connection settings, **⌘Enter** saves and **Escape** dismisses the sheet.
 
 Passwords are stored in macOS Keychain under service `io.qrow.connection`, keyed
 by profile UUID. They are retrieved on a background thread when a tab connects.
@@ -234,7 +238,9 @@ the result, and closes its session. It does not verify engine sharing or cancell
 - `src/connector/`: connector traits, HiveServer2 implementation, SASL transport,
   and generated Apache Thrift bindings.
 - `src/worker.rs`: per-tab query execution and cancellation coordination.
-- `src/ui.rs`: GPUI workspace, editor, tabs, and connection controls.
+- `src/ui.rs`: workspace state, worker events, and session commands.
+- `src/ui/workspace_view.rs`: GPUI Kit workspace layout and window overlays.
+- `src/ui/profile_view.rs`: connection settings sheet.
 - `src/ui/results.rs`: virtualized results, column metadata, and clipboard actions.
 - `src/storage.rs`: workspace persistence and macOS Keychain access.
 - `src/sql.rs`: SQL lexer and single-statement validation.

@@ -1,47 +1,23 @@
 mod ui;
 
-use gpui::*;
-use gpui_component::{
-    Root, Theme, ThemeMode,
+use gpui_kit::component::{
+    Root, Theme,
     highlighter::{LanguageConfig, LanguageRegistry},
 };
+use gpui_kit::*;
 
 fn main() {
     let demo = std::env::args().any(|arg| arg == "--demo");
     let started = std::time::Instant::now();
-    Application::new()
-        .with_assets(gpui_component_assets::Assets)
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
         .run(move |cx| {
-            gpui_component::init(cx);
-            Theme::change(ThemeMode::Dark, None, cx);
-            let theme = Theme::global_mut(cx);
-            theme.font_size = px(14.);
-            theme.scrollbar_show = gpui_component::scroll::ScrollbarShow::Always;
-            theme.background = rgb(0x282c34).into();
-            theme.foreground = rgb(0xcdd3de).into();
-            theme.border = rgb(0x363c47).into();
-            theme.input = rgb(0x20232a).into();
-            theme.primary = rgb(0x7aa2f7).into();
-            theme.primary_hover = rgb(0x91b2fa).into();
-            theme.primary_foreground = rgb(0x182030).into();
-            theme.selection = rgb(0x3d4e6c).into();
-            theme.table = rgb(0x282c34).into();
-            theme.table_even = rgb(0x2c3039).into();
-            theme.table_head = rgb(0x242830).into();
-            theme.table_head_foreground = rgb(0xb7c1d0).into();
-            theme.table_hover = rgb(0x323945).into();
-            // GPUI Component paints this overlay above the row's text.
-            theme.table_active = gpui::Hsla::from(rgb(0x7aa2f7)).alpha(0.1);
-            theme.table_active_border = rgb(0x617dad).into();
-            theme.table_row_border = rgb(0x333944).into();
-            theme.popover = rgb(0x292e38).into();
-            theme.popover_foreground = rgb(0xcdd3de).into();
-            let highlight = std::sync::Arc::make_mut(&mut theme.highlight_theme);
-            highlight.style.editor_background = Some(rgb(0x282c34).into());
-            highlight.style.editor_foreground = Some(rgb(0xcdd3de).into());
-            highlight.style.editor_active_line = Some(rgb(0x2e333d).into());
-            highlight.style.editor_line_number = Some(rgb(0x636d7c).into());
-            highlight.style.editor_active_line_number = Some(rgb(0xb9c4d5).into());
+            gpui_kit::init(cx);
+            Theme::sync_system_appearance(None, cx);
+            Theme::global_mut(cx).font_size = px(14.);
+            Theme::sync_base(cx);
+            // Wide result sets need a persistent, discoverable horizontal scrollbar.
+            Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
 
             LanguageRegistry::singleton().register(
                 "sql",
@@ -70,13 +46,19 @@ fn main() {
                     ..Default::default()
                 },
                 |window, cx| {
+                    window
+                        .observe_window_appearance(|window, cx| {
+                            Theme::sync_system_appearance(Some(window), cx);
+                        })
+                        .detach();
                     let view = cx.new(|cx| ui::Qrow::new(window, cx, demo, started));
-                    cx.new(|cx| Root::new(view, window, cx))
+                    let shell = cx.new(|_| ui::WindowView::new(view));
+                    cx.new(|cx| Root::new(shell, window, cx))
                 },
             )
             .expect("open Qrow window");
             cx.activate(true);
-            cx.on_window_closed(|cx| {
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }

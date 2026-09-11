@@ -1,9 +1,11 @@
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
+    ActiveTheme, Sizable,
     menu::{PopupMenu, PopupMenuItem},
-    table::{Column, TableDelegate, TableState},
+    scroll::Scrollbar,
+    table::{Column, DataTable, TableDelegate, TableState},
 };
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use qrow::model::{Column as DataColumn, Row};
 
 #[derive(Default)]
@@ -45,14 +47,14 @@ impl TableDelegate for Results {
     fn rows_count(&self, _: &App) -> usize {
         self.rows.len()
     }
-    fn column(&self, c: usize, _: &App) -> &Column {
-        &self.headers[c]
+    fn column(&self, c: usize, _: &App) -> Column {
+        self.headers[c].clone()
     }
     fn render_th(
         &mut self,
         c: usize,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         div()
             .flex()
@@ -60,13 +62,13 @@ impl TableDelegate for Results {
             .gap_2()
             .size_full()
             .overflow_hidden()
-            .text_size(px(12.))
+            .text_sm()
             .child(self.headers[c].name.clone())
             .when(c > 0, |el| {
                 el.child(
                     div()
-                        .text_size(px(10.))
-                        .text_color(rgb(0x7f899a))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
                         .child(self.columns[c - 1].data_type.clone()),
                 )
             })
@@ -78,26 +80,27 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let number = (r + 1).to_string();
         let value = if c == 0 {
-            Some((r + 1).to_string())
+            Some(number.as_str())
         } else {
-            self.rows[r].get(c - 1).cloned().flatten()
+            self.rows[r].get(c - 1).and_then(|value| value.as_deref())
         };
         let null = value.is_none();
-        let display: String = value
-            .unwrap_or_else(|| "NULL".into())
-            .chars()
-            .take(500)
-            .collect();
+        let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         div()
             .id(("cell", c))
             .size_full()
             .flex()
             .items_center()
-            .text_size(px(12.))
+            .text_sm()
             .overflow_hidden()
-            .when(c == 0 || null, |el| el.text_color(rgb(0xb7c1d0)))
-            .when(self.selected == Some((r, c)), |el| el.bg(rgb(0x30425c)))
+            .when(c == 0 || null, |el| {
+                el.text_color(cx.theme().muted_foreground)
+            })
+            .when(self.selected == Some((r, c)), |el| {
+                el.bg(cx.theme().selection)
+            })
             .child(div().truncate().child(display))
             .on_mouse_down(
                 MouseButton::Left,
@@ -147,15 +150,15 @@ impl TableDelegate for Results {
     fn render_empty(
         &mut self,
         _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         div()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
-            .text_color(rgb(0x7f899a))
-            .text_size(px(13.))
+            .text_color(cx.theme().muted_foreground)
+            .text_sm()
             .child("Run a query to preview its results")
     }
 }
@@ -205,5 +208,36 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>) -> impl IntoElemen
         },
     )
     .absolute()
+    .size_full()
     .inset_0()
+}
+
+/// Reserve a scrollbar lane inside the results viewport. An overlay track can
+/// otherwise fall outside the table's clipped container in the Kit layout.
+pub(super) fn view(table: &Entity<TableState<Results>>, modal: bool, cx: &App) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_col()
+        .size_full()
+        .min_h_0()
+        .min_w_0()
+        .child(
+            div()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .relative()
+                .overflow_hidden()
+                .child(
+                    DataTable::new(table)
+                        .small()
+                        .stripe(true)
+                        .bordered(false)
+                        .scrollbar_visible(true, false),
+                )
+                .when(!modal, |el| el.child(horizontal_scroll(table))),
+        )
+        .child(div().h_3().w_full().flex_shrink_0().relative().child(
+            Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
+        ))
 }

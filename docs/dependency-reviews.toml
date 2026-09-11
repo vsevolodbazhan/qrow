@@ -1,0 +1,5 @@
+[[license]]
+name = "libbz2-rs-sys"
+version = "=0.2.5"
+review_by = "2026-12-11"
+reason = "GPUI Kit 0.6.1 enables bzip2 through its HTTP compression stack with no facade opt-out. The supplied license permits source and binary redistribution, requires attribution and marking altered sources, and forbids endorsement. Qrow does not modify this dependency and packages its full license in THIRD_PARTY_NOTICES.txt. Recheck upstream feature controls and license text before upgrading."

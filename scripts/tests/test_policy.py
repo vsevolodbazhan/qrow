@@ -31,3 +31,16 @@ class PolicyTests(unittest.TestCase):
     def test_dated_waiver_and_full_pin_pass(self):
         errors = self.run_policy('{id="RUSTSEC-0000-0000",reason="upstream migration; review-by: 2026-12-11"}', 'actions/checkout@' + 'a'*40)
         self.assertEqual(errors, [])
+
+    def test_license_exception_requires_current_review_for_exact_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "docs").mkdir()
+            (root / "deny.toml").write_text('[advisories]\nignore=[]\n[[licenses.exceptions]]\nname="codec"\nversion="=1.0.0"\nallow=["bzip2-1.0.6"]\n')
+            with patch.object(policy, "ROOT", root):
+                today = datetime.date(2026, 9, 11)
+                self.assertTrue(policy.check(today))
+                review = root / "docs/dependency-reviews.toml"
+                for version, date, fails in [("=1.0.1", "2026-12-11", True), ("=1.0.0", "2026-09-10", True), ("=1.0.0", "invalid", True), ("=1.0.0", "2026-12-11", False)]:
+                    review.write_text(f'[[license]]\nname="codec"\nversion="{version}"\nreview_by="{date}"\nreason="Required upstream codec; supplied notices retained."\n')
+                    self.assertEqual(bool(policy.check(today)), fails)

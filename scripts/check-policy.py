@@ -20,6 +20,22 @@ def check(today=None):
         match = re.search(r"review-by: (\d{4}-\d{2}-\d{2})", waiver.get("reason", ""))
         if not match or datetime.date.fromisoformat(match[1]) < today:
             errors.append(f"Missing or expired review date: {waiver.get('id', waiver)}")
+    exceptions = policy.get("licenses", {}).get("exceptions", [])
+    reviews_path = ROOT / "docs/dependency-reviews.toml"
+    reviews = tomllib.loads(reviews_path.read_text()).get("license", []) if reviews_path.exists() else []
+    for exception in exceptions:
+        review = next((entry for entry in reviews if
+                       entry.get("name") == exception.get("name") and
+                       entry.get("version") == exception.get("version")), None)
+        if review is None or not review.get("reason", "").strip():
+            errors.append(f"License exception requires a matching review: {exception}")
+            continue
+        try:
+            expires = datetime.date.fromisoformat(review.get("review_by", ""))
+        except ValueError:
+            expires = datetime.date.min
+        if expires < today:
+            errors.append(f"Missing or expired license review date: {exception['name']}")
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         for line in path.read_text().splitlines():
             match = re.search(r"\buses:\s*([^ #]+)", line)
