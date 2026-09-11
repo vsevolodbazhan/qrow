@@ -37,20 +37,6 @@ impl Results {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
-    pub fn copy_cell(&self, cx: &mut App) {
-        if let Some((r, c)) = self.selected {
-            let value = if c == 0 {
-                (r + 1).to_string()
-            } else {
-                self.rows
-                    .get(r)
-                    .and_then(|r| r.get(c - 1))
-                    .and_then(|v| v.clone())
-                    .unwrap_or_else(|| "NULL".into())
-            };
-            cx.write_to_clipboard(ClipboardItem::new_string(value));
-        }
-    }
 }
 impl TableDelegate for Results {
     fn columns_count(&self, _: &App) -> usize {
@@ -174,7 +160,7 @@ impl TableDelegate for Results {
     }
 }
 
-/// Include the results toolbar so Copy cell can use the current selection.
+/// Clear the cell selection after a click outside the results area.
 pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
     let table = table.clone();
     div().on_mouse_down_out(move |_, _, cx| {

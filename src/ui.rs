@@ -282,7 +282,7 @@ impl Qrow {
                 match event {
                     Event::Connecting => {
                         tab.busy = true;
-                        tab.status = "Connecting to Kyuubi…".into();
+                        tab.status = "Connecting to Spark (HiveServer2)…".into();
                     }
                     Event::Connected => tab.connected = true,
                     Event::Running => {
@@ -857,9 +857,9 @@ impl Qrow {
                             .text_size(px(16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(if form.is_new {
-                                "New connection"
+                                "New Spark (HiveServer2) connection"
                             } else {
-                                "Edit connection"
+                                "Edit Spark (HiveServer2) connection"
                             }),
                     )
                     .child(
@@ -1069,15 +1069,6 @@ impl Render for Qrow {
                             )
                     })),
             )
-            .when(self.profiles.is_empty(), |el| {
-                el.child(
-                    div()
-                        .p_3()
-                        .text_size(px(12.))
-                        .text_color(rgb(0x808a9b))
-                        .child("Add a Kyuubi connection to get started."),
-                )
-            })
             .child(
                 div()
                     .h(px(28.))
@@ -1086,7 +1077,7 @@ impl Render for Qrow {
                     .items_center()
                     .text_size(px(11.))
                     .text_color(rgb(0x7f899a))
-                    .child("Spark / Kyuubi"),
+                    .child("Spark (HiveServer2)"),
             );
         let tabs = div()
             .h(px(35.))
@@ -1277,17 +1268,6 @@ impl Render for Qrow {
                             .child(count),
                     )
                     .child(div().flex_1())
-                    .child(
-                        Button::new("copy-cell")
-                            .ghost()
-                            .xsmall()
-                            .label("Copy cell")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.tabs[this.active]
-                                    .table
-                                    .update(cx, |t, cx| t.delegate().copy_cell(cx));
-                            })),
-                    )
                     .child(
                         Button::new("more")
                             .ghost()
