@@ -435,7 +435,7 @@ impl Qrow {
                         self.tabs[self.active].saved.profile = Some(id);
                     }
                     self.form = None;
-                    window.close_sheet(cx);
+                    window.close_dialog(cx);
                     self.dirty = Some(Instant::now());
                 }
                 Err(error) => {
@@ -685,7 +685,7 @@ impl Qrow {
             saving: None,
             confirm_delete: false,
         });
-        self.open_profile_sheet(window, cx);
+        self.open_profile_dialog(window, cx);
         cx.notify();
     }
     fn save_profile(&mut self, cx: &mut Context<Self>) {

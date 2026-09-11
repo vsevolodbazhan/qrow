@@ -7,21 +7,39 @@ use gpui_kit::component::{
 };
 
 impl Qrow {
-    pub(super) fn open_profile_sheet(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_profile_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
-        window.open_sheet(cx, move |sheet, _, cx| {
+        if window.has_active_dialog(cx) {
+            if let Some(form) = &self.form {
+                form.fields[0].update(cx, |field, cx| field.focus(window, cx));
+            }
+            return;
+        }
+        window.open_dialog(cx, move |dialog, window, cx| {
             let close = weak.clone();
+            let save = weak.clone();
             let content = weak.update(cx, |this, cx| this.profile_content(cx)).ok();
             let footer = weak.update(cx, |this, cx| this.profile_footer(cx)).ok();
-            sheet
+            // Resolve the popup against the current window so its footer stays visible.
+            let rem = window.rem_size();
+            let viewport = window.viewport_size();
+            let height = (rem * 48.).min(viewport.height - rem * 4.);
+            dialog
                 .title("Connection settings")
-                .size(rems(36.))
+                .w((rem * 36.).min(viewport.width - rem * 4.))
+                .h(height)
+                .margin_top((viewport.height - height) / 2.)
                 .overlay_closable(false)
+                .on_ok(move |_, _, cx| {
+                    let _ = save.update(cx, |this, cx| this.save_profile(cx));
+                    // The worker result closes the popup only after a successful save.
+                    false
+                })
                 .children(content)
-                .when_some(footer, |sheet, footer| sheet.footer(footer))
+                .when_some(footer, |dialog, footer| dialog.footer(footer))
                 .on_close(move |_, _, cx| {
                     let _ = close.update(cx, |this, cx| {
-                        // A submitted save must finish even if its sheet is dismissed.
+                        // A submitted save must finish even if its popup is dismissed.
                         if !this.form.as_ref().is_some_and(|f| f.saving.is_some()) {
                             this.form = None;
                         }
@@ -48,7 +66,7 @@ impl Qrow {
             .w_full().gap_4().pb_4()
             .child(v_flex().gap_1()
                 .child(div().font_weight(FontWeight::MEDIUM).child(if form.is_new { "New connection".to_owned() } else { form.profile.name.clone() }))
-                .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Spark through Kyuubi · LDAP authentication")))
+                .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Spark (HiveServer2) · LDAP authentication")))
             .child(v_flex().id("connection-fields").gap_4()
                 .child(Form::new().child(field(0, "Name")))
                 .child(Form::new().columns(2).child(field(1, "Host")).child(field(2, "Port")))
@@ -104,7 +122,7 @@ impl Qrow {
                                         .label("Delete")
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.delete_profile(cx);
-                                            window.close_sheet(cx);
+                                            window.close_dialog(cx);
                                         })),
                                 ),
                         ),
@@ -144,7 +162,7 @@ impl Qrow {
                             .disabled(saving)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.form = None;
-                                window.close_sheet(cx);
+                                window.close_dialog(cx);
                                 cx.notify();
                             })),
                     )

@@ -1,6 +1,6 @@
 use super::*;
 use gpui_kit::component::{
-    Selectable, h_flex,
+    Selectable, TitleBar, h_flex,
     input::Editor,
     tab::{Tab as QueryTab, TabBar},
     v_flex,
@@ -54,10 +54,28 @@ impl Qrow {
                                     .ghost()
                                     .small()
                                     .flex_1()
-                                    .justify_start()
                                     .min_w_0()
-                                    .icon(IconName::SquareTerminal)
-                                    .label(profile.name.clone())
+                                    .accessibility_label(profile.name.clone())
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .gap_2()
+                                            .child(
+                                                gpui_kit::component::Icon::new(
+                                                    IconName::SquareTerminal,
+                                                )
+                                                .size_3p5()
+                                                .flex_shrink_0(),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .truncate()
+                                                    .child(profile.name.clone()),
+                                            ),
+                                    )
                                     .selected(active == Some(id))
                                     .disabled(busy)
                                     .tooltip(format!("{} · {}", profile.host, profile.database))
@@ -99,15 +117,14 @@ impl Qrow {
                     .gap_1()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Spark through Kyuubi")
-                    .child("Independent session per tab"),
+                    .child("Spark (HiveServer2)"),
             )
     }
 
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         TabBar::new("query-tabs")
             .selected_index(self.active)
-            .small()
+            .large()
             .prefix(
                 Button::new("sidebar-toggle")
                     .ghost()
@@ -387,7 +404,7 @@ impl Render for Qrow {
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
         let editor_height = self
             .editor_height
-            .min(window.viewport_size().height - px(260.))
+            .min(window.viewport_size().height - px(294.))
             .max(px(100.));
         v_flex()
             .relative()
@@ -421,13 +438,23 @@ impl Render for Qrow {
                         (initial + e.position.x - start.x).clamp(px(180.), px(360.));
                 } else {
                     this.editor_height = (initial + e.position.y - start.y)
-                        .clamp(px(100.), window.viewport_size().height - px(260.));
+                        .clamp(px(100.), window.viewport_size().height - px(294.));
                 }
                 cx.notify();
             }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| this.resize = None),
+            )
+            .child(
+                TitleBar::new().child(
+                    div()
+                        .flex_1()
+                        .pr(px(80.))
+                        .text_center()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
+                ),
             )
             .child(
                 h_flex()

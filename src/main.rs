@@ -1,7 +1,7 @@
 mod ui;
 
 use gpui_kit::component::{
-    Root, Theme,
+    Root, Theme, TitleBar,
     highlighter::{LanguageConfig, LanguageRegistry},
 };
 use gpui_kit::*;
@@ -40,10 +40,10 @@ fn main() {
                     ))),
                     titlebar: Some(TitlebarOptions {
                         title: Some(if demo { "Qrow · Demo" } else { "Qrow" }.into()),
-                        ..Default::default()
+                        ..TitleBar::title_bar_options()
                     }),
                     window_min_size: Some(size(px(850.), px(560.))),
-                    ..Default::default()
+                    ..TitleBar::window_options()
                 },
                 |window, cx| {
                     window
