@@ -138,14 +138,14 @@ impl Qrow {
                         el.child(
                             Button::new("delete-profile")
                                 .ghost()
-                                .label("Delete…")
+                                .label("Delete")
                                 .disabled(saving || form.confirm_delete)
                                 .on_click(cx.listener(|this, _, _, cx| this.delete_profile(cx))),
                         )
                         .child(
                             Button::new("duplicate-profile")
                                 .ghost()
-                                .label("Duplicate…")
+                                .label("Duplicate")
                                 .disabled(saving)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     let mut profile = this.form.as_ref().unwrap().profile.clone();

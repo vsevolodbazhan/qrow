@@ -1,0 +1,145 @@
+{
+  "name": "Qrow One Dark",
+  "mode": "dark",
+  "font.size": 14,
+  "colors": {
+    "background": "#1e2024",
+    "table.background": "#1e2024",
+    "list.background": "#1e2024",
+    "tab.active.background": "#1e2024",
+    "sidebar.background": "#26292f",
+    "popover.background": "#26292f",
+    "tab_bar.background": "#26292f",
+    "tab.background": "#26292f",
+    "table.head.background": "#26292f",
+    "table.foot.background": "#26292f",
+    "list.head.background": "#26292f",
+    "secondary.background": "#26292f",
+    "muted.background": "#26292f",
+    "accordion.background": "#26292f",
+    "group_box.background": "#26292f",
+    "tab_bar.segmented.background": "#26292f",
+    "title_bar.background": "#30343c",
+    "status_bar.background": "#30343c",
+    "button.background": "#30343c",
+    "secondary.hover.background": "#30343c",
+    "list.hover.background": "#30343c",
+    "table.hover.background": "#30343c",
+    "accent.background": "#30343c",
+    "sidebar.accent.background": "#30343c",
+    "border": "#3b414c",
+    "input.border": "#3b414c",
+    "sidebar.border": "#3b414c",
+    "title_bar.border": "#3b414c",
+    "status_bar.border": "#3b414c",
+    "window.border": "#3b414c",
+    "button.active.background": "#3b414c",
+    "secondary.active.background": "#3b414c",
+    "foreground": "#abb2bf",
+    "popover.foreground": "#abb2bf",
+    "sidebar.foreground": "#abb2bf",
+    "tab.foreground": "#abb2bf",
+    "secondary.foreground": "#abb2bf",
+    "button.foreground": "#abb2bf",
+    "table.head.foreground": "#abb2bf",
+    "table.foot.foreground": "#abb2bf",
+    "group_box.foreground": "#abb2bf",
+    "tab.active.foreground": "#d7dae0",
+    "accent.foreground": "#d7dae0",
+    "sidebar.accent.foreground": "#d7dae0",
+    "muted.foreground": "#969eae",
+    "primary.background": "#61afef",
+    "ring": "#61afef",
+    "caret": "#61afef",
+    "table.active.border": "#61afef",
+    "list.active.border": "#61afef",
+    "sidebar.primary.background": "#61afef",
+    "info.background": "#61afef",
+    "primary.foreground": "#1e2024",
+    "sidebar.primary.foreground": "#1e2024",
+    "info.foreground": "#1e2024",
+    "success.foreground": "#1e2024",
+    "warning.foreground": "#1e2024",
+    "danger.foreground": "#1e2024",
+    "primary.active.background": "#528bcc",
+    "primary.hover.background": "#78baf2",
+    "selection.background": "#354157",
+    "list.active.background": "#354157",
+    "table.active.background": "#354157",
+    "table.even.background": "#23262b",
+    "list.even.background": "#23262b",
+    "scrollbar.background": "#1e202400",
+    "scrollbar.thumb.background": "#596273",
+    "scrollbar.thumb.hover.background": "#737e91",
+    "danger.background": "#e06c75",
+    "success.background": "#98c379",
+    "warning.background": "#e5c07b",
+    "table.row.border": "#3b414c",
+    "overlay": "#181b2266",
+    "link": "#61afef",
+    "link.hover": "#78baf2",
+    "progress_bar": "#61afef",
+    "slider_bar": "#61afef"
+  },
+  "highlight": {
+    "editor.foreground": "#abb2bf",
+    "editor.background": "#1e2024",
+    "editor.active_line.background": "#26292f",
+    "editor.line_number": "#737e91",
+    "editor.active_line_number": "#d7dae0",
+    "editor.invisible": "#596273",
+    "syntax": {
+      "keyword": {
+        "color": "#c678dd"
+      },
+      "operator": {
+        "color": "#c678dd"
+      },
+      "string": {
+        "color": "#98c379"
+      },
+      "string.escape": {
+        "color": "#98c379"
+      },
+      "number": {
+        "color": "#d19a66"
+      },
+      "boolean": {
+        "color": "#d19a66"
+      },
+      "constant": {
+        "color": "#d19a66"
+      },
+      "function": {
+        "color": "#61afef"
+      },
+      "constructor": {
+        "color": "#61afef"
+      },
+      "type": {
+        "color": "#e5c07b"
+      },
+      "attribute": {
+        "color": "#e5c07b"
+      },
+      "variable": {
+        "color": "#abb2bf"
+      },
+      "punctuation": {
+        "color": "#abb2bf"
+      },
+      "punctuation.bracket": {
+        "color": "#abb2bf"
+      },
+      "punctuation.delimiter": {
+        "color": "#abb2bf"
+      },
+      "comment": {
+        "color": "#7f899b"
+      },
+      "comment.doc": {
+        "color": "#7f899b"
+      }
+    }
+  }
+}

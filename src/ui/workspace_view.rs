@@ -16,7 +16,8 @@ impl Qrow {
             .child(
                 h_flex()
                     .h_12()
-                    .px_3()
+                    .pl_3()
+                    .pr_2()
                     .gap_2()
                     .child(
                         div()
@@ -62,11 +63,10 @@ impl Qrow {
                                             .min_w_0()
                                             .gap_2()
                                             .child(
-                                                gpui_kit::component::Icon::new(
-                                                    IconName::SquareTerminal,
-                                                )
-                                                .size_3p5()
-                                                .flex_shrink_0(),
+                                                gpui_kit::component::Icon::default()
+                                                    .path(crate::assets::SPARK_ICON)
+                                                    .size_3p5()
+                                                    .flex_shrink_0(),
                                             )
                                             .child(
                                                 div()
@@ -111,14 +111,6 @@ impl Qrow {
                         )
                     }),
             )
-            .child(
-                v_flex()
-                    .p_3()
-                    .gap_1()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Spark (HiveServer2)"),
-            )
     }
 
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -126,16 +118,21 @@ impl Qrow {
             .selected_index(self.active)
             .large()
             .prefix(
-                Button::new("sidebar-toggle")
-                    .ghost()
-                    .small()
-                    .icon(IconName::PanelLeft)
-                    .accessibility_label("Toggle connections")
-                    .tooltip("Toggle connections · ⌘B")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar = !this.sidebar;
-                        cx.notify();
-                    })),
+                h_flex().h(px(36.)).px_2().flex_shrink_0().child(
+                    Button::new("sidebar-toggle")
+                        .ghost()
+                        .small()
+                        .w(px(28.))
+                        .h(px(28.))
+                        .flex_shrink_0()
+                        .icon(IconName::PanelLeft)
+                        .accessibility_label("Toggle sidebar")
+                        .tooltip("Toggle sidebar · ⌘B")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sidebar = !this.sidebar;
+                            cx.notify();
+                        })),
+                ),
             )
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                 QueryTab::new()
@@ -148,6 +145,7 @@ impl Qrow {
                     .suffix(
                         h_flex()
                             .gap_1()
+                            .pr_2()
                             .when(tab.busy, |el| {
                                 el.child(
                                     div()
@@ -180,13 +178,19 @@ impl Qrow {
                 cx.listener(|this, index: &usize, window, cx| this.activate(*index, window, cx)),
             )
             .suffix(
-                Button::new("new-tab")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Plus)
-                    .accessibility_label("New query")
-                    .tooltip("New query · ⌘T")
-                    .on_click(cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx))),
+                h_flex().h(px(36.)).px_2().flex_shrink_0().child(
+                    Button::new("new-tab")
+                        .ghost()
+                        .small()
+                        .w(px(28.))
+                        .h(px(28.))
+                        .icon(IconName::Plus)
+                        .accessibility_label("New tab")
+                        .tooltip("New tab · ⌘T")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
+                        ),
+                ),
             )
     }
 
@@ -210,12 +214,28 @@ impl Qrow {
                 Button::new("connection-picker")
                     .ghost()
                     .small()
-                    .label(
+                    // Match the menu's outer padding and item inset.
+                    .px_1()
+                    .accessibility_label(
                         profile
                             .map_or("Choose connection", |p| p.name.as_str())
                             .to_owned(),
                     )
-                    .icon(IconName::ChevronDown)
+                    .child(
+                        h_flex()
+                            .px(px(8.))
+                            .gap_1()
+                            .child(
+                                gpui_kit::component::Icon::new(IconName::ChevronDown)
+                                    .xsmall()
+                                    .flex_shrink_0(),
+                            )
+                            .child(
+                                profile
+                                    .map_or("Choose connection", |p| p.name.as_str())
+                                    .to_owned(),
+                            ),
+                    )
                     .disabled(tab.busy || profiles.is_empty())
                     .dropdown_menu(move |mut menu, _, _| {
                         for (id, name) in &profiles {
@@ -233,14 +253,6 @@ impl Qrow {
                         menu
                     }),
             )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(profile.map_or("", |p| p.database.as_str()).to_owned()),
-            )
             .child(div().flex_1())
             .child(
                 Button::new("disconnect")
@@ -257,7 +269,7 @@ impl Qrow {
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .tooltip("Run selected SQL or the whole editor · ⌘Enter")
+                        .tooltip("Run SQL selection, or editor contents if nothing is selected. One statement only · ⌘Enter")
                         .disabled(active.is_none() && !self.demo)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
@@ -372,15 +384,33 @@ impl Qrow {
             } else {
                 "editor-splitter"
             })
+            .relative()
             .flex_shrink_0()
-            .bg(cx.theme().border)
-            .hover(|s| s.bg(cx.theme().primary))
             .when(horizontal, |el| {
-                el.w_1().h_full().cursor(CursorStyle::ResizeLeftRight)
+                el.w(px(5.))
+                    .mx(px(-2.))
+                    .h_full()
+                    .cursor(CursorStyle::ResizeLeftRight)
             })
             .when(!horizontal, |el| {
-                el.h_1().w_full().cursor(CursorStyle::ResizeUpDown)
+                el.h(px(5.))
+                    .my(px(-2.))
+                    .w_full()
+                    .cursor(CursorStyle::ResizeUpDown)
             })
+            .child(
+                div()
+                    .absolute()
+                    .bg(
+                        if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
+                            cx.theme().primary
+                        } else {
+                            cx.theme().border
+                        },
+                    )
+                    .when(horizontal, |el| el.left(px(2.)).w(px(1.)).h_full())
+                    .when(!horizontal, |el| el.top(px(2.)).h(px(1.)).w_full()),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -447,7 +477,7 @@ impl Render for Qrow {
                 cx.listener(|this, _, _, _| this.resize = None),
             )
             .child(
-                TitleBar::new().child(
+                TitleBar::new().bg(cx.theme().title_bar).child(
                     div()
                         .flex_1()
                         .pr(px(80.))

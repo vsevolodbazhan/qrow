@@ -7,7 +7,8 @@ The core library still builds with `--no-default-features`.
 The workspace now composes a connection sidebar, query tab bar, execution
 toolbar, SQL editor, results viewport, and status bar. Connection settings use
 a centered popup dialog with grouped fields and a fixed footer. Presentation
-uses theme colors and relative spacing. System appearance changes update the theme.
+uses theme colors and relative spacing. The bundled One Dark-style theme is the
+default, independent of system appearance.
 
 Workspace commands and worker events remain in `src/ui.rs`. Layout is in
 `src/ui/workspace_view.rs`, settings presentation in `src/ui/profile_view.rs`,
@@ -68,7 +69,20 @@ Enter confirmation uses the same save command and waits for its result before
 closing. Duplicating a profile reuses the popup and focuses the new name.
 
 The window uses Kit's `TitleBar` with native macOS window buttons. The sidebar
-footer shows only the connector label. Native checks passed after these changes;
+footer labels have been removed. Native checks passed after these changes;
 the release demo confirmed popup save and dismissal, the compact popup layout,
 and tab selection after a title-bar drag. Window movement and double-click
 behavior still need manual verification.
+
+## Theme and spacing refinements
+
+The default theme combines darker charcoal surfaces with One Dark-style syntax
+colors and blue accents. Spark connections use the supplied SVG, embedded from
+`assets/icons/apache-spark.svg`. Toolbar edges have equal padding; tab controls
+have inset hover areas, and dividers occupy one pixel while their drag targets
+overlap adjacent edges. Connection settings use plain Delete and Duplicate
+labels. The Run tooltip states the single-statement limit.
+
+Native checks passed throughout these changes. Release demo checks covered the
+theme, Spark icon, settings popup, control highlights, sidebar hide/show, and
+both divider drag directions followed by another click.

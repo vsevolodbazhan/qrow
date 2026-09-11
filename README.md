@@ -3,7 +3,7 @@
 A native Rust SQL workbench for macOS. Connect to Spark through Kyuubi, edit SQL,
 run queries in parallel tabs, and inspect results without a local JVM or web UI.
 The interface uses GPUI Kit 0.6.1 with native Metal rendering. SQL highlighting
-uses Tree-sitter. The UI follows the system appearance, with query tabs, a
+uses Tree-sitter. The default theme uses One Dark-style blue-gray colors, with query tabs, a
 connection sidebar, a resizable editor and results table, and connection settings
 in a popup dialog.
 

@@ -1,7 +1,8 @@
+mod assets;
 mod ui;
 
 use gpui_kit::component::{
-    Root, Theme, TitleBar,
+    Root, Theme, ThemeConfig, ThemeMode, TitleBar,
     highlighter::{LanguageConfig, LanguageRegistry},
 };
 use gpui_kit::*;
@@ -10,12 +11,13 @@ fn main() {
     let demo = std::env::args().any(|arg| arg == "--demo");
     let started = std::time::Instant::now();
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            Theme::sync_system_appearance(None, cx);
-            Theme::global_mut(cx).font_size = px(14.);
-            Theme::sync_base(cx);
+            let theme: ThemeConfig = serde_json::from_str(include_str!("one-dark.json"))
+                .expect("valid bundled One Dark theme");
+            Theme::global_mut(cx).dark_theme = std::rc::Rc::new(theme);
+            Theme::change(ThemeMode::Dark, None, cx);
             // Wide result sets need a persistent, discoverable horizontal scrollbar.
             Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
 
@@ -46,11 +48,6 @@ fn main() {
                     ..TitleBar::window_options()
                 },
                 |window, cx| {
-                    window
-                        .observe_window_appearance(|window, cx| {
-                            Theme::sync_system_appearance(Some(window), cx);
-                        })
-                        .detach();
                     let view = cx.new(|cx| ui::Qrow::new(window, cx, demo, started));
                     let shell = cx.new(|_| ui::WindowView::new(view));
                     cx.new(|cx| Root::new(shell, window, cx))

@@ -85,7 +85,7 @@ pub fn init(cx: &mut App) {
             name: "Query".into(),
             items: vec![
                 MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle Connections", ToggleSidebar),
+                MenuItem::action("Toggle sidebar", ToggleSidebar),
             ],
         },
     ]);
