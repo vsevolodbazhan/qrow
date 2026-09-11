@@ -30,7 +30,8 @@ fn main() {
             theme.table_head = rgb(0x242830).into();
             theme.table_head_foreground = rgb(0xb7c1d0).into();
             theme.table_hover = rgb(0x323945).into();
-            theme.table_active = rgb(0x34425b).into();
+            // GPUI Component paints this overlay above the row's text.
+            theme.table_active = gpui::Hsla::from(rgb(0x7aa2f7)).alpha(0.1);
             theme.table_active_border = rgb(0x617dad).into();
             theme.table_row_border = rgb(0x333944).into();
             theme.popover = rgb(0x292e38).into();

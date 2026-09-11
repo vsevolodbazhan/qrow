@@ -110,7 +110,7 @@ impl TableDelegate for Results {
             .items_center()
             .text_size(px(12.))
             .overflow_hidden()
-            .when(c == 0 || null, |el| el.text_color(rgb(0x778292)))
+            .when(c == 0 || null, |el| el.text_color(rgb(0xb7c1d0)))
             .when(self.selected == Some((r, c)), |el| el.bg(rgb(0x30425c)))
             .child(div().truncate().child(display))
             .on_mouse_down(
@@ -172,6 +172,19 @@ impl TableDelegate for Results {
             .text_size(px(13.))
             .child("Run a query to preview its results")
     }
+}
+
+/// Include the results toolbar so Copy cell can use the current selection.
+pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
+    let table = table.clone();
+    div().on_mouse_down_out(move |_, _, cx| {
+        table.update(cx, |state, cx| {
+            if state.delegate().selected.is_some() || state.selected_row().is_some() {
+                state.delegate_mut().selected = None;
+                state.clear_selection(cx);
+            }
+        });
+    })
 }
 
 /// Handle horizontal wheel motion before the row list consumes the event.
