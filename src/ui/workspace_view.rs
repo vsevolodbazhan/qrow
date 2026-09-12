@@ -77,6 +77,12 @@ impl Qrow {
                                             ),
                                     )
                                     .selected(active == Some(id))
+                                    .text_color(cx.theme().sidebar_foreground)
+                                    .when(active == Some(id), |button| {
+                                        button
+                                            .bg(cx.theme().sidebar_accent)
+                                            .text_color(cx.theme().sidebar_accent_foreground)
+                                    })
                                     .disabled(busy)
                                     .tooltip(format!("{} · {}", profile.host, profile.database))
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -214,8 +220,8 @@ impl Qrow {
                 Button::new("connection-picker")
                     .ghost()
                     .small()
-                    // Match the menu's outer padding and item inset.
-                    .px_1()
+                    .pl_0()
+                    .pr_1p5()
                     .accessibility_label(
                         profile
                             .map_or("Choose connection", |p| p.name.as_str())
@@ -223,7 +229,6 @@ impl Qrow {
                     )
                     .child(
                         h_flex()
-                            .px(px(8.))
                             .gap_1()
                             .child(
                                 gpui_kit::component::Icon::new(IconName::ChevronDown)

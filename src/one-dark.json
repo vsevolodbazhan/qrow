@@ -65,7 +65,7 @@
     "primary.hover.background": "#78baf2",
     "selection.background": "#354157",
     "list.active.background": "#354157",
-    "table.active.background": "#354157",
+    "table.active.background": "#35415700",
     "table.even.background": "#23262b",
     "list.even.background": "#23262b",
     "scrollbar.background": "#1e202400",

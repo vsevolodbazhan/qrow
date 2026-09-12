@@ -95,11 +95,12 @@ impl TableDelegate for Results {
             .items_center()
             .text_sm()
             .overflow_hidden()
+            .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
                 el.text_color(cx.theme().muted_foreground)
             })
             .when(self.selected == Some((r, c)), |el| {
-                el.bg(cx.theme().selection)
+                el.bg(cx.theme().selection).text_color(rgb(0xf0f4fc))
             })
             .child(div().truncate().child(display))
             .on_mouse_down(
