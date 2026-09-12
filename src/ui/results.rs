@@ -17,9 +17,17 @@ pub struct Results {
 }
 impl Results {
     pub fn schema(&mut self, columns: Vec<DataColumn>) {
+        // The inner 4px inset leaves text at the table's original 6px offset.
+        let padding = Edges {
+            top: px(3.),
+            bottom: px(3.),
+            left: px(2.),
+            right: px(2.),
+        };
         self.headers = vec![
             Column::new("row", "#")
                 .width(px(48.))
+                .paddings(padding)
                 .fixed_left()
                 .movable(false),
         ];
@@ -32,6 +40,7 @@ impl Results {
                 };
                 Column::new(i.to_string(), c.name.clone())
                     .width(px(width))
+                    .paddings(padding)
                     .movable(false)
             }));
         self.columns = columns;
@@ -50,6 +59,16 @@ impl TableDelegate for Results {
     fn column(&self, c: usize, _: &App) -> Column {
         self.headers[c].clone()
     }
+    fn render_tr(
+        &mut self,
+        row: usize,
+        _: &mut Window,
+        _: &mut Context<TableState<Self>>,
+    ) -> Stateful<Div> {
+        // The first row's outline sits inside the row; later outlines overlap
+        // the preceding border. Reserve that pixel below the header as well.
+        div().id(("row", row)).when(row == 0, |el| el.pt(px(1.)))
+    }
     fn render_th(
         &mut self,
         c: usize,
@@ -61,6 +80,7 @@ impl TableDelegate for Results {
             .items_center()
             .gap_2()
             .size_full()
+            .px_1()
             .overflow_hidden()
             .text_sm()
             .child(self.headers[c].name.clone())
@@ -91,6 +111,8 @@ impl TableDelegate for Results {
         div()
             .id(("cell", c))
             .size_full()
+            .px_1()
+            .rounded_sm()
             .flex()
             .items_center()
             .text_sm()
@@ -102,7 +124,7 @@ impl TableDelegate for Results {
             .when(self.selected == Some((r, c)), |el| {
                 el.bg(cx.theme().selection).text_color(rgb(0xf0f4fc))
             })
-            .child(div().truncate().child(display))
+            .child(div().line_height(relative(1.)).truncate().child(display))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |s, _, _, cx| {

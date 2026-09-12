@@ -123,7 +123,7 @@ the app requests cancellation and session cleanup, waiting up to one second
 after saving the workspace. If the server is unreachable, cleanup is best effort
 and server-side idle/session timeouts remain responsible for abandoned resources.
 
-Switch profiles using the toolbar or sidebar. SQL stays in the tab, while the
+Switch profiles using the Connections sidebar. SQL stays in the tab, while the
 old session and results are released. Switching and closing are disabled while
 the tab is busy. Use the settings icon beside a connection to edit it; the editor
 also has a **Duplicate** button. Editing is disabled while that profile has a

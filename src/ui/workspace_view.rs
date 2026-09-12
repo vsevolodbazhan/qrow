@@ -203,70 +203,12 @@ impl Qrow {
     fn query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let active = tab.saved.profile;
-        let profile = self.profiles.iter().find(|p| Some(p.id) == active);
-        let profiles: Vec<_> = self
-            .profiles
-            .iter()
-            .map(|p| (p.id, p.name.clone()))
-            .collect();
-        let weak = cx.weak_entity();
         h_flex()
             .h_12()
             .px_3()
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .child(
-                Button::new("connection-picker")
-                    .ghost()
-                    .small()
-                    .pl_0()
-                    .pr_1p5()
-                    .accessibility_label(
-                        profile
-                            .map_or("Choose connection", |p| p.name.as_str())
-                            .to_owned(),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .child(
-                                gpui_kit::component::Icon::new(IconName::ChevronDown)
-                                    .xsmall()
-                                    .flex_shrink_0(),
-                            )
-                            .child(
-                                profile
-                                    .map_or("Choose connection", |p| p.name.as_str())
-                                    .to_owned(),
-                            ),
-                    )
-                    .disabled(tab.busy || profiles.is_empty())
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (id, name) in &profiles {
-                            let id = *id;
-                            let weak = weak.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(name.clone())
-                                    .checked(active == Some(id))
-                                    .on_click(move |_, _, cx| {
-                                        let _ =
-                                            weak.update(cx, |this, cx| this.switch_profile(id, cx));
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(tab.busy || !tab.connected)
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
             .when(!tab.busy, |el| {
                 el.child(
                     Button::new("run")
@@ -294,6 +236,14 @@ impl Qrow {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             })
+            .child(
+                Button::new("disconnect")
+                    .ghost()
+                    .small()
+                    .label("Disconnect")
+                    .disabled(tab.busy || !tab.connected)
+                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
+            )
     }
 
     fn results_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
