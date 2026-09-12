@@ -18,6 +18,7 @@ Kyuubi deployments or validate every cancellation and failure scenario.
 - A current stable Rust toolchain, including `cargo` and `rustc`.
 - Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - Python 3 for the packaging script's dependency-license collection.
+- [uv](https://docs.astral.sh/uv/) for the locked icon packaging dependency.
 
 Check your tools:
 
@@ -26,6 +27,7 @@ rustc --version
 cargo --version
 xcode-select -p
 python3 --version
+uv --version
 ```
 
 Run the commands below from the repository root, the directory containing
@@ -47,6 +49,12 @@ The script builds for the current Mac's architecture and produces `dist/Qrow.app
 and `dist/Qrow-macos.zip`. On an Apple Silicon Mac these are ARM64 builds. The app
 is locally ad-hoc signed, not notarized for public distribution. No separately
 installed database driver is required.
+
+The icon compiler is portable and can run on Linux before the final macOS build:
+
+```sh
+uv run --locked python scripts/build-icon.py assets/app-icons/macos/qrow.png Qrow.icns
+```
 
 You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
 After changing the source, quit Qrow, rerun the packaging script, and reopen the

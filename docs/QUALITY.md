@@ -13,7 +13,7 @@ sh scripts/install-hooks.sh
 
 The tool installer pins cargo-deny 0.20.2, cargo-machete 0.9.2, and
 cargo-llvm-cov 0.9.1. It also installs LLVM's coverage tools for the pinned Rust
-version. Python 3.11 or later is required for policy checks and packaging.
+version. Python 3.11 or later and uv are required for policy checks and packaging.
 
 ## Local commands
 

@@ -12,27 +12,7 @@ QROW_BUNDLE="dist/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
 QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
 test -f "$QROW_ICON_SOURCE" || { echo "Missing application icon: $QROW_ICON_SOURCE" >&2; exit 1; }
-QROW_ICON_TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/qrow-icon.XXXXXX")"
-QROW_ICONSET="$QROW_ICON_TEMP_DIR/Qrow.iconset"
-trap 'rm -rf "$QROW_ICON_TEMP_DIR"' EXIT HUP INT TERM
-mkdir "$QROW_ICONSET"
-swift scripts/inset-icon.swift "$QROW_ICON_SOURCE" "$QROW_ICON_TEMP_DIR/Qrow.png"
-
-make_icon_size() {
-    sips -z "$1" "$1" "$QROW_ICON_TEMP_DIR/Qrow.png" --out "$QROW_ICONSET/$2" >/dev/null
-}
-
-make_icon_size 16 icon_16x16.png
-make_icon_size 32 icon_16x16@2x.png
-make_icon_size 32 icon_32x32.png
-make_icon_size 64 icon_32x32@2x.png
-make_icon_size 128 icon_128x128.png
-make_icon_size 256 icon_128x128@2x.png
-make_icon_size 256 icon_256x256.png
-make_icon_size 512 icon_256x256@2x.png
-make_icon_size 512 icon_512x512.png
-make_icon_size 1024 icon_512x512@2x.png
-iconutil -c icns "$QROW_ICONSET" -o "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
+uv run --locked python scripts/build-icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
 # Replace the executable atomically, including when an older build is still running.
 cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
 mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"

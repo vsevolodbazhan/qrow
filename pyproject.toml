@@ -1,0 +1,8 @@
+[project]
+name = "qrow-packaging"
+version = "0.1.0"
+description = "Reproducible packaging helpers for Qrow"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow==12.3.0",
+]
