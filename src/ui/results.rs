@@ -12,7 +12,6 @@ use qrow::{
     worker::Event,
 };
 
-#[derive(Default)]
 pub struct Results {
     pub columns: Vec<DataColumn>,
     pub rows: Vec<Row>,
@@ -20,8 +19,31 @@ pub struct Results {
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selected: Option<(usize, usize)>,
+    ui_scale: f32,
+}
+impl Default for Results {
+    fn default() -> Self {
+        Self {
+            columns: vec![],
+            rows: vec![],
+            pagination: Pagination::default(),
+            empty_message: None,
+            headers: vec![],
+            selected: None,
+            ui_scale: 1.,
+        }
+    }
 }
 impl Results {
+    fn px(&self, value: f32) -> Pixels {
+        px(self.ui_scale * value)
+    }
+    pub fn set_ui_scale(&mut self, scale: f32) {
+        self.ui_scale = scale;
+        if !self.columns.is_empty() {
+            self.schema(self.columns.clone());
+        }
+    }
     pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
         let message = match event {
             Event::Ready { limited: true, .. } => Some("No rows fit within the preview limit"),
@@ -42,16 +64,17 @@ impl Results {
     }
 
     pub fn schema(&mut self, columns: Vec<DataColumn>) {
-        // The inner 4px inset leaves text at the table's original 6px offset.
+        let scale = self.ui_scale;
+        // At 100% scale, the inner 4px inset keeps the original 6px text offset.
         let padding = Edges {
-            top: px(3.),
-            bottom: px(3.),
-            left: px(2.),
-            right: px(2.),
+            top: self.px(3.),
+            bottom: self.px(3.),
+            left: self.px(2.),
+            right: self.px(2.),
         };
         self.headers = vec![
             Column::new("row", "#")
-                .width(px(48.))
+                .width(self.px(48.))
                 .paddings(padding)
                 .fixed_left()
                 .movable(false),
@@ -64,14 +87,17 @@ impl Results {
                     _ => 120.,
                 };
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(width))
+                    .width(px(scale * width))
                     .paddings(padding)
                     .movable(false)
             }));
         self.columns = columns;
     }
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            ui_scale: self.ui_scale,
+            ..Self::default()
+        };
     }
 }
 impl TableDelegate for Results {
@@ -107,12 +133,12 @@ impl TableDelegate for Results {
             .size_full()
             .px_1()
             .overflow_hidden()
-            .text_sm()
+            .text_size(self.px(12.))
             .child(self.headers[c].name.clone())
             .when(c > 0, |el| {
                 el.child(
                     div()
-                        .text_xs()
+                        .text_size(self.px(10.))
                         .text_color(cx.theme().muted_foreground)
                         .child(self.columns[c - 1].data_type.clone()),
                 )
@@ -141,7 +167,7 @@ impl TableDelegate for Results {
             .rounded_sm()
             .flex()
             .items_center()
-            .text_sm()
+            .text_size(self.px(12.))
             .overflow_hidden()
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
@@ -208,7 +234,7 @@ impl TableDelegate for Results {
             .items_center()
             .justify_center()
             .text_color(cx.theme().muted_foreground)
-            .text_sm()
+            .text_size(self.px(13.))
             .child(
                 self.empty_message
                     .unwrap_or("Run a query to preview its results"),
@@ -231,7 +257,7 @@ pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
 
 /// Handle horizontal wheel motion before the row list consumes the event.
 /// Vertical motion stays with the virtual list; Shift-wheel also scrolls columns.
-pub fn horizontal_scroll(table: &Entity<TableState<Results>>) -> impl IntoElement {
+pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> impl IntoElement {
     let table = table.clone();
     canvas(
         |_, _, _| (),
@@ -240,7 +266,7 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>) -> impl IntoElemen
                 if !phase.capture() || !bounds.contains(&event.position) {
                     return;
                 }
-                let delta = event.delta.pixel_delta(px(24.));
+                let delta = event.delta.pixel_delta(px(24. * scale));
                 let dx = if event.modifiers.shift && delta.x == px(0.) {
                     delta.y
                 } else {
@@ -267,7 +293,12 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>) -> impl IntoElemen
 
 /// Reserve a scrollbar lane inside the results viewport. An overlay track can
 /// otherwise fall outside the table's clipped container in the Kit layout.
-pub(super) fn view(table: &Entity<TableState<Results>>, modal: bool, cx: &App) -> impl IntoElement {
+pub(super) fn view(
+    table: &Entity<TableState<Results>>,
+    modal: bool,
+    scale: f32,
+    cx: &App,
+) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
@@ -288,7 +319,7 @@ pub(super) fn view(table: &Entity<TableState<Results>>, modal: bool, cx: &App) -
                         .bordered(false)
                         .scrollbar_visible(true, false),
                 )
-                .when(!modal, |el| el.child(horizontal_scroll(table))),
+                .when(!modal, |el| el.child(horizontal_scroll(table, scale))),
         )
         .child(div().h_3().w_full().flex_shrink_0().relative().child(
             Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
@@ -306,4 +337,39 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
             cx.notify();
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DataColumn, Event, Results};
+    use gpui_kit::px;
+
+    #[test]
+    fn scaling_preserves_page_and_query_state_and_clear_preserves_scale() {
+        let mut results = Results::default();
+        results.schema(vec![DataColumn {
+            name: "value".into(),
+            data_type: "STRING".into(),
+        }]);
+        results.rows = vec![vec![Some("value".into())]; 1250];
+        assert!(results.pagination.select(1, results.rows.len()));
+        results.selected = Some((1000, 1));
+        results.query_event(&Event::Cancelled, false);
+
+        results.set_ui_scale(1.5);
+        assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
+        assert_eq!(results.selected, Some((1000, 1)));
+        assert_eq!(
+            results.empty_message,
+            Some("Query cancelled before any rows arrived")
+        );
+        assert_eq!(results.px(48.), px(72.));
+
+        results.clear();
+        assert_eq!(results.ui_scale, 1.5);
+        assert_eq!(results.pagination.page(), 0);
+        assert!(results.rows.is_empty());
+        assert!(results.empty_message.is_none());
+        assert!(results.selected.is_none());
+    }
 }

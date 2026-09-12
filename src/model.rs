@@ -6,6 +6,53 @@ pub const PREVIEW_ROWS: usize = 1_000;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 
+pub const MIN_UI_SCALE: f32 = 0.75;
+pub const MAX_UI_SCALE: f32 = 1.50;
+pub const UI_SCALE_STEP: f32 = 0.10;
+pub const MIN_EDITOR_FONT_SIZE: f32 = 10.;
+pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Settings {
+    pub ui_scale: f32,
+    pub editor_font_family: String,
+    pub editor_font_size: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            ui_scale: 1.,
+            editor_font_family: "Menlo".into(),
+            editor_font_size: 13.,
+        }
+    }
+}
+
+impl Settings {
+    pub fn sanitize(&mut self) {
+        if !self.ui_scale.is_finite() {
+            self.ui_scale = Self::default().ui_scale;
+        }
+        self.ui_scale = (self.ui_scale * 100.).round() / 100.;
+        self.ui_scale = self.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
+
+        if !self.editor_font_size.is_finite() {
+            self.editor_font_size = Self::default().editor_font_size;
+        }
+        self.editor_font_size = self
+            .editor_font_size
+            .round()
+            .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
+
+        self.editor_font_family = self.editor_font_family.trim().into();
+        if self.editor_font_family.is_empty() {
+            self.editor_font_family = Self::default().editor_font_family;
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
     pub id: Uuid,
@@ -110,6 +157,8 @@ impl SavedTab {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Workspace {
     pub version: u32,
+    #[serde(default)]
+    pub settings: Settings,
     pub profiles: Vec<Profile>,
     pub tabs: Vec<SavedTab>,
     pub active_tab: usize,
@@ -119,6 +168,7 @@ impl Default for Workspace {
     fn default() -> Self {
         Self {
             version: 1,
+            settings: Settings::default(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,
@@ -180,5 +230,32 @@ mod tests {
         let restored: ConnectionLifecycle =
             serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
         assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn settings_restore_defaults_and_stay_within_supported_bounds() {
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored, Settings::default());
+
+        let mut settings = Settings {
+            ui_scale: f32::INFINITY,
+            editor_font_family: "   ".into(),
+            editor_font_size: f32::NAN,
+        };
+        settings.sanitize();
+        assert_eq!(settings, Settings::default());
+
+        settings.ui_scale = 1.46;
+        settings.editor_font_size = 33.;
+        settings.sanitize();
+        assert_eq!(settings.ui_scale, 1.46);
+        assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
+        let encoded = serde_json::to_string(&settings).unwrap();
+        let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
+        restored.sanitize();
+        assert_eq!(restored.ui_scale, 1.46);
+        settings.ui_scale = 9.;
+        settings.sanitize();
+        assert_eq!(settings.ui_scale, MAX_UI_SCALE);
     }
 }

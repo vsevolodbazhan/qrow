@@ -121,16 +121,20 @@ impl Qrow {
     }
 
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab_height = self.ui_px(36.);
         TabBar::new("query-tabs")
             .selected_index(self.active)
             .large()
+            .h(tab_height)
+            .min_h(tab_height)
+            .max_h(tab_height)
             .prefix(
-                h_flex().h(px(36.)).px_2().flex_shrink_0().child(
+                h_flex().h(self.ui_px(36.)).px_2().flex_shrink_0().child(
                     Button::new("sidebar-toggle")
                         .ghost()
                         .small()
-                        .w(px(28.))
-                        .h(px(28.))
+                        .w(self.ui_px(28.))
+                        .h(self.ui_px(28.))
                         .flex_shrink_0()
                         .icon(IconName::PanelLeft)
                         .accessibility_label("Toggle sidebar")
@@ -143,6 +147,10 @@ impl Qrow {
             )
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
                 QueryTab::new()
+                    // Kit's large tab uses a fixed 36px height internally.
+                    // Constrain it to the same scaled height as the bar and its tools.
+                    .min_h(tab_height)
+                    .max_h(tab_height)
                     .label(tab.saved.title.clone())
                     .aria_label(format!(
                         "{}{}",
@@ -185,19 +193,39 @@ impl Qrow {
                 cx.listener(|this, index: &usize, window, cx| this.activate(*index, window, cx)),
             )
             .suffix(
-                h_flex().h(px(36.)).px_2().flex_shrink_0().child(
-                    Button::new("new-tab")
-                        .ghost()
-                        .small()
-                        .w(px(28.))
-                        .h(px(28.))
-                        .icon(IconName::Plus)
-                        .accessibility_label("New tab")
-                        .tooltip("New tab · ⌘T")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
-                        ),
-                ),
+                h_flex()
+                    .h(self.ui_px(36.))
+                    .px_2()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        Button::new("open-settings")
+                            .ghost()
+                            .small()
+                            .w(self.ui_px(28.))
+                            .h(self.ui_px(28.))
+                            .icon(IconName::Settings2)
+                            .accessibility_label("Settings")
+                            .tooltip("Settings…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_settings(&OpenSettings, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("new-tab")
+                            .ghost()
+                            .small()
+                            .w(self.ui_px(28.))
+                            .h(self.ui_px(28.))
+                            .icon(IconName::Plus)
+                            .accessibility_label("New tab")
+                            .tooltip("New tab · ⌘T")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.new_tab(&NewTab, window, cx)
+                                }),
+                            ),
+                    ),
             )
     }
 
@@ -333,7 +361,8 @@ impl Qrow {
             })
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
-                self.form.is_some(),
+                self.form.is_some() || self.settings_open,
+                self.settings.ui_scale,
                 cx,
             )))
     }
@@ -375,14 +404,14 @@ impl Qrow {
             .relative()
             .flex_shrink_0()
             .when(horizontal, |el| {
-                el.w(px(5.))
-                    .mx(px(-2.))
+                el.w(self.ui_px(5.))
+                    .mx(self.ui_px(-2.))
                     .h_full()
                     .cursor(CursorStyle::ResizeLeftRight)
             })
             .when(!horizontal, |el| {
-                el.h(px(5.))
-                    .my(px(-2.))
+                el.h(self.ui_px(5.))
+                    .my(self.ui_px(-2.))
                     .w_full()
                     .cursor(CursorStyle::ResizeUpDown)
             })
@@ -396,8 +425,12 @@ impl Qrow {
                             cx.theme().border
                         },
                     )
-                    .when(horizontal, |el| el.left(px(2.)).w(px(1.)).h_full())
-                    .when(!horizontal, |el| el.top(px(2.)).h(px(1.)).w_full()),
+                    .when(horizontal, |el| {
+                        el.left(self.ui_px(2.)).w(self.ui_px(1.)).h_full()
+                    })
+                    .when(!horizontal, |el| {
+                        el.top(self.ui_px(2.)).h(self.ui_px(1.)).w_full()
+                    }),
             )
             .on_mouse_down(
                 MouseButton::Left,
@@ -422,8 +455,8 @@ impl Render for Qrow {
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
         let editor_height = self
             .editor_height
-            .min(window.viewport_size().height - px(294.))
-            .max(px(100.));
+            .min(window.viewport_size().height - self.ui_px(294.))
+            .max(self.ui_px(100.));
         v_flex()
             .relative()
             .size_full()
@@ -443,6 +476,9 @@ impl Render for Qrow {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::increase_ui_scale))
+            .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
                 let Some((horizontal, start, initial)) = this.resize else {
                     return;
@@ -452,11 +488,13 @@ impl Render for Qrow {
                     return;
                 }
                 if horizontal {
-                    this.sidebar_width =
-                        (initial + e.position.x - start.x).clamp(px(180.), px(360.));
+                    this.sidebar_width = (initial + e.position.x - start.x)
+                        .clamp(this.ui_px(180.), this.ui_px(360.));
                 } else {
-                    this.editor_height = (initial + e.position.y - start.y)
-                        .clamp(px(100.), window.viewport_size().height - px(294.));
+                    this.editor_height = (initial + e.position.y - start.y).clamp(
+                        this.ui_px(100.),
+                        window.viewport_size().height - this.ui_px(294.),
+                    );
                 }
                 cx.notify();
             }))
@@ -468,7 +506,7 @@ impl Render for Qrow {
                 TitleBar::new().bg(cx.theme().title_bar).child(
                     div()
                         .flex_1()
-                        .pr(px(80.))
+                        .pr(self.ui_px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
                         .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
@@ -500,6 +538,8 @@ impl Render for Qrow {
                                 div().h(editor_height).flex_shrink_0().min_w_0().child(
                                     Editor::new(&self.tabs[self.active].input)
                                         .appearance(false)
+                                        .font_family(self.settings.editor_font_family.clone())
+                                        .text_size(self.ui_px(self.settings.editor_font_size))
                                         .size_full()
                                         .aria_label("SQL editor"),
                                 ),
@@ -535,6 +575,23 @@ impl Render for WindowView {
         use gpui_kit::component::Root;
         div()
             .size_full()
+            // Capture above editor and dialog focus scopes, before text input consumes keys.
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let key = &event.keystroke;
+                if !key.modifiers.platform || key.modifiers.control || key.modifiers.alt {
+                    return;
+                }
+                let change = match key.key.as_str() {
+                    "+" | "=" => UI_SCALE_STEP,
+                    "-" => -UI_SCALE_STEP,
+                    _ => return,
+                };
+                this.content.update(cx, |content, cx| {
+                    content.adjust_ui_scale(change, window, cx)
+                });
+                cx.stop_propagation();
+                window.prevent_default();
+            }))
             .child(self.content.clone())
             .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
