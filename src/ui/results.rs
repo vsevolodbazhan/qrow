@@ -9,6 +9,7 @@ use gpui_kit::*;
 use qrow::{
     model::{Column as DataColumn, Row},
     pagination::Pagination,
+    worker::Event,
 };
 
 #[derive(Default)]
@@ -16,10 +17,30 @@ pub struct Results {
     pub columns: Vec<DataColumn>,
     pub rows: Vec<Row>,
     pub pagination: Pagination,
+    pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selected: Option<(usize, usize)>,
 }
 impl Results {
+    pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
+        let message = match event {
+            Event::Ready { limited: true, .. } => Some("No rows fit within the preview limit"),
+            Event::Ready { .. } if cancelling => Some("Fetching stopped before any rows arrived"),
+            Event::Ready { .. } if self.columns.is_empty() => {
+                Some("Statement completed without a result set")
+            }
+            Event::Ready { .. } => Some("Query returned no rows"),
+            Event::Cancelled => Some("Query cancelled before any rows arrived"),
+            Event::Error { .. } => Some("Query failed before any rows arrived"),
+            _ => None,
+        };
+        if let Some(message) = message {
+            self.empty_message = Some(message);
+            return true;
+        }
+        false
+    }
+
     pub fn schema(&mut self, columns: Vec<DataColumn>) {
         self.headers = vec![
             Column::new("row", "#")
@@ -165,7 +186,10 @@ impl TableDelegate for Results {
             .justify_center()
             .text_color(cx.theme().muted_foreground)
             .text_sm()
-            .child("Run a query to preview its results")
+            .child(
+                self.empty_message
+                    .unwrap_or("Run a query to preview its results"),
+            )
     }
 }
 

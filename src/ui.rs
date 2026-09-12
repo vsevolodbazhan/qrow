@@ -302,6 +302,13 @@ impl Qrow {
                 .unwrap_or_default();
             changed |= !events.is_empty();
             for event in events {
+                if tab.started.is_some() {
+                    tab.table.update(cx, |table, cx| {
+                        if table.delegate_mut().query_event(&event, tab.cancelling) {
+                            cx.notify();
+                        }
+                    });
+                }
                 match event {
                     Event::Connecting => {
                         tab.busy = true;
@@ -579,6 +586,7 @@ impl Qrow {
         }
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
+            t.delegate_mut().empty_message = Some("Waiting for query results…");
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
             t.scroll_to_row(0, cx);
