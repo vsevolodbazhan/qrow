@@ -1,6 +1,7 @@
 mod connection_form;
 mod profile_view;
 mod results;
+mod settings_view;
 mod workspace_view;
 pub(crate) use workspace_view::WindowView;
 
@@ -13,7 +14,10 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use qrow::{
-    model::{Profile, SavedTab, Workspace},
+    model::{
+        MAX_EDITOR_FONT_SIZE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_UI_SCALE, Profile, SavedTab,
+        Settings, UI_SCALE_STEP, Workspace,
+    },
     sql,
     storage::{self, Saver},
     worker::{Event, Worker},
@@ -34,6 +38,9 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        OpenSettings,
+        IncreaseUiScale,
+        DecreaseUiScale,
         SaveConnection,
         Quit
     ]
@@ -44,6 +51,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-=", IncreaseUiScale, None),
+        KeyBinding::new("cmd-+", IncreaseUiScale, None),
+        KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
     ]);
@@ -52,7 +62,11 @@ pub fn init(cx: &mut App) {
         Menu {
             disabled: false,
             name: "Qrow".into(),
-            items: vec![MenuItem::action("Quit Qrow", Quit)],
+            items: vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit Qrow", Quit),
+            ],
         },
         Menu {
             disabled: false,
@@ -115,7 +129,21 @@ struct ProfileEditor {
     confirm_delete: bool,
     keep_connected: bool,
 }
+
+fn installed_coding_fonts(cx: &App) -> Vec<String> {
+    let mut fonts = cx.text_system().all_font_names();
+    fonts.retain(|font| !font.is_empty());
+    if !fonts.iter().any(|font| font == "Menlo") {
+        fonts.insert(0, "Menlo".into());
+    }
+    fonts
+}
+
 pub struct Qrow {
+    settings: Settings,
+    coding_fonts: Vec<String>,
+    settings_open: bool,
+    settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
     tabs: Vec<Tab>,
     active: usize,
@@ -133,11 +161,14 @@ pub struct Qrow {
     wake: async_channel::Sender<()>,
 }
 impl Qrow {
+    fn ui_px(&self, value: f32) -> Pixels {
+        px(self.settings.ui_scale * value)
+    }
     pub fn new(window: &mut Window, cx: &mut Context<Self>, demo: bool, started: Instant) -> Self {
         let (wake, notifications) = async_channel::bounded(1);
         let save_wake = wake.clone();
         let path = storage::workspace_path();
-        let (workspace, message, saver) = if demo {
+        let (mut workspace, mut message, saver) = if demo {
             (demo_workspace(), None, None)
         } else {
             match storage::load(&path) {
@@ -157,22 +188,42 @@ impl Qrow {
                 ),
             }
         };
+        let coding_fonts = installed_coding_fonts(cx);
+        workspace.settings.sanitize();
+        let unavailable_font = !coding_fonts
+            .iter()
+            .any(|font| font == &workspace.settings.editor_font_family);
+        if unavailable_font {
+            workspace.settings.editor_font_family = Settings::default().editor_font_family;
+            message.get_or_insert_with(|| {
+                "The saved coding font is unavailable, so Qrow is using Menlo.".into()
+            });
+        }
+        let scale = workspace.settings.ui_scale;
+        let theme = gpui_kit::component::Theme::global_mut(cx);
+        theme.font_size = px(14. * scale);
+        theme.mono_font_size = px(13. * scale);
+        window.set_rem_size(theme.font_size);
         let quit = cx.on_app_quit(|this, cx| {
             this.finish(cx);
             async {}
         });
         let mut this = Self {
+            settings: workspace.settings,
+            coding_fonts,
+            settings_open: false,
+            settings_form: None,
             profiles: workspace.profiles,
             tabs: vec![],
             active: workspace.active_tab,
             form: None,
             saver,
-            dirty: None,
+            dirty: (!demo && unavailable_font).then(Instant::now),
             message,
             demo,
             sidebar: true,
-            sidebar_width: px(240.),
-            editor_height: px(285.),
+            sidebar_width: px(240. * scale),
+            editor_height: px(285. * scale),
             resize: None,
             focus: cx.focus_handle(),
             _quit: quit,
@@ -235,8 +286,12 @@ impl Qrow {
                 this.changed(cx);
             }
         });
-        let table =
-            cx.new(|cx| TableState::new(Results::default(), window, cx).col_selectable(false));
+        let scale = self.settings.ui_scale;
+        let table = cx.new(|cx| {
+            let mut results = Results::default();
+            results.set_ui_scale(scale);
+            TableState::new(results, window, cx).col_selectable(false)
+        });
         Tab {
             saved,
             input,
@@ -257,6 +312,7 @@ impl Qrow {
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
             version: 1,
+            settings: self.settings.clone(),
             profiles: self.profiles.clone(),
             tabs: self
                 .tabs
@@ -477,7 +533,7 @@ impl Qrow {
         self.changed(cx);
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() {
+        if self.form.is_some() || self.settings_open {
             return;
         }
         let number = self
@@ -498,7 +554,7 @@ impl Qrow {
         self.activate(self.tabs.len() - 1, window, cx);
     }
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.tabs[index].busy {
+        if self.form.is_some() || self.settings_open || self.tabs[index].busy {
             return;
         }
         if let Some(w) = &self.tabs[index].worker {
@@ -545,7 +601,7 @@ impl Qrow {
         self.changed(cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.tabs[self.active].busy {
+        if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
             return;
         }
         if self.demo {
@@ -645,7 +701,7 @@ impl Qrow {
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
-        if tab.busy || !tab.connected || self.form.is_some() {
+        if tab.busy || !tab.connected || self.form.is_some() || self.settings_open {
             return;
         }
         if let Some(worker) = &tab.worker {
@@ -654,6 +710,71 @@ impl Qrow {
             tab.status = "Disconnecting…".into();
         }
         cx.notify();
+    }
+    fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        if self.form.is_none() && !self.settings_open {
+            self.settings_open = true;
+            self.init_settings_form(window, cx);
+            self.open_settings_dialog(window, cx);
+            cx.notify();
+        }
+    }
+    fn apply_ui_scale(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.settings.ui_scale;
+        self.settings.ui_scale = scale;
+        self.settings.sanitize();
+        let scale = self.settings.ui_scale;
+        if scale == previous {
+            return;
+        }
+        let ratio = scale / previous;
+        self.sidebar_width *= ratio;
+        self.editor_height *= ratio;
+        let theme = gpui_kit::component::Theme::global_mut(cx);
+        theme.font_size = px(14. * scale);
+        theme.mono_font_size = px(13. * scale);
+        window.set_rem_size(theme.font_size);
+        for tab in &self.tabs {
+            tab.table.update(cx, |table, cx| {
+                table.delegate_mut().set_ui_scale(scale);
+                table.refresh(cx);
+            });
+        }
+        self.changed(cx);
+    }
+    fn adjust_ui_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_ui_scale(self.settings.ui_scale + change, window, cx);
+    }
+    fn increase_ui_scale(
+        &mut self,
+        _: &IncreaseUiScale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.adjust_ui_scale(UI_SCALE_STEP, window, cx);
+    }
+    fn decrease_ui_scale(
+        &mut self,
+        _: &DecreaseUiScale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.adjust_ui_scale(-UI_SCALE_STEP, window, cx);
+    }
+    fn set_editor_font(&mut self, font: String, cx: &mut Context<Self>) {
+        if self.coding_fonts.iter().any(|available| available == &font)
+            && self.settings.editor_font_family != font
+        {
+            self.settings.editor_font_family = font;
+            self.changed(cx);
+        }
+    }
+    fn reset_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = Settings::default();
+        self.settings.editor_font_family = settings.editor_font_family;
+        self.settings.editor_font_size = settings.editor_font_size;
+        self.apply_ui_scale(settings.ui_scale, window, cx);
+        self.changed(cx);
     }
     fn edit_profile(
         &mut self,
@@ -897,6 +1018,7 @@ fn demo_workspace() -> Workspace {
     tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
         version: 1,
+        settings: Settings::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,

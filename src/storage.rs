@@ -34,6 +34,7 @@ pub fn load(path: &Path) -> Result<Workspace> {
         workspace.tabs = Workspace::default().tabs;
     }
     workspace.active_tab = workspace.active_tab.min(workspace.tabs.len() - 1);
+    workspace.settings.sanitize();
     Ok(workspace)
 }
 
@@ -173,8 +174,13 @@ mod tests {
         let path = dir.path().join("workspace.json");
         let mut state = Workspace::default();
         state.tabs[0].sql = "SELECT '日本語';".into();
+        state.settings.ui_scale = 1.2;
+        state.settings.editor_font_family = "Monaco".into();
+        state.settings.editor_font_size = 16.;
         save(&path, &state).unwrap();
-        assert_eq!(load(&path).unwrap().tabs[0].sql, state.tabs[0].sql);
+        let restored = load(&path).unwrap();
+        assert_eq!(restored.tabs[0].sql, state.tabs[0].sql);
+        assert_eq!(restored.settings, state.settings);
         fs::write(&path, b"broken").unwrap();
         assert!(load(&path).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"broken");
