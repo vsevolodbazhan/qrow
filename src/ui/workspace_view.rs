@@ -193,39 +193,19 @@ impl Qrow {
                 cx.listener(|this, index: &usize, window, cx| this.activate(*index, window, cx)),
             )
             .suffix(
-                h_flex()
-                    .h(self.ui_px(36.))
-                    .px_2()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("open-settings")
-                            .ghost()
-                            .small()
-                            .w(self.ui_px(28.))
-                            .h(self.ui_px(28.))
-                            .icon(IconName::Settings2)
-                            .accessibility_label("Settings")
-                            .tooltip("Settings…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_settings(&OpenSettings, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("new-tab")
-                            .ghost()
-                            .small()
-                            .w(self.ui_px(28.))
-                            .h(self.ui_px(28.))
-                            .icon(IconName::Plus)
-                            .accessibility_label("New tab")
-                            .tooltip("New tab · ⌘T")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.new_tab(&NewTab, window, cx)
-                                }),
-                            ),
-                    ),
+                h_flex().h(self.ui_px(36.)).px_2().flex_shrink_0().child(
+                    Button::new("new-tab")
+                        .ghost()
+                        .small()
+                        .w(self.ui_px(28.))
+                        .h(self.ui_px(28.))
+                        .icon(IconName::Plus)
+                        .accessibility_label("New tab")
+                        .tooltip("New tab · ⌘T")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
+                        ),
+                ),
             )
     }
 
