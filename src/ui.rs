@@ -8,7 +8,6 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
-    menu::{DropdownMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
