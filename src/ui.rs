@@ -1,15 +1,18 @@
 mod connection_form;
+mod profile_view;
 mod results;
+mod workspace_view;
+pub(crate) use workspace_view::WindowView;
 
-use gpui::prelude::FluentBuilder;
-use gpui::*;
-use gpui_component::{
-    Disableable, IconName, Sizable,
+use gpui_kit::component::{
+    ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariants},
-    input::{Input, InputEvent, InputState},
+    input::{EditorState, Input, InputEvent, InputState, TextareaState},
     menu::{DropdownMenu, PopupMenuItem},
-    table::{Table, TableState},
+    table::TableState,
 };
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use qrow::{
     model::{Profile, SavedTab, Workspace},
     sql,
@@ -25,7 +28,17 @@ use std::{
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
-actions!(qrow, [RunQuery, NewTab, CloseTab, ToggleSidebar, Quit]);
+actions!(
+    qrow,
+    [
+        RunQuery,
+        NewTab,
+        CloseTab,
+        ToggleSidebar,
+        SaveConnection,
+        Quit
+    ]
+);
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
@@ -33,14 +46,17 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(vec![
         Menu {
+            disabled: false,
             name: "Qrow".into(),
             items: vec![MenuItem::action("Quit Qrow", Quit)],
         },
         Menu {
+            disabled: false,
             name: "File".into(),
             items: vec![
                 MenuItem::action("New Query Tab", NewTab),
@@ -48,33 +64,35 @@ pub fn init(cx: &mut App) {
             ],
         },
         Menu {
+            disabled: false,
             name: "Edit".into(),
             items: vec![
-                MenuItem::os_action("Undo", gpui_component::input::Undo, OsAction::Undo),
-                MenuItem::os_action("Redo", gpui_component::input::Redo, OsAction::Redo),
+                MenuItem::os_action("Undo", gpui_kit::component::input::Undo, OsAction::Undo),
+                MenuItem::os_action("Redo", gpui_kit::component::input::Redo, OsAction::Redo),
                 MenuItem::separator(),
-                MenuItem::os_action("Cut", gpui_component::input::Cut, OsAction::Cut),
-                MenuItem::os_action("Copy", gpui_component::input::Copy, OsAction::Copy),
-                MenuItem::os_action("Paste", gpui_component::input::Paste, OsAction::Paste),
+                MenuItem::os_action("Cut", gpui_kit::component::input::Cut, OsAction::Cut),
+                MenuItem::os_action("Copy", gpui_kit::component::input::Copy, OsAction::Copy),
+                MenuItem::os_action("Paste", gpui_kit::component::input::Paste, OsAction::Paste),
                 MenuItem::os_action(
                     "Select All",
-                    gpui_component::input::SelectAll,
+                    gpui_kit::component::input::SelectAll,
                     OsAction::SelectAll,
                 ),
             ],
         },
         Menu {
+            disabled: false,
             name: "Query".into(),
             items: vec![
                 MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle Connections", ToggleSidebar),
+                MenuItem::action("Toggle sidebar", ToggleSidebar),
             ],
         },
     ]);
 }
 struct Tab {
     saved: SavedTab,
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
     worker: Option<Worker>,
@@ -90,6 +108,7 @@ struct Tab {
 struct ProfileEditor {
     profile: Profile,
     fields: Vec<Entity<InputState>>,
+    parameters: Entity<TextareaState>,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<Profile, String>>>,
@@ -152,7 +171,7 @@ impl Qrow {
             message,
             demo,
             sidebar: true,
-            sidebar_width: px(200.),
+            sidebar_width: px(240.),
             editor_height: px(285.),
             resize: None,
             focus: cx.focus_handle(),
@@ -182,11 +201,13 @@ impl Qrow {
             let mut pending = false;
             loop {
                 if pending {
-                    Timer::after(Duration::from_millis(50)).await;
+                    cx.background_executor()
+                        .timer(Duration::from_millis(50))
+                        .await;
                 } else if notifications.recv().await.is_err() {
                     break;
                 }
-                match weak.update(cx, |this, cx| this.tick(cx)) {
+                match weak.update_in(cx, |this, window, cx| this.tick(window, cx)) {
                     Ok(keep_polling) => pending = keep_polling,
                     Err(_) => break,
                 }
@@ -204,8 +225,8 @@ impl Qrow {
     }
     fn make_tab(&self, saved: SavedTab, window: &mut Window, cx: &mut Context<Self>) -> Tab {
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql")
+            EditorState::new(window, cx)
+                .language("sql")
                 .soft_wrap(false)
                 .default_value(saved.sql.clone())
         });
@@ -269,7 +290,7 @@ impl Qrow {
         let _ = self.wake.try_send(());
         cx.notify();
     }
-    fn tick(&mut self, cx: &mut Context<Self>) -> bool {
+    fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         for tab in &mut self.tabs {
             let events: Vec<_> = tab
@@ -414,6 +435,7 @@ impl Qrow {
                         self.tabs[self.active].saved.profile = Some(id);
                     }
                     self.form = None;
+                    window.close_dialog(cx);
                     self.dirty = Some(Instant::now());
                 }
                 Err(error) => {
@@ -642,16 +664,19 @@ impl Qrow {
                         } else {
                             "Leave blank to keep stored password"
                         })
-                    } else if i == 6 {
-                        input.multi_line(true).rows(5)
                     } else {
                         input
                     }
                 })
             })
             .collect::<Vec<_>>();
-        fields[0].update(cx, |s, cx| s.focus(window, cx));
+        let parameters = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .rows(5)
+                .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
+        });
         self.form = Some(ProfileEditor {
+            parameters,
             keep_connected: profile.lifecycle.keep_alive_seconds > 0,
             profile,
             fields,
@@ -660,6 +685,7 @@ impl Qrow {
             saving: None,
             confirm_delete: false,
         });
+        self.open_profile_dialog(window, cx);
         cx.notify();
     }
     fn save_profile(&mut self, cx: &mut Context<Self>) {
@@ -669,7 +695,7 @@ impl Qrow {
         if form.saving.is_some() {
             return;
         }
-        let values: Vec<String> = form
+        let mut values: Vec<String> = form
             .fields
             .iter()
             .enumerate()
@@ -681,6 +707,7 @@ impl Qrow {
                 }
             })
             .collect();
+        values[6] = form.parameters.read(cx).value().to_string();
         let mut profile = form.profile.clone();
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
@@ -816,638 +843,6 @@ impl Qrow {
         });
         tab.status = "Complete · demo data".into();
         tab.elapsed = Some(Duration::from_millis(842));
-    }
-    fn render_form(&self, cx: &mut Context<Self>) -> AnyElement {
-        let form = self.form.as_ref().unwrap();
-        let saving = form.saving.is_some();
-        let labels = [
-            "Name",
-            "Host",
-            "Port",
-            "LDAP username",
-            "Password · macOS Keychain",
-            "Default database",
-            "Session parameters · JSON string values",
-            "Disconnect after · seconds",
-            "Heartbeat interval · seconds",
-            "Keep-alive SQL",
-        ];
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
-            .bg(black().opacity(0.55))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .w(px(520.))
-                    .max_h(relative(0.95))
-                    .bg(rgb(0x24272e))
-                    .border_1()
-                    .border_color(rgb(0x414650))
-                    .rounded_lg()
-                    .p_5()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(if form.is_new {
-                                "New Spark (HiveServer2) connection"
-                            } else {
-                                "Edit Spark (HiveServer2) connection"
-                            }),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .text_color(rgb(0x9ca6b5))
-                            .child("Disconnecting preserves SQL and downloaded results, but releases temporary views, session settings, and unfetched rows."),
-                    )
-                    .child(
-                        div()
-                            .id("connection-fields")
-                            .overflow_y_scroll()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .children(form.fields.iter().take(7).enumerate().map(|(i, f)| {
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(0xa7b0bf))
-                                            .child(labels[i]),
-                                    )
-                                    .child(
-                                        Input::new(f)
-                                            .small()
-                                            .disabled(saving)
-                                            .when(i == 6, |input| input.h(px(90.))),
-                                    )
-                            }))
-                            .child(connection_form::render_lifecycle(form, &labels, cx)),
-                    )
-                    .when_some(form.error.clone(), |el, error| {
-                        el.child(
-                            div()
-                                .text_size(px(12.))
-                                .text_color(rgb(0xef9292))
-                                .child(error),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .when(!form.is_new, |el| {
-                                el.child(
-                                    Button::new("delete-profile")
-                                        .small()
-                                        .ghost()
-                                        .label(if form.confirm_delete {
-                                            "Confirm delete"
-                                        } else {
-                                            "Delete"
-                                        })
-                                        .disabled(saving)
-                                        .on_click(
-                                            cx.listener(|this, _, _, cx| this.delete_profile(cx)),
-                                        ),
-                                )
-                            })
-                            .when(!form.is_new, |el| {
-                                el.child(
-                                    Button::new("duplicate-profile")
-                                        .small()
-                                        .ghost()
-                                        .label("Duplicate")
-                                        .disabled(saving)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            let mut profile =
-                                                this.form.as_ref().unwrap().profile.clone();
-                                            profile.id = Uuid::new_v4();
-                                            profile.name.push_str(" copy");
-                                            this.edit_profile(profile, true, window, cx);
-                                        })),
-                                )
-                            })
-                            .child(div().flex_1())
-                            .child(
-                                Button::new("cancel-profile")
-                                    .small()
-                                    .label("Cancel")
-                                    .disabled(saving)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.form = None;
-                                        this.tabs[this.active]
-                                            .input
-                                            .update(cx, |s, cx| s.focus(window, cx));
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("save-profile")
-                                    .small()
-                                    .primary()
-                                    .label(if saving {
-                                        "Saving…"
-                                    } else {
-                                        "Save connection"
-                                    })
-                                    .disabled(saving)
-                                    .on_click(cx.listener(|this, _, _, cx| this.save_profile(cx))),
-                            ),
-                    ),
-            )
-            .into_any_element()
-    }
-}
-impl Render for Qrow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.editor_height = self
-            .editor_height
-            .min(window.viewport_size().height - px(260.))
-            .max(px(100.));
-        let tab = &self.tabs[self.active];
-        let active_profile = tab.saved.profile;
-        let busy = tab.busy;
-        let profiles = self.profiles.clone();
-        let weak = cx.weak_entity();
-        let profile = self.profiles.iter().find(|p| Some(p.id) == active_profile);
-        let profile_name = profile
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "Choose connection".into());
-        let database = profile.map(|p| p.database.clone()).unwrap_or_default();
-        let data = tab.table.read(cx).delegate();
-        let count = format!("{} rows · {} columns", data.rows.len(), data.columns.len());
-        let elapsed = tab
-            .elapsed
-            .map(|d| format!("{:.2}s", d.as_secs_f64()))
-            .unwrap_or_default();
-        let error = tab.error.clone();
-        let status = tab.status.clone();
-        let input = tab.input.clone();
-        let table = tab.table.clone();
-        let more = tab.more;
-        let cancelling = tab.cancelling;
-        let connected = tab.connected;
-        let sidebar = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(0x20232a))
-            .child(
-                div()
-                    .h(px(36.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .text_size(px(11.))
-                    .text_color(rgb(0x9ca5b4))
-                    .child("CONNECTIONS")
-                    .child(
-                        Button::new("add-connection")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::Plus)
-                            .tooltip("New connection")
-                            .on_click(cx.listener(|this, _, w, cx| {
-                                this.edit_profile(Profile::default(), true, w, cx)
-                            })),
-                    ),
-            )
-            .child(
-                div()
-                    .id("connections-list")
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .px_1()
-                    .children(self.profiles.iter().enumerate().map(|(i, p)| {
-                        let id = p.id;
-                        let edit = p.clone();
-                        div()
-                            .id(("profile", i))
-                            .h(px(30.))
-                            .px_2()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .rounded_sm()
-                            .text_size(px(12.))
-                            .when(active_profile == Some(id), |el| el.bg(rgb(0x303745)))
-                            .hover(|el| el.bg(rgb(0x2b303a)))
-                            .cursor_pointer()
-                            .child(
-                                gpui_component::Icon::new(IconName::SquareTerminal)
-                                    .size(px(13.))
-                                    .text_color(rgb(0x8595ac)),
-                            )
-                            .child(div().flex_1().truncate().child(p.name.clone()))
-                            .child(
-                                Button::new(("edit-profile", i))
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Settings2)
-                                    .tooltip("Edit connection")
-                                    .on_click(cx.listener(move |this, _, w, cx| {
-                                        cx.stop_propagation();
-                                        this.edit_profile(edit.clone(), false, w, cx);
-                                    })),
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.switch_profile(id, cx)),
-                            )
-                    })),
-            )
-            .child(
-                div()
-                    .h(px(28.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .text_size(px(11.))
-                    .text_color(rgb(0x7f899a))
-                    .child("Spark (HiveServer2)"),
-            );
-        let tabs = div()
-            .h(px(35.))
-            .flex()
-            .items_center()
-            .bg(rgb(0x20232a))
-            .border_b_1()
-            .border_color(rgb(0x323640))
-            .child(
-                Button::new("sidebar-toggle")
-                    .ghost()
-                    .small()
-                    .icon(IconName::PanelLeft)
-                    .tooltip("Toggle connections · ⌘B")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar = !this.sidebar;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .id("tabs")
-                    .flex()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_x_scroll()
-                    .children(self.tabs.iter().enumerate().map(|(i, t)| {
-                        div()
-                            .id(("tab", i))
-                            .h(px(35.))
-                            .min_w(px(130.))
-                            .max_w(px(220.))
-                            .px_3()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .border_r_1()
-                            .border_color(rgb(0x323640))
-                            .cursor_pointer()
-                            .when(i == self.active, |el| {
-                                el.bg(rgb(0x282c34))
-                                    .border_b_2()
-                                    .border_color(rgb(0x7aa2f7))
-                            })
-                            .child(
-                                div()
-                                    .text_size(px(10.))
-                                    .text_color(rgb(if t.busy { 0xe5c07b } else { 0x7aa2f7 }))
-                                    .child(if t.busy { "●" } else { "SQL" }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .truncate()
-                                    .text_size(px(12.))
-                                    .child(t.saved.title.clone()),
-                            )
-                            .child(
-                                Button::new(("close-tab", i))
-                                    .ghost()
-                                    .xsmall()
-                                    .disabled(t.busy)
-                                    .icon(IconName::Close)
-                                    .on_click(cx.listener(move |this, _, w, cx| {
-                                        cx.stop_propagation();
-                                        this.close_tab(i, w, cx);
-                                    })),
-                            )
-                            .on_click(cx.listener(move |this, _, w, cx| this.activate(i, w, cx)))
-                    })),
-            )
-            .child(
-                Button::new("new-tab")
-                    .ghost()
-                    .small()
-                    .icon(IconName::Plus)
-                    .tooltip("New query · ⌘T")
-                    .on_click(cx.listener(|this, _, w, cx| this.new_tab(&NewTab, w, cx))),
-            );
-        let toolbar = div()
-            .h(px(38.))
-            .px_3()
-            .flex()
-            .items_center()
-            .gap_2()
-            .border_b_1()
-            .border_color(rgb(0x323640))
-            .child(
-                Button::new("connection-picker")
-                    .ghost()
-                    .small()
-                    .label(profile_name)
-                    .icon(IconName::ChevronDown)
-                    .disabled(busy)
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for p in &profiles {
-                            let id = p.id;
-                            let weak = weak.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(p.name.clone())
-                                    .checked(active_profile == Some(id))
-                                    .on_click(move |_, _, cx| {
-                                        let _ =
-                                            weak.update(cx, |this, cx| this.switch_profile(id, cx));
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(
-                div()
-                    .text_size(px(12.))
-                    .text_color(rgb(0x929cab))
-                    .child(database),
-            )
-            .child(div().flex_1())
-            .child(
-                Button::new("disconnect")
-                    .ghost()
-                    .small()
-                    .label("Disconnect")
-                    .disabled(busy || !connected)
-                    .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
-            )
-            .child(
-                div()
-                    .text_size(px(11.))
-                    .text_color(rgb(0x7f899a))
-                    .child("⌘↵"),
-            )
-            .when(!busy, |el| {
-                el.child(
-                    Button::new("run")
-                        .small()
-                        .primary()
-                        .icon(IconName::ArrowRight)
-                        .label("Run")
-                        .on_click(cx.listener(|this, _, w, cx| this.run(&RunQuery, w, cx))),
-                )
-            })
-            .when(busy, |el| {
-                el.child(
-                    Button::new("cancel")
-                        .small()
-                        .label(if cancelling {
-                            "Cancelling…"
-                        } else {
-                            "Cancel"
-                        })
-                        .disabled(cancelling)
-                        .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
-                )
-            });
-        let editor = div().size_full().py_2().bg(rgb(0x282c34)).child(
-            Input::new(&input)
-                .appearance(false)
-                .font_family("Menlo")
-                .text_size(px(13.))
-                .size_full(),
-        );
-        let results = results::selection_boundary(&table)
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(
-                div()
-                    .h(px(34.))
-                    .flex_shrink_0()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .bg(rgb(0x242830))
-                    .border_b_1()
-                    .border_color(rgb(0x353a44))
-                    .child(
-                        div()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Results"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(rgb(0x9ba6b6))
-                            .child(count),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("more")
-                            .ghost()
-                            .xsmall()
-                            .label("Load 1,000 more")
-                            .disabled(!more || busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.more(cx))),
-                    ),
-            )
-            .when_some(error, |el, error| {
-                el.child(
-                    div()
-                        .id("query-error")
-                        .max_h(px(100.))
-                        .overflow_y_scroll()
-                        .p_3()
-                        .bg(rgb(0x3c2c32))
-                        .text_color(rgb(0xefaaaa))
-                        .text_size(px(12.))
-                        .child(error),
-                )
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .overflow_hidden()
-                    .min_w_0()
-                    .child(Table::new(&table).small().stripe(true).bordered(false))
-                    .when(self.form.is_none(), |el| {
-                        el.child(results::horizontal_scroll(&table))
-                    }),
-            );
-        let vertical_handle = div()
-            .id("editor-splitter")
-            .h(px(5.))
-            .w_full()
-            .flex_shrink_0()
-            .bg(rgb(0x242830))
-            .hover(|s| s.bg(rgb(0x617dad)))
-            .cursor(CursorStyle::ResizeUpDown)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                    this.resize = Some((false, e.position, this.editor_height));
-                    cx.stop_propagation();
-                }),
-            );
-        let horizontal_handle = div()
-            .id("sidebar-splitter")
-            .w(px(4.))
-            .h_full()
-            .flex_shrink_0()
-            .bg(rgb(0x242830))
-            .hover(|s| s.bg(rgb(0x617dad)))
-            .cursor(CursorStyle::ResizeLeftRight)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, e: &MouseDownEvent, _, cx| {
-                    this.resize = Some((true, e.position, this.sidebar_width));
-                    cx.stop_propagation();
-                }),
-            );
-        let center = div()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .child(tabs)
-            .child(toolbar)
-            .child(div().h(self.editor_height).flex_shrink_0().child(editor))
-            .child(vertical_handle)
-            .child(div().flex_1().min_h_0().child(results));
-        div()
-            .relative()
-            .key_context("Qrow")
-            .track_focus(&self.focus)
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(0x282c34))
-            .text_color(rgb(0xcdd3de))
-            .font_family(".AppleSystemUIFont")
-            .text_size(px(13.))
-            .on_action(cx.listener(Self::run))
-            .on_action(cx.listener(Self::new_tab))
-            .on_action(cx.listener(|this, _: &CloseTab, w, cx| this.close_tab(this.active, w, cx)))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar = !this.sidebar;
-                cx.notify();
-            }))
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
-                let Some((horizontal, start, initial)) = this.resize else {
-                    return;
-                };
-                if e.pressed_button != Some(MouseButton::Left) {
-                    this.resize = None;
-                    return;
-                }
-                if horizontal {
-                    this.sidebar_width =
-                        (initial + e.position.x - start.x).clamp(px(150.), px(360.));
-                } else {
-                    this.editor_height = (initial + e.position.y - start.y)
-                        .clamp(px(100.), window.viewport_size().height - px(260.));
-                }
-                cx.notify();
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.resize = None),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .when(self.sidebar, |el| {
-                        el.child(
-                            div()
-                                .w(self.sidebar_width)
-                                .flex_shrink_0()
-                                .h_full()
-                                .child(sidebar),
-                        )
-                        .child(horizontal_handle)
-                    })
-                    .child(center),
-            )
-            .when_some(self.message.clone(), |el, message| {
-                el.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_size(px(12.))
-                        .text_color(rgb(0xe5c07b))
-                        .child(message),
-                )
-            })
-            .child(
-                div()
-                    .h(px(25.))
-                    .flex_shrink_0()
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .bg(rgb(0x20232a))
-                    .border_t_1()
-                    .border_color(rgb(0x323640))
-                    .text_size(px(11.))
-                    .text_color(rgb(0x99a4b5))
-                    .child(
-                        div()
-                            .text_color(rgb(if busy {
-                                0xe5c07b
-                            } else if connected || self.demo {
-                                0x98c379
-                            } else {
-                                0x7f899a
-                            }))
-                            .child("●"),
-                    )
-                    .child(status)
-                    .child(div().flex_1())
-                    .child(elapsed)
-                    .child(if self.demo {
-                        "Demo · nothing is saved"
-                    } else if self.saver.is_none() {
-                        "Workspace saving disabled"
-                    } else if self.dirty.is_some() {
-                        "Saving…"
-                    } else {
-                        "Workspace saved"
-                    }),
-            )
-            .when(self.form.is_some(), |el| el.child(self.render_form(cx)))
     }
 }
 fn demo_workspace() -> Workspace {

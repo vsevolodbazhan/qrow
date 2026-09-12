@@ -8,7 +8,7 @@ default-run = "qrow"
 
 [features]
 default = ["ui"]
-ui = ["dep:gpui", "dep:gpui-component", "dep:gpui-component-assets", "dep:tree-sitter-sequel", "dep:async-channel"]
+ui = ["dep:gpui-kit", "dep:tree-sitter-sequel", "dep:async-channel"]
 
 [[bin]]
 name = "qrow"
@@ -18,9 +18,7 @@ required-features = ["ui"]
 [dependencies]
 anyhow = "1"
 async-channel = { version = "2", optional = true }
-gpui = { version = "=0.2.2", default-features = false, features = ["runtime_shaders"], optional = true }
-gpui-component = { version = "=0.5.1", optional = true }
-gpui-component-assets = { version = "=0.5.1", optional = true }
+gpui-kit = { version = "=0.6.1", features = ["tree-sitter"], optional = true }
 tree-sitter-sequel = { version = "0.3.8", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
