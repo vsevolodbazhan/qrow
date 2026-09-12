@@ -78,7 +78,7 @@ behavior still need manual verification.
 
 The default theme combines darker charcoal surfaces with One Dark-style syntax
 colors and blue accents. Spark connections use the supplied SVG, embedded from
-`assets/icons/apache-spark.svg`. Toolbar edges have equal padding; tab controls
+`assets/connection-type-icons/apache-spark.svg`. Toolbar edges have equal padding; tab controls
 have inset hover areas, and dividers occupy one pixel while their drag targets
 overlap adjacent edges. Connection settings use plain Delete and Duplicate
 labels. The Run tooltip states the single-statement limit.

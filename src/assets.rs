@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use gpui_kit::{AssetSource, SharedString};
 
-pub(crate) const SPARK_ICON: &str = "icons/apache-spark.svg";
+pub(crate) const SPARK_ICON: &str = "connection-type-icons/apache-spark.svg";
 
 pub(crate) struct Assets;
 
@@ -10,7 +10,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
         if path == SPARK_ICON {
             return Ok(Some(Cow::Borrowed(include_bytes!(
-                "../assets/icons/apache-spark.svg"
+                "../assets/connection-type-icons/apache-spark.svg"
             ))));
         }
         gpui_kit::assets::Assets.load(path)
