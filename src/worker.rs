@@ -288,14 +288,7 @@ impl Runner {
     fn fetch_preview(&mut self) -> Result<()> {
         let mut fetched = 0;
         while fetched < PREVIEW_ROWS {
-            if self.cancelled.load(Ordering::SeqCst) {
-                // Fetching only starts after FINISHED. Closing releases the cursor; it does not roll back execution.
-                self.session
-                    .as_mut()
-                    .context("Session is disconnected")?
-                    .close_operation()?;
-                *self.target.lock().unwrap() = None;
-                self.emit(Event::Cancelled);
+            if self.finish_cancelled_fetch()? {
                 return Ok(());
             }
             let batch = self
@@ -303,7 +296,15 @@ impl Runner {
                 .as_mut()
                 .context("Session is disconnected")?
                 .fetch((PREVIEW_ROWS - fetched).min(250))?;
+            // A blocked fetch may return after Cancel was requested.
+            if self.finish_cancelled_fetch()? {
+                return Ok(());
+            }
             let count = batch.rows.len();
+            anyhow::ensure!(
+                count <= (PREVIEW_ROWS - fetched).min(250),
+                "Connector returned more rows than requested"
+            );
             let bytes: usize = batch
                 .rows
                 .iter()
@@ -342,5 +343,19 @@ impl Runner {
             limited: false,
         });
         Ok(())
+    }
+
+    fn finish_cancelled_fetch(&mut self) -> Result<bool> {
+        if !self.cancelled.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        // Execution has finished. Closing releases the cursor, without rolling back SQL.
+        self.session
+            .as_mut()
+            .context("Session is disconnected")?
+            .close_operation()?;
+        *self.target.lock().unwrap() = None;
+        self.emit(Event::Cancelled);
+        Ok(true)
     }
 }

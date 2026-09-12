@@ -6,16 +6,41 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use qrow::model::{Column as DataColumn, Row};
+use qrow::{
+    model::{Column as DataColumn, Row},
+    pagination::Pagination,
+    worker::Event,
+};
 
 #[derive(Default)]
 pub struct Results {
     pub columns: Vec<DataColumn>,
     pub rows: Vec<Row>,
+    pub pagination: Pagination,
+    pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selected: Option<(usize, usize)>,
 }
 impl Results {
+    pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
+        let message = match event {
+            Event::Ready { limited: true, .. } => Some("No rows fit within the preview limit"),
+            Event::Ready { .. } if cancelling => Some("Fetching stopped before any rows arrived"),
+            Event::Ready { .. } if self.columns.is_empty() => {
+                Some("Statement completed without a result set")
+            }
+            Event::Ready { .. } => Some("Query returned no rows"),
+            Event::Cancelled => Some("Query cancelled before any rows arrived"),
+            Event::Error { .. } => Some("Query failed before any rows arrived"),
+            _ => None,
+        };
+        if let Some(message) = message {
+            self.empty_message = Some(message);
+            return true;
+        }
+        false
+    }
+
     pub fn schema(&mut self, columns: Vec<DataColumn>) {
         self.headers = vec![
             Column::new("row", "#")
@@ -45,7 +70,7 @@ impl TableDelegate for Results {
         self.headers.len()
     }
     fn rows_count(&self, _: &App) -> usize {
-        self.rows.len()
+        self.pagination.range(self.rows.len()).len()
     }
     fn column(&self, c: usize, _: &App) -> Column {
         self.headers[c].clone()
@@ -80,6 +105,7 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
+        let r = self.pagination.range(self.rows.len()).start + r;
         let number = (r + 1).to_string();
         let value = if c == 0 {
             Some(number.as_str())
@@ -124,6 +150,7 @@ impl TableDelegate for Results {
         _: &mut Window,
         _: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
+        let row = self.pagination.range(self.rows.len()).start + row;
         let cell = self.selected.filter(|(r, _)| *r == row).map(|(_, c)| {
             if c == 0 {
                 (row + 1).to_string()
@@ -159,7 +186,10 @@ impl TableDelegate for Results {
             .justify_center()
             .text_color(cx.theme().muted_foreground)
             .text_sm()
-            .child("Run a query to preview its results")
+            .child(
+                self.empty_message
+                    .unwrap_or("Run a query to preview its results"),
+            )
     }
 }
 
@@ -240,4 +270,17 @@ pub(super) fn view(table: &Entity<TableState<Results>>, modal: bool, cx: &App) -
         .child(div().h_3().w_full().flex_shrink_0().relative().child(
             Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
         ))
+}
+
+/// Move within downloaded results and reset selection and vertical position.
+pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut App) {
+    table.update(cx, |state, cx| {
+        let data = state.delegate_mut();
+        if data.pagination.select(page, data.rows.len()) {
+            data.selected = None;
+            state.clear_selection(cx);
+            state.scroll_to_row(0, cx);
+            cx.notify();
+        }
+    });
 }

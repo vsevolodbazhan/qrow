@@ -130,9 +130,16 @@ also has a **Duplicate** button. Editing is disabled while that profile has a
 running query. Saving an edit disconnects idle sessions that use that profile;
 the next query opens a new session.
 
-Results arrive in batches of up to 250 rows, stopping at a 1,000-row preview.
-**Load 1,000 more** advances the cursor. The client does not add a SQL `LIMIT`.
-An empty fetch confirms exhaustion because some servers misreport `hasMoreRows`.
+Results stream in batches of up to 250 rows into a 1,000-row page. **Next**
+fetches another page only when needed. **Previous** and **Next** reuse downloaded
+pages without executing SQL again. Row numbers refer to the full result, and
+copy actions use the full stored values on the displayed page. You can browse
+downloaded pages while a fetch is running. New batches preserve the current
+scroll position; changing pages clears selection and scrolls to the top.
+The client does not add a SQL `LIMIT`. An empty fetch confirms exhaustion
+because some servers misreport `hasMoreRows`. If Next finds no further rows,
+the last populated page stays visible. Cancellation or a fetch failure retains
+previously downloaded rows.
 Preview storage is capped at 100,000 rows or approximately 64 MiB per tab; an
 incoming batch that would exceed the cap is discarded and the cursor is closed.
 Frame size is also capped at 64 MiB. The table virtualizes rows and columns.
