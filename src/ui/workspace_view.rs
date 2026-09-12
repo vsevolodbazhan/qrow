@@ -94,6 +94,7 @@ impl Qrow {
                                     .ghost()
                                     .small()
                                     .icon(IconName::Settings2)
+                                    .text_color(cx.theme().sidebar_foreground)
                                     .accessibility_label(format!("Edit {}", profile.name))
                                     .tooltip("Edit connection…")
                                     .disabled(
