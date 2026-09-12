@@ -100,6 +100,7 @@ struct Tab {
     cancelling: bool,
     connected: bool,
     more: bool,
+    pending_page: Option<usize>,
     status: String,
     error: Option<String>,
     started: Option<Instant>,
@@ -247,6 +248,7 @@ impl Qrow {
             cancelling: false,
             connected: false,
             more: false,
+            pending_page: None,
             status: "Not connected".into(),
             error: None,
             started: None,
@@ -326,12 +328,18 @@ impl Qrow {
                         });
                         tab.status = "Fetching preview…".into();
                     }
-                    Event::Rows(rows) => tab.table.update(cx, |t, cx| {
-                        t.delegate_mut().rows.extend(rows);
-                        cx.notify();
-                    }),
+                    Event::Rows(rows) => {
+                        tab.table.update(cx, |t, cx| {
+                            t.delegate_mut().rows.extend(rows);
+                            cx.notify();
+                        });
+                        if let Some(page) = tab.pending_page.take() {
+                            results::select_page(&tab.table, page, cx);
+                        }
+                    }
                     Event::Ready { more, limited } => {
                         tab.more = more;
+                        tab.pending_page = None;
                         tab.busy = false;
                         tab.cancelling = false;
                         tab.elapsed = tab.started.take().map(|t| t.elapsed());
@@ -348,6 +356,7 @@ impl Qrow {
                         tab.busy = false;
                         tab.cancelling = false;
                         tab.more = false;
+                        tab.pending_page = None;
                         tab.elapsed = tab.started.take().map(|t| t.elapsed());
                         tab.status = "Cancelled · partial preview retained".into();
                     }
@@ -358,6 +367,7 @@ impl Qrow {
                         tab.busy = false;
                         tab.cancelling = false;
                         tab.more = false;
+                        tab.pending_page = None;
                         if disconnected {
                             tab.connected = false;
                         }
@@ -377,6 +387,7 @@ impl Qrow {
                     Event::Disconnected | Event::IdleDisconnected => {
                         tab.connected = false;
                         tab.more = false;
+                        tab.pending_page = None;
                         tab.busy = false;
                         tab.cancelling = false;
                         tab.status = if matches!(event, Event::IdleDisconnected) {
@@ -428,6 +439,7 @@ impl Qrow {
                             tab.busy = false;
                             tab.cancelling = false;
                             tab.more = false;
+                            tab.pending_page = None;
                             tab.status = "Not connected".into();
                         }
                     }
@@ -513,6 +525,7 @@ impl Qrow {
         tab.saved.profile = Some(id);
         tab.connected = false;
         tab.more = false;
+        tab.pending_page = None;
         tab.error = None;
         tab.elapsed = None;
         tab.status = "Not connected".into();
@@ -572,6 +585,7 @@ impl Qrow {
             t.refresh(cx);
         });
         tab.more = false;
+        tab.pending_page = None;
         tab.error = None;
         tab.elapsed = None;
         tab.busy = true;
@@ -581,17 +595,33 @@ impl Qrow {
         tab.worker.as_ref().unwrap().run(profile, query);
         cx.notify();
     }
-    fn more(&mut self, cx: &mut Context<Self>) {
-        let t = &mut self.tabs[self.active];
-        if t.busy || !t.more {
-            return;
+    fn next_page(&mut self, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[self.active];
+        let data = tab.table.read(cx).delegate();
+        let page = data.pagination.page() + 1;
+        if page < data.pagination.pages(data.rows.len()) {
+            tab.pending_page = None;
+            results::select_page(&tab.table, page, cx);
+        } else if !tab.busy
+            && tab.more
+            && let Some(worker) = &tab.worker
+        {
+            tab.pending_page = Some(page);
+            tab.busy = true;
+            tab.cancelling = false;
+            tab.error = None;
+            tab.started = Some(Instant::now());
+            tab.status = "Fetching next page…".into();
+            worker.more();
         }
-        if let Some(w) = &t.worker {
-            t.busy = true;
-            t.started = Some(Instant::now());
-            t.status = "Fetching preview…".into();
-            w.more();
-        }
+        cx.notify();
+    }
+
+    fn previous_page(&mut self, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[self.active];
+        let page = tab.table.read(cx).delegate().pagination.page();
+        tab.pending_page = None;
+        results::select_page(&tab.table, page.saturating_sub(1), cx);
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
@@ -809,7 +839,7 @@ impl Qrow {
                 data_type: "DOUBLE".into(),
             }));
             data.schema(columns);
-            data.rows = (0..1000)
+            data.rows = (0..2250)
                 .map(|i| {
                     let mut row = vec![
                         Some(

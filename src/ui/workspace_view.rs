@@ -294,6 +294,26 @@ impl Qrow {
     fn results_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let data = tab.table.read(cx).delegate();
+        let page = data.pagination.page();
+        let pages = data.pagination.pages(data.rows.len());
+        let range = data.pagination.range(data.rows.len());
+        let count = if range.is_empty() {
+            format!("0 rows · {} columns", data.columns.len())
+        } else {
+            format!(
+                "Rows {}–{} · {} loaded · {} columns",
+                range.start + 1,
+                range.end,
+                data.rows.len(),
+                data.columns.len()
+            )
+        };
+        let page_label = format!(
+            "Page {} of {}{}",
+            page + 1,
+            pages,
+            if tab.more || tab.busy { "+" } else { "" }
+        );
         results::selection_boundary(&tab.table)
             .size_full()
             .flex()
@@ -312,23 +332,26 @@ impl Qrow {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "{} rows · {} columns",
-                                data.rows.len(),
-                                data.columns.len()
-                            )),
+                            .child(count),
                     )
                     .child(div().flex_1())
-                    .when(tab.more, |el| {
-                        el.child(
-                            Button::new("more")
-                                .small()
-                                .ghost()
-                                .label("Load 1,000 more")
-                                .disabled(tab.busy)
-                                .on_click(cx.listener(|this, _, _, cx| this.more(cx))),
-                        )
-                    }),
+                    .child(
+                        Button::new("previous-page")
+                            .small()
+                            .ghost()
+                            .label("Previous")
+                            .disabled(page == 0)
+                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                    )
+                    .child(div().text_xs().child(page_label))
+                    .child(
+                        Button::new("next-page")
+                            .small()
+                            .ghost()
+                            .label("Next")
+                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                    ),
             )
             .when_some(tab.error.clone(), |el, error| {
                 el.child(

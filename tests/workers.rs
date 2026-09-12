@@ -6,7 +6,7 @@ use qrow::{
 };
 use std::{
     sync::{
-        Arc,
+        Arc, Barrier,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -16,11 +16,17 @@ use zeroize::Zeroizing;
 #[derive(Default)]
 struct Fixture {
     connects: AtomicUsize,
+    fetches: Arc<AtomicUsize>,
+    second_fetch: Option<Arc<Barrier>>,
+    fail_fetch: Option<usize>,
     total_rows: usize,
     value_bytes: usize,
     closes: Arc<AtomicUsize>,
 }
 struct FakeSession {
+    fetches: Arc<AtomicUsize>,
+    second_fetch: Option<Arc<Barrier>>,
+    fail_fetch: Option<usize>,
     preview_offset: Option<usize>,
     total_rows: usize,
     value_bytes: usize,
@@ -40,6 +46,9 @@ impl Connector for Fixture {
     fn connect(&self, _: &Profile, _: Zeroizing<String>) -> Result<Box<dyn Session>> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeSession {
+            fetches: self.fetches.clone(),
+            second_fetch: self.second_fetch.clone(),
+            fail_fetch: self.fail_fetch,
             preview_offset: None,
             total_rows: if self.total_rows == 0 {
                 1250
@@ -88,6 +97,14 @@ impl Session for FakeSession {
         }])
     }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        let fetch = self.fetches.fetch_add(1, Ordering::SeqCst);
+        anyhow::ensure!(self.fail_fetch != Some(fetch), "Fetch transport failed");
+        if fetch == 1
+            && let Some(barrier) = &self.second_fetch
+        {
+            barrier.wait();
+            barrier.wait();
+        }
         let end = (self.offset + count).min(self.total_rows);
         let rows: Vec<_> = (self.offset..end)
             .map(|n| {
@@ -406,4 +423,103 @@ fn cancelling_a_query_does_not_disable_future_heartbeats() {
     assert!(matches!(next(&worker), Event::Cancelled));
     assert!(matches!(next(&worker), Event::KeepAliveStarted));
     assert!(matches!(next(&worker), Event::KeepAliveFinished));
+}
+
+#[test]
+fn pages_fetch_only_on_demand_and_confirm_exhaustion_with_an_empty_fetch() {
+    let fixture = Arc::new(Fixture {
+        total_rows: 2000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    worker.run(Profile::default(), "select".into());
+    let mut values = Vec::new();
+    for page in 0..2 {
+        loop {
+            match next(&worker) {
+                Event::Rows(rows) => {
+                    values.extend(rows.into_iter().map(|row| row[0].clone().unwrap()))
+                }
+                Event::Ready { more, limited } => {
+                    assert!(more);
+                    assert!(!limited);
+                    break;
+                }
+                Event::Error { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+        assert_eq!(fixture.fetches.load(Ordering::SeqCst), (page + 1) * 4);
+        assert!(
+            worker
+                .events
+                .recv_timeout(Duration::from_millis(50))
+                .is_err()
+        );
+        worker.more();
+    }
+    assert_eq!(ready(&worker), (0, false));
+    assert_eq!(fixture.fetches.load(Ordering::SeqCst), 9);
+    assert_eq!(values, (0..2000).map(|n| n.to_string()).collect::<Vec<_>>());
+}
+
+#[test]
+fn rows_stream_before_the_page_finishes_and_cancel_discards_a_late_fetch() {
+    let barrier = Arc::new(Barrier::new(2));
+    let fixture = Arc::new(Fixture {
+        second_fetch: Some(barrier.clone()),
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    worker.run(Profile::default(), "select".into());
+    loop {
+        match next(&worker) {
+            Event::Rows(rows) => {
+                assert_eq!(rows.len(), 250);
+                break;
+            }
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    barrier.wait();
+    worker.cancel();
+    barrier.wait();
+    assert!(matches!(next(&worker), Event::Cancelled));
+    assert_eq!(fixture.fetches.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
+    let fixture = Arc::new(Fixture {
+        total_rows: 2500,
+        fail_fetch: Some(5),
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    worker.run(Profile::default(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+    worker.more();
+    match next(&worker) {
+        Event::Rows(rows) => {
+            assert_eq!(rows.len(), 250);
+            assert_eq!(rows[0][0].as_deref(), Some("1000"));
+        }
+        _ => panic!("Expected the first batch of the second page"),
+    }
+    assert!(matches!(
+        next(&worker),
+        Event::Error {
+            disconnected: true,
+            ..
+        }
+    ));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(50))
+            .is_err()
+    );
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
 }
