@@ -10,6 +10,9 @@ case "$QROW_BUILD_PROFILE" in
 esac
 QROW_BUNDLE="dist/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
+QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
+test -f "$QROW_ICON_SOURCE" || { echo "Missing application icon: $QROW_ICON_SOURCE" >&2; exit 1; }
+uv run --locked python scripts/build-icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
 # Replace the executable atomically, including when an older build is still running.
 cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
 mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
@@ -24,6 +27,7 @@ cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleDisplayName</key><string>Qrow</string>
 <key>CFBundleIdentifier</key><string>io.qrow.app</string>
 <key>CFBundleExecutable</key><string>qrow</string>
+<key>CFBundleIconFile</key><string>Qrow.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>

@@ -5,6 +5,10 @@ editing while connecting to Spark through Kyuubi. Read [README.md](README.md) fo
 the current workflow and [docs/QUALITY.md](docs/QUALITY.md) for check commands,
 budgets, and dependency exceptions.
 
+## Pull requests
+
+- Write pull request titles and descriptions in English.
+
 ## Product and architecture
 
 - Keep the application native Rust with GPUI. Do not introduce a webview, local

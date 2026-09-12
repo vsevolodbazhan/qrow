@@ -1,0 +1,46 @@
+{
+  "fill" : "system-dark",
+  "groups" : [
+    {
+      "blend-mode" : "normal",
+      "hidden" : false,
+      "layers" : [
+        {
+          "blend-mode" : "normal",
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "3_eye 2.svg",
+          "name" : "3_eye 2",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              -64,
+              -64
+            ]
+          }
+        },
+        {
+          "image-name" : "2_bird 2.svg",
+          "name" : "2_bird 2"
+        },
+        {
+          "image-name" : "0_background 2.png",
+          "name" : "0_background 2"
+        }
+      ],
+      "lighting" : "individual",
+      "shadow" : {
+        "kind" : "layer-color",
+        "opacity" : 0.3
+      },
+      "specular" : true,
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}
