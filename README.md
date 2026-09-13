@@ -233,7 +233,8 @@ cargo fmt --all -- --check
 For the disposable real-server suite and native UI release checks, see
 [End-to-end testing](docs/E2E.md). Run the backend suite with
 `sh scripts/check.sh backend-e2e`; run the native suite with
-`sh scripts/check.sh ui-e2e` from a macOS session configured for automation.
+`sh scripts/check.sh ui-e2e` with Java 17 from a macOS session configured for automation.
+Use `sh scripts/check.sh ui-e2e --runtime docker` to run its servers in local Docker instead.
 
 Local protocol tests exercise SASL authentication, session parameters, async
 execution, result metadata, exact decimal/null handling, batched fetching,

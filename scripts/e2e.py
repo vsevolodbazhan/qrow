@@ -43,6 +43,9 @@ def ready():
 
 
 def observe(action, token):
+    if action == "count" and os.environ.get("QROW_E2E_NATIVE_EVIDENCE"):
+        print(native_evidence_count(Path(os.environ["QROW_E2E_NATIVE_EVIDENCE"]), token))
+        return
     if action == "count":
         if not re.fullmatch(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)", token):
             raise ValueError("Invalid evidence filename")
@@ -64,6 +67,18 @@ def observe(action, token):
         ready()
     else:
         raise ValueError("Unknown observer action")
+
+
+def native_evidence_count(root, token):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)", token):
+        raise ValueError("Invalid evidence filename")
+    if token.endswith(".ended"):
+        reference = (root / (token.removesuffix(".ended") + ".task")).read_text().strip()
+        if not re.fullmatch(r"app-[a-zA-Z0-9_-]+", reference):
+            raise ValueError("Invalid Spark task reference")
+        token = reference + ".ended"
+    path = root / token
+    return len(path.read_text().splitlines()) if path.exists() else 0
 
 
 def bounded_command(args, timeout, log):
@@ -107,9 +122,15 @@ def main():
     parser.add_argument("suite", choices=["backend", "native-ui", "observe"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("token", nargs="?", default="unused")
+    parser.add_argument("--runtime", choices=["native", "docker"], default="native",
+                        help="Server runtime for native UI tests; backend tests always use Docker")
     args = parser.parse_args()
     if args.suite == "observe":
         observe(args.action, args.token)
+        return
+    if args.suite == "native-ui" and args.runtime == "native":
+        import native_fixture
+        native_fixture.run()
         return
     if args.suite == "native-ui":
         run(["sh", "scripts/native-e2e.sh", "--preflight"])

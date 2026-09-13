@@ -12,11 +12,12 @@ import org.apache.spark.scheduler.SparkListenerTaskEnd;
 
 /** Executor evidence for cancellation and SQL replay tests. Never shipped with Qrow. */
 public final class Blocking extends UDF {
+    private static final String EVIDENCE = System.getProperty("qrow.evidence.dir", "/evidence");
     private static void record(String token, String state) throws java.io.IOException {
         if (!token.matches("[a-zA-Z0-9_-]+")) {
             throw new IllegalArgumentException("Invalid evidence token");
         }
-        Files.writeString(Path.of("/evidence", token + "." + state), "1\n",
+        Files.writeString(Path.of(EVIDENCE, token + "." + state), "1\n",
             StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
 
@@ -37,7 +38,7 @@ public final class Blocking extends UDF {
 
     public Long evaluate(Long value, String token, Long milliseconds) throws Exception {
         String task = SparkEnv.get().conf().get("spark.app.id") + "-" + TaskContext.get().taskAttemptId();
-        Files.writeString(Path.of("/evidence", token + ".task"), task);
+        Files.writeString(Path.of(EVIDENCE, token + ".task"), task);
         record(token, "started");
         try {
             Thread.sleep(milliseconds);

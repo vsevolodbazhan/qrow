@@ -13,7 +13,6 @@ if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log
 fi
 test "${1:-}" != --preflight || exit 0
 : "${QROW_E2E_ARTIFACTS:?Run python3 scripts/e2e.py native-ui}"
-: "${QROW_E2E_PORT:?Missing isolated fixture port}"
 export QROW_DATA_DIR="$QROW_E2E_ARTIFACTS/workspace"
 export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
@@ -24,6 +23,10 @@ cleanup() {
 trap cleanup 0
 trap 'exit 130' INT
 trap 'exit 143' TERM
-sh scripts/package-macos.sh
-python3 scripts/check-size.py
+if [ "${1:-}" != --prepared ]; then
+    sh scripts/package-macos.sh
+    python3 scripts/check-size.py
+fi
+test "${1:-}" != --prepare || exit 0
+: "${QROW_E2E_PORT:?Missing isolated fixture port}"
 target/e2e-tools/native-driver

@@ -38,7 +38,7 @@ jobs:
   macos:
     name: macos
     needs: backend
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,13 +54,11 @@ jobs:
           version: "0.12.10"
       - name: check-native-automation-permissions
         run: sh scripts/native-e2e.sh --preflight
-      - name: start-local-docker
-        timeout-minutes: 10
-        run: sh scripts/ci-docker-macos.sh start
+      - name: select-java-17
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_arm64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_arm64/bin" >> "$GITHUB_PATH"
       - run: sh scripts/check.sh ui-e2e
-      - name: stop-local-docker
-        if: always()
-        run: sh scripts/ci-docker-macos.sh stop
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -68,7 +66,6 @@ jobs:
           path: |
             target/e2e/
             target/e2e-tools/preflight.log
-            target/e2e-tools/docker.log
           retention-days: 14
           if-no-files-found: error
 

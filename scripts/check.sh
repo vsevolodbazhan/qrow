@@ -45,7 +45,8 @@ case "$mode" in
         python3 scripts/e2e.py backend
         ;;
     ui-e2e|native-ui)
-        python3 scripts/e2e.py native-ui
+        shift
+        python3 scripts/e2e.py native-ui "$@"
         ;;
     all)
         "$0" scripts

@@ -99,17 +99,32 @@ and does not block the early release. Server resource use is excluded from
 Qrow's process samples. No claim about M1 performance follows from a larger CI
 runner passing these tests.
 
-## Docker on the Mac runner
+## Native reference servers on ARM
 
-Native CI uses a disposable Colima Linux VM on the same GitHub-hosted Mac.
-The VM has two CPUs and 6 GiB RAM. Docker publishes Kyuubi on loopback, and
-Qrow connects through Colima's localhost port forwarding. The stack still uses
-real LDAP, Kyuubi, and separate Spark master/worker processes.
+The native suite runs on the standard GitHub-hosted ARM `macos-15` runner.
+Java 17 starts real Kyuubi 1.12.0, Spark 3.5.3 master and worker, ZooKeeper
+3.9.3, and a loopback LDAP server using UnboundID 7.0.3. The backend Linux
+suite retains Docker Compose and OpenLDAP. Both use the same synthetic user
+LDIF, Kyuubi configuration, and executor cancellation evidence code.
 
-`scripts/ci-docker-macos.sh` installs the runtime, keeps its profile and Docker
-configuration under `RUNNER_TEMP`, and deletes the VM in an always-run cleanup
-step. It refuses to run outside an Intel macOS Actions job. Local UI tests use
-your existing local Docker runtime and the ordinary `ui-e2e` command.
+No Docker VM, external host, SSH keys, or repository secrets are needed for
+native E2E. Qrow itself remains native Rust; Java is only a test fixture.
+Set `JAVA_HOME` to a Java 17 JDK before running `sh scripts/check.sh ui-e2e`
+locally. To use Docker for the same native UI scenarios instead, run:
+
+```sh
+sh scripts/check.sh ui-e2e --runtime docker
+```
+
+This needs a local Docker daemon and does not need a host JDK.
+`tests/e2e/native-downloads.json` pins downloads and SHA-512 digests.
+Verified archives are cached under `target/e2e-downloads`.
+
+`scripts/native_fixture.py` binds servers to loopback on temporary ports,
+puts configuration and logs under the run's artifact directory, and terminates
+its server process groups, including engines and executors, after each run.
+The app is packaged before starting servers to avoid overlapping compiler and
+server memory use. Workspace and Keychain fixtures remain isolated.
 
 ## CI and merge policy
 
@@ -127,21 +142,15 @@ Their acceptance gate intentionally stays red: a maintainer must review the
 contribution and move it to an internal branch before merging. The workflow
 does not use `pull_request_target`.
 
-The native E2E job uses GitHub's standard `macos-15-intel` runner so it can
-host the Linux VM. The smaller M1 `macos-15` runner cannot provide nested
-virtualization; core builds continue to use it. This changes CI capacity, not
-Qrow's minimum hardware target. See [Docker runner support](https://github.com/marketplace/actions/setup-docker-on-macos).
-
-No external server, SSH repository variables, or SSH secrets are required.
-The driver preflight checks the graphical session and automation permissions
-before starting the VM.
+The native E2E and core macOS jobs both use `macos-15`. The driver preflight
+checks the graphical session and automation permissions before starting servers.
 
 Require `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 in branch protection. Workflow files cannot enforce this repository setting.
 The gate publishes a commit status on the tested SHA because `workflow_run`
 checks belong to the default branch. GitHub only enables this trigger once
 `e2e.yml` exists on `main`; it cannot run from this PR alone.
-Artifacts remain available for 14 days. The fixture and VM are deleted after
+Artifacts remain available for 14 days. The fixture processes are stopped after
 each run, including failure. GitHub also discards the hosted runner itself.
 Native UI success requires the complete suite to pass; compilation and driver
 preflight alone are insufficient.
@@ -156,4 +165,4 @@ accessibility information; Qrow now gives those elements roles and labels.
 The ordinary full quality suite passed, and native checks passed after this UI
 change. The isolated release package remained within the existing size budgets.
 
-These local runs do not verify the hosted Intel runner and Colima combination.
+The native JVM fixture is verified separately from these earlier Docker-based runs.
