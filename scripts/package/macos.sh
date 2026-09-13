@@ -1,7 +1,19 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
-test "$(uname -s)" = Darwin || { echo "Packaging requires macOS." >&2; exit 1; }
+. scripts/core/preflight.sh
+qrow_require_commands cargo python3 rustc uv codesign ditto
+qrow_require_python_311
+qrow_require_macos
+qrow_require_xcode_tools
+for file in Cargo.lock LICENSE NOTICE pyproject.toml uv.lock assets/app-icons/macos/qrow.png; do
+    if [ ! -f "$file" ]; then
+        echo "Missing required file: $file" >&2
+        qrow_preflight_failed=1
+    fi
+done
+qrow_preflight_finish || exit 1
+
 QROW_BUILD_PROFILE="${QROW_BUILD_PROFILE:-release}"
 case "$QROW_BUILD_PROFILE" in
     release) cargo build --locked --release --bin qrow ;;
@@ -12,7 +24,6 @@ QROW_DIST_DIR="${QROW_DIST_DIR:-dist}"
 QROW_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
 QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
-test -f "$QROW_ICON_SOURCE" || { echo "Missing application icon: $QROW_ICON_SOURCE" >&2; exit 1; }
 uv run --locked python scripts/package/icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
 # Replace the executable atomically, including when an older build is still running.
 cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"

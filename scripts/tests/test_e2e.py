@@ -72,7 +72,7 @@ class AcceptanceTests(unittest.TestCase):
                 e2e.bounded_command(["cargo"], 1, Path(directory) / "test.log")
 
     def test_failed_suite_still_collects_evidence_and_removes_volumes(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(e2e, "ROOT", Path(directory)), patch.dict(os.environ, {}, clear=True), patch.object(e2e.sys, "argv", ["e2e.py", "backend"]), patch.object(e2e, "free_port", return_value=23456), patch.object(e2e, "ready"), patch.object(e2e, "collect") as collect, patch.object(e2e, "compose", return_value=subprocess.CompletedProcess([], 0, "127.0.0.1:23456\n", "")) as compose, patch.object(e2e, "bounded_command", side_effect=RuntimeError("assertion failed")):
+        with tempfile.TemporaryDirectory() as directory, patch.object(e2e, "ROOT", Path(directory)), patch.dict(os.environ, {}, clear=True), patch.object(e2e.sys, "argv", ["e2e.py", "backend"]), patch.object(e2e, "require_commands"), patch.object(e2e, "free_port", return_value=23456), patch.object(e2e, "ready"), patch.object(e2e, "collect") as collect, patch.object(e2e, "compose", return_value=subprocess.CompletedProcess([], 0, "127.0.0.1:23456\n", "")) as compose, patch.object(e2e, "bounded_command", side_effect=RuntimeError("assertion failed")):
             with self.assertRaisesRegex(RuntimeError, "assertion failed"):
                 e2e.main()
             collect.assert_called_once()
@@ -84,8 +84,8 @@ class AcceptanceTests(unittest.TestCase):
     def test_required_gate_does_not_accept_skipped_jobs(self):
         workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
         self.assertNotIn("pull_request_target", workflow)
-        self.assertIn("needs: backend", workflow)
-        self.assertIn("needs: [backend, macos]", workflow)
+        self.assertIn("needs: changes", workflow)
+        self.assertIn("needs: [changes, backend, macos]", workflow)
         # Execute the actual gate's shell condition for each possible Actions outcome.
         script = workflow.split("      - name: require-both-suites\n", 1)[1].split("        run: |\n", 1)[1]
         import textwrap
@@ -94,9 +94,12 @@ class AcceptanceTests(unittest.TestCase):
                                       ("failure", "skipped", 1), ("success", "cancelled", 1),
                                       ("success", "failure", 1)]:
             with self.subTest(backend=backend, ui=ui):
-                result = subprocess.run(["sh", "-c", script], env={"BACKEND_RESULT": backend, "UI_RESULT": ui},
+                result = subprocess.run(["sh", "-c", script], env={"BACKEND_RESULT": backend, "UI_RESULT": ui, "E2E_REQUIRED": "true"},
                                         capture_output=True, check=False)
                 self.assertEqual(result.returncode, expected)
+        skipped = subprocess.run(["sh", "-c", script], env={"BACKEND_RESULT": "skipped", "UI_RESULT": "skipped", "E2E_REQUIRED": "false"},
+                                 capture_output=True, check=False)
+        self.assertEqual(skipped.returncode, 0)
 
     def test_commit_gate_reports_both_suite_results(self):
         workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
@@ -111,7 +114,7 @@ class AcceptanceTests(unittest.TestCase):
                     result = subprocess.run(["/bin/sh", "-c", script], check=True, capture_output=True, text=True,
                                             env={"PATH": directory, "GITHUB_REPOSITORY": "owner/repo", "TESTED_SHA": "candidate-sha",
                                                  "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
-                                                 "BACKEND_RESULT": backend, "UI_RESULT": ui})
+                                                 "BACKEND_RESULT": backend, "UI_RESULT": ui, "E2E_REQUIRED": "true"})
                     self.assertIn("repos/owner/repo/statuses/candidate-sha", result.stdout)
                     self.assertIn(f"state={state}\n", result.stdout)
                     self.assertIn("context=e2e / gate\n", result.stdout)

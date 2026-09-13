@@ -45,8 +45,10 @@ not depend on GPUI. Default builds still include the application.
 The installer sets repository-local `core.hooksPath` to `.githooks`. It refuses
 to replace a different configured hook directory. Each clone needs installation.
 
-- Pre-commit checks the staged tree: formatting, core Clippy, core tests, and
-  dependency waiver dates and CI action pins.
+- Pre-commit checks the staged tree by changed path. Rust and test changes run
+  formatting, core Clippy, and core tests. Dependency changes run policy checks.
+  Script, hook, and workflow changes run the script checks. Documentation-only
+  commits do not run checks.
 - Pre-push checks each distinct revision being pushed with the full local suite.
   Deleting a remote branch does not run checks.
 
@@ -134,8 +136,12 @@ and manual dispatch. Linux runs headless core checks, coverage, and script
 checks. A macOS ARM64 runner builds the full app, runs tests and benchmarks,
 packages it, verifies signing, and enforces size limits.
 
-Core runs in order: `dependencies`, then `backend`, then `macos`. Each job
-starts only after its prerequisite succeeds.
+The `changes` job always runs. It starts `dependencies` for Rust policy and
+lockfile changes, `backend` for Rust code or test changes, `macos` for
+application, asset, package, or native E2E changes, and the script checks in
+`backend` for scripts, hooks, and workflows. A manual dispatch runs every job. The E2E
+workflow receives the same decision and skips real-server tests when none of
+the backend or macOS paths changed.
 
 CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and

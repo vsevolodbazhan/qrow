@@ -5,6 +5,7 @@ on:
     types: [completed]
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -12,9 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    outputs:
+      e2e: ${{ steps.filter.outputs.e2e }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.event.workflow_run.id }}" --name core-changes --dir core-changes
+          echo "e2e=$(cat core-changes/e2e-required)" >> "$GITHUB_OUTPUT"
+
   backend:
     name: backend
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    needs: changes
+    if: github.event.workflow_run.conclusion == 'success' && needs.changes.outputs.e2e == 'true' && github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -37,7 +53,8 @@ jobs:
 
   macos:
     name: macos
-    needs: backend
+    needs: [changes, backend]
+    if: github.event.workflow_run.conclusion == 'success' && needs.changes.outputs.e2e == 'true' && needs.backend.result == 'success'
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -72,7 +89,7 @@ jobs:
   gate:
     name: gate
     if: always() && github.event.workflow_run.conclusion == 'success'
-    needs: [backend, macos]
+    needs: [changes, backend, macos]
     permissions:
       statuses: write
     runs-on: ubuntu-24.04
@@ -82,8 +99,9 @@ jobs:
         env:
           BACKEND_RESULT: ${{ needs.backend.result }}
           UI_RESULT: ${{ needs.macos.result }}
+          E2E_REQUIRED: ${{ needs.changes.outputs.e2e }}
         run: |
-          if [ "$BACKEND_RESULT" != success ] || [ "$UI_RESULT" != success ]; then
+          if [ "$E2E_REQUIRED" = true ] && { [ "$BACKEND_RESULT" != success ] || [ "$UI_RESULT" != success ]; }; then
             echo 'Both acceptance suites must pass on an internal branch. Fork contributions require maintainer review and an internal branch.' >&2
             exit 1
           fi
@@ -94,9 +112,10 @@ jobs:
           TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
           BACKEND_RESULT: ${{ needs.backend.result }}
           UI_RESULT: ${{ needs.macos.result }}
+          E2E_REQUIRED: ${{ needs.changes.outputs.e2e }}
         run: |
           state=failure
-          if [ "$BACKEND_RESULT" = success ] && [ "$UI_RESULT" = success ]; then
+          if [ "$E2E_REQUIRED" != true ] || { [ "$BACKEND_RESULT" = success ] && [ "$UI_RESULT" = success ]; }; then
             state=success
           fi
           gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \

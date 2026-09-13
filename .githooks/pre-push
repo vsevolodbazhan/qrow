@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+if ! command -v git >/dev/null 2>&1; then
+    echo 'Missing required command: git' >&2
+    exit 1
+fi
 repository="$(git rev-parse --show-toplevel)"
 # Verify the actual commits being pushed, including pushes from another branch.
 seen=' '

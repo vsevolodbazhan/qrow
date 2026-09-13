@@ -24,6 +24,8 @@ class HookTests(unittest.TestCase):
         for name in ["pre-commit", "pre-push"]:
             shutil.copy2(ROOT / ".githooks" / name, self.repo / ".githooks" / name)
         shutil.copy2(ROOT / "scripts/hooks/snapshot.sh", self.repo / "scripts/hooks/snapshot.sh")
+        (self.repo / "scripts/core").mkdir()
+        shutil.copy2(ROOT / "scripts/core/preflight.sh", self.repo / "scripts/core/preflight.sh")
         (self.repo / "scripts/check.sh").write_text('#!/bin/sh\nset -eu\ntest "$(cat payload)" = good\n')
         (self.repo / "payload").write_text("good")
         self.git("add", ".")

@@ -1,6 +1,10 @@
 #!/bin/sh
 # Check committed/staged content without touching the user's worktree or index.
 set -eu
+# shellcheck disable=SC1091 # The hook can run from any working directory.
+. "$(dirname "$0")/../core/preflight.sh"
+qrow_require_commands git mktemp tar
+qrow_preflight_finish || exit 1
 repository="$(git rev-parse --show-toplevel)"
 revision="${1:?Expected a Git tree or commit}"
 mode="${2:-hook}"

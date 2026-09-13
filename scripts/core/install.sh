@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+. scripts/core/preflight.sh
+qrow_require_commands cargo rustup
+qrow_preflight_finish || exit 1
 # Pin tool versions as well as the project's Rust toolchain.
 if ! cargo deny --version 2>/dev/null | grep -qx 'cargo-deny 0.20.2'; then
     cargo install --locked cargo-deny --version 0.20.2

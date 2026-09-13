@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+. scripts/core/preflight.sh
+qrow_require_commands python3 thrift
+qrow_require_python_311
+qrow_preflight_finish || exit 1
 thrift --gen rs -out src/connector vendor/TCLIService.thrift
 # Thrift 0.24's Rust generator boxes union elements incorrectly and shadows a map.
 # Keep these narrowly scoped corrections reproducible alongside the pinned IDL.
