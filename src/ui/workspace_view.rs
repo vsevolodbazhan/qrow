@@ -106,17 +106,7 @@ impl Qrow {
                                         this.edit_profile(edit.clone(), false, window, cx)
                                     })),
                             )
-                    }))
-                    .when(self.profiles.is_empty(), |el| {
-                        el.child(
-                            v_flex().p_2().gap_2().child("No connections").child(
-                                div()
-                                    .text_sm()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Add a Kyuubi connection to run SQL."),
-                            ),
-                        )
-                    }),
+                    })),
             )
     }
 
