@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 test "$(uname -s)" = Darwin || { echo 'Native UI tests require macOS.' >&2; exit 1; }
 mkdir -p target/e2e-tools
-if [ ! -x target/e2e-tools/native-driver ] || [ tests/e2e/native/Driver.swift -nt target/e2e-tools/native-driver ]; then
+if [ ! -x target/e2e-tools/native-driver ] || [ -n "$(find tests/e2e/native/Driver.swift -newer target/e2e-tools/native-driver -print)" ]; then
     swiftc -warnings-as-errors tests/e2e/native/Driver.swift -o target/e2e-tools/native-driver
 fi
 if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log 2>&1; then
