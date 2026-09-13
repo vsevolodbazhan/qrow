@@ -12,7 +12,7 @@ import tarfile
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/e2e/fixture"
 
 
@@ -95,8 +95,8 @@ def run():
 
 
 def run_fixture():
-    import e2e
-    e2e.run(["sh", "scripts/native-e2e.sh", "--preflight"])
+    import run as runner
+    runner.run(["sh", "scripts/e2e/driver.sh", "--preflight"])
     java_home = Path(os.environ["JAVA_HOME"])
     java = str(java_home / "bin/java")
     paths = downloads()
@@ -108,13 +108,13 @@ def run_fixture():
     os.environ["QROW_E2E_NATIVE_EVIDENCE"] = str(evidence)
     print(f"Artifacts: {artifacts}", flush=True)
     # Build before starting the JVMs to keep compiler and server memory separate.
-    e2e.bounded_command(["sh", "scripts/native-e2e.sh", "--prepare"], 1200, artifacts / "package.log")
+    runner.bounded_command(["sh", "scripts/e2e/driver.sh", "--prepare"], 1200, artifacts / "package.log")
     classes = artifacts / "classes"
     classes.mkdir()
-    e2e.run([str(java_home / "bin/javac"), "-cp", f"{paths['spark']}/jars/*:{paths['ldap']}",
+    runner.run([str(java_home / "bin/javac"), "-cp", f"{paths['spark']}/jars/*:{paths['ldap']}",
              "-d", str(classes), str(FIXTURE / "Blocking.java"), str(FIXTURE / "Ldap.java")])
     jar = artifacts / "qrow-fixture.jar"
-    e2e.run([str(java_home / "bin/jar"), "cf", str(jar), "-C", str(classes), "."])
+    runner.run([str(java_home / "bin/jar"), "cf", str(jar), "-C", str(classes), "."])
     listeners = [socket.socket() for _ in range(5)]
     try:
         for listener in listeners:
@@ -163,14 +163,14 @@ def run_fixture():
             raise RuntimeError("Native fixture never became ready; see readiness.log")
         servers.check()
         (artifacts / "reference.json").write_text(json.dumps({"kyuubi": "1.12.0", "spark": "3.5.3", "authentication": "LDAP", "spark_master": "standalone", "fixture": "native-jvm", "architecture": os.uname().machine}, indent=2) + "\n")
-        e2e.bounded_command(["sh", "scripts/native-e2e.sh", "--prepared"], 1200, artifacts / "native-ui.log")
+        runner.bounded_command(["sh", "scripts/e2e/driver.sh", "--prepared"], 1200, artifacts / "native-ui.log")
         servers.check()
     except BaseException as error:
         (artifacts / "failure.txt").write_text(str(error) + "\n")
         raise
     finally:
         servers.stop()
-        e2e.run(["python3", "scripts/native-e2e-cleanup.py"])
+        runner.run(["python3", "scripts/e2e/keychain.py"])
 
 
 if __name__ == "__main__":

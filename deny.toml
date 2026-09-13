@@ -3,7 +3,7 @@ targets = ["aarch64-apple-darwin"]
 
 [advisories]
 # These inherited maintenance advisories have no compatible fixed releases.
-# Each waiver expires; scripts/check-policy.py enforces the dates.
+# Each waiver expires; scripts/core/policy.py enforces the dates.
 ignore = [
     { id = "RUSTSEC-2024-0384", reason = "instant via GPUI Component notify 7. Requires upstream notify migration. review-by: 2026-12-11" },
     { id = "RUSTSEC-2024-0436", reason = "paste in GPUI Component and Metal bindings. Requires upstream macro migration. review-by: 2026-12-11" },

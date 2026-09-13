@@ -27,19 +27,19 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: core
-      - run: sh scripts/check.sh backend
+      - run: sh scripts/core/backend.sh
       - name: Install script linters
         run: |
           sudo apt-get update
           sudo apt-get install --yes shellcheck
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - run: sh scripts/check.sh scripts
+      - run: sh scripts/core/scripts.sh
       - name: Install coverage tooling
         run: |
           cargo install --locked cargo-llvm-cov --version 0.9.1
           rustup component add llvm-tools-preview
-      - run: sh scripts/check.sh coverage
+      - run: sh scripts/core/coverage.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: core-coverage
@@ -63,14 +63,14 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      - run: sh scripts/check.sh macos
+      - run: sh scripts/core/macos.sh
       - name: SQL performance budgets
         shell: bash
         run: |
           set -o pipefail
-          sh scripts/check.sh performance | tee performance.txt
-      - run: sh scripts/package-macos.sh
-      - run: python3 scripts/check-size.py
+          sh scripts/core/performance.sh | tee performance.txt
+      - run: sh scripts/package/macos.sh
+      - run: python3 scripts/core/size.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-package-and-performance
@@ -93,6 +93,6 @@ jobs:
         with:
           shared-key: dependency-tools
           cache-all-crates: true
-      - run: sh scripts/install-check-tools.sh
-      - run: python3 scripts/check-policy.py
-      - run: sh scripts/check.sh dependencies
+      - run: sh scripts/core/install.sh
+      - run: python3 scripts/core/policy.py
+      - run: sh scripts/core/dependencies.sh

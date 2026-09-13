@@ -16,7 +16,7 @@ The initial image download and build are substantially larger than the app.
 Use the repository's pinned Rust toolchain and Python 3.11 or later.
 
 ```sh
-sh scripts/check.sh backend-e2e
+sh scripts/check.sh e2e/backend
 ```
 
 This command builds and starts the fixture, waits for an LDAP-authenticated SQL
@@ -66,8 +66,8 @@ real pointer and keyboard events; it takes focus while running. It uses the
 app's accessibility tree to locate controls and assert displayed values.
 
 ```sh
-sh scripts/native-e2e.sh --preflight
-sh scripts/check.sh ui-e2e
+sh scripts/e2e/driver.sh --preflight
+sh scripts/check.sh e2e/macos
 ```
 
 The compiled driver at `target/e2e-tools/native-driver`, or its invoking terminal
@@ -88,7 +88,7 @@ paste shortcuts and restores the previous clipboard contents. Clicks allow
 dialog geometry and input focus to settle; assertions wait for the resulting
 control values and enabled states.
 An OS crash or SIGKILL during a profile save can interrupt credential cleanup;
-rerun `scripts/native-e2e-cleanup.py` with that run's `QROW_E2E_ARTIFACTS` once its
+rerun `scripts/e2e/keychain.py` with that run's `QROW_E2E_ARTIFACTS` once its
 workspace exists. It validates the fixture directory and profiles before removal.
 
 The driver records Qrow process RSS in KiB and CPU percentage through `ps`.
@@ -109,18 +109,18 @@ LDIF, Kyuubi configuration, and executor cancellation evidence code.
 
 No Docker VM, external host, SSH keys, or repository secrets are needed for
 native E2E. Qrow itself remains native Rust; Java is only a test fixture.
-Set `JAVA_HOME` to a Java 17 JDK before running `sh scripts/check.sh ui-e2e`
+Set `JAVA_HOME` to a Java 17 JDK before running `sh scripts/check.sh e2e/macos`
 locally. To use Docker for the same native UI scenarios instead, run:
 
 ```sh
-sh scripts/check.sh ui-e2e --runtime docker
+sh scripts/check.sh e2e/macos --runtime docker
 ```
 
 This needs a local Docker daemon and does not need a host JDK.
 `tests/e2e/native-downloads.json` pins downloads and SHA-512 digests.
 Verified archives are cached under `target/e2e-downloads`.
 
-`scripts/native_fixture.py` binds servers to loopback on temporary ports,
+`scripts/e2e/servers.py` binds servers to loopback on temporary ports,
 puts configuration and logs under the run's artifact directory, and terminates
 its server process groups, including engines and executors, after each run.
 The app is packaged before starting servers to avoid overlapping compiler and
@@ -165,4 +165,9 @@ accessibility information; Qrow now gives those elements roles and labels.
 The ordinary full quality suite passed, and native checks passed after this UI
 change. The isolated release package remained within the existing size budgets.
 
-The native JVM fixture is verified separately from these earlier Docker-based runs.
+On 2026-09-13, the native JVM fixture passed the same UI scenarios locally on
+ARM, including loopback engine discovery and executor/driver cancellation
+markers. The explicit `--runtime docker` UI run also passed after this change.
+The [hosted verification run](https://github.com/vsevolodbazhan/qrow/actions/runs/34740343377)
+also passed both backend E2E and native UI E2E on the standard ARM `macos-15`
+runner. The temporary verification workflow was removed afterward.

@@ -79,14 +79,14 @@ budgets, and dependency exceptions.
   claim compatibility with every deployment, or imply live cancellation was
   verified by local protocol tests. The probe only runs `SELECT 1`.
 - Run the checks appropriate to the change through `scripts/check.sh`. Use
-  `core` for backend changes, `native` for UI changes, `scripts` for automation,
-  and the full suite for dependency or cross-cutting changes. Native Clippy and
+  `core/backend` for backend changes, `core/macos` for UI changes,
+  `core/scripts` for automation, and the full suite for dependency or cross-cutting changes. Native Clippy and
   core coverage do not verify GUI interaction behavior.
 - Do not loosen lint rules, coverage floors, performance budgets, or dependency
   policy merely to make checks pass. Investigate failures. Keep unavoidable
   dependency exceptions specific, justified, and subject to enforced review dates.
 - Preserve generated Proptest regression seeds when fixing discovered failures.
-  Change Thrift generation through `scripts/generate-thrift.sh` and the vendored
+  Change Thrift generation through `scripts/generate/thrift.sh` and the vendored
   interface; do not hand-edit generated bindings without a reproducible change.
 - Hooks check Git snapshots, not the working copy. Include required code and
   configuration in the staged change instead of bypassing a failing hook. Hook

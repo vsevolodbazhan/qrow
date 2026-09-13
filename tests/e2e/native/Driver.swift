@@ -249,7 +249,7 @@ final class Driver {
         let token = "ui-" + UUID().uuidString.lowercased()
         try query("SELECT qrow_block(id, '\(token)', CAST(60000 AS BIGINT)) FROM range(1)")
         var deadline = clock.now.advanced(by: .seconds(150))
-        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).started"]) != "1" {
+        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).started"]) != "1" {
             try require(clock.now < deadline, "Spark executor never started UI query")
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -261,17 +261,17 @@ final class Driver {
         let cancelStarted = clock.now
         try press("Cancel")
         deadline = cancelStarted.advanced(by: .seconds(10))
-        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).interrupted"]) != "1" {
+        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).interrupted"]) != "1" {
             try require(clock.now < deadline, "UI cancellation did not stop Spark within 10 seconds")
             Thread.sleep(forTimeInterval: 0.1)
         }
-        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).ended"]) != "1" {
+        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).ended"]) != "1" {
             try require(clock.now < deadline, "Spark driver did not confirm terminal task within 10 seconds")
             Thread.sleep(forTimeInterval: 0.1)
         }
         _ = try wait("Cancelled · partial preview retained", timeout: 2)
         try require(clock.now <= deadline, "UI cancellation exceeded 10 seconds")
-        try require(try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
+        try require(try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
         try snapshot("cancelled")
         try query("SELECT 'after-cancel-works' AS result")
         _ = try wait("after-cancel-works")

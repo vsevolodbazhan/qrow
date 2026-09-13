@@ -26,7 +26,7 @@ only their display prefixes; clipboard commands retain full values.
 
 - `sh scripts/check.sh` passed, including core and native tests, script checks,
   dependency audit, SQL performance budgets, and core coverage.
-- `sh scripts/check.sh native` passed again after the final UI corrections.
+- `sh scripts/check.sh core/macos` passed again after the final UI corrections.
 - The signed release bundle passed packaging and size checks. The executable
   is 21.09 MiB and the archive is 7.60 MiB, below the 24 MiB and 10 MiB budgets.
 - The final release demo reported 218 ms for UI initialization. This is one

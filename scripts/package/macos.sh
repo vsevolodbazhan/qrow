@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 test "$(uname -s)" = Darwin || { echo "Packaging requires macOS." >&2; exit 1; }
 QROW_BUILD_PROFILE="${QROW_BUILD_PROFILE:-release}"
 case "$QROW_BUILD_PROFILE" in
@@ -13,13 +13,13 @@ QROW_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
 QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
 test -f "$QROW_ICON_SOURCE" || { echo "Missing application icon: $QROW_ICON_SOURCE" >&2; exit 1; }
-uv run --locked python scripts/build-icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
+uv run --locked python scripts/package/icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
 # Replace the executable atomically, including when an older build is still running.
 cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
 mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
 cp NOTICE "$QROW_BUNDLE/Contents/Resources/NOTICE"
 cp LICENSE "$QROW_BUNDLE/Contents/Resources/LICENSE"
-python3 scripts/third-party-notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
+python3 scripts/package/notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

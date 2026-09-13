@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "tests/e2e/compose.yml"
 
 
@@ -119,7 +119,7 @@ def free_port():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("suite", choices=["backend", "native-ui", "observe"])
+    parser.add_argument("suite", choices=["backend", "macos", "observe"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("token", nargs="?", default="unused")
     parser.add_argument("--runtime", choices=["native", "docker"], default="native",
@@ -128,12 +128,12 @@ def main():
     if args.suite == "observe":
         observe(args.action, args.token)
         return
-    if args.suite == "native-ui" and args.runtime == "native":
-        import native_fixture
-        native_fixture.run()
+    if args.suite == "macos" and args.runtime == "native":
+        import servers
+        servers.run()
         return
-    if args.suite == "native-ui":
-        run(["sh", "scripts/native-e2e.sh", "--preflight"])
+    if args.suite == "macos":
+        run(["sh", "scripts/e2e/driver.sh", "--preflight"])
     project = "qrow-e2e-" + uuid.uuid4().hex[:12]
     os.environ["QROW_E2E_PROJECT"] = project
     artifacts = ROOT / "target/e2e" / project
@@ -156,7 +156,7 @@ def main():
                              "live_kyuubi", "--", "--ignored", "--test-threads=1", "--nocapture"],
                             1200, artifacts / "backend.log")
         else:
-            bounded_command(["sh", "scripts/native-e2e.sh"], 1200, artifacts / "native-ui.log")
+            bounded_command(["sh", "scripts/e2e/driver.sh"], 1200, artifacts / "native-ui.log")
     except BaseException as error:
         failure = error
         (artifacts / "failure.txt").write_text(str(error) + "\n")
@@ -171,9 +171,9 @@ def main():
         except Exception as error:
             print(f"Fixture cleanup failed: {error}", file=sys.stderr)
             failure = failure or error
-        if args.suite == "native-ui":
+        if args.suite == "macos":
             try:
-                run(["python3", "scripts/native-e2e-cleanup.py"])
+                run(["python3", "scripts/e2e/keychain.py"])
             except Exception as error:
                 failure = failure or error
     if failure:

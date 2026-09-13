@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location("e2e", ROOT / "scripts/e2e.py")
+spec = importlib.util.spec_from_file_location("e2e", ROOT / "scripts/e2e/run.py")
 e2e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e2e)
 

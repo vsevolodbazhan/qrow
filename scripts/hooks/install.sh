@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 existing="$(git config --get core.hooksPath || true)"
 if [ -n "$existing" ] && [ "$existing" != '.githooks' ]; then
     echo "Existing hooksPath is $existing; refusing to replace another hook setup." >&2

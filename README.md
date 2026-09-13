@@ -41,7 +41,7 @@ shader compilation, so the separate Xcode Metal compiler is not required either.
 For normal use, build the optimized application bundle and launch it:
 
 ```sh
-sh scripts/package-macos.sh
+sh scripts/package/macos.sh
 open dist/Qrow.app
 ```
 
@@ -53,7 +53,7 @@ installed database driver is required.
 The icon compiler is portable and can run on Linux before the final macOS build:
 
 ```sh
-uv run --locked python scripts/build-icon.py assets/app-icons/macos/qrow.png Qrow.icns
+uv run --locked python scripts/package/icon.py assets/app-icons/macos/qrow.png Qrow.icns
 ```
 
 You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
@@ -213,8 +213,8 @@ Install and enable the development checks and Git hooks:
 
 ```sh
 brew install shellcheck actionlint
-sh scripts/install-check-tools.sh
-sh scripts/install-hooks.sh
+sh scripts/core/install.sh
+sh scripts/hooks/install.sh
 sh scripts/check.sh
 ```
 
@@ -232,9 +232,9 @@ cargo fmt --all -- --check
 
 For the disposable real-server suite and native UI release checks, see
 [End-to-end testing](docs/E2E.md). Run the backend suite with
-`sh scripts/check.sh backend-e2e`; run the native suite with
-`sh scripts/check.sh ui-e2e` with Java 17 from a macOS session configured for automation.
-Use `sh scripts/check.sh ui-e2e --runtime docker` to run its servers in local Docker instead.
+`sh scripts/check.sh e2e/backend`; run the native suite with
+`sh scripts/check.sh e2e/macos` with Java 17 from a macOS session configured for automation.
+Use `sh scripts/check.sh e2e/macos --runtime docker` to run its servers in local Docker instead.
 
 Local protocol tests exercise SASL authentication, session parameters, async
 execution, result metadata, exact decimal/null handling, batched fetching,
@@ -272,7 +272,7 @@ Generated bindings are checked in, so building the application does not need the
 Thrift compiler. To regenerate them, install Thrift **0.24.0** and run:
 
 ```sh
-sh scripts/generate-thrift.sh
+sh scripts/generate/thrift.sh
 ```
 
 The script applies four compiler-output corrections for union collections.
