@@ -99,25 +99,17 @@ and does not block the early release. Server resource use is excluded from
 Qrow's process samples. No claim about M1 performance follows from a larger CI
 runner passing these tests.
 
-## Separate server host for the Mac
+## Docker on the Mac runner
 
-CI runs the native app on a Mac and the reference stack on a dedicated Linux
-Docker host. The Mac needs Docker CLI, the Compose v2 and Buildx plugins, SSH, Swift command
-line tools, Rust, Python, and uv. The Linux account needs Docker access and
-Python 3. This host must contain only disposable test infrastructure.
+Native CI uses a disposable Colima Linux VM on the same GitHub-hosted Mac.
+The VM has two CPUs and 6 GiB RAM. Docker publishes Kyuubi on loopback, and
+Qrow connects through Colima's localhost port forwarding. The stack still uses
+real LDAP, Kyuubi, and separate Spark master/worker processes.
 
-Local runs can use the same arrangement with an existing SSH alias:
-
-```sh
-export QROW_E2E_SSH=qrow-test-host
-export DOCKER_HOST=ssh://qrow-test-host
-sh scripts/check.sh ui-e2e
-```
-
-Images build on the Docker host using copied build contexts and named volumes;
-there are no local bind-mount assumptions. A job-local SSH tunnel forwards the
-fixture's loopback port to the Mac. The Linux host never exposes LDAP or
-unencrypted HiveServer2 publicly. Host keys must be verified in advance.
+`scripts/ci-docker-macos.sh` installs the runtime, keeps its profile and Docker
+configuration under `RUNNER_TEMP`, and deletes the VM in an always-run cleanup
+step. It refuses to run outside an Intel macOS Actions job. Local UI tests use
+your existing local Docker runtime and the ordinary `ui-e2e` command.
 
 ## CI and merge policy
 
@@ -130,38 +122,29 @@ allocated while core is running. Both suites check out the triggering run's
 allows `e2e / macos` to run, against a fresh stack. `e2e / gate` fails if
 either job fails, is cancelled, or is skipped.
 
-Fork PRs run ordinary checks without the acceptance jobs or SSH credentials.
+Fork PRs run ordinary checks without the acceptance jobs.
 Their acceptance gate intentionally stays red: a maintainer must review the
 contribution and move it to an internal branch before merging. The workflow
 does not use `pull_request_target`.
 
-The native job uses GitHub's standard `macos-15` hosted runner, matching the
-core macOS job. The driver preflight checks its graphical session and automation
-permissions before running the suite. See [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The native E2E job uses GitHub's standard `macos-15-intel` runner so it can
+host the Linux VM. The smaller M1 `macos-15` runner cannot provide nested
+virtualization; core builds continue to use it. This changes CI capacity, not
+Qrow's minimum hardware target. See [Docker runner support](https://github.com/marketplace/actions/setup-docker-on-macos).
 
-Configure these repository settings before enabling the native job:
-
-- `QROW_E2E_SSH_HOST` and `QROW_E2E_SSH_USER` variables: the dedicated Linux
-  Docker host's DNS name or IPv4 address and SSH user.
-- `QROW_E2E_SSH_KEY` secret: that test host's SSH key.
-- `QROW_E2E_KNOWN_HOSTS` secret: its independently verified known-hosts entry.
-
-The SSH configuration and key live in the job's temporary directory and are
-removed in an always-run cleanup step. The runner user's SSH files are untouched.
-Do not reuse a production Docker host or production access key.
+No external server, SSH repository variables, or SSH secrets are required.
+The driver preflight checks the graphical session and automation permissions
+before starting the VM.
 
 Require `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 in branch protection. Workflow files cannot enforce this repository setting.
 The gate publishes a commit status on the tested SHA because `workflow_run`
 checks belong to the default branch. GitHub only enables this trigger once
 `e2e.yml` exists on `main`; it cannot run from this PR alone.
-Artifacts remain available for 14 days. Configure periodic cleanup of orphaned
-`qrow-e2e-*` projects on the dedicated Docker host in case its Mac runner is
-terminated before the workflow's cleanup executes.
-
-Hosted runner GUI permissions, remote Docker connectivity, and the first hosted
-workflow run must be verified in the configured environment. Compiling the
-Swift driver or passing Rust tests does not establish native UI success.
+Artifacts remain available for 14 days. The fixture and VM are deleted after
+each run, including failure. GitHub also discards the hosted runner itself.
+Native UI success requires the complete suite to pass; compilation and driver
+preflight alone are insufficient.
 
 ## Local verification
 
@@ -173,5 +156,4 @@ accessibility information; Qrow now gives those elements roles and labels.
 The ordinary full quality suite passed, and native checks passed after this UI
 change. The isolated release package remained within the existing size budgets.
 
-These local runs do not verify GitHub's hosted graphical session or the remote
-Docker/SSH configuration. Those remain deployment checks for the CI setup above.
+These local runs do not verify the hosted Intel runner and Colima combination.

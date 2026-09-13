@@ -97,12 +97,6 @@ def collect(artifacts):
 
 
 def free_port():
-    ssh_host = os.environ.get("QROW_E2E_SSH")
-    if ssh_host:
-        code = "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"
-        # Pass one quoted remote command; the program contains no user-controlled input.
-        import shlex
-        return int(run(["ssh", ssh_host, "python3 -c " + shlex.quote(code)], capture=True).stdout)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
@@ -125,27 +119,13 @@ def main():
     artifacts.mkdir(parents=True)
     os.environ["QROW_E2E_ARTIFACTS"] = str(artifacts)
     print(f"Artifacts: {artifacts}", flush=True)
-    tunnel = None
     failure = None
     try:
         os.environ["QROW_E2E_BIND_PORT"] = str(free_port())
         compose("up", "-d", "--build", timeout=900)
-        remote_port = int(compose("port", "kyuubi", "10009", capture=True).stdout.strip().rsplit(":", 1)[1])
-        ssh_host = os.environ.get("QROW_E2E_SSH")
-        if ssh_host:
-            # Server ports remain on the Linux host's loopback interface.
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                local_port = listener.getsockname()[1]
-            tunnel = subprocess.Popen(["ssh", "-N", "-o", "ExitOnForwardFailure=yes",
-                                       "-o", "ServerAliveInterval=15", "-L",
-                                       f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}", ssh_host])
-        else:
-            local_port = remote_port
+        local_port = int(compose("port", "kyuubi", "10009", capture=True).stdout.strip().rsplit(":", 1)[1])
         os.environ["QROW_E2E_PORT"] = str(local_port)
         ready()
-        if tunnel and tunnel.poll() is not None:
-            raise RuntimeError("SSH port forwarding failed")
         (artifacts / "reference.json").write_text(json.dumps({
             "project": project, "kyuubi": "1.12.0", "spark": "3.5.3",
             "authentication": "LDAP", "spark_master": "standalone", "suite": args.suite,
@@ -175,9 +155,6 @@ def main():
                 run(["python3", "scripts/native-e2e-cleanup.py"])
             except Exception as error:
                 failure = failure or error
-        if tunnel:
-            tunnel.terminate()
-            tunnel.wait(timeout=10)
     if failure:
         raise failure
 
