@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+. scripts/core/preflight.sh
+qrow_require_commands cargo cargo-llvm-cov
+qrow_preflight_finish || exit 1
 coverage_dir="${CARGO_TARGET_DIR:-target}/coverage"
 mkdir -p "$coverage_dir"
 cargo llvm-cov --locked --no-default-features --lib --tests \

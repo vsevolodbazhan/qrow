@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import socket
 import subprocess
 import tarfile
@@ -14,6 +15,22 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/e2e/fixture"
+
+
+def preflight():
+    if os.uname().sysname != "Darwin":
+        raise RuntimeError("Native E2E tests require macOS")
+    missing = [command for command in ("curl",) if shutil.which(command) is None]
+    if missing:
+        raise RuntimeError("Missing required command: " + ", ".join(missing))
+    java_home = os.environ.get("JAVA_HOME")
+    if not java_home:
+        raise RuntimeError("JAVA_HOME must point to a JDK for native E2E tests")
+    required_tools = ("java", "javac", "jar")
+    missing = [tool for tool in required_tools if not (Path(java_home) / "bin" / tool).is_file()]
+    if missing:
+        raise RuntimeError("JAVA_HOME is missing required JDK tools: " + ", ".join(missing))
+    return Path(java_home)
 
 
 def distribution(item):
@@ -96,8 +113,8 @@ def run():
 
 def run_fixture():
     import run as runner
+    java_home = preflight()
     runner.run(["sh", "scripts/e2e/driver.sh", "--preflight"])
-    java_home = Path(os.environ["JAVA_HOME"])
     java = str(java_home / "bin/java")
     paths = downloads()
     artifacts = ROOT / "target/e2e" / ("qrow-e2e-" + uuid.uuid4().hex[:12])

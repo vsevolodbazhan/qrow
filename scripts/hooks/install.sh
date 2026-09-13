@@ -1,6 +1,9 @@
 #!/bin/sh
 set -eu
 cd "$(dirname "$0")/../.."
+. scripts/core/preflight.sh
+qrow_require_commands git
+qrow_preflight_finish || exit 1
 existing="$(git config --get core.hooksPath || true)"
 if [ -n "$existing" ] && [ "$existing" != '.githooks' ]; then
     echo "Existing hooksPath is $existing; refusing to replace another hook setup." >&2

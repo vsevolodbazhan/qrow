@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -19,6 +20,12 @@ COMPOSE = ROOT / "tests/e2e/compose.yml"
 def run(args, *, timeout=180, check=True, capture=False):
     return subprocess.run(args, cwd=ROOT, check=check, timeout=timeout,
                           text=True, capture_output=capture)
+
+
+def require_commands(*commands):
+    missing = [command for command in commands if shutil.which(command) is None]
+    if missing:
+        raise RuntimeError("Missing required command: " + ", ".join(missing))
 
 
 def compose(*args, **kwargs):
@@ -126,12 +133,16 @@ def main():
                         help="Server runtime for native UI tests; backend tests always use Docker")
     args = parser.parse_args()
     if args.suite == "observe":
+        if not os.environ.get("QROW_E2E_NATIVE_EVIDENCE"):
+            require_commands("docker")
         observe(args.action, args.token)
         return
     if args.suite == "macos" and args.runtime == "native":
+        require_commands("curl")
         import servers
         servers.run()
         return
+    require_commands("cargo", "docker")
     if args.suite == "macos":
         run(["sh", "scripts/e2e/driver.sh", "--preflight"])
     project = "qrow-e2e-" + uuid.uuid4().hex[:12]

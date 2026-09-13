@@ -3,9 +3,12 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import uuid
 
+if shutil.which("security") is None:
+    raise RuntimeError("Missing required command: security")
 artifacts = Path(os.environ["QROW_E2E_ARTIFACTS"]).resolve()
 root = Path(__file__).resolve().parents[2] / "target/e2e"
 if artifacts.parent != root or not artifacts.name.startswith("qrow-e2e-"):
