@@ -1,0 +1,17 @@
+dn: ou=people,dc=qrow,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: uid=qrow,ou=people,dc=qrow,dc=test
+objectClass: inetOrgPerson
+uid: qrow
+cn: Qrow Fixture
+sn: Fixture
+userPassword: qrow-test-password
+
+dn: uid=other,ou=people,dc=qrow,dc=test
+objectClass: inetOrgPerson
+uid: other
+cn: Other Fixture
+sn: Fixture
+userPassword: other-test-password

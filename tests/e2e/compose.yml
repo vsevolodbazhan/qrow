@@ -1,0 +1,52 @@
+x-spark: &spark
+  image: qrow-e2e-fixture:${QROW_E2E_PROJECT:?Use scripts/e2e.py}
+  build: ./fixture
+  init: true
+  volumes:
+    - evidence:/evidence
+  environment:
+    SPARK_NO_DAEMONIZE: '1'
+  mem_limit: 3g
+  cpus: 2
+
+services:
+  ldap:
+    build:
+      context: ./fixture
+      dockerfile: ldap.Dockerfile
+    environment:
+      LDAP_ORGANISATION: Qrow tests
+      LDAP_DOMAIN: qrow.test
+      LDAP_ADMIN_PASSWORD: fixture-admin
+      LDAP_TLS: 'false'
+    healthcheck:
+      test: [CMD, ldapwhoami, -x, -H, 'ldap://localhost', -D, 'uid=qrow,ou=people,dc=qrow,dc=test', -w, qrow-test-password]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    mem_limit: 256m
+  zookeeper:
+    image: zookeeper:3.9.3@sha256:9980cafbff742c15b339811ae829faa61c69154606ec504223560da9d31acd43
+    mem_limit: 512m
+  spark-master:
+    <<: *spark
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.master.Master, --host, spark-master]
+    mem_limit: 512m
+  spark-worker:
+    <<: *spark
+    command: [/opt/spark/bin/spark-class, org.apache.spark.deploy.worker.Worker, --cores, '2', --memory, 2g, 'spark://spark-master:7077']
+    depends_on:
+      - spark-master
+  kyuubi:
+    <<: *spark
+    ports:
+      - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use scripts/e2e.py}:10009'
+    depends_on:
+      ldap:
+        condition: service_healthy
+      zookeeper:
+        condition: service_started
+      spark-worker:
+        condition: service_started
+volumes:
+  evidence:

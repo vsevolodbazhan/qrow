@@ -39,9 +39,9 @@ impl Runner {
     }
 
     fn keep_alive(&mut self, sql: &str) -> Result<()> {
+        anyhow::ensure!(!self.stopped.load(Ordering::SeqCst), "Disconnect requested");
         let previous_target = self.target.lock().unwrap().take();
         let result = (|| -> Result<()> {
-            anyhow::ensure!(!self.stopped.load(Ordering::SeqCst), "Disconnect requested");
             let cancellation = self.session.as_mut().unwrap().execute_keep_alive(sql)?;
             *self.target.lock().unwrap() = Some(cancellation.clone());
             if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {

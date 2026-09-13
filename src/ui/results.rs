@@ -127,6 +127,8 @@ impl TableDelegate for Results {
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
         div()
+            .id(("column-header", c))
+            .role(Role::ColumnHeader)
             .flex()
             .items_center()
             .gap_2()
@@ -134,6 +136,7 @@ impl TableDelegate for Results {
             .px_1()
             .overflow_hidden()
             .text_size(self.px(12.))
+            .aria_label(self.headers[c].name.clone())
             .child(self.headers[c].name.clone())
             .when(c > 0, |el| {
                 el.child(
@@ -162,6 +165,8 @@ impl TableDelegate for Results {
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         div()
             .id(("cell", c))
+            .role(Role::Cell)
+            .aria_label(display.clone())
             .size_full()
             .px_1()
             .rounded_sm()

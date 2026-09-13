@@ -1,0 +1,297 @@
+import AppKit
+import ApplicationServices
+import Foundation
+
+// This driver uses macOS input and accessibility APIs against the packaged application.
+// It does not call Qrow internals or replace its connector.
+struct Failure: Error, CustomStringConvertible {
+    let description: String
+    init(_ description: String) { self.description = description }
+}
+let env = ProcessInfo.processInfo.environment
+let artifacts = env["QROW_E2E_ARTIFACTS"] ?? "/tmp"
+let clock = ContinuousClock()
+var inputPID: pid_t = 0
+
+func require(_ condition: Bool, _ message: String) throws {
+    if !condition { throw Failure(message) }
+}
+func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var value: CFTypeRef?
+    return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+}
+func strings(_ element: AXUIElement) -> [String] {
+    [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, "AXHelp", "AXIdentifier"]
+        .compactMap { attribute(element, $0) as? String }
+}
+func descendants(_ root: AXUIElement) -> [AXUIElement] {
+    var queue = [root]
+    var result: [AXUIElement] = []
+    var seen = Set<AXUIElement>()
+    while !queue.isEmpty && result.count < 10000 {
+        let element = queue.removeFirst()
+        if !seen.insert(element).inserted { continue }
+        result.append(element)
+        queue += (attribute(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
+    }
+    return result
+}
+func key(_ code: CGKeyCode, flags: CGEventFlags = []) {
+    for down in [true, false] {
+        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)!
+        event.flags = flags
+        event.postToPid(inputPID)
+    }
+}
+func click(_ element: AXUIElement) throws {
+    // Dialog accessibility nodes appear before their opening animation settles.
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard let position = attribute(element, kAXPositionAttribute),
+          let size = attribute(element, kAXSizeAttribute) else { throw Failure("Element has no bounds") }
+    var point = CGPoint.zero
+    var extent = CGSize.zero
+    try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")
+    AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point)
+    AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
+    print("Click \(strings(element)): \(point) \(extent)")
+    point.x += extent.width / 2
+    point.y += extent.height / 2
+    for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .left)!
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+    }
+}
+func command(_ args: [String]) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = args
+    let output = Pipe()
+    process.standardOutput = output
+    try process.run()
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    try require(process.terminationStatus == 0, "Command failed: \(args.first ?? "")")
+    return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+final class Driver {
+    let process = Process()
+    var app: AXUIElement!
+    var log: FileHandle!
+    var sampleTimer: Timer?
+    var samples = [String]()
+    func elements() -> [AXUIElement] {
+        // macOS menus can contain the user's recent files. Inspect only this app's windows.
+        ((attribute(app, kAXWindowsAttribute) as? [AXUIElement]) ?? []).flatMap(descendants)
+    }
+    func find(_ label: String, role: String? = nil) -> AXUIElement? {
+        elements().first {
+            (role == nil || attribute($0, kAXRoleAttribute) as? String == role) && strings($0).contains(label)
+        }
+    }
+    func wait(_ label: String, timeout: Double = 150, role: String? = nil) throws -> AXUIElement {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        repeat {
+            if let element = find(label, role: role) { return element }
+            try require(process.isRunning, "Qrow exited while waiting for \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Timed out waiting for \(label)")
+    }
+    func waitGone(_ label: String, timeout: Double = 10) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        while find(label) != nil {
+            try require(clock.now < deadline, "Old UI state remained visible: \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
+    }
+    func press(_ label: String) throws {
+        let deadline = clock.now.advanced(by: .seconds(150))
+        repeat {
+            if let button = find(label, role: kAXButtonRole), attribute(button, kAXEnabledAttribute) as? Bool != false {
+                try click(button)
+                return
+            }
+            try require(process.isRunning, "Qrow exited while waiting for button: \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Button never became enabled: \(label)")
+    }
+    func fill(_ label: String, _ value: String) throws {
+        // GPUI exposes inputs as text fields or text areas depending on the control.
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var input: AXUIElement?
+        repeat {
+            input = elements().first {
+                [kAXTextFieldRole, kAXTextAreaRole].contains(attribute($0, kAXRoleAttribute) as? String ?? "") && strings($0).contains(label)
+            }
+            if input != nil { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < deadline
+        guard let element = input else { throw Failure("Missing accessible input: \(label)") }
+        try click(element)
+        // Let the native click establish editor focus before sending keyboard shortcuts.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        key(0, flags: .maskCommand)
+        let clipboard = NSPasteboard.general
+        let saved = (clipboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+        defer {
+            clipboard.clearContents()
+            let restored = saved.map { data -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, value) in data { item.setData(value, forType: type) }
+                return item
+            }
+            clipboard.writeObjects(restored)
+        }
+        clipboard.clearContents()
+        clipboard.setString(value, forType: .string)
+        key(9, flags: .maskCommand)
+        if label == "Password" {
+            // macOS intentionally withholds secure text values.
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } else {
+            let deadline = clock.now.advanced(by: .seconds(5))
+            while attribute(element, kAXValueAttribute) as? String != value {
+                try require(clock.now < deadline, "Input did not accept text: \(label)")
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
+        }
+    }
+    func query(_ sql: String) throws {
+        try fill("SQL editor", sql)
+        try press("Run")
+    }
+    func snapshot(_ name: String) throws {
+        let text = elements().map { "\(attribute($0, kAXRoleAttribute) ?? "?" as CFString) \(strings($0))" }.joined(separator: "\n")
+        try text.write(toFile: "\(artifacts)/\(name)-accessibility.txt", atomically: true, encoding: .utf8)
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        guard let window = windows.first(where: {
+            $0[kCGWindowOwnerPID as String] as? Int32 == process.processIdentifier && $0[kCGWindowLayer as String] as? Int == 0
+        }), let number = window[kCGWindowNumber as String] as? UInt32 else { throw Failure("No Qrow window to capture") }
+        _ = try command(["screencapture", "-x", "-l", "\(number)", "\(artifacts)/\(name).png"])
+    }
+    func start() throws {
+        let bundle = env["QROW_E2E_BUNDLE"]!
+        let logURL = URL(fileURLWithPath: "\(artifacts)/qrow.log")
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        log = try FileHandle(forWritingTo: logURL)
+        process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
+        process.environment = env
+        process.standardOutput = log
+        process.standardError = log
+        let started = clock.now
+        try process.run()
+        inputPID = process.processIdentifier
+        app = AXUIElementCreateApplication(process.processIdentifier)
+        NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
+        _ = try wait("New connection", timeout: 20)
+        samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
+        sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if let sample = try? command(["ps", "-o", "rss=,%cpu=", "-p", "\(self.process.processIdentifier)"]) {
+                self.samples.append("\(Date().timeIntervalSince1970) \(sample)")
+            }
+        }
+    }
+    func stop() {
+        sampleTimer?.invalidate()
+        if process.isRunning {
+            NSRunningApplication(processIdentifier: process.processIdentifier)?.terminate()
+            let deadline = Date(timeIntervalSinceNow: 5)
+            while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
+            if process.isRunning { process.terminate() }
+        }
+        try? samples.joined(separator: "\n").write(toFile: "\(artifacts)/qrow-resources.txt", atomically: true, encoding: .utf8)
+        try? log?.close()
+    }
+    func test() throws {
+        try start()
+        try press("New connection")
+        for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
+                               ("Port", env["QROW_E2E_PORT"]!), ("LDAP username", "qrow"),
+                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
+            try fill(label, value)
+        }
+        try press("Save")
+        _ = try wait("Qrow E2E")
+        try press("Qrow E2E")
+        try query("SELECT 'qrow-ui-connected' AS result")
+        _ = try wait("qrow-ui-connected")
+        try snapshot("connected")
+
+        try query("SELECT concat('row-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(1001) ORDER BY id")
+        _ = try wait("row-0000")
+        try press("Next")
+        _ = try wait("row-1000")
+        _ = try wait("Page 2")
+        try press("Previous")
+        _ = try wait("row-0000")
+        _ = try wait("Page 1")
+        try snapshot("pagination")
+
+        // A bad prefix proves only the selected statement reaches Spark. Selection is UTF-16.
+        try fill("SQL editor", "invalid prefix;\nSELECT '日本語😀' AS selected_value")
+        key(123, flags: [.maskCommand, .maskShift])
+        key(36, flags: .maskCommand)
+        _ = try wait("日本語😀")
+        try snapshot("unicode-selection")
+
+        try query("CREATE TEMPORARY FUNCTION qrow_block AS 'io.qrow.fixture.Blocking'")
+        try waitGone("日本語😀")
+        _ = try wait("Complete")
+        let token = "ui-" + UUID().uuidString.lowercased()
+        try query("SELECT qrow_block(id, '\(token)', CAST(60000 AS BIGINT)) FROM range(1)")
+        var deadline = clock.now.advanced(by: .seconds(150))
+        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).started"]) != "1" {
+            try require(clock.now < deadline, "Spark executor never started UI query")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        try press("New tab")
+        try press("Qrow E2E")
+        try query("SELECT 'other-tab-works' AS result")
+        _ = try wait("other-tab-works")
+        try click(try wait("Query 1, running"))
+        let cancelStarted = clock.now
+        try press("Cancel")
+        deadline = cancelStarted.advanced(by: .seconds(10))
+        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).interrupted"]) != "1" {
+            try require(clock.now < deadline, "UI cancellation did not stop Spark within 10 seconds")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        while try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).ended"]) != "1" {
+            try require(clock.now < deadline, "Spark driver did not confirm terminal task within 10 seconds")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        _ = try wait("Cancelled · partial preview retained", timeout: 2)
+        try require(clock.now <= deadline, "UI cancellation exceeded 10 seconds")
+        try require(try command(["python3", "scripts/e2e.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
+        try snapshot("cancelled")
+        try query("SELECT 'after-cancel-works' AS result")
+        _ = try wait("after-cancel-works")
+        try press("Disconnect")
+        try query("SELECT 'reconnect-works' AS result")
+        _ = try wait("reconnect-works")
+        try snapshot("reconnected")
+        print("PASS: connection form, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+    }
+}
+
+do {
+    try require(AXIsProcessTrusted(), "Native UI tests require Accessibility permission for the driver/terminal. No UI tests ran.")
+    try require(CGPreflightScreenCaptureAccess(), "Native UI tests require Screen Recording permission for failure screenshots. No UI tests ran.")
+    if !CommandLine.arguments.contains("--preflight") {
+        let driver = Driver()
+        do { try driver.test(); driver.stop() }
+        catch { if driver.app != nil { try? driver.snapshot("failure") }; driver.stop(); throw error }
+    }
+} catch {
+    fputs("\(error)\n", stderr)
+    exit(1)
+}
