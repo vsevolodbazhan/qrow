@@ -123,8 +123,8 @@ unencrypted HiveServer2 publicly. Host keys must be verified in advance.
 
 `core.yml` retains the existing lint, test, documentation, coverage,
 dependency, performance, and package checks. `e2e.yml` runs the real-service
-and native UI suites as a reusable workflow called only after all three core
-jobs pass, using the same commit. `e2e / backend` runs first. Only its success
+and native UI suites in a separate workflow. Its backend job waits for the core
+run with the same event and commit to pass before starting tests. `e2e / backend` runs first. Only its success
 allows `e2e / macos` to run, against a fresh stack. `e2e / gate` fails if
 either job fails, is cancelled, or is skipped.
 

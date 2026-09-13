@@ -1,9 +1,14 @@
 name: e2e
 on:
-  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: e2e-${{ github.workflow }}-${{ github.ref }}
@@ -14,11 +19,17 @@ jobs:
     name: backend
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: wait-for-core
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CORE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          CORE_EVENT: ${{ github.event_name }}
+        run: python3 scripts/wait-for-core.py
       - run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:

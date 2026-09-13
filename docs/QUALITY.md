@@ -129,8 +129,8 @@ is the supported distributable.
 
 ## CI
 
-`.github/workflows/core.yml` runs on pushes, pull requests, and manual
-dispatch. Linux runs headless core checks, coverage, and script
+`.github/workflows/core.yml` runs on pushes to `main`, pull requests targeting `main`,
+and manual dispatch. Linux runs headless core checks, coverage, and script
 checks. A macOS ARM64 runner builds the full app, runs tests and benchmarks,
 packages it, verifies signing, and enforces size limits.
 
@@ -138,8 +138,8 @@ CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and
 checkout credentials are not persisted.
 
-After all three core jobs pass, core calls `.github/workflows/e2e.yml`
-for the same commit. It runs real Kyuubi/Spark checks followed by native UI checks.
+`.github/workflows/e2e.yml` runs separately and waits for core to pass for the
+same event and commit. It runs real Kyuubi/Spark checks followed by native UI checks.
 Make `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 required checks in branch protection. Fork contributions need review and an
 internal branch before the acceptance jobs run. See [End-to-end testing](E2E.md)
