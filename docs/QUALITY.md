@@ -136,8 +136,7 @@ packages it, verifies signing, and enforces size limits.
 
 CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and
-checkout credentials are not persisted. Dependabot proposes Cargo and Actions
-updates weekly, grouping the GPUI packages together.
+checkout credentials are not persisted.
 
 After all three core jobs pass, core calls `.github/workflows/e2e.yml`
 for the same commit. It runs real Kyuubi/Spark checks followed by native UI checks.
