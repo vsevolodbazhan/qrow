@@ -1,5 +1,5 @@
 #!/bin/sh
-# The same commands run locally and in CI. No live database or Keychain access.
+# Ordinary checks stay offline. Explicit acceptance modes use disposable servers and fixture credentials.
 set -eu
 cd "$(dirname "$0")/.."
 mode="${1:-all}"
@@ -16,13 +16,13 @@ case "$mode" in
         python3 -m unittest discover -s scripts/tests
         python3 scripts/check-policy.py
         ;;
-    core)
+    backend|core)
         cargo fmt --all -- --check
         cargo clippy --locked --no-default-features --all-targets -- -D warnings
         cargo test --locked --no-default-features
         RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-default-features --no-deps
         ;;
-    native)
+    macos|native)
         cargo clippy --locked --all-targets -- -D warnings
         cargo test --locked
         ;;
@@ -41,13 +41,19 @@ case "$mode" in
     performance)
         cargo bench --locked --no-default-features --bench sql
         ;;
+    backend-e2e|backend-integration)
+        python3 scripts/e2e.py backend
+        ;;
+    ui-e2e|native-ui)
+        python3 scripts/e2e.py native-ui
+        ;;
     all)
         "$0" scripts
-        "$0" core
-        "$0" native
+        "$0" backend
+        "$0" macos
         "$0" dependencies
         "$0" performance
         "$0" coverage
         ;;
-    *) echo "Usage: $0 [all|hook|scripts|core|native|dependencies|coverage|performance]" >&2; exit 2 ;;
+    *) echo "Usage: $0 [all|hook|scripts|backend|macos|dependencies|coverage|performance|backend-e2e|ui-e2e]" >&2; exit 2 ;;
 esac

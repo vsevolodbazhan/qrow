@@ -294,7 +294,14 @@ impl Qrow {
                             .child(count),
                     )
                     .child(div().flex_1())
-                    .child(div().text_xs().child(page_label))
+                    .child(
+                        div()
+                            .id("page-label")
+                            .role(Role::Label)
+                            .text_xs()
+                            .aria_label(page_label.clone())
+                            .child(page_label),
+                    )
                     .child(
                         h_flex()
                             .flex_shrink_0()
@@ -358,7 +365,15 @@ impl Qrow {
             .border_t_1()
             .border_color(cx.theme().border)
             .text_color(cx.theme().muted_foreground)
-            .child(div().min_w_0().truncate().child(tab.status.clone()))
+            .child(
+                div()
+                    .id("query-status")
+                    .role(Role::Status)
+                    .min_w_0()
+                    .truncate()
+                    .aria_label(tab.status.clone())
+                    .child(tab.status.clone()),
+            )
             .child(div().flex_1())
             .when_some(tab.elapsed, |el, elapsed| {
                 el.child(format!("{:.2} s", elapsed.as_secs_f64()))

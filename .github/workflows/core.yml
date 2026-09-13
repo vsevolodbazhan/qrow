@@ -1,21 +1,22 @@
-name: Quality
+name: core
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
-  schedule:
-    - cron: '23 5 * * 1'
 
 permissions:
   contents: read
 
 concurrency:
-  group: quality-${{ github.workflow }}-${{ github.ref }}
+  group: core-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  core:
-    name: Core / lint, tests, docs
+  backend:
+    name: backend
+    needs: dependencies
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -26,7 +27,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: core
-      - run: sh scripts/check.sh core
+      - run: sh scripts/check.sh backend
       - name: Install script linters
         run: |
           sudo apt-get update
@@ -46,8 +47,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  native:
-    name: macOS ARM64 / native, performance, package
+  macos:
+    name: macos
+    needs: backend
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -61,7 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      - run: sh scripts/check.sh native
+      - run: sh scripts/check.sh macos
       - name: SQL performance budgets
         shell: bash
         run: |
@@ -79,7 +81,7 @@ jobs:
           if-no-files-found: error
 
   dependencies:
-    name: Dependency policy
+    name: dependencies
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

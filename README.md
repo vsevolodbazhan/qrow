@@ -230,6 +230,11 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+For the disposable real-server suite and native UI release checks, see
+[End-to-end testing](docs/E2E.md). Run the backend suite with
+`sh scripts/check.sh backend-e2e`; run the native suite with
+`sh scripts/check.sh ui-e2e` from a macOS session configured for automation.
+
 Local protocol tests exercise SASL authentication, session parameters, async
 execution, result metadata, exact decimal/null handling, batched fetching,
 cancellation, and dropped connections. They do not prove server configuration,

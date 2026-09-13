@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Check optimized distributable sizes. Never measures debug binaries."""
 from pathlib import Path
+import os
 import sys
 
 root = Path(__file__).resolve().parent.parent
+dist = os.environ.get("QROW_DIST_DIR", "dist")
 limits = {
-    "dist/Qrow.app/Contents/MacOS/qrow": 24 * 1024 * 1024,
-    "dist/Qrow-macos.zip": 10 * 1024 * 1024,
+    f"{dist}/Qrow.app/Contents/MacOS/qrow": 24 * 1024 * 1024,
+    f"{dist}/Qrow-macos.zip": 10 * 1024 * 1024,
 }
 errors = []
 for name, limit in limits.items():

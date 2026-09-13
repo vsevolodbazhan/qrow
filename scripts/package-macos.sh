@@ -8,7 +8,8 @@ case "$QROW_BUILD_PROFILE" in
     debug) cargo build --locked --bin qrow ;;
     *) echo "Use release or debug for QROW_BUILD_PROFILE." >&2; exit 1 ;;
 esac
-QROW_BUNDLE="dist/Qrow.app"
+QROW_DIST_DIR="${QROW_DIST_DIR:-dist}"
+QROW_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
 QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
 test -f "$QROW_ICON_SOURCE" || { echo "Missing application icon: $QROW_ICON_SOURCE" >&2; exit 1; }
@@ -38,5 +39,5 @@ cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
 PLIST
 codesign --force --deep --sign - "$QROW_BUNDLE"
 codesign --verify --deep --strict "$QROW_BUNDLE"
-ditto -c -k --keepParent "$QROW_BUNDLE" dist/Qrow-macos.zip
-echo "Built $QROW_BUNDLE and dist/Qrow-macos.zip for $(uname -m)."
+ditto -c -k --keepParent "$QROW_BUNDLE" "$QROW_DIST_DIR/Qrow-macos.zip"
+echo "Built $QROW_BUNDLE and $QROW_DIST_DIR/Qrow-macos.zip for $(uname -m)."

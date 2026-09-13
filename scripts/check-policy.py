@@ -39,6 +39,9 @@ def check(today=None):
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         for line in path.read_text().splitlines():
             match = re.search(r"\buses:\s*([^ #]+)", line)
+            # Local reusable workflows run from the caller's commit.
+            if match and re.fullmatch(r"\./\.github/workflows/[\w-]+\.ya?ml", match[1]):
+                continue
             if match and not re.fullmatch(r"[\w.-]+/[\w./-]+@[a-f0-9]{40}", match[1]):
                 errors.append(f"Pin action to a full commit SHA in {path.name}: {match[1]}")
     return errors

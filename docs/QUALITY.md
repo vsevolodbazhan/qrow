@@ -20,15 +20,17 @@ version. Python 3.11 or later and uv are required for policy checks and packagin
 ```sh
 sh scripts/check.sh             # Full suite, including coverage and dependency audit
 sh scripts/check.sh hook        # Fast checks used before each commit
-sh scripts/check.sh core        # No GPUI dependencies; lint, tests, and rustdoc
-sh scripts/check.sh native      # Full application lint and tests
+sh scripts/check.sh backend        # No GPUI dependencies; lint, tests, and rustdoc
+sh scripts/check.sh macos      # Full application lint and tests
 sh scripts/check.sh scripts     # ShellCheck, actionlint, hook and policy tests
 sh scripts/check.sh dependencies
 sh scripts/check.sh coverage
 sh scripts/check.sh performance
 ```
 
-Checks never run real Kyuubi queries, retrieve credentials, or open the UI. The
+Ordinary checks above never run real Kyuubi queries, retrieve credentials, or open the UI.
+The explicit `backend-e2e` and `ui-e2e` modes use disposable real
+servers and synthetic credentials. See [End-to-end testing](E2E.md). The
 existing Keychain integration test stays opt-in. Generated Thrift bindings are
 excluded from Clippy's normal style checks and from the coverage report. Unsafe
 code is forbidden throughout Qrow, including generated bindings. This does not
@@ -127,20 +129,27 @@ is the supported distributable.
 
 ## CI
 
-`.github/workflows/quality.yml` runs on pushes, pull requests, manual dispatch,
-and weekly schedules. Linux runs headless core checks, coverage, and script
+`.github/workflows/core.yml` runs on pushes to `main`, pull requests targeting `main`,
+and manual dispatch. Linux runs headless core checks, coverage, and script
 checks. A macOS ARM64 runner builds the full app, runs tests and benchmarks,
-packages it, verifies signing, and enforces size limits. Dependency checks also
-run weekly so new advisories are detected without a code change.
+packages it, verifies signing, and enforces size limits.
+
+Core runs in order: `dependencies`, then `backend`, then `macos`. Each job
+starts only after its prerequisite succeeds.
 
 CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and
-checkout credentials are not persisted. Dependabot proposes Cargo and Actions
-updates weekly, grouping the GPUI packages together.
+checkout credentials are not persisted.
 
-No remote is configured yet, so the hosted workflow has not run. After pushing
-to GitHub, make the three Quality jobs required checks in branch protection.
-Local checks cannot enforce remote branch protection.
+`.github/workflows/e2e.yml` starts from a successful core completion event,
+without a waiting runner. It checks out that run's head SHA and runs real
+Kyuubi/Spark checks followed by native UI checks. The gate publishes its result
+on the tested commit; only that job has permission to write commit statuses.
+Make `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
+required checks in branch protection. Fork contributions need review and an
+internal branch before the acceptance jobs run. See [End-to-end testing](E2E.md)
+for runner setup and verification gaps. Local checks cannot enforce remote
+branch protection.
 
 GPUI Kit 0.6.1 brings `libbz2-rs-sys` 0.2.5 through its HTTP compression stack.
 Its `bzip2-1.0.6` license has an exception for that exact version. The package

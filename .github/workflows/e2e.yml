@@ -1,0 +1,128 @@
+name: e2e
+on:
+  workflow_run:
+    workflows: [core]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}-${{ github.event.workflow_run.event }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: core
+      - run: sh scripts/check.sh backend-e2e
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: backend-evidence
+          path: target/e2e/
+          retention-days: 14
+          if-no-files-found: error
+
+  macos:
+    name: macos
+    needs: backend
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      QROW_E2E_SSH: qrow-e2e-docker
+      DOCKER_HOST: ssh://qrow-e2e-docker
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: check-native-automation-permissions
+        run: sh scripts/native-e2e.sh --preflight
+      - name: configure-isolated-docker-host
+        env:
+          E2E_SSH_HOST: ${{ vars.QROW_E2E_SSH_HOST }}
+          E2E_SSH_USER: ${{ vars.QROW_E2E_SSH_USER }}
+          E2E_SSH_KEY: ${{ secrets.QROW_E2E_SSH_KEY }}
+          E2E_KNOWN_HOSTS: ${{ secrets.QROW_E2E_KNOWN_HOSTS }}
+        run: python3 scripts/e2e-ssh.py
+      - name: install-docker-client
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          brew install docker docker-compose docker-buildx
+          mkdir -p "$RUNNER_TEMP/qrow-docker/cli-plugins"
+          ln -s "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$RUNNER_TEMP/qrow-docker/cli-plugins/docker-compose"
+          ln -s "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$RUNNER_TEMP/qrow-docker/cli-plugins/docker-buildx"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/qrow-docker" >> "$GITHUB_ENV"
+      - name: check-docker-tools
+        run: |
+          docker version
+          docker compose version
+          docker buildx version
+      - run: sh scripts/check.sh ui-e2e
+      - name: remove-ssh-credentials
+        if: always()
+        run: python3 scripts/e2e-ssh.py --cleanup
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-evidence
+          path: |
+            target/e2e/
+            target/e2e-tools/preflight.log
+          retention-days: 14
+          if-no-files-found: error
+
+  gate:
+    name: gate
+    if: always() && github.event.workflow_run.conclusion == 'success'
+    needs: [backend, macos]
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: require-both-suites
+        env:
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          UI_RESULT: ${{ needs.macos.result }}
+        run: |
+          if [ "$BACKEND_RESULT" != success ] || [ "$UI_RESULT" != success ]; then
+            echo 'Both acceptance suites must pass on an internal branch. Fork contributions require maintainer review and an internal branch.' >&2
+            exit 1
+          fi
+      - name: publish-commit-gate
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          UI_RESULT: ${{ needs.macos.result }}
+        run: |
+          state=failure
+          if [ "$BACKEND_RESULT" = success ] && [ "$UI_RESULT" = success ]; then
+            state=success
+          fi
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$TESTED_SHA" \
+            -f state="$state" -f context='e2e / gate' \
+            -f description='Real backend and native UI acceptance' \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
