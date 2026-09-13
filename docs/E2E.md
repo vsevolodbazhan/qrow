@@ -123,8 +123,10 @@ unencrypted HiveServer2 publicly. Host keys must be verified in advance.
 
 `core.yml` retains the existing lint, test, documentation, coverage,
 dependency, performance, and package checks. `e2e.yml` runs the real-service
-and native UI suites in a separate workflow. Its backend job waits for the core
-run with the same event and commit to pass before starting tests. `e2e / backend` runs first. Only its success
+and native UI suites after a successful `core` completion event. No runner is
+allocated while core is running. Both suites check out the triggering run's
+`head_sha`; fork code is excluded from jobs with test infrastructure access.
+`e2e / backend` runs first. Only its success
 allows `e2e / macos` to run, against a fresh stack. `e2e / gate` fails if
 either job fails, is cancelled, or is skipped.
 
@@ -150,6 +152,9 @@ Do not reuse a production Docker host or production access key.
 
 Require `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 in branch protection. Workflow files cannot enforce this repository setting.
+The gate publishes a commit status on the tested SHA because `workflow_run`
+checks belong to the default branch. GitHub only enables this trigger once
+`e2e.yml` exists on `main`; it cannot run from this PR alone.
 Artifacts remain available for 14 days. Configure periodic cleanup of orphaned
 `qrow-e2e-*` projects on the dedicated Docker host in case its Mac runner is
 terminated before the workflow's cleanup executes.

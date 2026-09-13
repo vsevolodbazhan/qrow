@@ -138,8 +138,10 @@ CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and
 checkout credentials are not persisted.
 
-`.github/workflows/e2e.yml` runs separately and waits for core to pass for the
-same event and commit. It runs real Kyuubi/Spark checks followed by native UI checks.
+`.github/workflows/e2e.yml` starts from a successful core completion event,
+without a waiting runner. It checks out that run's head SHA and runs real
+Kyuubi/Spark checks followed by native UI checks. The gate publishes its result
+on the tested commit; only that job has permission to write commit statuses.
 Make `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 required checks in branch protection. Fork contributions need review and an
 internal branch before the acceptance jobs run. See [End-to-end testing](E2E.md)

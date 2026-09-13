@@ -73,7 +73,7 @@ class AcceptanceTests(unittest.TestCase):
         # Execute the actual gate's shell condition for each possible Actions outcome.
         script = workflow.split("      - name: require-both-suites\n", 1)[1].split("        run: |\n", 1)[1]
         import textwrap
-        script = textwrap.dedent(script)
+        script = textwrap.dedent(script.split("      - name: publish-commit-gate\n", 1)[0])
         for backend, ui, expected in [("success", "success", 0), ("skipped", "skipped", 1),
                                       ("failure", "skipped", 1), ("success", "cancelled", 1),
                                       ("success", "failure", 1)]:
@@ -81,3 +81,21 @@ class AcceptanceTests(unittest.TestCase):
                 result = subprocess.run(["sh", "-c", script], env={"BACKEND_RESULT": backend, "UI_RESULT": ui},
                                         capture_output=True, check=False)
                 self.assertEqual(result.returncode, expected)
+
+    def test_commit_gate_reports_both_suite_results(self):
+        workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
+        import textwrap
+        script = textwrap.dedent(workflow.split("      - name: publish-commit-gate\n", 1)[1].split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            gh = Path(directory) / "gh"
+            gh.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+            gh.chmod(0o755)
+            for backend, ui, state in [("success", "success", "success"), ("failure", "skipped", "failure"), ("success", "cancelled", "failure")]:
+                with self.subTest(backend=backend, ui=ui):
+                    result = subprocess.run(["/bin/sh", "-c", script], check=True, capture_output=True, text=True,
+                                            env={"PATH": directory, "GITHUB_REPOSITORY": "owner/repo", "TESTED_SHA": "candidate-sha",
+                                                 "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
+                                                 "BACKEND_RESULT": backend, "UI_RESULT": ui})
+                    self.assertIn("repos/owner/repo/statuses/candidate-sha", result.stdout)
+                    self.assertIn(f"state={state}\n", result.stdout)
+                    self.assertIn("context=e2e / gate\n", result.stdout)
