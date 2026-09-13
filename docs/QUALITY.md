@@ -134,6 +134,9 @@ and manual dispatch. Linux runs headless core checks, coverage, and script
 checks. A macOS ARM64 runner builds the full app, runs tests and benchmarks,
 packages it, verifies signing, and enforces size limits.
 
+Core runs in order: `dependencies`, then `backend`, then `macos`. Each job
+starts only after its prerequisite succeeds.
+
 CI uploads the core LCOV report and the macOS package/performance report for 14
 days. Actions are pinned to immutable commits, permissions are read-only, and
 checkout credentials are not persisted.
