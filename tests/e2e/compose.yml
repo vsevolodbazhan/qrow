@@ -1,5 +1,5 @@
 x-spark: &spark
-  image: qrow-e2e-fixture:${QROW_E2E_PROJECT:?Use scripts/e2e.py}
+  image: qrow-e2e-fixture:${QROW_E2E_PROJECT:?Use scripts/e2e/run.py}
   build: ./fixture
   init: true
   volumes:
@@ -40,7 +40,7 @@ services:
   kyuubi:
     <<: *spark
     ports:
-      - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use scripts/e2e.py}:10009'
+      - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use scripts/e2e/run.py}:10009'
     depends_on:
       ldap:
         condition: service_healthy

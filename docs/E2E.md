@@ -16,7 +16,7 @@ The initial image download and build are substantially larger than the app.
 Use the repository's pinned Rust toolchain and Python 3.11 or later.
 
 ```sh
-sh scripts/check.sh backend-e2e
+sh scripts/check.sh e2e/backend
 ```
 
 This command builds and starts the fixture, waits for an LDAP-authenticated SQL
@@ -66,8 +66,8 @@ real pointer and keyboard events; it takes focus while running. It uses the
 app's accessibility tree to locate controls and assert displayed values.
 
 ```sh
-sh scripts/native-e2e.sh --preflight
-sh scripts/check.sh ui-e2e
+sh scripts/e2e/driver.sh --preflight
+sh scripts/check.sh e2e/macos
 ```
 
 The compiled driver at `target/e2e-tools/native-driver`, or its invoking terminal
@@ -88,7 +88,7 @@ paste shortcuts and restores the previous clipboard contents. Clicks allow
 dialog geometry and input focus to settle; assertions wait for the resulting
 control values and enabled states.
 An OS crash or SIGKILL during a profile save can interrupt credential cleanup;
-rerun `scripts/native-e2e-cleanup.py` with that run's `QROW_E2E_ARTIFACTS` once its
+rerun `scripts/e2e/keychain.py` with that run's `QROW_E2E_ARTIFACTS` once its
 workspace exists. It validates the fixture directory and profiles before removal.
 
 The driver records Qrow process RSS in KiB and CPU percentage through `ps`.
@@ -99,25 +99,32 @@ and does not block the early release. Server resource use is excluded from
 Qrow's process samples. No claim about M1 performance follows from a larger CI
 runner passing these tests.
 
-## Separate server host for the Mac
+## Native reference servers on ARM
 
-CI runs the native app on a Mac and the reference stack on a dedicated Linux
-Docker host. The Mac needs Docker CLI, the Compose v2 and Buildx plugins, SSH, Swift command
-line tools, Rust, Python, and uv. The Linux account needs Docker access and
-Python 3. This host must contain only disposable test infrastructure.
+The native suite runs on the standard GitHub-hosted ARM `macos-15` runner.
+Java 17 starts real Kyuubi 1.12.0, Spark 3.5.3 master and worker, ZooKeeper
+3.9.3, and a loopback LDAP server using UnboundID 7.0.3. The backend Linux
+suite retains Docker Compose and OpenLDAP. Both use the same synthetic user
+LDIF, Kyuubi configuration, and executor cancellation evidence code.
 
-Local runs can use the same arrangement with an existing SSH alias:
+No Docker VM, external host, SSH keys, or repository secrets are needed for
+native E2E. Qrow itself remains native Rust; Java is only a test fixture.
+Set `JAVA_HOME` to a Java 17 JDK before running `sh scripts/check.sh e2e/macos`
+locally. To use Docker for the same native UI scenarios instead, run:
 
 ```sh
-export QROW_E2E_SSH=qrow-test-host
-export DOCKER_HOST=ssh://qrow-test-host
-sh scripts/check.sh ui-e2e
+sh scripts/check.sh e2e/macos --runtime docker
 ```
 
-Images build on the Docker host using copied build contexts and named volumes;
-there are no local bind-mount assumptions. A job-local SSH tunnel forwards the
-fixture's loopback port to the Mac. The Linux host never exposes LDAP or
-unencrypted HiveServer2 publicly. Host keys must be verified in advance.
+This needs a local Docker daemon and does not need a host JDK.
+`tests/e2e/native-downloads.json` pins downloads and SHA-512 digests.
+Verified archives are cached under `target/e2e-downloads`.
+
+`scripts/e2e/servers.py` binds servers to loopback on temporary ports,
+puts configuration and logs under the run's artifact directory, and terminates
+its server process groups, including engines and executors, after each run.
+The app is packaged before starting servers to avoid overlapping compiler and
+server memory use. Workspace and Keychain fixtures remain isolated.
 
 ## CI and merge policy
 
@@ -130,38 +137,23 @@ allocated while core is running. Both suites check out the triggering run's
 allows `e2e / macos` to run, against a fresh stack. `e2e / gate` fails if
 either job fails, is cancelled, or is skipped.
 
-Fork PRs run ordinary checks without the acceptance jobs or SSH credentials.
+Fork PRs run ordinary checks without the acceptance jobs.
 Their acceptance gate intentionally stays red: a maintainer must review the
 contribution and move it to an internal branch before merging. The workflow
 does not use `pull_request_target`.
 
-The native job uses GitHub's standard `macos-15` hosted runner, matching the
-core macOS job. The driver preflight checks its graphical session and automation
-permissions before running the suite. See [GitHub-hosted runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-
-Configure these repository settings before enabling the native job:
-
-- `QROW_E2E_SSH_HOST` and `QROW_E2E_SSH_USER` variables: the dedicated Linux
-  Docker host's DNS name or IPv4 address and SSH user.
-- `QROW_E2E_SSH_KEY` secret: that test host's SSH key.
-- `QROW_E2E_KNOWN_HOSTS` secret: its independently verified known-hosts entry.
-
-The SSH configuration and key live in the job's temporary directory and are
-removed in an always-run cleanup step. The runner user's SSH files are untouched.
-Do not reuse a production Docker host or production access key.
+The native E2E and core macOS jobs both use `macos-15`. The driver preflight
+checks the graphical session and automation permissions before starting servers.
 
 Require `core / backend`, `core / macos`, `core / dependencies`, and `e2e / gate`
 in branch protection. Workflow files cannot enforce this repository setting.
 The gate publishes a commit status on the tested SHA because `workflow_run`
 checks belong to the default branch. GitHub only enables this trigger once
 `e2e.yml` exists on `main`; it cannot run from this PR alone.
-Artifacts remain available for 14 days. Configure periodic cleanup of orphaned
-`qrow-e2e-*` projects on the dedicated Docker host in case its Mac runner is
-terminated before the workflow's cleanup executes.
-
-Hosted runner GUI permissions, remote Docker connectivity, and the first hosted
-workflow run must be verified in the configured environment. Compiling the
-Swift driver or passing Rust tests does not establish native UI success.
+Artifacts remain available for 14 days. The fixture processes are stopped after
+each run, including failure. GitHub also discards the hosted runner itself.
+Native UI success requires the complete suite to pass; compilation and driver
+preflight alone are insufficient.
 
 ## Local verification
 
@@ -173,5 +165,9 @@ accessibility information; Qrow now gives those elements roles and labels.
 The ordinary full quality suite passed, and native checks passed after this UI
 change. The isolated release package remained within the existing size budgets.
 
-These local runs do not verify GitHub's hosted graphical session or the remote
-Docker/SSH configuration. Those remain deployment checks for the CI setup above.
+On 2026-09-13, the native JVM fixture passed the same UI scenarios locally on
+ARM, including loopback engine discovery and executor/driver cancellation
+markers. The explicit `--runtime docker` UI run also passed after this change.
+The [hosted verification run](https://github.com/vsevolodbazhan/qrow/actions/runs/34740343377)
+also passed both backend E2E and native UI E2E on the standard ARM `macos-15`
+runner. The temporary verification workflow was removed afterward.

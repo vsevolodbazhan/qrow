@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 thrift --gen rs -out src/connector vendor/TCLIService.thrift
 # Thrift 0.24's Rust generator boxes union elements incorrectly and shadows a map.
 # Keep these narrowly scoped corrections reproducible alongside the pinned IDL.

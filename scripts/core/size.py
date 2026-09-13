@@ -4,7 +4,7 @@ from pathlib import Path
 import os
 import sys
 
-root = Path(__file__).resolve().parent.parent
+root = Path(__file__).resolve().parents[2]
 dist = os.environ.get("QROW_DIST_DIR", "dist")
 limits = {
     f"{dist}/Qrow.app/Contents/MacOS/qrow": 24 * 1024 * 1024,
@@ -14,7 +14,7 @@ errors = []
 for name, limit in limits.items():
     path = root / name
     if not path.is_file():
-        errors.append(f"Missing {name}; run sh scripts/package-macos.sh first.")
+        errors.append(f"Missing {name}; run sh scripts/package/macos.sh first.")
         continue
     size = path.stat().st_size
     print(f"{name}: {size / 1024 / 1024:.2f} MiB / {limit / 1024 / 1024:.0f} MiB")

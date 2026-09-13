@@ -7,7 +7,7 @@ import subprocess
 import uuid
 
 artifacts = Path(os.environ["QROW_E2E_ARTIFACTS"]).resolve()
-root = Path(__file__).resolve().parent.parent / "target/e2e"
+root = Path(__file__).resolve().parents[2] / "target/e2e"
 if artifacts.parent != root or not artifacts.name.startswith("qrow-e2e-"):
     raise ValueError("Refusing to clean credentials outside an isolated E2E run")
 workspace = artifacts / "workspace/workspace.json"

@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+cd "$(dirname "$0")/../.."
 # Pin tool versions as well as the project's Rust toolchain.
 if ! cargo deny --version 2>/dev/null | grep -qx 'cargo-deny 0.20.2'; then
     cargo install --locked cargo-deny --version 0.20.2

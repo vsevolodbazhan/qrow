@@ -12,7 +12,7 @@ import sys
 import time
 import uuid
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "tests/e2e/compose.yml"
 
 
@@ -43,6 +43,9 @@ def ready():
 
 
 def observe(action, token):
+    if action == "count" and os.environ.get("QROW_E2E_NATIVE_EVIDENCE"):
+        print(native_evidence_count(Path(os.environ["QROW_E2E_NATIVE_EVIDENCE"]), token))
+        return
     if action == "count":
         if not re.fullmatch(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)", token):
             raise ValueError("Invalid evidence filename")
@@ -64,6 +67,18 @@ def observe(action, token):
         ready()
     else:
         raise ValueError("Unknown observer action")
+
+
+def native_evidence_count(root, token):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)", token):
+        raise ValueError("Invalid evidence filename")
+    if token.endswith(".ended"):
+        reference = (root / (token.removesuffix(".ended") + ".task")).read_text().strip()
+        if not re.fullmatch(r"app-[a-zA-Z0-9_-]+", reference):
+            raise ValueError("Invalid Spark task reference")
+        token = reference + ".ended"
+    path = root / token
+    return len(path.read_text().splitlines()) if path.exists() else 0
 
 
 def bounded_command(args, timeout, log):
@@ -97,12 +112,6 @@ def collect(artifacts):
 
 
 def free_port():
-    ssh_host = os.environ.get("QROW_E2E_SSH")
-    if ssh_host:
-        code = "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])"
-        # Pass one quoted remote command; the program contains no user-controlled input.
-        import shlex
-        return int(run(["ssh", ssh_host, "python3 -c " + shlex.quote(code)], capture=True).stdout)
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         return listener.getsockname()[1]
@@ -110,42 +119,34 @@ def free_port():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("suite", choices=["backend", "native-ui", "observe"])
+    parser.add_argument("suite", choices=["backend", "macos", "observe"])
     parser.add_argument("action", nargs="?")
     parser.add_argument("token", nargs="?", default="unused")
+    parser.add_argument("--runtime", choices=["native", "docker"], default="native",
+                        help="Server runtime for native UI tests; backend tests always use Docker")
     args = parser.parse_args()
     if args.suite == "observe":
         observe(args.action, args.token)
         return
-    if args.suite == "native-ui":
-        run(["sh", "scripts/native-e2e.sh", "--preflight"])
+    if args.suite == "macos" and args.runtime == "native":
+        import servers
+        servers.run()
+        return
+    if args.suite == "macos":
+        run(["sh", "scripts/e2e/driver.sh", "--preflight"])
     project = "qrow-e2e-" + uuid.uuid4().hex[:12]
     os.environ["QROW_E2E_PROJECT"] = project
     artifacts = ROOT / "target/e2e" / project
     artifacts.mkdir(parents=True)
     os.environ["QROW_E2E_ARTIFACTS"] = str(artifacts)
     print(f"Artifacts: {artifacts}", flush=True)
-    tunnel = None
     failure = None
     try:
         os.environ["QROW_E2E_BIND_PORT"] = str(free_port())
         compose("up", "-d", "--build", timeout=900)
-        remote_port = int(compose("port", "kyuubi", "10009", capture=True).stdout.strip().rsplit(":", 1)[1])
-        ssh_host = os.environ.get("QROW_E2E_SSH")
-        if ssh_host:
-            # Server ports remain on the Linux host's loopback interface.
-            with socket.socket() as listener:
-                listener.bind(("127.0.0.1", 0))
-                local_port = listener.getsockname()[1]
-            tunnel = subprocess.Popen(["ssh", "-N", "-o", "ExitOnForwardFailure=yes",
-                                       "-o", "ServerAliveInterval=15", "-L",
-                                       f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}", ssh_host])
-        else:
-            local_port = remote_port
+        local_port = int(compose("port", "kyuubi", "10009", capture=True).stdout.strip().rsplit(":", 1)[1])
         os.environ["QROW_E2E_PORT"] = str(local_port)
         ready()
-        if tunnel and tunnel.poll() is not None:
-            raise RuntimeError("SSH port forwarding failed")
         (artifacts / "reference.json").write_text(json.dumps({
             "project": project, "kyuubi": "1.12.0", "spark": "3.5.3",
             "authentication": "LDAP", "spark_master": "standalone", "suite": args.suite,
@@ -155,7 +156,7 @@ def main():
                              "live_kyuubi", "--", "--ignored", "--test-threads=1", "--nocapture"],
                             1200, artifacts / "backend.log")
         else:
-            bounded_command(["sh", "scripts/native-e2e.sh"], 1200, artifacts / "native-ui.log")
+            bounded_command(["sh", "scripts/e2e/driver.sh"], 1200, artifacts / "native-ui.log")
     except BaseException as error:
         failure = error
         (artifacts / "failure.txt").write_text(str(error) + "\n")
@@ -170,14 +171,11 @@ def main():
         except Exception as error:
             print(f"Fixture cleanup failed: {error}", file=sys.stderr)
             failure = failure or error
-        if args.suite == "native-ui":
+        if args.suite == "macos":
             try:
-                run(["python3", "scripts/native-e2e-cleanup.py"])
+                run(["python3", "scripts/e2e/keychain.py"])
             except Exception as error:
                 failure = failure or error
-        if tunnel:
-            tunnel.terminate()
-            tunnel.wait(timeout=10)
     if failure:
         raise failure
 

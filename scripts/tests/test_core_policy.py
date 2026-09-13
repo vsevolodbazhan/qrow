@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-spec = importlib.util.spec_from_file_location("policy", Path(__file__).resolve().parents[1] / "check-policy.py")
+spec = importlib.util.spec_from_file_location("policy", Path(__file__).resolve().parents[1] / "core/policy.py")
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 

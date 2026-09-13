@@ -2,4 +2,4 @@
 set -eu
 repository="$(git rev-parse --show-toplevel)"
 printf '%s\n' 'Checking the staged snapshot…'
-sh "$repository/scripts/check-snapshot.sh" "$(git write-tree)" hook
+sh "$repository/scripts/hooks/snapshot.sh" "$(git write-tree)" hook

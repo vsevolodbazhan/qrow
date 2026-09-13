@@ -7,8 +7,8 @@ in `rust-toolchain.toml`. Cargo commands use the lockfile.
 
 ```sh
 brew install shellcheck actionlint
-sh scripts/install-check-tools.sh
-sh scripts/install-hooks.sh
+sh scripts/core/install.sh
+sh scripts/hooks/install.sh
 ```
 
 The tool installer pins cargo-deny 0.20.2, cargo-machete 0.9.2, and
@@ -18,18 +18,18 @@ version. Python 3.11 or later and uv are required for policy checks and packagin
 ## Local commands
 
 ```sh
-sh scripts/check.sh             # Full suite, including coverage and dependency audit
-sh scripts/check.sh hook        # Fast checks used before each commit
-sh scripts/check.sh backend        # No GPUI dependencies; lint, tests, and rustdoc
-sh scripts/check.sh macos      # Full application lint and tests
-sh scripts/check.sh scripts     # ShellCheck, actionlint, hook and policy tests
-sh scripts/check.sh dependencies
-sh scripts/check.sh coverage
-sh scripts/check.sh performance
+sh scripts/check.sh                # Full offline suite
+sh scripts/check.sh hook           # Fast checks used before each commit
+sh scripts/check.sh core/backend   # Backend lint, tests, and rustdoc
+sh scripts/check.sh core/macos     # Full application lint and tests
+sh scripts/check.sh core/scripts   # Script/workflow lint and automation tests
+sh scripts/check.sh core/dependencies
+sh scripts/check.sh core/coverage
+sh scripts/check.sh core/performance
 ```
 
 Ordinary checks above never run real Kyuubi queries, retrieve credentials, or open the UI.
-The explicit `backend-e2e` and `ui-e2e` modes use disposable real
+The explicit `e2e/backend` and `e2e/macos` modes use disposable real
 servers and synthetic credentials. See [End-to-end testing](E2E.md). The
 existing Keychain integration test stays opt-in. Generated Thrift bindings are
 excluded from Clippy's normal style checks and from the coverage report. Unsafe
@@ -94,8 +94,8 @@ not rendering or query execution on Spark.
 After an optimized package build:
 
 ```sh
-sh scripts/package-macos.sh
-python3 scripts/check-size.py
+sh scripts/package/macos.sh
+python3 scripts/core/size.py
 ```
 
 Budgets are 24 MiB for the executable and 10 MiB for the zipped bundle, against

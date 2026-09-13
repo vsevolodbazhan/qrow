@@ -1,0 +1,48 @@
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import sys
+import tempfile
+import time
+import unittest
+from unittest.mock import patch
+
+spec = importlib.util.spec_from_file_location("native_fixture", Path(__file__).resolve().parents[1] / "e2e/servers.py")
+native_fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(native_fixture)
+
+
+class NativeFixtureTests(unittest.TestCase):
+    def test_cached_download_is_verified_before_use(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "target/e2e-downloads"
+            cache.mkdir(parents=True)
+            archive = cache / "fixture.jar"
+            archive.write_bytes(b"verified fixture")
+            item = {"url": "https://example.invalid/fixture.jar", "directory": "fixture.jar",
+                    "sha512": hashlib.sha512(archive.read_bytes()).hexdigest()}
+            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "run") as download:
+                self.assertEqual(native_fixture.distribution(item), archive)
+                archive.write_bytes(b"corrupted fixture")
+                with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
+                    native_fixture.distribution(item)
+                download.assert_not_called()
+
+    def test_cleanup_terminates_server_and_descendant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = "import signal,time; from pathlib import Path; signal.signal(signal.SIGTERM, lambda *_: (Path('stopped').touch(), exit(0))); Path('ready').touch(); time.sleep(30)"
+            parent = f"import subprocess,signal,sys,time; child=subprocess.Popen([sys.executable, '-c', {child!r}]); signal.signal(signal.SIGTERM, lambda *_: (child.wait(timeout=5), sys.exit(0))); time.sleep(30)"
+            servers = native_fixture.Servers(root)
+            try:
+                servers.start("test-server", [sys.executable, "-c", parent], os.environ.copy())
+                deadline = time.monotonic() + 5
+                while not (root / "ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue((root / "ready").exists())
+            finally:
+                servers.stop()
+            self.assertTrue((root / "stopped").exists())
+            self.assertIsNotNone(servers.processes[0][1].poll())

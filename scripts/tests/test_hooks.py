@@ -19,11 +19,11 @@ class HookTests(unittest.TestCase):
             if key.startswith("GIT_"):
                 self.env.pop(key)
         self.git("init", "-q")
-        (self.repo / "scripts").mkdir()
+        (self.repo / "scripts/hooks").mkdir(parents=True)
         (self.repo / ".githooks").mkdir()
         for name in ["pre-commit", "pre-push"]:
             shutil.copy2(ROOT / ".githooks" / name, self.repo / ".githooks" / name)
-        shutil.copy2(ROOT / "scripts/check-snapshot.sh", self.repo / "scripts/check-snapshot.sh")
+        shutil.copy2(ROOT / "scripts/hooks/snapshot.sh", self.repo / "scripts/hooks/snapshot.sh")
         (self.repo / "scripts/check.sh").write_text('#!/bin/sh\nset -eu\ntest "$(cat payload)" = good\n')
         (self.repo / "payload").write_text("good")
         self.git("add", ".")

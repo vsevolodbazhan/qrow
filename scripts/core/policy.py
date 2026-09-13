@@ -6,7 +6,7 @@ import re
 import sys
 import tomllib
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
+ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def check(today=None):

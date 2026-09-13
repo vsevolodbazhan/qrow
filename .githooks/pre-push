@@ -8,5 +8,5 @@ while read -r local_ref local_oid _remote_ref _remote_oid; do
     case "$seen" in *" $local_oid "*) continue ;; esac
     seen="$seen$local_oid "
     printf 'Checking %s before push…\n' "$local_ref"
-    sh "$repository/scripts/check-snapshot.sh" "$local_oid" all </dev/null
+    sh "$repository/scripts/hooks/snapshot.sh" "$local_oid" all </dev/null
 done

@@ -8,12 +8,28 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location("e2e", ROOT / "scripts/e2e.py")
+spec = importlib.util.spec_from_file_location("e2e", ROOT / "scripts/e2e/run.py")
 e2e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e2e)
 
 
 class AcceptanceTests(unittest.TestCase):
+    def test_native_evidence_uses_executor_and_driver_markers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(e2e.native_evidence_count(root, "query.started"), 0)
+            (root / "query.interrupted").write_text("1\n")
+            (root / "query.task").write_text("app-123-4")
+            (root / "app-123-4.ended").write_text("1\n")
+            self.assertEqual(e2e.native_evidence_count(root, "query.interrupted"), 1)
+            self.assertEqual(e2e.native_evidence_count(root, "query.ended"), 1)
+            for token in ["../query.started", "query.task", "/query.ended"]:
+                with self.assertRaises(ValueError):
+                    e2e.native_evidence_count(root, token)
+            (root / "query.task").write_text("../outside")
+            with self.assertRaises(ValueError):
+                e2e.native_evidence_count(root, "query.ended")
+
     def test_compose_rejects_unscoped_project_before_invoking_docker(self):
         for name in ["", "production", "qrow-e2e-", "qrow-e2e-a;ls", "../qrow-e2e-x"]:
             with self.subTest(name=name), patch.dict(os.environ, {"QROW_E2E_PROJECT": name}), patch.object(e2e, "run") as run:
