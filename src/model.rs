@@ -16,6 +16,7 @@ pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
 #[serde(default)]
 pub struct Settings {
     pub ui_scale: f32,
+    pub ui_font_family: String,
     pub editor_font_family: String,
     pub editor_font_size: f32,
 }
@@ -24,6 +25,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ui_scale: 1.,
+            ui_font_family: ".SystemUIFont".into(),
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
         }
@@ -37,6 +39,11 @@ impl Settings {
         }
         self.ui_scale = (self.ui_scale * 100.).round() / 100.;
         self.ui_scale = self.ui_scale.clamp(MIN_UI_SCALE, MAX_UI_SCALE);
+
+        self.ui_font_family = self.ui_font_family.trim().into();
+        if self.ui_font_family.is_empty() {
+            self.ui_font_family = Self::default().ui_font_family;
+        }
 
         if !self.editor_font_size.is_finite() {
             self.editor_font_size = Self::default().editor_font_size;
@@ -239,6 +246,7 @@ mod tests {
 
         let mut settings = Settings {
             ui_scale: f32::INFINITY,
+            ui_font_family: "   ".into(),
             editor_font_family: "   ".into(),
             editor_font_size: f32::NAN,
         };
@@ -257,5 +265,37 @@ mod tests {
         settings.ui_scale = 9.;
         settings.sanitize();
         assert_eq!(settings.ui_scale, MAX_UI_SCALE);
+    }
+
+    #[test]
+    fn legacy_settings_keep_editor_preferences_and_default_ui_font() {
+        let mut settings: Settings = serde_json::from_str(
+            r#"{"ui_scale":1.2,"editor_font_family":"Monaco","editor_font_size":16}"#,
+        )
+        .unwrap();
+        settings.sanitize();
+        assert_eq!(settings.ui_font_family, Settings::default().ui_font_family);
+        assert_eq!(settings.editor_font_family, "Monaco");
+        assert_eq!(settings.editor_font_size, 16.);
+        assert_eq!(settings.ui_scale, 1.2);
+
+        settings.ui_font_family = " Helvetica ".into();
+        settings.sanitize();
+        assert_eq!(settings.ui_font_family, "Helvetica");
+        assert_eq!(settings.editor_font_size, 16.);
+    }
+
+    #[test]
+    fn removed_ui_font_size_does_not_prevent_restoring_settings() {
+        let settings: Settings = serde_json::from_str(
+            r#"{"ui_scale":1.2,"ui_font_family":"Helvetica","ui_font_size":20,"editor_font_family":"Monaco","editor_font_size":16}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.ui_scale, 1.2);
+        assert_eq!(settings.ui_font_family, "Helvetica");
+        assert_eq!(settings.editor_font_family, "Monaco");
+        assert_eq!(settings.editor_font_size, 16.);
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert!(saved.get("ui_font_size").is_none());
     }
 }

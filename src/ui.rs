@@ -130,7 +130,7 @@ struct ProfileEditor {
     keep_connected: bool,
 }
 
-fn installed_coding_fonts(cx: &App) -> Vec<String> {
+fn installed_fonts(cx: &App) -> Vec<String> {
     let mut fonts = cx.text_system().all_font_names();
     fonts.retain(|font| !font.is_empty());
     if !fonts.iter().any(|font| font == "Menlo") {
@@ -139,9 +139,18 @@ fn installed_coding_fonts(cx: &App) -> Vec<String> {
     fonts
 }
 
+fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
+    let theme = gpui_kit::component::Theme::global_mut(cx);
+    theme.font_family = settings.ui_font_family.clone().into();
+    theme.font_size = px(14. * settings.ui_scale);
+    theme.mono_font_size = px(13. * settings.ui_scale);
+    window.set_rem_size(theme.font_size);
+    window.refresh();
+}
+
 pub struct Qrow {
     settings: Settings,
-    coding_fonts: Vec<String>,
+    fonts: Vec<String>,
     settings_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
@@ -188,29 +197,40 @@ impl Qrow {
                 ),
             }
         };
-        let coding_fonts = installed_coding_fonts(cx);
+        let fonts = installed_fonts(cx);
         workspace.settings.sanitize();
-        let unavailable_font = !coding_fonts
+        let mut unavailable_font = !fonts
             .iter()
             .any(|font| font == &workspace.settings.editor_font_family);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
             message.get_or_insert_with(|| {
-                "The saved coding font is unavailable, so Qrow is using Menlo.".into()
+                "The saved editor font is unavailable, so Qrow is using Menlo.".into()
             });
         }
+        if workspace.settings.ui_font_family != Settings::default().ui_font_family
+            && !fonts.contains(&workspace.settings.ui_font_family)
+        {
+            workspace.settings.ui_font_family = Settings::default().ui_font_family;
+            unavailable_font = true;
+            let warning =
+                "The saved interface font is unavailable, so Qrow is using the system font.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
+        }
         let scale = workspace.settings.ui_scale;
-        let theme = gpui_kit::component::Theme::global_mut(cx);
-        theme.font_size = px(14. * scale);
-        theme.mono_font_size = px(13. * scale);
-        window.set_rem_size(theme.font_size);
+        apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
             this.finish(cx);
             async {}
         });
         let mut this = Self {
             settings: workspace.settings,
-            coding_fonts,
+            fonts,
             settings_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -730,10 +750,7 @@ impl Qrow {
         let ratio = scale / previous;
         self.sidebar_width *= ratio;
         self.editor_height *= ratio;
-        let theme = gpui_kit::component::Theme::global_mut(cx);
-        theme.font_size = px(14. * scale);
-        theme.mono_font_size = px(13. * scale);
-        window.set_rem_size(theme.font_size);
+        apply_ui_theme(&self.settings, window, cx);
         for tab in &self.tabs {
             tab.table.update(cx, |table, cx| {
                 table.delegate_mut().set_ui_scale(scale);
@@ -762,18 +779,29 @@ impl Qrow {
         self.adjust_ui_scale(-UI_SCALE_STEP, window, cx);
     }
     fn set_editor_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if self.coding_fonts.iter().any(|available| available == &font)
+        if self.fonts.iter().any(|available| available == &font)
             && self.settings.editor_font_family != font
         {
             self.settings.editor_font_family = font;
             self.changed(cx);
         }
     }
+    fn set_ui_font(&mut self, font: String, window: &mut Window, cx: &mut Context<Self>) {
+        if (font == Settings::default().ui_font_family || self.fonts.contains(&font))
+            && self.settings.ui_font_family != font
+        {
+            self.settings.ui_font_family = font;
+            apply_ui_theme(&self.settings, window, cx);
+            self.changed(cx);
+        }
+    }
     fn reset_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = Settings::default();
+        self.settings.ui_font_family = settings.ui_font_family;
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
         self.apply_ui_scale(settings.ui_scale, window, cx);
+        apply_ui_theme(&self.settings, window, cx);
         self.changed(cx);
     }
     fn edit_profile(

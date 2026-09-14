@@ -8,11 +8,19 @@ use gpui_kit::component::{
 };
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
+const SYSTEM_FONT_LABEL: &str = "System font";
+
+#[derive(Clone, Copy)]
+enum NumberSetting {
+    Scale,
+    EditorSize,
+}
 
 pub(super) struct SettingsForm {
     scale: Entity<InputState>,
     font: SettingSelect,
     size: Entity<InputState>,
+    ui_font: SettingSelect,
     displayed_scale: std::cell::Cell<f32>,
     displayed_size: std::cell::Cell<f32>,
     _subscriptions: Vec<Subscription>,
@@ -25,24 +33,40 @@ impl Qrow {
                 .default_value(format!("{:.0}", self.settings.ui_scale * 100.))
         });
         let font = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(self.coding_fonts.clone()),
-                None,
-                window,
-                cx,
-            )
-            .searchable(true)
+            SelectState::new(SearchableVec::new(self.fonts.clone()), None, window, cx)
+                .searchable(true)
         });
         let size = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(format!("{:.0}", self.settings.editor_font_size))
+        });
+        let ui_font = cx.new(|cx| {
+            let mut fonts = self.fonts.clone();
+            fonts.retain(|font| font != &Settings::default().ui_font_family);
+            fonts.insert(0, SYSTEM_FONT_LABEL.into());
+            SelectState::new(SearchableVec::new(fonts), None, window, cx).searchable(true)
         });
         let mut subscriptions = vec![cx.subscribe(&font, |this, _, event, cx| {
             if let SelectEvent::Confirm(Some(value)) = event {
                 this.set_editor_font(value.clone(), cx);
             }
         })];
-        for (input, is_scale) in [(&scale, true), (&size, false)] {
+        subscriptions.push(
+            cx.subscribe_in(&ui_font, window, |this, _, event, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    let font = if value == SYSTEM_FONT_LABEL {
+                        Settings::default().ui_font_family
+                    } else {
+                        value.clone()
+                    };
+                    this.set_ui_font(font, window, cx);
+                }
+            }),
+        );
+        for (input, setting) in [
+            (&scale, NumberSetting::Scale),
+            (&size, NumberSetting::EditorSize),
+        ] {
             // Handle steps here instead of InputState's default one-unit step.
             input.update(cx, |input, cx| input.set_step(None, window, cx));
             subscriptions.push(cx.subscribe_in(
@@ -55,7 +79,7 @@ impl Qrow {
                     } else {
                         -1.
                     };
-                    this.commit_number_setting(input, is_scale, direction, window, cx);
+                    this.commit_number_setting(input, setting, direction, window, cx);
                 },
             ));
             subscriptions.push(cx.subscribe_in(
@@ -63,7 +87,7 @@ impl Qrow {
                 window,
                 move |this, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                        this.commit_number_setting(input, is_scale, 0., window, cx);
+                        this.commit_number_setting(input, setting, 0., window, cx);
                     } else if matches!(event, InputEvent::Change) {
                         cx.notify();
                     }
@@ -76,6 +100,7 @@ impl Qrow {
             scale,
             font,
             size,
+            ui_font,
             _subscriptions: subscriptions,
         });
     }
@@ -83,25 +108,24 @@ impl Qrow {
     fn commit_number_setting(
         &mut self,
         input: &Entity<InputState>,
-        is_scale: bool,
+        setting: NumberSetting,
         direction: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (current, min, max, step) = if is_scale {
-            (
+        let (current, min, max, step) = match setting {
+            NumberSetting::Scale => (
                 self.settings.ui_scale * 100.,
                 MIN_UI_SCALE * 100.,
                 MAX_UI_SCALE * 100.,
                 UI_SCALE_STEP * 100.,
-            )
-        } else {
-            (
+            ),
+            NumberSetting::EditorSize => (
                 self.settings.editor_font_size,
                 MIN_EDITOR_FONT_SIZE,
                 MAX_EDITOR_FONT_SIZE,
                 1.,
-            )
+            ),
         };
         let value = input
             .read(cx)
@@ -115,11 +139,13 @@ impl Qrow {
         input.update(cx, |input, cx| {
             input.set_value(format!("{value:.0}"), window, cx)
         });
-        if is_scale {
-            self.apply_ui_scale(value / 100., window, cx);
-        } else if self.settings.editor_font_size != value {
-            self.settings.editor_font_size = value;
-            self.changed(cx);
+        match setting {
+            NumberSetting::Scale => self.apply_ui_scale(value / 100., window, cx),
+            NumberSetting::EditorSize if self.settings.editor_font_size != value => {
+                self.settings.editor_font_size = value;
+                self.changed(cx);
+            }
+            _ => {}
         }
     }
 
@@ -133,7 +159,7 @@ impl Qrow {
             let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
             let rem = window.rem_size();
             let viewport = window.viewport_size();
-            let height = (rem * 28.).min(viewport.height - rem * 4.);
+            let height = (rem * 34.).min(viewport.height - rem * 4.);
             dialog
                 .title("Settings")
                 .w((rem * 56.).min(viewport.width - rem * 4.))
@@ -182,11 +208,27 @@ impl Qrow {
                 state.set_selected_value(&self.settings.editor_font_family, window, cx)
             });
         }
+        let ui_font = if self.settings.ui_font_family == Settings::default().ui_font_family {
+            SYSTEM_FONT_LABEL.to_owned()
+        } else {
+            self.settings.ui_font_family.clone()
+        };
+        if form.ui_font.read(cx).selected_value() != Some(&ui_font) {
+            form.ui_font.update(cx, |state, cx| {
+                state.set_selected_value(&ui_font, window, cx)
+            });
+        }
         let width =
             (window.rem_size() * 56.).min(window.viewport_size().width - window.rem_size() * 4.);
         let label_width = (width - window.rem_size() * 6.) * 0.60;
+        let compact = width < window.rem_size() * 42.;
         let row = |label: &'static str, description: &'static str, control: AnyElement| {
-            Form::horizontal().label_width(label_width).child(
+            let form = if compact {
+                Form::vertical()
+            } else {
+                Form::horizontal().label_width(label_width)
+            };
+            form.child(
                 Field::new()
                     .py_5()
                     .border_b_1()
@@ -215,6 +257,7 @@ impl Qrow {
         };
         v_flex()
             .w_full()
+            .flex_shrink_0()
             .pt_3()
             .child(row(
                 "Interface scale",
@@ -232,21 +275,34 @@ impl Qrow {
                     .into_any_element(),
             ))
             .child(row(
-                "Coding font",
-                "Editor font; monospace recommended.",
+                "Interface font",
+                "Used for controls and query results.",
+                div()
+                    .w(rems(10.))
+                    .flex_shrink_0()
+                    .child(
+                        Select::new(&form.ui_font)
+                            .w_full()
+                            .accessibility_label("Interface font"),
+                    )
+                    .into_any_element(),
+            ))
+            .child(row(
+                "Editor font",
+                "Used for SQL. A monospace font is recommended.",
                 div()
                     .w(rems(10.))
                     .flex_shrink_0()
                     .child(
                         Select::new(&form.font)
                             .w_full()
-                            .accessibility_label("Coding font"),
+                            .accessibility_label("Editor font"),
                     )
                     .into_any_element(),
             ))
             .child(row(
                 "Editor font size",
-                "Editor text size before scaling.",
+                "SQL text size before scaling.",
                 div()
                     .w(rems(10.))
                     .flex_shrink_0()
@@ -282,8 +338,20 @@ impl Qrow {
                         if let Some(form) = &this.settings_form {
                             let scale = form.scale.clone();
                             let size = form.size.clone();
-                            this.commit_number_setting(&scale, true, 0., window, cx);
-                            this.commit_number_setting(&size, false, 0., window, cx);
+                            this.commit_number_setting(
+                                &scale,
+                                NumberSetting::Scale,
+                                0.,
+                                window,
+                                cx,
+                            );
+                            this.commit_number_setting(
+                                &size,
+                                NumberSetting::EditorSize,
+                                0.,
+                                window,
+                                cx,
+                            );
                         }
                         // Programmatic close_dialog does not invoke Dialog::on_close.
                         this.settings_open = false;
