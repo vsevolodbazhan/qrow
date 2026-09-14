@@ -191,6 +191,15 @@ requires no active user sessions. Releasing Qrow's sessions allows that timeout
 to take effect, but other clients or tabs can still hold the engine open. There
 are no heartbeat requests when Keep connected is off.
 
+## Appearance
+
+Open **Qrow → Settings…** to choose the interface font, editor font and size,
+or interface scale. The interface font applies to controls and query results;
+the editor font applies to SQL. Editor font size is in pixels before scaling.
+Use interface scale to resize text and controls throughout the app.
+Changes appear immediately and are saved with the workspace. **Restore defaults**
+resets all appearance settings, including the system interface font.
+
 ## Workspace
 
 Tabs, SQL, selected profiles, and connection settings are saved automatically to:

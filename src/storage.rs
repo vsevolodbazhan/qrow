@@ -175,6 +175,7 @@ mod tests {
         let mut state = Workspace::default();
         state.tabs[0].sql = "SELECT '日本語';".into();
         state.settings.ui_scale = 1.2;
+        state.settings.ui_font_family = "Helvetica".into();
         state.settings.editor_font_family = "Monaco".into();
         state.settings.editor_font_size = 16.;
         save(&path, &state).unwrap();

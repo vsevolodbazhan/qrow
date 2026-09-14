@@ -6,22 +6,30 @@ use gpui_kit::component::{
     v_flex,
 };
 
+const TAB_BAR_HEIGHT: f32 = 36.;
+
 impl Qrow {
     fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.tabs[self.active].saved.profile;
         let busy = self.tabs[self.active].busy;
+        let action_size = self.ui_px(28.);
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
                 h_flex()
-                    .h_12()
+                    .h(self.ui_px(TAB_BAR_HEIGHT))
+                    .flex_shrink_0()
+                    .items_center()
                     .pl_3()
                     .pr_2()
                     .gap_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .child(
                         div()
                             .flex_1()
+                            .text_base()
                             .font_weight(FontWeight::MEDIUM)
                             .child("Connections"),
                     )
@@ -29,6 +37,9 @@ impl Qrow {
                         Button::new("add-connection")
                             .ghost()
                             .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
                             .icon(IconName::Plus)
                             .accessibility_label("New connection")
                             .tooltip("New connection…")
@@ -44,16 +55,20 @@ impl Qrow {
                     .min_h_0()
                     .overflow_y_scroll()
                     .px_2()
+                    .pt_2()
                     .gap_1()
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
                         let edit = profile.clone();
                         h_flex()
+                            .h(self.ui_px(32.))
+                            .flex_shrink_0()
                             .gap_1()
                             .child(
                                 Button::new(SharedString::from(format!("profile-{id}")))
                                     .ghost()
                                     .small()
+                                    .h_full()
                                     .flex_1()
                                     .min_w_0()
                                     .accessibility_label(profile.name.clone())
@@ -61,11 +76,12 @@ impl Qrow {
                                         h_flex()
                                             .w_full()
                                             .min_w_0()
+                                            .text_base()
                                             .gap_2()
                                             .child(
                                                 gpui_kit::component::Icon::default()
                                                     .path(crate::assets::SPARK_ICON)
-                                                    .size_3p5()
+                                                    .size_4()
                                                     .flex_shrink_0(),
                                             )
                                             .child(
@@ -93,6 +109,9 @@ impl Qrow {
                                 Button::new(SharedString::from(format!("edit-profile-{id}")))
                                     .ghost()
                                     .small()
+                                    .w(action_size)
+                                    .h_full()
+                                    .flex_shrink_0()
                                     .icon(IconName::Settings2)
                                     .text_color(cx.theme().sidebar_foreground)
                                     .accessibility_label(format!("Edit {}", profile.name))
@@ -111,7 +130,7 @@ impl Qrow {
     }
 
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tab_height = self.ui_px(36.);
+        let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         TabBar::new("query-tabs")
             .selected_index(self.active)
             .large()
@@ -119,7 +138,7 @@ impl Qrow {
             .min_h(tab_height)
             .max_h(tab_height)
             .prefix(
-                h_flex().h(self.ui_px(36.)).px_2().flex_shrink_0().child(
+                h_flex().h(tab_height).px_2().flex_shrink_0().child(
                     Button::new("sidebar-toggle")
                         .ghost()
                         .small()
@@ -183,7 +202,7 @@ impl Qrow {
                 cx.listener(|this, index: &usize, window, cx| this.activate(*index, window, cx)),
             )
             .suffix(
-                h_flex().h(self.ui_px(36.)).px_2().flex_shrink_0().child(
+                h_flex().h(tab_height).px_2().flex_shrink_0().child(
                     Button::new("new-tab")
                         .ghost()
                         .small()

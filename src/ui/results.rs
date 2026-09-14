@@ -135,13 +135,13 @@ impl TableDelegate for Results {
             .size_full()
             .px_1()
             .overflow_hidden()
-            .text_size(self.px(12.))
+            .text_size(rems(12. / 14.))
             .aria_label(self.headers[c].name.clone())
             .child(self.headers[c].name.clone())
             .when(c > 0, |el| {
                 el.child(
                     div()
-                        .text_size(self.px(10.))
+                        .text_size(rems(10. / 14.))
                         .text_color(cx.theme().muted_foreground)
                         .child(self.columns[c - 1].data_type.clone()),
                 )
@@ -172,7 +172,7 @@ impl TableDelegate for Results {
             .rounded_sm()
             .flex()
             .items_center()
-            .text_size(self.px(12.))
+            .text_size(rems(12. / 14.))
             .overflow_hidden()
             .text_color(cx.theme().foreground)
             .when(c == 0 || null, |el| {
@@ -239,7 +239,7 @@ impl TableDelegate for Results {
             .items_center()
             .justify_center()
             .text_color(cx.theme().muted_foreground)
-            .text_size(self.px(13.))
+            .text_size(rems(13. / 14.))
             .child(
                 self.empty_message
                     .unwrap_or("Run a query to preview its results"),
