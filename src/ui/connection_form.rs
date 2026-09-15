@@ -26,43 +26,69 @@ pub(super) fn parse_lifecycle(
     Ok(policy)
 }
 
+use super::setting_row::Rows;
 use super::{ProfileEditor, Qrow};
-use gpui_kit::component::{input::Input, radio::Radio};
-use gpui_kit::{Context, IntoElement, div, prelude::*};
+use gpui_kit::component::{input::Input, radio::Radio, v_flex};
+use gpui_kit::{AnyElement, Context, IntoElement, prelude::*};
 
 pub(super) fn render_lifecycle(
     form: &ProfileEditor,
-    labels: &[&'static str],
+    rows: &Rows,
     cx: &mut Context<Qrow>,
 ) -> impl IntoElement {
     let saving = form.saving.is_some();
-    div()
-        .flex()
-        .flex_col()
+    let keep = form.keep_connected;
+    let field = |index: usize, label: &'static str| {
+        Input::new(&form.fields[index])
+            .disabled(saving)
+            .aria_label(label)
+            .into_any_element()
+    };
+    let choice: AnyElement = v_flex()
         .gap_2()
-        .child("When idle")
-        .children([(false, "Disconnect after"), (true, "Keep connected")].map(|(keep, label)| {
-            Radio::new(label)
-                .label(label)
-                .checked(form.keep_connected == keep)
-                .disabled(saving)
-                .on_change(cx.listener(move |this, _, _, cx| {
-                    if let Some(form) = &mut this.form {
-                        form.keep_connected = keep;
-                    }
-                    cx.notify();
-                }))
-        }))
-        .children((7..10).filter(|i| (*i > 7) == form.keep_connected).map(|i| {
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(div().text_sm().child(labels[i]))
-                .child(Input::new(&form.fields[i]).disabled(saving))
-        }))
-        .when(form.keep_connected, |el| {
-            el.child(div().text_sm().child("Heartbeats run only while idle and keep the engine active. Use a lightweight, read-only query."))
+        .children(
+            [(false, "Disconnect"), (true, "Keep connected")].map(|(value, label)| {
+                Radio::new(label)
+                    .label(label)
+                    .checked(keep == value)
+                    .disabled(saving)
+                    .on_change(cx.listener(move |this, _, _, cx| {
+                        if let Some(form) = &mut this.form {
+                            form.keep_connected = value;
+                        }
+                        cx.notify();
+                    }))
+            }),
+        )
+        .into_any_element();
+    v_flex()
+        .child(rows.row(
+            "When idle",
+            "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
+            choice,
+            cx,
+        ))
+        .when(!keep, |el| {
+            el.child(rows.row(
+                "Idle timeout",
+                "Seconds of inactivity before the session is released.",
+                field(7, "Idle timeout in seconds"),
+                cx,
+            ))
+        })
+        .when(keep, |el| {
+            el.child(rows.row(
+                "Heartbeat interval",
+                "Seconds between keep-alive queries.",
+                field(8, "Heartbeat interval in seconds"),
+                cx,
+            ))
+            .child(rows.row(
+                "Heartbeat SQL",
+                "Runs only while idle, and keeps the engine active. Use a lightweight, read-only query.",
+                field(9, "Heartbeat SQL"),
+                cx,
+            ))
         })
 }
 

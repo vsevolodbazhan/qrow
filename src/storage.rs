@@ -133,12 +133,24 @@ pub fn set_password(id: Uuid, password: &str) -> Result<()> {
     .context("Could not save the password in macOS Keychain")
 }
 
+/// Deleting a profile leaves its secret behind otherwise, keyed by a UUID that
+/// nothing refers to any more.
+#[cfg(target_os = "macos")]
+pub fn delete_password(id: Uuid) -> Result<()> {
+    security_framework::passwords::delete_generic_password("io.qrow.connection", &id.to_string())
+        .context("Could not delete the password from macOS Keychain")
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn password(_: Uuid) -> Result<Zeroizing<String>> {
     anyhow::bail!("Keychain requires macOS")
 }
 #[cfg(not(target_os = "macos"))]
 pub fn set_password(_: Uuid, _: &str) -> Result<()> {
+    anyhow::bail!("Keychain requires macOS")
+}
+#[cfg(not(target_os = "macos"))]
+pub fn delete_password(_: Uuid) -> Result<()> {
     anyhow::bail!("Keychain requires macOS")
 }
 

@@ -59,11 +59,21 @@ impl Qrow {
                     .gap_1()
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
-                        let edit = profile.clone();
                         h_flex()
+                            .id(SharedString::from(format!("connection-{id}")))
                             .h(self.ui_px(32.))
                             .flex_shrink_0()
-                            .gap_1()
+                            // Editing, duplicating, and deleting all live in the
+                            // context menu, so the row keeps its full width.
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                                    let position = event.position;
+                                    cx.defer_in(window, move |this, window, cx| {
+                                        this.open_connection_menu(id, position, window, cx)
+                                    });
+                                }),
+                            )
                             .child(
                                 Button::new(SharedString::from(format!("profile-{id}")))
                                     .ghost()
@@ -105,26 +115,6 @@ impl Qrow {
                                         this.switch_profile(id, cx)
                                     })),
                             )
-                            .child(
-                                Button::new(SharedString::from(format!("edit-profile-{id}")))
-                                    .ghost()
-                                    .small()
-                                    .w(action_size)
-                                    .h_full()
-                                    .flex_shrink_0()
-                                    .icon(IconName::Settings2)
-                                    .text_color(cx.theme().sidebar_foreground)
-                                    .accessibility_label(format!("Edit {}", profile.name))
-                                    .tooltip("Edit connection…")
-                                    .disabled(
-                                        self.tabs
-                                            .iter()
-                                            .any(|t| t.saved.profile == Some(id) && t.busy),
-                                    )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.edit_profile(edit.clone(), false, window, cx)
-                                    })),
-                            )
                     })),
             )
     }
@@ -155,11 +145,22 @@ impl Qrow {
                 ),
             )
             .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+                let id = tab.saved.id;
                 QueryTab::new()
                     // Kit's large tab uses a fixed 36px height internally.
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
+                    // Right click does not activate the tab; the menu names its target.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                            let position = event.position;
+                            cx.defer_in(window, move |this, window, cx| {
+                                this.open_tab_menu(id, position, window, cx)
+                            });
+                        }),
+                    )
                     .label(tab.saved.title.clone())
                     .aria_label(format!(
                         "{}{}",
@@ -357,7 +358,7 @@ impl Qrow {
             })
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
-                self.form.is_some() || self.settings_open,
+                self.dialog_open(),
                 self.settings.ui_scale,
                 cx,
             )))
@@ -552,6 +553,17 @@ impl Render for Qrow {
                             .child(div().flex_1().min_h_0().child(self.results_panel(cx))),
                     ),
             )
+            .when_some(self.menu.as_ref(), |el, menu| {
+                el.child(
+                    deferred(
+                        anchored()
+                            .position(menu.position)
+                            .snap_to_window_with_margin(px(8.))
+                            .child(menu.view.clone()),
+                    )
+                    .with_priority(gpui_kit::base::POPUP_PRIORITY),
+                )
+            })
             .when_some(self.message.clone(), |el, message| {
                 el.child(
                     div()

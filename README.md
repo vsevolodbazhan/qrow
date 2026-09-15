@@ -109,7 +109,8 @@ endpoint, then add a connection profile as described below.
 In connection settings, **⌘Enter** saves and **Escape** dismisses the popup.
 
 Passwords are stored in macOS Keychain under service `io.qrow.connection`, keyed
-by profile UUID. They are retrieved on a background thread when a tab connects.
+by profile UUID. They are retrieved on a background thread when a tab connects,
+and deleted on that thread when the connection is deleted.
 The prototype supports SASL PLAIN over TCP for the existing LDAP deployment,
 matching the provided PyHive configuration. SASL PLAIN does not encrypt the
 transport. Use it on the same trusted network/VPN as that setup. TLS, Kerberos,
@@ -133,10 +134,15 @@ and server-side idle/session timeouts remain responsible for abandoned resources
 
 Switch profiles using the Connections sidebar. SQL stays in the tab, while the
 old session and results are released. Switching and closing are disabled while
-the tab is busy. Use the settings icon beside a connection to edit it; the editor
-also has a **Duplicate** button. Editing is disabled while that profile has a
-running query. Saving an edit disconnects idle sessions that use that profile;
-the next query opens a new session.
+the tab is busy. Right-click a connection for **Edit connection…**, **Duplicate**,
+and **Delete**; deleting asks for confirmation and also removes the stored
+password. Editing and deleting are disabled while that profile has a running
+query. Saving an edit disconnects idle sessions that use that profile; the next
+query opens a new session.
+
+Right-click a query tab for **Edit tab…**, which renames it. The current name is
+the field's placeholder, so leaving the field blank keeps it. Renaming preserves
+the tab's SQL, connection, and downloaded results.
 
 Results stream in batches of up to 250 rows into a 1,000-row page. **Next**
 fetches another page only when needed. **Previous** and **Next** reuse downloaded
@@ -271,6 +277,8 @@ the result, and closes its session. It does not verify engine sharing or cancell
 - `src/ui.rs`: workspace state, worker events, and session commands.
 - `src/ui/workspace_view.rs`: GPUI Kit workspace layout and window overlays.
 - `src/ui/profile_view.rs`: connection settings popup.
+- `src/ui/tab_view.rs`: tab settings popup.
+- `src/ui/setting_row.rs`: shared dialog row layout.
 - `src/ui/results.rs`: virtualized results, column metadata, and clipboard actions.
 - `src/storage.rs`: workspace persistence and macOS Keychain access.
 - `src/sql.rs`: SQL lexer and single-statement validation.

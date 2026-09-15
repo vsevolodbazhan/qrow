@@ -1,11 +1,14 @@
+use super::setting_row::Rows;
 use super::*;
 use gpui_kit::component::{
-    form::{Field, Form},
     h_flex,
     input::{NumberInputEvent, StepAction},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     v_flex,
 };
+
+const DIALOG_REMS: f32 = 56.;
+const CONTROL_REMS: f32 = 10.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System font";
@@ -162,7 +165,7 @@ impl Qrow {
             let height = (rem * 34.).min(viewport.height - rem * 4.);
             dialog
                 .title("Settings")
-                .w((rem * 56.).min(viewport.width - rem * 4.))
+                .w(Rows::dialog_width(window, DIALOG_REMS))
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
                 .overlay_closable(false)
@@ -218,42 +221,13 @@ impl Qrow {
                 state.set_selected_value(&ui_font, window, cx)
             });
         }
-        let width =
-            (window.rem_size() * 56.).min(window.viewport_size().width - window.rem_size() * 4.);
-        let label_width = (width - window.rem_size() * 6.) * 0.60;
-        let compact = width < window.rem_size() * 42.;
+        let rows = Rows::new(
+            Rows::dialog_width(window, DIALOG_REMS),
+            window.rem_size(),
+            CONTROL_REMS,
+        );
         let row = |label: &'static str, description: &'static str, control: AnyElement| {
-            let form = if compact {
-                Form::vertical()
-            } else {
-                Form::horizontal().label_width(label_width)
-            };
-            form.child(
-                Field::new()
-                    .py_5()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .items_center()
-                    .label_fn(move |_, cx| {
-                        v_flex()
-                            .gap_1()
-                            .pr_6()
-                            .child(
-                                div()
-                                    .text_base()
-                                    .font_weight(FontWeight::NORMAL)
-                                    .child(label),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::NORMAL)
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(description),
-                            )
-                    })
-                    .child(h_flex().w_full().child(div().flex_1()).child(control)),
-            )
+            rows.row(label, description, control, cx)
         };
         v_flex()
             .w_full()
@@ -262,57 +236,28 @@ impl Qrow {
             .child(row(
                 "Interface scale",
                 "Resize text and controls.",
-                div()
-                    .w(rems(10.))
-                    .flex_shrink_0()
-                    .child(setting_stepper(
-                        &form.scale,
-                        "%",
-                        "Interface scale",
-                        window,
-                        cx,
-                    ))
-                    .into_any_element(),
+                setting_stepper(&form.scale, "%", "Interface scale", window, cx).into_any_element(),
             ))
             .child(row(
                 "Interface font",
                 "Used for controls and query results.",
-                div()
-                    .w(rems(10.))
-                    .flex_shrink_0()
-                    .child(
-                        Select::new(&form.ui_font)
-                            .w_full()
-                            .accessibility_label("Interface font"),
-                    )
+                Select::new(&form.ui_font)
+                    .w_full()
+                    .accessibility_label("Interface font")
                     .into_any_element(),
             ))
             .child(row(
                 "Editor font",
                 "Used for SQL. A monospace font is recommended.",
-                div()
-                    .w(rems(10.))
-                    .flex_shrink_0()
-                    .child(
-                        Select::new(&form.font)
-                            .w_full()
-                            .accessibility_label("Editor font"),
-                    )
+                Select::new(&form.font)
+                    .w_full()
+                    .accessibility_label("Editor font")
                     .into_any_element(),
             ))
             .child(row(
                 "Editor font size",
                 "SQL text size before scaling.",
-                div()
-                    .w(rems(10.))
-                    .flex_shrink_0()
-                    .child(setting_stepper(
-                        &form.size,
-                        "px",
-                        "Editor font size",
-                        window,
-                        cx,
-                    ))
+                setting_stepper(&form.size, "px", "Editor font size", window, cx)
                     .into_any_element(),
             ))
             .into_any_element()
