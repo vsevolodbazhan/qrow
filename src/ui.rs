@@ -1,14 +1,18 @@
 mod connection_form;
 mod profile_view;
 mod results;
+mod setting_row;
 mod settings_view;
+mod tab_view;
 mod workspace_view;
 pub(crate) use workspace_view::WindowView;
 
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonVariant, ButtonVariants},
+    dialog::DialogFooter,
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
+    menu::{PopupMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -42,6 +46,7 @@ actions!(
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
+        RenameTab,
         Quit
     ]
 );
@@ -56,6 +61,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
+        KeyBinding::new("cmd-enter", RenameTab, Some("TabSettings")),
     ]);
     cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(vec![
@@ -126,8 +132,40 @@ struct ProfileEditor {
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<Profile, String>>>,
-    confirm_delete: bool,
     keep_connected: bool,
+}
+/// A tab keeps its identity while it is renamed, so the editor holds the tab's
+/// id rather than its position in the bar.
+struct TabEditor {
+    tab: Uuid,
+    title: Entity<InputState>,
+    error: Option<String>,
+}
+/// Kit's `ContextMenu` wrapper cannot be handed back to `TabBar`, which accepts
+/// `Tab` values only. Qrow therefore owns its context menus itself.
+struct ContextMenu {
+    position: Point<Pixels>,
+    view: Entity<PopupMenu>,
+    _subscription: Subscription,
+}
+
+/// Long names push the tab bar around without adding information.
+const MAX_TAB_TITLE: usize = 60;
+const MAX_PROFILE_DISPLAY_NAME: usize = 40;
+
+fn truncate_display_name(name: &str) -> String {
+    let mut chars = name.chars();
+    let truncated: String = chars.by_ref().take(MAX_PROFILE_DISPLAY_NAME).collect();
+    if chars.next().is_none() {
+        truncated
+    } else {
+        let mut display: String = name
+            .chars()
+            .take(MAX_PROFILE_DISPLAY_NAME.saturating_sub(1))
+            .collect();
+        display.push('…');
+        display
+    }
 }
 
 fn installed_fonts(cx: &App) -> Vec<String> {
@@ -157,6 +195,8 @@ pub struct Qrow {
     tabs: Vec<Tab>,
     active: usize,
     form: Option<ProfileEditor>,
+    tab_form: Option<TabEditor>,
+    menu: Option<ContextMenu>,
     saver: Option<Saver>,
     dirty: Option<Instant>,
     message: Option<String>,
@@ -237,6 +277,8 @@ impl Qrow {
             tabs: vec![],
             active: workspace.active_tab,
             form: None,
+            tab_form: None,
+            menu: None,
             saver,
             dirty: (!demo && unavailable_font).then(Instant::now),
             message,
@@ -552,8 +594,12 @@ impl Qrow {
             .update(cx, |s, cx| s.focus(window, cx));
         self.changed(cx);
     }
+    /// A modal owns the window, so tab and profile commands wait for it.
+    fn dialog_open(&self) -> bool {
+        self.form.is_some() || self.settings_open || self.tab_form.is_some()
+    }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.settings_open {
+        if self.dialog_open() {
             return;
         }
         let number = self
@@ -574,9 +620,11 @@ impl Qrow {
         self.activate(self.tabs.len() - 1, window, cx);
     }
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.settings_open || self.tabs[index].busy {
+        if self.dialog_open() || self.tabs[index].busy {
             return;
         }
+        // The menu names a tab that is about to disappear.
+        self.menu = None;
         if let Some(w) = &self.tabs[index].worker {
             w.shutdown();
         }
@@ -732,7 +780,7 @@ impl Qrow {
         cx.notify();
     }
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_none() && !self.settings_open {
+        if !self.dialog_open() {
             self.settings_open = true;
             self.init_settings_form(window, cx);
             self.open_settings_dialog(window, cx);
@@ -804,6 +852,152 @@ impl Qrow {
         apply_ui_theme(&self.settings, window, cx);
         self.changed(cx);
     }
+    /// Open a context menu at the pointer. Callers defer this from their right
+    /// mouse down so an already open menu dismisses itself first.
+    fn open_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Ask the window rather than mirroring "a dialog is up" into a flag of
+        // our own: a flag only stays true until some close path forgets to
+        // clear it, and then no menu ever opens again.
+        if self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        // Dismissing the menu returns focus to the SQL editor rather than the
+        // row or tab that was clicked.
+        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+        let view = PopupMenu::build(window, cx, move |menu, window, cx| {
+            items(menu.action_context(restore), window, cx)
+        });
+        let subscription = cx.subscribe(&view, |this, dismissed, _: &DismissEvent, cx| {
+            // A replacement menu may already be open; only drop the one dismissed.
+            if this
+                .menu
+                .as_ref()
+                .is_some_and(|menu| menu.view.entity_id() == dismissed.entity_id())
+            {
+                this.menu = None;
+                cx.notify();
+            }
+        });
+        view.focus_handle(cx).focus(window, cx);
+        self.menu = Some(ContextMenu {
+            position,
+            view,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+    fn open_tab_menu(
+        &mut self,
+        tab: Uuid,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.tabs.iter().any(|t| t.saved.id == tab) {
+            return;
+        }
+        let edit =
+            cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_tab(tab, window, cx));
+        self.open_context_menu(
+            position,
+            move |menu, _, _| menu.item(PopupMenuItem::new("Edit tab…").on_click(edit)),
+            window,
+            cx,
+        );
+    }
+    fn open_connection_menu(
+        &mut self,
+        id: Uuid,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
+            return;
+        };
+        // Editing or removing a connection under a running query is the same
+        // hazard the sidebar button used to guard against.
+        let busy = self
+            .tabs
+            .iter()
+            .any(|t| t.saved.profile == Some(id) && t.busy);
+        let edited = profile.clone();
+        let duplicated = profile.clone();
+        let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.edit_profile(edited.clone(), false, window, cx)
+        });
+        let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            let mut profile = duplicated.clone();
+            profile.id = Uuid::new_v4();
+            profile.name.push_str(" copy");
+            this.edit_profile(profile, true, window, cx);
+        });
+        let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.confirm_delete_profile(id, window, cx)
+        });
+        self.open_context_menu(
+            position,
+            move |menu, _, _| {
+                menu.item(
+                    PopupMenuItem::new("Edit connection…")
+                        .on_click(edit)
+                        .disabled(busy),
+                )
+                .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                .separator()
+                .item(PopupMenuItem::new("Delete").on_click(delete).disabled(busy))
+            },
+            window,
+            cx,
+        );
+    }
+    fn edit_tab(&mut self, tab: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        let Some(current) = self.tabs.iter().find(|t| t.saved.id == tab) else {
+            return;
+        };
+        // The current name is the placeholder, so an untouched field keeps it.
+        let title = current.saved.title.clone();
+        let title = cx.new(|cx| InputState::new(window, cx).placeholder(title));
+        self.tab_form = Some(TabEditor {
+            tab,
+            title,
+            error: None,
+        });
+        self.open_tab_dialog(window, cx);
+        cx.notify();
+    }
+    fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.tab_form else {
+            return;
+        };
+        let title = form.title.read(cx).value().trim().to_owned();
+        if title.chars().count() > MAX_TAB_TITLE {
+            form.error = Some(format!(
+                "Tab name must be {MAX_TAB_TITLE} characters or fewer."
+            ));
+            cx.notify();
+            return;
+        }
+        let tab = form.tab;
+        if !title.is_empty()
+            && let Some(current) = self.tabs.iter_mut().find(|t| t.saved.id == tab)
+        {
+            current.saved.title = title;
+        }
+        self.tab_form = None;
+        // Programmatic close_dialog does not invoke Dialog::on_close.
+        window.close_dialog(cx);
+        self.changed(cx);
+    }
     fn edit_profile(
         &mut self,
         profile: Profile,
@@ -869,7 +1063,6 @@ impl Qrow {
             is_new,
             error: None,
             saving: None,
-            confirm_delete: false,
         });
         self.open_profile_dialog(window, cx);
         cx.notify();
@@ -925,7 +1118,7 @@ impl Qrow {
         }
         let password = Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string());
         if form.is_new && password.is_empty() && !self.demo {
-            form.error = Some("Enter the LDAP password to store in Keychain.".into());
+            form.error = Some("Enter the LDAP password for this connection.".into());
             cx.notify();
             return;
         }
@@ -944,16 +1137,49 @@ impl Qrow {
         });
         cx.notify();
     }
-    fn delete_profile(&mut self, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.form else {
+    fn confirm_delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
             return;
         };
-        if !form.confirm_delete {
-            form.confirm_delete = true;
-            cx.notify();
+        let name = profile.name.clone();
+        let display_name = truncate_display_name(&name);
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert
+                .width(px(360.))
+                .title(format!("Delete connection \"{display_name}\"?"))
+                .description(
+                    "This permanently deletes the connection settings and its saved password.",
+                )
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("cancel-delete-connection")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("confirm-delete-connection")
+                                .label("Delete")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, window, cx| {
+                                    let _ =
+                                        confirm.update(cx, |this, cx| this.delete_profile(id, cx));
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+    fn delete_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if !self.profiles.iter().any(|p| p.id == id) {
             return;
         }
-        let id = form.profile.id;
         self.profiles.retain(|p| p.id != id);
         for tab in &mut self.tabs {
             if tab.saved.profile == Some(id) {
@@ -965,6 +1191,13 @@ impl Qrow {
                 tab.more = false;
                 tab.status = "Not connected".into();
             }
+        }
+        // Keychain work must stay off the GPUI thread. A failure here can only
+        // leave the secret behind, which is what the old behaviour did anyway.
+        if !self.demo {
+            std::thread::spawn(move || {
+                let _ = storage::delete_password(id);
+            });
         }
         self.form = None;
         self.changed(cx);
