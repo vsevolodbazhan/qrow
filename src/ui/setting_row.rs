@@ -56,13 +56,13 @@ impl Rows {
         };
         form.child(
             Field::new()
-                .py_5()
+                .py_4()
                 .border_b_1()
                 .border_color(cx.theme().border)
                 .items_center()
                 .label_fn(move |_, cx| {
                     v_flex()
-                        .gap_1()
+                        .gap_0()
                         .pr_6()
                         .child(
                             div()
