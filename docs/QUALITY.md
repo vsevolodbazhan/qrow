@@ -28,6 +28,22 @@ sh scripts/check.sh core/coverage
 sh scripts/check.sh core/performance
 ```
 
+The basic Rust checks remain available individually:
+
+```sh
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+Local protocol tests exercise SASL authentication, session parameters, async
+execution, result metadata, exact decimal/null handling, batched fetching,
+cancellation, and dropped connections. They do not prove server configuration,
+engine isolation, or cancellation behavior in a deployed Kyuubi instance.
+
+UI initialization time is printed to stderr. This is a local diagnostic, not
+a measurement of cold launch to first visible display.
+
 Ordinary checks above never run real Kyuubi queries, retrieve credentials, or open the UI.
 The explicit `e2e/backend` and `e2e/macos` modes use disposable real
 servers and synthetic credentials. See [End-to-end testing](E2E.md). The
@@ -109,6 +125,18 @@ Startup, frame latency, scrolling, editor selection, macOS focus behavior,
 Keychain prompts, and workspace restoration still need native UI verification.
 A passing benchmark cannot establish those properties. Use the release demo and
 an isolated `QROW_DATA_DIR` for UI checks.
+
+## Manual connection probe
+
+After saving a real connection in the app, verify session initialization and a
+read-only query with:
+
+```sh
+cargo run --bin qrow-probe -- "your profile name"
+```
+
+The probe reads the profile and Keychain password, executes `SELECT 1`, verifies
+the result, and closes its session. It does not verify engine sharing or cancellation.
 
 ## Dependency maintenance exceptions
 

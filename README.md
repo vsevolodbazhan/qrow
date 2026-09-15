@@ -1,16 +1,48 @@
 # Qrow
 
-A native Rust SQL workbench for macOS. Connect to Spark through Kyuubi, edit SQL,
-run queries in parallel tabs, and inspect results without a local JVM or web UI.
-The interface uses GPUI Kit 0.6.1 with native Metal rendering. SQL highlighting
-uses Tree-sitter. The default theme uses One Dark-style blue-gray colors, with query tabs, a
-connection sidebar, a resizable editor and results table, and connection settings
-in a popup dialog.
+A Rust-based SQL workbench for macOS.
 
-This is a personal prototype. The HiveServer2 connector has local wire-level
-tests, and the project owner has confirmed that it works against their real
-Kyuubi connection. That confirmation does not establish compatibility with all
-Kyuubi deployments or validate every cancellation and failure scenario.
+I'm a data engineer. I run SQL every day, and for years my tool of choice was
+DataGrip. It worked well until it didn't: slow startup times, a heavy memory
+footprint, and regular freezing that came with the territory of running on the
+JVM. I went looking for an alternative. DBeaver was out there, sure, but it felt
+like an app from the past.
+
+Building a whole new SQL client from scratch wasn't realistic on top of a
+full-time job — until AI models got good enough to make it one. I'm not a
+professional developer, and I can't write Rust myself. What I bring is years of
+hands-on SQL and data-engineering experience, and a strong sense of what a
+workbench like this should feel like to use. An AI wrote the code; I directed
+every decision, reviewed the result, and I use Qrow as my own daily driver
+against a real Kyuubi connection.
+
+Connect to Spark through Kyuubi, edit SQL, run queries in parallel tabs, and
+inspect results without a local JVM or web UI. The interface uses GPUI Kit 0.6.1
+with native Metal rendering. SQL highlighting uses Tree-sitter. The default
+theme uses One Dark-style blue-gray colors, with query tabs, a connection
+sidebar, a resizable editor and results table, and connection settings in a
+popup dialog.
+
+![Qrow screenshot placeholder](docs/screenshot.png)
+
+## Status and limitations
+
+Qrow is a personal tool, scoped to what I actually use day to day, not a
+general-purpose client:
+
+- **Kyuubi/Spark only.** The only connector implemented is HiveServer2 over
+  SASL PLAIN, matching the deployment I connect to daily. Trino, ODBC, and
+  other backends aren't implemented.
+- **Apple Silicon macOS only.** That's the hardware I run every day; there's
+  no Intel or other-OS build.
+- **Ad-hoc signed, not notarized.** I haven't paid for an Apple Developer
+  Program membership yet, so there's no notarized release — build from source
+  (see below).
+- **Tested by one person, against one deployment.** The HiveServer2 connector
+  has local wire-level protocol tests, and I've confirmed it works against my
+  own real Kyuubi connection. That doesn't establish compatibility with other
+  Kyuubi deployments, and not every cancellation or failure scenario has been
+  exercised outside my own setup.
 
 ## Prerequisites
 
@@ -106,193 +138,22 @@ endpoint, then add a connection profile as described below.
 4. Save the connection. macOS may ask for Keychain access.
 5. Write SQL and click **Run** or press **⌘Enter**.
 
-In connection settings, **⌘Enter** saves and **Escape** dismisses the popup.
+See [Usage](docs/USAGE.md) for connection internals, tab and cancellation
+behavior, result streaming and copy semantics, idle/reconnect handling,
+appearance settings, and workspace storage.
 
-Passwords are stored in macOS Keychain under service `io.qrow.connection`, keyed
-by profile UUID. They are retrieved on a background thread when a tab connects,
-and deleted on that thread when the connection is deleted.
-The prototype supports SASL PLAIN over TCP for the existing LDAP deployment,
-matching the provided PyHive configuration. SASL PLAIN does not encrypt the
-transport. Use it on the same trusted network/VPN as that setup. TLS, Kerberos,
-HTTP transport, and SSH tunneling are not implemented.
+## Development
 
-Select text to execute just that statement. Without a selection, the whole
-editor is submitted. Multiple statements are rejected locally. No SQL is
-automatically retried after a connection failure.
+See [Quality checks](docs/QUALITY.md) for local validation, Git hooks, and CI.
+See [End-to-end testing](docs/E2E.md) for the real-server and native UI suites.
+See [Architecture](docs/ARCHITECTURE.md) for the code map and Thrift bindings.
 
-Use **⌘T** or **+** in the tab strip to open a tab. Each tab owns an independent
-session and can run one query at a time. Different tabs can run concurrently.
-The Cancel button sends a request over a separate authenticated transport so it
-does not queue behind a blocked fetch. Kyuubi must accept the operation handle
-on that transport; this requires live validation. Cancellation cannot roll back
-a statement that has already completed. If a connection or initial session setup
-is still in progress, cancellation prevents submission of the user's query once
-setup returns. Individual network reads time out after 120 seconds. On exit,
-the app requests cancellation and session cleanup, waiting up to one second
-after saving the workspace. If the server is unreachable, cleanup is best effort
-and server-side idle/session timeouts remain responsible for abandoned resources.
+## Issues & contributions
 
-Switch profiles using the Connections sidebar. SQL stays in the tab, while the
-old session and results are released. Switching and closing are disabled while
-the tab is busy. Right-click a connection for **Edit connection…**, **Duplicate**,
-and **Delete**; deleting asks for confirmation and also removes the stored
-password. Editing and deleting are disabled while that profile has a running
-query. Saving an edit disconnects idle sessions that use that profile; the next
-query opens a new session.
+Issues and discussion are welcome — if something breaks, or you have ideas,
+open an issue. The project isn't set up for external pull requests right now.
+It's MIT-licensed, so if you want to take it in your own direction, fork it.
 
-Right-click a query tab for **Edit tab…**, which renames it. The current name is
-the field's placeholder, so leaving the field blank keeps it. Renaming preserves
-the tab's SQL, connection, and downloaded results.
+## License
 
-Results stream in batches of up to 250 rows into a 1,000-row page. **Next**
-fetches another page only when needed. **Previous** and **Next** reuse downloaded
-pages without executing SQL again. Row numbers refer to the full result, and
-copy actions use the full stored values on the displayed page. You can browse
-downloaded pages while a fetch is running. New batches preserve the current
-scroll position; changing pages clears selection and scrolls to the top.
-The client does not add a SQL `LIMIT`. An empty fetch confirms exhaustion
-because some servers misreport `hasMoreRows`. If Next finds no further rows,
-the last populated page stays visible. Cancellation or a fetch failure retains
-previously downloaded rows.
-Preview storage is capped at 100,000 rows or approximately 64 MiB per tab; an
-incoming batch that would exceed the cap is discarded and the cursor is closed.
-Frame size is also capped at 64 MiB. The table virtualizes rows and columns.
-Drag column boundaries to resize them. Drag the divider above Results to resize
-the editor, and the sidebar divider to change its width. **⌘B** toggles the sidebar.
-
-Decimals and textual timestamps retain their server representation. Binary
-values display as hexadecimal. Nulls display as `NULL`; empty strings remain
-empty. Nested values use the textual representation returned by HiveServer2.
-Cells display a shortened preview, while right-click **Copy cell** or **Copy row**
-copies the full stored value. File export is not included.
-
-## Idle connections and reconnecting
-
-Each connection has a **When idle** choice in its settings:
-
-- **Disconnect after** releases each idle tab's session after the configured
-  number of seconds. The default is 900 seconds, including for existing profiles.
-  The timer starts after query or preview fetching finishes. Reading results or
-  editing SQL does not reset it, and a running query is never interrupted by it.
-- **Keep connected** replaces idle disconnection with periodic heartbeat SQL.
-  The editor suggests a 300-second interval and `SELECT 1`. Both are configurable.
-  Choose a lightweight, read-only statement. Heartbeats run only while the tab
-  is idle, use the same session, and preserve the user's result cursor. They do
-  not create new sessions or reconnect after failures. This mode is off by default.
-
-**Disconnect** in the query toolbar releases the active tab's session. It is
-unavailable while a query or heartbeat is running; Cancel remains available.
-Manual and idle disconnection preserve SQL and downloaded results. They release
-unfetched rows, temporary views, and session settings. The next explicit Run opens
-and initializes a new session with the profile's configured database and parameters.
-
-A dead connection, including a Kyuubi error wrapping an engine transport failure,
-is discarded. Qrow reports the error and reconnects on the next explicit Run;
-it never automatically resubmits the failed SQL. A failed heartbeat also disconnects
-and stops background queries until the user runs a query again.
-
-Qrow's idle timeout is separate from Kyuubi's engine idle timeout. Kyuubi's
-[engine shutdown check](https://github.com/apache/kyuubi/blob/master/kyuubi-common/src/main/scala/org/apache/kyuubi/session/SessionManager.scala)
-requires no active user sessions. Releasing Qrow's sessions allows that timeout
-to take effect, but other clients or tabs can still hold the engine open. There
-are no heartbeat requests when Keep connected is off.
-
-## Appearance
-
-Open **Qrow → Settings…** to choose the interface font, editor font and size,
-or interface scale. The interface font applies to controls and query results;
-the editor font applies to SQL. Editor font size is in pixels before scaling.
-Use interface scale to resize text and controls throughout the app.
-Changes appear immediately and are saved with the workspace. **Restore defaults**
-resets all appearance settings, including the system interface font.
-
-## Workspace
-
-Tabs, SQL, selected profiles, and connection settings are saved automatically to:
-
-```text
-~/Library/Application Support/Qrow/workspace.json
-```
-
-Passwords and results are not written to this file. The workspace is written
-atomically in the background after a short editing debounce and flushed on exit.
-Tabs restore without opening connections. A corrupt or unsupported workspace is
-left untouched and automatic saving is disabled for that run.
-
-For isolated testing, set `QROW_DATA_DIR` to another directory. The demo uses an
-in-memory workspace and never saves it.
-
-## Validation
-
-Install and enable the development checks and Git hooks:
-
-```sh
-brew install shellcheck actionlint
-sh scripts/core/install.sh
-sh scripts/hooks/install.sh
-sh scripts/check.sh
-```
-
-See [Quality checks](docs/QUALITY.md) for staged-snapshot hooks, CI, coverage,
-performance budgets, and dependency policy. The hooks do not replace the running
-application or access real connections.
-
-The basic Rust checks remain available individually:
-
-```sh
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo fmt --all -- --check
-```
-
-For the disposable real-server suite and native UI release checks, see
-[End-to-end testing](docs/E2E.md). Run the backend suite with
-`sh scripts/check.sh e2e/backend`; run the native suite with
-`sh scripts/check.sh e2e/macos` with Java 17 from a macOS session configured for automation.
-Use `sh scripts/check.sh e2e/macos --runtime docker` to run its servers in local Docker instead.
-
-Local protocol tests exercise SASL authentication, session parameters, async
-execution, result metadata, exact decimal/null handling, batched fetching,
-cancellation, and dropped connections. They do not prove server configuration,
-engine isolation, or cancellation behavior in a deployed Kyuubi instance.
-
-UI initialization time is printed to stderr. This is a local diagnostic, not
-a measurement of cold launch to first visible display.
-
-After saving a real connection in the app, verify session initialization and a
-read-only query with:
-
-```sh
-cargo run --bin qrow-probe -- "your profile name"
-```
-
-The probe reads the profile and Keychain password, executes `SELECT 1`, verifies
-the result, and closes its session. It does not verify engine sharing or cancellation.
-
-## Structure
-
-- `src/connector/`: connector traits, HiveServer2 implementation, SASL transport,
-  and generated Apache Thrift bindings.
-- `src/worker.rs`: per-tab query execution and cancellation coordination.
-- `src/ui.rs`: workspace state, worker events, and session commands.
-- `src/ui/workspace_view.rs`: GPUI Kit workspace layout and window overlays.
-- `src/ui/profile_view.rs`: connection settings popup.
-- `src/ui/tab_view.rs`: tab settings popup.
-- `src/ui/setting_row.rs`: shared dialog row layout.
-- `src/ui/results.rs`: virtualized results, column metadata, and clipboard actions.
-- `src/storage.rs`: workspace persistence and macOS Keychain access.
-- `src/sql.rs`: SQL lexer and single-statement validation.
-- `tests/hive_protocol.rs`: local protocol fixtures.
-- `PROJECT_PLAN.md`: agreed product scope and decisions.
-
-Generated bindings are checked in, so building the application does not need the
-Thrift compiler. To regenerate them, install Thrift **0.24.0** and run:
-
-```sh
-sh scripts/generate/thrift.sh
-```
-
-The script applies four compiler-output corrections for union collections.
-Apache Thrift 0.24 marks its Rust generator deprecated, so maintaining or replacing
-these bindings is a known dependency risk. Future Trino, ODBC, or ADBC connectors
-should implement the application connector boundary without changing the editor.
+MIT — see [LICENSE](LICENSE).
