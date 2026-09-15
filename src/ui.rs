@@ -1130,11 +1130,12 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
+                .width(px(360.))
                 .title(format!("Delete connection \"{name}\"?"))
-                .description("This does not delete its tabs, SQL, or downloaded results.")
+                .description("This permanently deletes the connection and its saved password.")
                 .footer(
                     DialogFooter::new()
-                        .justify_start()
+                        .justify_end()
                         .child(
                             Button::new("cancel-delete-connection")
                                 .label("Cancel")
