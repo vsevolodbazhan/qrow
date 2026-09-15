@@ -115,10 +115,11 @@ impl Qrow {
                         rows.row(
                             "Session parameters",
                             "JSON object with string values.",
-                            // The row gives the control its width but no height,
-                            // so the textarea has to state how tall it wants to be.
+                            // A one-entry pretty-printed object uses four lines.
+                            // Keep the control to that height so it does not show
+                            // an empty fifth line below the closing brace.
                             Textarea::new(&form.parameters)
-                                .h(rems(7.5))
+                                .h(rems(6.))
                                 .disabled(saving)
                                 .font_family("Menlo")
                                 .aria_label("Session parameters")

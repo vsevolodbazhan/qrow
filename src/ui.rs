@@ -1052,7 +1052,6 @@ impl Qrow {
             .collect::<Vec<_>>();
         let parameters = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .rows(5)
                 .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
         });
         self.form = Some(ProfileEditor {
