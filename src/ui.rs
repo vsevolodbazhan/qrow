@@ -1147,7 +1147,7 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
-                .width(px(330.))
+                .width(px(360.))
                 .title(format!("Delete connection \"{display_name}\"?"))
                 .description(
                     "This permanently deletes the connection settings and its saved password.",
