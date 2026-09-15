@@ -10,7 +10,7 @@ pub(crate) use workspace_view::WindowView;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
-    dialog::DialogButtonProps,
+    dialog::DialogFooter,
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
     table::TableState,
@@ -1127,26 +1127,32 @@ impl Qrow {
         };
         let name = profile.name.clone();
         let weak = cx.weak_entity();
-        // The confirmation keeps no state of its own. AlertDialog drops any
-        // `on_close` handler when it rebuilds its button props, so a flag set
-        // here would have no reliable place to be cleared.
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
-                .title(format!("Delete \"{name}\"?"))
-                .description("Its tabs keep their SQL and downloaded results.")
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text("Delete")
-                        .ok_variant(ButtonVariant::Danger),
+                .title(format!("Delete connection \"{name}\"?"))
+                .description("This does not delete its tabs, SQL, or downloaded results.")
+                .footer(
+                    DialogFooter::new()
+                        .justify_start()
+                        .child(
+                            Button::new("cancel-delete-connection")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("confirm-delete-connection")
+                                .label("Delete")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, window, cx| {
+                                    let _ =
+                                        confirm.update(cx, |this, cx| this.delete_profile(id, cx));
+                                    window.close_dialog(cx);
+                                }),
+                        ),
                 )
-                // After button_props: it replaces the whole struct, so setting
-                // the props last would drop the cancel button again.
-                .confirm()
-                .on_ok(move |_, _, cx| {
-                    let _ = confirm.update(cx, |this, cx| this.delete_profile(id, cx));
-                    true
-                })
         });
         cx.notify();
     }
