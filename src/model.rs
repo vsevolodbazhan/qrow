@@ -5,6 +5,7 @@ use uuid::Uuid;
 pub const PREVIEW_ROWS: usize = 1_000;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
+pub const MAX_PROFILE_NAME: usize = 60;
 
 pub const MIN_UI_SCALE: f32 = 0.75;
 pub const MAX_UI_SCALE: f32 = 1.50;
@@ -127,6 +128,10 @@ impl Default for Profile {
 impl Profile {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.name.trim().is_empty(), "Give this connection a name.");
+        anyhow::ensure!(
+            self.name.chars().count() <= MAX_PROFILE_NAME,
+            "Connection name must be {MAX_PROFILE_NAME} characters or fewer."
+        );
         anyhow::ensure!(!self.host.trim().is_empty(), "Enter a host.");
         anyhow::ensure!(self.port != 0, "Port must be between 1 and 65535.");
         anyhow::ensure!(!self.username.trim().is_empty(), "Enter a username.");
@@ -204,6 +209,19 @@ mod tests {
     #[test]
     fn default_profile_uses_a_neutral_spark_name() {
         assert_eq!(Profile::default().name, "Spark");
+    }
+
+    #[test]
+    fn profile_name_is_limited_to_sixty_characters() {
+        let mut profile = Profile {
+            name: "n".repeat(MAX_PROFILE_NAME),
+            host: "localhost".into(),
+            username: "user".into(),
+            ..Profile::default()
+        };
+        assert!(profile.validate().is_ok());
+        profile.name.push('n');
+        assert!(profile.validate().is_err());
     }
 
     #[test]

@@ -151,6 +151,22 @@ struct ContextMenu {
 
 /// Long names push the tab bar around without adding information.
 const MAX_TAB_TITLE: usize = 60;
+const MAX_PROFILE_DISPLAY_NAME: usize = 40;
+
+fn truncate_display_name(name: &str) -> String {
+    let mut chars = name.chars();
+    let truncated: String = chars.by_ref().take(MAX_PROFILE_DISPLAY_NAME).collect();
+    if chars.next().is_none() {
+        truncated
+    } else {
+        let mut display: String = name
+            .chars()
+            .take(MAX_PROFILE_DISPLAY_NAME.saturating_sub(1))
+            .collect();
+        display.push('…');
+        display
+    }
+}
 
 fn installed_fonts(cx: &App) -> Vec<String> {
     let mut fonts = cx.text_system().all_font_names();
@@ -1126,12 +1142,13 @@ impl Qrow {
             return;
         };
         let name = profile.name.clone();
+        let display_name = truncate_display_name(&name);
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
                 .width(px(330.))
-                .title(format!("Delete connection \"{name}\"?"))
+                .title(format!("Delete connection \"{display_name}\"?"))
                 .description(
                     "This permanently deletes the connection settings and its saved password.",
                 )
