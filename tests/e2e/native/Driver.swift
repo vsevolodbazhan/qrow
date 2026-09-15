@@ -63,6 +63,25 @@ func click(_ element: AXUIElement) throws {
         event.post(tap: .cghidEventTap)
     }
 }
+func rightClick(_ element: AXUIElement) throws {
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard let position = attribute(element, kAXPositionAttribute),
+          let size = attribute(element, kAXSizeAttribute) else { throw Failure("Element has no bounds") }
+    var point = CGPoint.zero
+    var extent = CGSize.zero
+    try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")
+    AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point)
+    AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
+    point.x += extent.width / 2
+    point.y += extent.height / 2
+    print("Right click \(strings(element)): \(point) \(extent)")
+    for eventType in [CGEventType.rightMouseDown, .rightMouseUp] {
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .right)!
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.flags = []
+        event.post(tap: .cghidEventTap)
+    }
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -91,10 +110,26 @@ final class Driver {
             (role == nil || attribute($0, kAXRoleAttribute) as? String == role) && strings($0).contains(label)
         }
     }
+    func findExact(_ label: String, role: String? = nil) -> AXUIElement? {
+        elements().first {
+            (role == nil || attribute($0, kAXRoleAttribute) as? String == role) && strings($0).contains(where: { $0 == label })
+        }
+    }
     func wait(_ label: String, timeout: Double = 150, role: String? = nil) throws -> AXUIElement {
         let deadline = clock.now.advanced(by: .seconds(timeout))
         repeat {
             if let element = find(label, role: role) { return element }
+            try require(process.isRunning, "Qrow exited while waiting for \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Timed out waiting for \(label)")
+    }
+    func waitExact(_ label: String, timeout: Double = 150, role: String? = nil) throws -> AXUIElement {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        repeat {
+            if let element = findExact(label, role: role) {
+                return element
+            }
             try require(process.isRunning, "Qrow exited while waiting for \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         } while clock.now < deadline
@@ -221,10 +256,67 @@ final class Driver {
         }
         try press("Save")
         _ = try wait("Qrow E2E")
+        try waitGone("Cancel")
+
+        // Connection actions now live in the row context menu. Exercise each
+        // action on the disposable fixture profile before opening its session.
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        _ = try wait("Edit connection…")
+        _ = try wait("Duplicate")
+        _ = try wait("Delete")
+        key(53)
+        try waitGone("Edit connection…")
+
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Edit connection…"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try press("Cancel")
+        try waitGone("Cancel")
+
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Duplicate"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Password", "qrow-test-password-copy")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E copy")
+        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try click(try wait("Delete"))
+        // Alert titles are not exposed by GPUI's macOS accessibility tree.
+        // The confirmation button proves that the alert replaced the menu.
+        try press("Delete")
+        try waitGone("Qrow E2E copy")
+
         try press("Qrow E2E")
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected")
         try snapshot("connected")
+
+        // The tab menu renames the tab without changing its SQL or session.
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Edit tab…"))
+        _ = try wait("Tab name", role: kAXTextFieldRole)
+        try fill("Tab name", String(repeating: "x", count: 61))
+        try press("Save")
+        // Validation text is not exposed by GPUI's accessibility tree. A
+        // rejected save leaves the editor open and the tab title unchanged.
+        _ = try wait("Tab name", role: kAXTextFieldRole)
+        _ = try waitExact("Query 1")
+        try press("Cancel")
+        try waitGone("Tab name")
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Edit tab…"))
+        _ = try wait("Tab name", role: kAXTextFieldRole)
+        try fill("Tab name", "Renamed tab")
+        try press("Save")
+        try waitGone("Tab name")
+        _ = try waitExact("Renamed tab")
+        try rightClick(try waitExact("Renamed tab"))
+        try click(try wait("Edit tab…"))
+        _ = try wait("Tab name", role: kAXTextFieldRole)
+        try press("Save")
+        try waitGone("Tab name")
+        _ = try waitExact("Renamed tab")
 
         try query("SELECT concat('row-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(1001) ORDER BY id")
         _ = try wait("row-0000")
@@ -253,11 +345,22 @@ final class Driver {
             try require(clock.now < deadline, "Spark executor never started UI query")
             Thread.sleep(forTimeInterval: 0.1)
         }
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        // GPUI exposes these as disabled menu items visually, but does not
+        // publish AXEnabled on macOS. Verify their observable no-op behavior.
+        try click(try wait("Edit connection…"))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened while the connection was busy")
+        try click(try wait("Delete"))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(find("Delete", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
+        key(53)
+        try waitGone("Edit connection…")
         try press("New tab")
         try press("Qrow E2E")
         try query("SELECT 'other-tab-works' AS result")
         _ = try wait("other-tab-works")
-        try click(try wait("Query 1, running"))
+        try click(try wait("Renamed tab, running"))
         let cancelStarted = clock.now
         try press("Cancel")
         deadline = cancelStarted.advanced(by: .seconds(10))
@@ -279,7 +382,7 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
-        print("PASS: connection form, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: connection menus, tab rename, connection form, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 
