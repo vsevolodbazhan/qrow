@@ -1132,7 +1132,9 @@ impl Qrow {
             alert
                 .width(px(330.))
                 .title(format!("Delete connection \"{name}\"?"))
-                .description("This permanently deletes the connection and its saved password.")
+                .description(
+                    "This permanently deletes the connection settings and its saved password.",
+                )
                 .footer(
                     DialogFooter::new()
                         .justify_end()
