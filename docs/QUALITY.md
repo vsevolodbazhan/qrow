@@ -13,7 +13,8 @@ sh scripts/hooks/install.sh
 
 The tool installer pins cargo-deny 0.20.2, cargo-machete 0.9.2, and
 cargo-llvm-cov 0.9.1. It also installs LLVM's coverage tools for the pinned Rust
-version. Python 3.11 or later and uv are required for policy checks and packaging.
+version. `uv` is required for policy checks and packaging; it provisions the
+pinned Python 3.11+ toolchain itself, so no separate Python installation is needed.
 
 ## Local commands
 
@@ -113,7 +114,7 @@ After an optimized package build:
 
 ```sh
 sh scripts/package/macos.sh
-python3 scripts/core/size.py
+uv run --locked python scripts/core/size.py
 ```
 
 Budgets are 24 MiB for the executable and 10 MiB for the zipped bundle, against

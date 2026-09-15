@@ -2,13 +2,12 @@
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
-qrow_require_commands python3 thrift
-qrow_require_python_311
+qrow_require_commands uv thrift
 qrow_preflight_finish || exit 1
 thrift --gen rs -out src/connector vendor/TCLIService.thrift
 # Thrift 0.24's Rust generator boxes union elements incorrectly and shadows a map.
 # Keep these narrowly scoped corrections reproducible alongside the pinned IDL.
-python3 - <<'PY'
+uv run --locked python - <<'PY'
 from pathlib import Path
 p = Path('src/connector/t_c_l_i_service.rs')
 s = p.read_text()

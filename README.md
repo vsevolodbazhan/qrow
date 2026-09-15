@@ -49,8 +49,9 @@ general-purpose client:
 - macOS. The prototype has been built and tested on Apple Silicon.
 - A current stable Rust toolchain, including `cargo` and `rustc`.
 - Xcode command-line tools. Install them with `xcode-select --install` if needed.
-- Python 3 for the packaging script's dependency-license collection.
-- [uv](https://docs.astral.sh/uv/) for the locked icon packaging dependency.
+- [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
+  toolchain used by the packaging, dependency-license, and code-generation
+  scripts. A separately installed Python is not required.
 
 Check your tools:
 
@@ -58,7 +59,6 @@ Check your tools:
 rustc --version
 cargo --version
 xcode-select -p
-python3 --version
 uv --version
 ```
 

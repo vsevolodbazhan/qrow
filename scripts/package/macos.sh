@@ -2,8 +2,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
-qrow_require_commands cargo python3 rustc uv codesign ditto
-qrow_require_python_311
+qrow_require_commands cargo rustc uv codesign ditto
 qrow_require_macos
 qrow_require_xcode_tools
 for file in Cargo.lock LICENSE NOTICE pyproject.toml uv.lock assets/app-icons/macos/qrow.png; do
@@ -30,7 +29,7 @@ cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
 mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
 cp NOTICE "$QROW_BUNDLE/Contents/Resources/NOTICE"
 cp LICENSE "$QROW_BUNDLE/Contents/Resources/LICENSE"
-python3 scripts/package/notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
+uv run --locked python scripts/package/notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

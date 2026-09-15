@@ -13,7 +13,8 @@ The Spark processes run in Linux containers. Qrow still has no JVM dependency.
 Install Docker with Compose v2 and start its daemon. Allow approximately 8 GB
 for the server stack. This is test infrastructure, not Qrow's memory requirement.
 The initial image download and build are substantially larger than the app.
-Use the repository's pinned Rust toolchain and Python 3.11 or later.
+Use the repository's pinned Rust toolchain and `uv`, which provisions the
+pinned Python 3.11+ toolchain.
 
 ```sh
 sh scripts/check.sh e2e/backend
