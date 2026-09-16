@@ -13,7 +13,7 @@ from PIL import Image
 
 CANVAS_SIZE = 1024
 # Leave enough breathing room for the rounded-square artwork in the Dock.
-INSET = 128
+INSET = 96
 ICNS_VARIANTS = (
     ("icp4", 16),
     ("ic11", 32),
