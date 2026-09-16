@@ -21,6 +21,8 @@ pub enum ActivityKind {
     ExecutionCompleted,
     FetchStarted,
     FetchCompleted,
+    KeepAliveStarted,
+    KeepAliveCompleted,
     CancelRequested,
     Cancelled,
     Error,
@@ -37,6 +39,8 @@ impl ActivityKind {
             Self::ExecutionCompleted => "Execution complete",
             Self::FetchStarted => "Fetch started",
             Self::FetchCompleted => "Fetch complete",
+            Self::KeepAliveStarted => "Keep-alive started",
+            Self::KeepAliveCompleted => "Keep-alive complete",
             Self::CancelRequested => "Cancellation requested",
             Self::Cancelled => "Cancelled",
             Self::Error => "Error",
@@ -332,44 +336,30 @@ pub enum Panel {
 pub struct PanelState {
     pub selected: Panel,
     pub unread_error: bool,
-    automatic_return_to_results: bool,
 }
 
 impl PanelState {
     pub fn user_select(&mut self, panel: Panel) {
         self.selected = panel;
-        self.automatic_return_to_results = false;
         if panel == Panel::Output {
             self.unread_error = false;
         }
     }
 
-    pub fn execution_started(&mut self) {
-        // A retry keeps this flag until its first successful preview arrives.
-    }
-
     pub fn failure(&mut self, _active: bool) {
         self.unread_error = true;
         self.selected = Panel::Output;
-        self.automatic_return_to_results = true;
     }
 
-    pub fn successful_preview(&mut self) {
-        if self.automatic_return_to_results {
-            self.selected = Panel::Results;
-            self.automatic_return_to_results = false;
-            self.unread_error = false;
-        }
+    pub fn success(&mut self) {
+        self.selected = Panel::Results;
+        self.unread_error = false;
     }
 
     pub fn output_visible(&mut self) {
         if self.selected == Panel::Output {
             self.unread_error = false;
         }
-    }
-
-    pub fn automatic_return_pending(&self) -> bool {
-        self.automatic_return_to_results
     }
 }
 
@@ -473,37 +463,45 @@ mod tests {
     }
 
     #[test]
-    fn panel_rules_preserve_selection_during_progress_and_return_after_a_retry() {
+    fn successful_queries_select_results_after_logs_were_selected() {
         let mut panel = PanelState::default();
         panel.user_select(Panel::Output);
-        panel.execution_started();
         assert_eq!(panel.selected, Panel::Output);
-
-        panel.failure(true);
-        assert!(panel.automatic_return_pending());
-        panel.successful_preview();
+        panel.success();
         assert_eq!(panel.selected, Panel::Results);
 
         panel.failure(true);
+        panel.success();
+        assert_eq!(panel.selected, Panel::Results);
+        assert!(!panel.unread_error);
+
+        panel.failure(true);
         panel.user_select(Panel::Output);
-        panel.successful_preview();
-        assert_eq!(panel.selected, Panel::Output);
+        panel.success();
+        assert_eq!(panel.selected, Panel::Results);
 
-        panel.failure(false);
-        assert!(panel.unread_error);
+        panel.user_select(Panel::Output);
         assert_eq!(panel.selected, Panel::Output);
-        assert!(panel.automatic_return_pending());
-        panel.user_select(Panel::Results);
-        assert!(!panel.automatic_return_pending());
+        panel.success();
+        assert_eq!(panel.selected, Panel::Results);
+    }
 
-        let mut background = PanelState::default();
-        background.failure(false);
-        assert_eq!(background.selected, Panel::Output);
-        assert!(background.unread_error);
-        assert!(background.automatic_return_pending());
-        background.output_visible();
-        assert!(!background.unread_error);
-        background.successful_preview();
-        assert_eq!(background.selected, Panel::Results);
+    #[test]
+    fn failures_select_logs_and_success_clears_errors_on_active_and_background_tabs() {
+        for active in [true, false] {
+            let mut panel = PanelState::default();
+            panel.failure(active);
+            assert_eq!(panel.selected, Panel::Output);
+            assert!(panel.unread_error);
+            panel.output_visible();
+            assert!(!panel.unread_error);
+            panel.success();
+            assert_eq!(panel.selected, Panel::Results);
+
+            panel.failure(active);
+            panel.success();
+            assert_eq!(panel.selected, Panel::Results);
+            assert!(!panel.unread_error);
+        }
     }
 }

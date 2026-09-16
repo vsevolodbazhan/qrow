@@ -1,6 +1,10 @@
-use super::{ActivityKind, Event, QueryState, Runner, Severity};
+use super::{ActivityEvent, ActivityKind, Event, QueryState, Runner, Severity, format_duration};
 use anyhow::Result;
-use std::{sync::atomic::Ordering, thread, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    thread,
+    time::{Duration, Instant},
+};
 
 impl Runner {
     pub(super) fn idle_interval(&self) -> Option<Duration> {
@@ -32,8 +36,21 @@ impl Runner {
         }
         let sql = policy.keep_alive_sql.clone();
         self.cancelled.store(false, Ordering::SeqCst);
+        self.emit_activity(
+            ActivityEvent::new(
+                None,
+                Severity::Info,
+                ActivityKind::KeepAliveStarted,
+                format!("Submitted keep-alive query:\n{sql}"),
+            )
+            .with_connection(self.profile.as_ref().unwrap().name.clone())
+            .with_sql(sql.clone()),
+        );
         self.emit(Event::KeepAliveStarted);
-        if let Err(error) = self.keep_alive(&sql) {
+        let started = Instant::now();
+        let result = self.keep_alive(&sql);
+        let duration = started.elapsed();
+        if let Err(error) = result {
             // A failed maintenance query must not repeat unattended.
             self.disconnect();
             let message = format!("Keep-alive failed: {error:#}");
@@ -41,14 +58,27 @@ impl Runner {
                 None,
                 Severity::Error,
                 ActivityKind::Error,
-                message.clone(),
-                None,
+                format!(
+                    "{message} (client measurement: {})",
+                    format_duration(duration)
+                ),
+                Some(duration),
             );
             self.emit(Event::Error {
                 message,
                 disconnected: true,
             });
         } else {
+            self.activity(
+                None,
+                Severity::Info,
+                ActivityKind::KeepAliveCompleted,
+                format!(
+                    "Keep-alive completed (client measurement: {})",
+                    format_duration(duration)
+                ),
+                Some(duration),
+            );
             self.emit(Event::KeepAliveFinished);
         }
     }

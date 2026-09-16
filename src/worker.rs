@@ -299,6 +299,9 @@ impl Runner {
     ) {
         let mut event = ActivityEvent::at(SystemTime::now(), execution_id, severity, kind, text);
         event.duration = duration;
+        self.emit_activity(event);
+    }
+    fn emit_activity(&self, event: ActivityEvent) {
         let _ = self.activity_tx.send(event);
         (self.wake)();
     }

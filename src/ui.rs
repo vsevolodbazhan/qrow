@@ -134,7 +134,6 @@ struct Tab {
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     next_execution_id: u64,
-    execution_has_results: bool,
 }
 struct ProfileEditor {
     profile: Profile,
@@ -410,7 +409,6 @@ impl Qrow {
             output_scroll: ScrollHandle::new(),
             current_execution: None,
             next_execution_id: 1,
-            execution_has_results: false,
         }
     }
     fn snapshot(&self, cx: &App) -> Workspace {
@@ -549,7 +547,6 @@ impl Qrow {
                         tab.status = "Connected · keep-alive enabled".into();
                     }
                     Event::Columns(columns) => {
-                        tab.execution_has_results = true;
                         tab.table.update(cx, |t, cx| {
                             t.delegate_mut().schema(columns);
                             t.refresh(cx);
@@ -580,8 +577,8 @@ impl Qrow {
                             "Complete"
                         }
                         .into();
-                        if !was_cancelling && tab.execution_has_results {
-                            tab.panel.successful_preview();
+                        if !was_cancelling {
+                            tab.panel.success();
                         }
                     }
                     Event::Cancelled => {
@@ -861,7 +858,6 @@ impl Qrow {
         tab.elapsed = None;
         tab.busy = true;
         tab.cancelling = false;
-        tab.execution_has_results = false;
         tab.started = Some(Instant::now());
         tab.status = "Preparing query…".into();
         let execution_id = Self::allocate_execution_id(tab);
@@ -870,7 +866,6 @@ impl Qrow {
             .unwrap()
             .run_with_id(profile.clone(), query.clone(), execution_id);
         tab.current_execution = Some(execution_id);
-        tab.panel.execution_started();
         let submission = ActivityEvent::new(
             Some(execution_id),
             Severity::Info,
@@ -1385,8 +1380,6 @@ impl Qrow {
         let execution_id = Self::allocate_execution_id(tab);
         let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);
-        tab.execution_has_results = true;
-        tab.panel.execution_started();
         Self::record_activity(
             tab,
             ActivityEvent::new(
@@ -1484,6 +1477,7 @@ impl Qrow {
         });
         tab.status = "Complete · demo data".into();
         tab.elapsed = Some(Duration::from_millis(842));
+        tab.panel.success();
     }
 }
 fn demo_workspace() -> Workspace {

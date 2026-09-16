@@ -324,16 +324,46 @@ fn keep_alive_overrides_idle_disconnect_and_stops_after_manual_disconnect() {
     let mut profile = Profile::default();
     profile.lifecycle.idle_seconds = 1;
     profile.lifecycle.keep_alive_seconds = 1;
-    worker.run(profile, "select".into());
+    profile.lifecycle.keep_alive_sql = "SELECT 'keep-alive λ';".into();
+    let keep_alive_sql = profile.lifecycle.keep_alive_sql.clone();
+    let execution = worker.run(profile, "select".into());
     assert_eq!(ready(&worker), (1000, true));
+    let query_activities: Vec<_> = worker.activities.try_iter().collect();
+    assert!(
+        query_activities
+            .iter()
+            .all(|event| event.execution_id == Some(execution))
+    );
     for _ in 0..2 {
         assert!(matches!(next(&worker), Event::KeepAliveStarted));
         assert!(matches!(next(&worker), Event::KeepAliveFinished));
+        let activities: Vec<_> = worker.activities.try_iter().collect();
+        assert_eq!(activities.len(), 2, "Log each keep-alive query and outcome");
+        assert_eq!(activities[0].kind, ActivityKind::KeepAliveStarted);
+        assert_eq!(
+            activities[0].text,
+            format!("Submitted keep-alive query:\n{keep_alive_sql}")
+        );
+        assert_eq!(activities[0].sql.as_deref(), Some(keep_alive_sql.as_str()));
+        assert_eq!(activities[1].kind, ActivityKind::KeepAliveCompleted);
+        assert!(activities[1].text.starts_with("Keep-alive completed"));
+        assert!(activities[1].duration.is_some());
+        assert!(activities.iter().all(|event| {
+            event.execution_id.is_none()
+                && event.severity == Severity::Info
+                && event.kind != ActivityKind::ExecutionCompleted
+        }));
     }
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
     worker.more();
     assert_eq!(ready(&worker), (250, false));
+    assert!(
+        worker
+            .activities
+            .try_iter()
+            .all(|event| event.execution_id == Some(execution))
+    );
     worker.disconnect();
     assert!(matches!(next(&worker), Event::Disconnected));
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
@@ -354,6 +384,7 @@ fn failed_keep_alive_disconnects_without_background_retry() {
     profile.lifecycle.keep_alive_sql = "broken".into();
     worker.run(profile, "select".into());
     ready(&worker);
+    worker.activities.try_iter().for_each(drop);
     assert!(matches!(next(&worker), Event::KeepAliveStarted));
     match next(&worker) {
         Event::Error {
@@ -365,6 +396,25 @@ fn failed_keep_alive_disconnects_without_background_retry() {
         }
         _ => panic!("Expected keep-alive failure"),
     }
+    let activities: Vec<_> = worker.activities.try_iter().collect();
+    assert_eq!(
+        activities.len(),
+        2,
+        "Log the failed keep-alive SQL and error"
+    );
+    assert_eq!(activities[0].kind, ActivityKind::KeepAliveStarted);
+    assert_eq!(activities[0].text, "Submitted keep-alive query:\nbroken");
+    assert_eq!(activities[0].sql.as_deref(), Some("broken"));
+    assert_eq!(activities[0].severity, Severity::Info);
+    assert_eq!(activities[1].kind, ActivityKind::Error);
+    assert_eq!(activities[1].severity, Severity::Error);
+    assert!(
+        activities[1]
+            .text
+            .contains("Keep-alive failed: syntax error")
+    );
+    assert!(activities[1].duration.is_some());
+    assert!(activities.iter().all(|event| event.execution_id.is_none()));
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
     assert!(
         worker

@@ -1,6 +1,6 @@
 # Queries
 
-Each query tab contains SQL, a selected connection, a result preview, and an
+Each query tab contains SQL, a selected connection, a result preview, and a
 Logs panel. A tab can run one query at a time. Other tabs can run
 concurrently.
 
@@ -30,19 +30,22 @@ Errors use the error color. Durations are client measurements.
 Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
 Settings to change the Logs text. The default line-height multiplier is 1.2.
 
+The Logs panel also shows each keep-alive query, its outcome, and its duration.
+Successful keep-alive queries do not change the selected panel or query results.
 Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
-batches or successful keep-alive checks. It shows keep-alive failures.
+batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
 deletes that history. **Clear** deletes the current history. **Copy All** and
 **Copy Error** copy the stored text. Text selection and copying preserve
 multiline and Unicode error details.
 
-Qrow selects Logs when the active query fails. A failed background query does
-not change the active query tab. It shows an unread error indicator on that
-tab. A successful retry selects Results after its first preview fetch. A
-statement without a result set keeps Logs selected. Selecting a panel after
-a failure cancels the automatic panel change.
+Qrow selects Logs when a query fails. It selects Results when a query succeeds,
+after the first preview fetch or completion without a result set. This applies
+even if you selected Logs before completion. You can select either panel again
+after completion. Background queries update their own panel without changing
+the active query tab. A failed background query shows an unread error indicator
+on its tab.
 
 Qrow limits history to 100 activity groups and 8 MiB per query tab. Qrow
 removes complete old groups when a limit is reached. The latest execution and
