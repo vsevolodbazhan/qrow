@@ -12,14 +12,6 @@ qrow_require_commands() {
     done
 }
 
-qrow_require_python_311() {
-    if command -v python3 >/dev/null 2>&1 \
-        && ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
-        echo "Python 3.11 or later is required." >&2
-        qrow_preflight_failed=1
-    fi
-}
-
 qrow_require_macos() {
     if [ "$(uname -s)" != Darwin ]; then
         echo "This script requires macOS." >&2

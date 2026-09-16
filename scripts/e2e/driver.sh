@@ -3,8 +3,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
-qrow_require_commands python3 swiftc
-qrow_require_python_311
+qrow_require_commands uv swiftc
 qrow_require_macos
 qrow_require_xcode_tools
 qrow_preflight_finish || exit 1
@@ -30,14 +29,14 @@ export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 mkdir -p "$QROW_DATA_DIR"
 cleanup() {
-    python3 scripts/e2e/keychain.py
+    uv run --locked python scripts/e2e/keychain.py
 }
 trap cleanup 0
 trap 'exit 130' INT
 trap 'exit 143' TERM
 if [ "${1:-}" != --prepared ]; then
     sh scripts/package/macos.sh
-    python3 scripts/core/size.py
+    uv run --locked python scripts/core/size.py
 fi
 test "${1:-}" != --prepare || exit 0
 target/e2e-tools/native-driver

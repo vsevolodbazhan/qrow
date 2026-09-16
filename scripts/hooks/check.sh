@@ -32,10 +32,9 @@ if [ "$backend" = true ]; then
 fi
 if [ "$dependencies" = true ]; then
     . scripts/core/preflight.sh
-    qrow_require_commands python3
-    qrow_require_python_311
+    qrow_require_commands uv
     qrow_preflight_finish || exit 1
-    python3 scripts/core/policy.py
+    uv run --locked python scripts/core/policy.py
 fi
 if [ "$scripts" = true ]; then
     sh scripts/core/scripts.sh
