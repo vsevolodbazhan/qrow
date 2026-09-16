@@ -61,14 +61,7 @@ impl Qrow {
         let error_text = tab.output.copy_error();
         let entries: Vec<_> = tab.output.entries().collect();
         let content = if entries.is_empty() {
-            div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(cx.theme().muted_foreground)
-                .child("No activity yet")
-                .into_any_element()
+            panel_empty_state("No activity yet", cx).into_any_element()
         } else {
             v_flex()
                 .w_full()

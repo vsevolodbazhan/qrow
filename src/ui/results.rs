@@ -233,17 +233,11 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .text_size(rems(13. / 14.))
-            .child(
-                self.empty_message
-                    .unwrap_or("Run a query to preview its results"),
-            )
+        super::panel_empty_state(
+            self.empty_message
+                .unwrap_or("Run a query to preview its results"),
+            cx,
+        )
     }
 }
 

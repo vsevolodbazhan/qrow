@@ -197,6 +197,18 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     window.refresh();
 }
 
+fn panel_empty_state(message: &'static str, cx: &App) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family(cx.theme().font_family.clone())
+        .text_size(rems(13. / 14.))
+        .text_color(cx.theme().muted_foreground)
+        .child(message)
+}
+
 pub struct Qrow {
     settings: Settings,
     fonts: Vec<String>,
