@@ -7,6 +7,9 @@ Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)
 page describes the Logs panel.
 
+If a result has no columns, the panel shows a status message without a table
+header. Column headers remain visible when a query returns columns but no rows.
+
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next** fetches another page when needed.
