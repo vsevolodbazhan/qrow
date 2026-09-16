@@ -134,6 +134,9 @@ to decide whether real-server tests are needed. When required, backend tests
 run first on Linux. Native UI tests then run against a fresh fixture on the
 standard ARM `macos-15` runner.
 
+Draft pull requests do not run the acceptance suites. The `ready_for_review`
+pull request event starts the core workflow for a pull request that is ready.
+
 Both suites check out the core run's tested SHA. No runner waits for core to
 finish. Test artifacts are retained for 14 days.
 
