@@ -1,4 +1,4 @@
-use super::{Event, QueryState, Runner};
+use super::{ActivityKind, Event, QueryState, Runner, Severity};
 use anyhow::Result;
 use std::{sync::atomic::Ordering, thread, time::Duration};
 
@@ -20,6 +20,13 @@ impl Runner {
         let policy = &self.profile.as_ref().unwrap().lifecycle;
         if policy.keep_alive_seconds == 0 {
             self.disconnect();
+            self.activity(
+                None,
+                Severity::Info,
+                ActivityKind::Disconnected,
+                "Disconnected after idle timeout",
+                None,
+            );
             self.emit(Event::IdleDisconnected);
             return;
         }
@@ -29,8 +36,16 @@ impl Runner {
         if let Err(error) = self.keep_alive(&sql) {
             // A failed maintenance query must not repeat unattended.
             self.disconnect();
+            let message = format!("Keep-alive failed: {error:#}");
+            self.activity(
+                None,
+                Severity::Error,
+                ActivityKind::Error,
+                message.clone(),
+                None,
+            );
             self.emit(Event::Error {
-                message: format!("Keep-alive failed: {error:#}"),
+                message,
                 disconnected: true,
             });
         } else {

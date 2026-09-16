@@ -1,5 +1,6 @@
 use anyhow::Result;
 use qrow::{
+    activity::{ActivityKind, Severity},
     connector::{Cancellation, Connector, QueryState, Session},
     model::{Batch, Column, Profile},
     worker::{Event, Worker},
@@ -521,5 +522,48 @@ fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
             .recv_timeout(Duration::from_millis(50))
             .is_err()
     );
+    let activities: Vec<_> = worker.activities.try_iter().collect();
+    let execution_outcomes: Vec<_> = activities
+        .iter()
+        .filter(|event| event.kind == ActivityKind::ExecutionCompleted)
+        .collect();
+    assert_eq!(execution_outcomes.len(), 1);
+    assert!(
+        execution_outcomes[0]
+            .text
+            .contains("Execution completed on the server")
+    );
+    assert!(activities.iter().any(|event| {
+        event.kind == ActivityKind::Error && event.text.contains("Fetch transport failed")
+    }));
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn activity_events_keep_execution_identity_and_page_measurements() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture);
+    let execution = worker.run(Profile::default(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+
+    let activities: Vec<_> = worker.activities.try_iter().collect();
+    assert!(activities.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == ActivityKind::Connected
+    }));
+    assert!(activities.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == ActivityKind::ExecutionCompleted
+    }));
+    assert!(activities.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == ActivityKind::FetchStarted
+    }));
+    assert!(activities.iter().any(|event| {
+        event.execution_id == Some(execution)
+            && event.kind == ActivityKind::FetchCompleted
+            && event.duration.is_some()
+    }));
+    assert!(
+        activities
+            .iter()
+            .all(|event| event.severity == Severity::Info)
+    );
 }

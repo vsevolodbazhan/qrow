@@ -9,8 +9,9 @@ the [end-to-end tests](end-to-end-testing.md) belongs to the server fixture.
 | Component | Responsibility |
 | --- | --- |
 | [Application and UI](../src/main.rs) | Initialize GPUI Kit, assets, the SQL language, and the root view. |
-| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, and commands. |
-| [UI modules](../src/ui/) | Present workspace layout, forms, settings, and results. |
+| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, activity history, and commands. |
+| [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
+| [Activity model](../src/activity.rs) | Group activity entries, apply retention, and define panel transitions. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
@@ -30,11 +31,17 @@ flowchart LR
     Kyuubi -->|Status and rows| Connector
     Connector --> Worker
     Worker -->|Events and bounded batches| Results[Results UI]
+    Worker -->|Timestamped activity| Activity[Logs history]
 ```
 
 The UI reads the selection and validates statement boundaries. The worker opens
 a session when needed, runs the SQL, and fetches a bounded preview. Worker events
 wake the UI to update status and results.
+
+The worker sends activity events through a separate channel. Activity events
+carry a wall-clock timestamp, an execution ID, an event kind, and a measured
+duration when available. The UI stores them in the tab's in-memory activity
+model. It does not save them in the workspace.
 
 Each tab owns one session and can perform one active query. Tabs can work
 concurrently. [Connections](connections.md), [Queries](queries.md), and
@@ -49,7 +56,8 @@ checks. There is no continuous idle repaint loop.
 
 Result rendering virtualizes both dimensions. Stored values remain separate
 from shortened cell previews. Restoring the workspace does not restore sessions
-or results, so database connections do not delay startup.
+or results. It does not restore Logs history, so database connections do not
+delay startup.
 
 The window shell owns overlays separately from workspace state. Table behavior
 stays in the results module. Focused form modules keep presentation and validation

@@ -12,6 +12,9 @@ pub const MAX_UI_SCALE: f32 = 1.50;
 pub const UI_SCALE_STEP: f32 = 0.10;
 pub const MIN_EDITOR_FONT_SIZE: f32 = 10.;
 pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
+pub const MIN_LINE_HEIGHT: f32 = 1.;
+pub const MAX_LINE_HEIGHT: f32 = 2.;
+pub const LINE_HEIGHT_STEP: f32 = 0.1;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -20,6 +23,10 @@ pub struct Settings {
     pub ui_font_family: String,
     pub editor_font_family: String,
     pub editor_font_size: f32,
+    pub editor_line_height: f32,
+    pub logs_font_family: String,
+    pub logs_font_size: f32,
+    pub logs_line_height: f32,
 }
 
 impl Default for Settings {
@@ -29,6 +36,10 @@ impl Default for Settings {
             ui_font_family: ".SystemUIFont".into(),
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
+            editor_line_height: 1.2,
+            logs_font_family: "Menlo".into(),
+            logs_font_size: 13.,
+            logs_line_height: 1.2,
         }
     }
 }
@@ -54,10 +65,39 @@ impl Settings {
             .round()
             .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
 
+        if !self.editor_line_height.is_finite() {
+            self.editor_line_height = Self::default().editor_line_height;
+        }
+        self.editor_line_height = (self.editor_line_height * 10.).round() / 10.;
+        self.editor_line_height = self
+            .editor_line_height
+            .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
         self.editor_font_family = self.editor_font_family.trim().into();
         if self.editor_font_family.is_empty() {
             self.editor_font_family = Self::default().editor_font_family;
         }
+
+        self.logs_font_family = self.logs_font_family.trim().into();
+        if self.logs_font_family.is_empty() {
+            self.logs_font_family = Self::default().logs_font_family;
+        }
+
+        if !self.logs_font_size.is_finite() {
+            self.logs_font_size = Self::default().logs_font_size;
+        }
+        self.logs_font_size = self
+            .logs_font_size
+            .round()
+            .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
+
+        if !self.logs_line_height.is_finite() {
+            self.logs_line_height = Self::default().logs_line_height;
+        }
+        self.logs_line_height = (self.logs_line_height * 10.).round() / 10.;
+        self.logs_line_height = self
+            .logs_line_height
+            .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
     }
 }
 
@@ -267,15 +307,25 @@ mod tests {
             ui_font_family: "   ".into(),
             editor_font_family: "   ".into(),
             editor_font_size: f32::NAN,
+            editor_line_height: f32::NAN,
+            logs_font_family: "   ".into(),
+            logs_font_size: f32::NAN,
+            logs_line_height: f32::NAN,
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
 
         settings.ui_scale = 1.46;
         settings.editor_font_size = 33.;
+        settings.editor_line_height = 2.1;
+        settings.logs_font_size = 33.;
+        settings.logs_line_height = 2.1;
         settings.sanitize();
         assert_eq!(settings.ui_scale, 1.46);
         assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
+        assert_eq!(settings.editor_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.logs_font_size, MAX_EDITOR_FONT_SIZE);
+        assert_eq!(settings.logs_line_height, MAX_LINE_HEIGHT);
         let encoded = serde_json::to_string(&settings).unwrap();
         let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
         restored.sanitize();
@@ -295,6 +345,19 @@ mod tests {
         assert_eq!(settings.ui_font_family, Settings::default().ui_font_family);
         assert_eq!(settings.editor_font_family, "Monaco");
         assert_eq!(settings.editor_font_size, 16.);
+        assert_eq!(
+            settings.editor_line_height,
+            Settings::default().editor_line_height
+        );
+        assert_eq!(
+            settings.logs_font_family,
+            Settings::default().logs_font_family
+        );
+        assert_eq!(settings.logs_font_size, Settings::default().logs_font_size);
+        assert_eq!(
+            settings.logs_line_height,
+            Settings::default().logs_line_height
+        );
         assert_eq!(settings.ui_scale, 1.2);
 
         settings.ui_font_family = " Helvetica ".into();

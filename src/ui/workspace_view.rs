@@ -163,9 +163,14 @@ impl Qrow {
                     )
                     .label(tab.saved.title.clone())
                     .aria_label(format!(
-                        "{}{}",
+                        "{}{}{}",
                         tab.saved.title,
-                        if tab.busy { ", running" } else { "" }
+                        if tab.busy { ", running" } else { "" },
+                        if tab.panel.unread_error {
+                            ", unread error"
+                        } else {
+                            ""
+                        },
                     ))
                     .suffix(
                         h_flex()
@@ -177,6 +182,11 @@ impl Qrow {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child("Running"),
+                                )
+                            })
+                            .when(tab.panel.unread_error, |el| {
+                                el.child(
+                                    div().text_xs().text_color(cx.theme().danger).child("Error"),
                                 )
                             })
                             .child(
@@ -265,7 +275,10 @@ impl Qrow {
             )
     }
 
-    fn results_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.tabs[self.active].panel.selected == Panel::Output {
+            return self.output_panel(cx);
+        }
         let tab = &self.tabs[self.active];
         let data = tab.table.read(cx).delegate();
         let page = data.pagination.page();
@@ -296,7 +309,31 @@ impl Qrow {
                     .gap_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().font_weight(FontWeight::MEDIUM).child("Results"))
+                    .child(
+                        Button::new("output-panel-tab")
+                            .ghost()
+                            .small()
+                            .label(if tab.panel.unread_error {
+                                "Logs · error"
+                            } else {
+                                "Logs"
+                            })
+                            .accessibility_label("Logs panel")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("results-panel-tab")
+                            .ghost()
+                            .small()
+                            .label("Results")
+                            .selected(true)
+                            .accessibility_label("Results panel")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
+                            ),
+                    )
                     .child(
                         div()
                             .text_xs()
@@ -343,25 +380,13 @@ impl Qrow {
                             ),
                     ),
             )
-            .when_some(tab.error.clone(), |el, error| {
-                el.child(
-                    v_flex()
-                        .id("query-error")
-                        .max_h_32()
-                        .overflow_y_scroll()
-                        .p_3()
-                        .gap_1()
-                        .text_color(cx.theme().danger)
-                        .child(div().font_weight(FontWeight::MEDIUM).child("Query failed"))
-                        .child(error),
-                )
-            })
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
                 self.dialog_open(),
                 self.settings.ui_scale,
                 cx,
             )))
+            .into_any_element()
     }
 
     fn status_bar(&self, cx: &App) -> impl IntoElement {
@@ -540,17 +565,22 @@ impl Render for Qrow {
                             .child(self.query_tabs(cx))
                             .child(self.query_toolbar(cx))
                             .child(
-                                div().h(editor_height).flex_shrink_0().min_w_0().child(
-                                    Editor::new(&self.tabs[self.active].input)
-                                        .appearance(false)
-                                        .font_family(self.settings.editor_font_family.clone())
-                                        .text_size(self.ui_px(self.settings.editor_font_size))
-                                        .size_full()
-                                        .aria_label("SQL editor"),
-                                ),
+                                div()
+                                    .h(editor_height)
+                                    .flex_shrink_0()
+                                    .min_w_0()
+                                    .line_height(relative(self.settings.editor_line_height))
+                                    .child(
+                                        Editor::new(&self.tabs[self.active].input)
+                                            .appearance(false)
+                                            .font_family(self.settings.editor_font_family.clone())
+                                            .text_size(self.ui_px(self.settings.editor_font_size))
+                                            .size_full()
+                                            .aria_label("SQL editor"),
+                                    ),
                             )
                             .child(self.splitter(false, cx))
-                            .child(div().flex_1().min_h_0().child(self.results_panel(cx))),
+                            .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
                     ),
             )
             .when_some(self.menu.as_ref(), |el, menu| {

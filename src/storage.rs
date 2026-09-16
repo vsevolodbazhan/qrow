@@ -190,6 +190,10 @@ mod tests {
         state.settings.ui_font_family = "Helvetica".into();
         state.settings.editor_font_family = "Monaco".into();
         state.settings.editor_font_size = 16.;
+        state.settings.editor_line_height = 1.1;
+        state.settings.logs_font_family = "Courier".into();
+        state.settings.logs_font_size = 15.;
+        state.settings.logs_line_height = 1.4;
         save(&path, &state).unwrap();
         let restored = load(&path).unwrap();
         assert_eq!(restored.tabs[0].sql, state.tabs[0].sql);

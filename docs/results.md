@@ -3,6 +3,10 @@
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
 The preview does not change the SQL sent to Spark.
 
+Select **Results** beside **Logs** to view the current preview. Qrow keeps
+one Results panel. A new execution replaces the preview. The [Queries](queries.md)
+page describes the Logs panel.
+
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next** fetches another page when needed.
@@ -48,7 +52,8 @@ transport frame limit can also reject large server responses.
 
 Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows. A new query or a profile switch clears the previous preview.
-Results are not restored after application restart.
+Results are not restored after application restart. Logs history is separate
+and is also not restored after application restart.
 
 ## Design
 

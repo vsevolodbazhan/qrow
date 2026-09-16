@@ -5,6 +5,50 @@ use std::{sync::Arc, thread, time::Duration};
 use zeroize::Zeroizing;
 
 pub struct HiveConnector;
+
+struct ConnectionFailure {
+    message: String,
+    details: Option<ErrorDetails>,
+}
+
+impl std::fmt::Display for ConnectionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for ConnectionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConnectionFailure")
+            .field("message", &self.message)
+            .field("details", &self.details)
+            .finish()
+    }
+}
+
+impl std::error::Error for ConnectionFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.details
+            .as_ref()
+            .map(|details| details as &(dyn std::error::Error + 'static))
+    }
+}
+
+impl std::fmt::Display for ErrorDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::fmt::Debug for ErrorDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for ErrorDetails {}
+
+struct ErrorDetails(String);
 struct Credentials {
     profile: Profile,
     password: Zeroizing<String>,
@@ -95,6 +139,7 @@ pub fn check(status: TStatus) -> Result<()> {
     }
     let message = status
         .error_message
+        .clone()
         .unwrap_or_else(|| format!("Kyuubi returned status {}", status.status_code.0));
     if status.status_code == TStatusCode::ERROR_STATUS {
         let connection_failure = status
@@ -106,9 +151,20 @@ pub fn check(status: TStatus) -> Result<()> {
                 .iter()
                 .flatten()
                 .any(|info| is_session_failure(info));
-        return Err(query_failure(message, connection_failure));
+        return Err(query_failure(
+            message,
+            status.info_messages.clone().unwrap_or_default(),
+            status.sql_state.clone(),
+            status.error_code,
+            connection_failure,
+        ));
     }
-    anyhow::bail!("{message}")
+    anyhow::bail!(format_error(
+        message,
+        status.info_messages.unwrap_or_default(),
+        status.sql_state,
+        status.error_code,
+    ))
 }
 
 fn is_session_failure(message: &str) -> bool {
@@ -124,11 +180,49 @@ fn is_session_failure(message: &str) -> bool {
     .any(|signature| message.contains(signature))
 }
 
-fn query_failure(message: String, connection_failure: bool) -> anyhow::Error {
+fn format_error(
+    message: String,
+    info_messages: Vec<String>,
+    sql_state: Option<String>,
+    error_code: Option<i32>,
+) -> String {
+    let mut formatted = message;
+    if !info_messages.is_empty() {
+        formatted.push_str("\nDiagnostics:\n");
+        for info in info_messages {
+            formatted.push_str(&info);
+            formatted.push('\n');
+        }
+        formatted.pop();
+    }
+    if let Some(sql_state) = sql_state {
+        formatted.push_str("\nSQL state: ");
+        formatted.push_str(&sql_state);
+    }
+    if let Some(error_code) = error_code {
+        formatted.push_str("\nError code: ");
+        formatted.push_str(&error_code.to_string());
+    }
+    formatted
+}
+
+fn query_failure(
+    message: String,
+    info_messages: Vec<String>,
+    sql_state: Option<String>,
+    error_code: Option<i32>,
+    connection_failure: bool,
+) -> anyhow::Error {
     // Kyuubi can wrap a dead engine transport in a successful Thrift response.
     // Only query errors allow the worker to reuse the existing session.
+    let primary = message.clone();
+    let message = format_error(message, info_messages, sql_state, error_code);
     if connection_failure || is_session_failure(&message) {
-        anyhow::anyhow!(message)
+        let details = (message != primary).then(|| ErrorDetails(message.clone()));
+        anyhow::Error::new(ConnectionFailure {
+            message: primary,
+            details,
+        })
     } else {
         QueryError(message).into()
     }
@@ -171,7 +265,8 @@ impl Session for HiveSession {
         let response = self
             .client
             .get_operation_status(TGetOperationStatusReq::new(operation.clone(), Some(false)))?;
-        check(response.status)?;
+        let status = response.status.clone();
+        check(status.clone())?;
         let state = response
             .operation_state
             .context("Kyuubi returned no operation state")?;
@@ -183,14 +278,19 @@ impl Session for HiveSession {
             Ok(QueryState::Cancelled)
         } else if state == TOperationState::ERROR_STATE || state == TOperationState::TIMEDOUT_STATE
         {
+            let connection_failure = response
+                .sql_state
+                .as_deref()
+                .or(status.sql_state.as_deref())
+                .is_some_and(|state| state.starts_with("08"));
             Err(query_failure(
                 response
                     .error_message
                     .unwrap_or_else(|| "Query failed or timed out".into()),
-                response
-                    .sql_state
-                    .as_deref()
-                    .is_some_and(|state| state.starts_with("08")),
+                status.info_messages.unwrap_or_default(),
+                response.sql_state.or(status.sql_state),
+                response.error_code.or(status.error_code),
+                connection_failure,
             ))
         } else if state == TOperationState::CLOSED_STATE || state == TOperationState::UKNOWN_STATE {
             anyhow::bail!("The operation is no longer available on Kyuubi")
@@ -429,6 +529,42 @@ mod tests {
             .unwrap_err();
             assert!(error.downcast_ref::<QueryError>().is_some());
         }
+    }
+
+    #[test]
+    fn server_diagnostics_are_kept_in_the_alternate_error_chain() {
+        let error = check(TStatus::new(
+            TStatusCode::ERROR_STATUS,
+            Some(vec!["detail one".into(), "detail two".into()]),
+            Some("42000".into()),
+            Some(17),
+            Some("Syntax error".into()),
+        ))
+        .unwrap_err();
+        assert!(error.to_string().starts_with("Syntax error"));
+        let complete = format!("{error:#}");
+        assert!(complete.contains("detail one"));
+        assert!(complete.contains("detail two"));
+        assert!(complete.contains("SQL state: 42000"));
+        assert!(complete.contains("Error code: 17"));
+    }
+
+    #[test]
+    fn connection_failure_keeps_diagnostics_without_changing_its_classification() {
+        let error = check(TStatus::new(
+            TStatusCode::ERROR_STATUS,
+            Some(vec!["transport detail".into()]),
+            Some("08S01".into()),
+            Some(17),
+            Some("Connection lost".into()),
+        ))
+        .unwrap_err();
+        assert!(error.downcast_ref::<QueryError>().is_none());
+        assert_eq!(error.to_string(), "Connection lost");
+        let complete = format!("{error:#}");
+        assert!(complete.contains("transport detail"));
+        assert!(complete.contains("SQL state: 08S01"));
+        assert!(complete.contains("Error code: 17"));
     }
 
     #[test]
