@@ -48,6 +48,27 @@ impl Rows {
         control: AnyElement,
         cx: &App,
     ) -> impl IntoElement {
+        self.row_with_divider(label, description, control, true, cx)
+    }
+
+    pub(super) fn last_row(
+        &self,
+        label: &'static str,
+        description: impl Into<SharedString>,
+        control: AnyElement,
+        cx: &App,
+    ) -> impl IntoElement {
+        self.row_with_divider(label, description, control, false, cx)
+    }
+
+    fn row_with_divider(
+        &self,
+        label: &'static str,
+        description: impl Into<SharedString>,
+        control: AnyElement,
+        divider: bool,
+        cx: &App,
+    ) -> impl IntoElement {
         let description = description.into();
         let form = if self.compact {
             Form::vertical()
@@ -57,8 +78,9 @@ impl Rows {
         form.child(
             Field::new()
                 .py_4()
-                .border_b_1()
-                .border_color(cx.theme().border)
+                .when(divider, |field| {
+                    field.border_b_1().border_color(cx.theme().border)
+                })
                 .items_center()
                 .label_fn(move |_, cx| {
                     v_flex()

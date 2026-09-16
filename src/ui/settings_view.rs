@@ -368,14 +368,17 @@ impl Qrow {
                 "Resize text and controls.",
                 setting_stepper(&form.scale, "%", "Interface scale", window, cx).into_any_element(),
             ))
-            .child(row(
-                "Interface font",
-                "Used for controls and query results.",
-                Select::new(&form.ui_font)
-                    .w_full()
-                    .accessibility_label("Interface font")
-                    .into_any_element(),
-            ))
+            .child(
+                rows.last_row(
+                    "Interface font",
+                    "Used for controls and query results.",
+                    Select::new(&form.ui_font)
+                        .w_full()
+                        .accessibility_label("Interface font")
+                        .into_any_element(),
+                    cx,
+                ),
+            )
             .child(section("Editor"))
             .child(row(
                 "Editor font",
@@ -391,18 +394,21 @@ impl Qrow {
                 setting_stepper(&form.editor_font_size, "px", "Editor font size", window, cx)
                     .into_any_element(),
             ))
-            .child(row(
-                "Editor line height",
-                "Line spacing multiplier for SQL.",
-                setting_stepper(
-                    &form.editor_line_height,
-                    "x",
+            .child(
+                rows.last_row(
                     "Editor line height",
-                    window,
+                    "Line spacing multiplier for SQL.",
+                    setting_stepper(
+                        &form.editor_line_height,
+                        "x",
+                        "Editor line height",
+                        window,
+                        cx,
+                    )
+                    .into_any_element(),
                     cx,
-                )
-                .into_any_element(),
-            ))
+                ),
+            )
             .child(section("Logs"))
             .child(row(
                 "Logs font",
@@ -418,12 +424,15 @@ impl Qrow {
                 setting_stepper(&form.logs_font_size, "px", "Logs font size", window, cx)
                     .into_any_element(),
             ))
-            .child(row(
-                "Logs line height",
-                "Line spacing multiplier for Logs.",
-                setting_stepper(&form.logs_line_height, "x", "Logs line height", window, cx)
-                    .into_any_element(),
-            ))
+            .child(
+                rows.last_row(
+                    "Logs line height",
+                    "Line spacing multiplier for Logs.",
+                    setting_stepper(&form.logs_line_height, "x", "Logs line height", window, cx)
+                        .into_any_element(),
+                    cx,
+                ),
+            )
             .into_any_element()
     }
 
