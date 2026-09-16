@@ -14,6 +14,7 @@
 - Create all pull requests as draft pull requests.
 - Promote a draft pull request to "Ready for review" explicitly when it is
   ready for review.
+- Store implementation plans in the gitignored `.plans/` directory.
 - Update affected docs in the same change as behavior, configuration, development
   commands, or testing workflows. Remove obsolete statements.
 - Describe current behavior and known limitations. Keep limitations with their topics.
