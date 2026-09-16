@@ -14,7 +14,7 @@ if [ -z "${QROW_CHANGED_FILES+x}" ]; then
     dependencies=true
 else
     if changed '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|src/|tests/)'; then backend=true; fi
-    if changed '^(Cargo\.toml|Cargo\.lock|deny\.toml|docs/dependency-reviews\.toml|scripts/core/(dependencies|install)\.sh|scripts/core/policy\.py)$'; then dependencies=true; fi
+    if changed '^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/(dependencies|install)\.sh|scripts/core/policy\.py)$'; then dependencies=true; fi
     if changed '^scripts/core/preflight\.sh$'; then
         backend=true
         dependencies=true

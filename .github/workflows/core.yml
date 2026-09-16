@@ -51,7 +51,7 @@ jobs:
           backend=$all
           macos=$all
           scripts=$all
-          if changed '^(Cargo\.toml|Cargo\.lock|deny\.toml|docs/dependency-reviews\.toml|scripts/core/(dependencies|install)\.sh|scripts/core/policy\.py|scripts/core/preflight\.sh)$'; then dependencies=true; fi
+          if changed '^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/(dependencies|install)\.sh|scripts/core/policy\.py|scripts/core/preflight\.sh)$'; then dependencies=true; fi
           if changed '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|src/|tests/)'; then backend=true; fi
           if changed '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|src/|assets/|pyproject\.toml|uv\.lock|scripts/package/|scripts/core/(macos|performance|preflight)\.sh|scripts/e2e/|tests/e2e/)'; then macos=true; fi
           if changed '^(\.githooks/|scripts/)'; then scripts=true; fi

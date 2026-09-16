@@ -1,29 +1,16 @@
 # Scripts
 
-Check entry points locate the repository root themselves and mirror the CI
-workflow and job names:
+See [Development](../docs/development.md) for local checks, hooks, dependency
+maintenance, and binding generation. See
+[End-to-end testing](../docs/end-to-end-testing.md) for real-server and native UI
+tests. Build and package commands are in the [project README](../README.md#build).
 
-| CI check | Entry point |
+| Path | Purpose |
 | --- | --- |
-| core / dependencies | `sh scripts/core/dependencies.sh` |
-| core / backend | `sh scripts/core/backend.sh` |
-| core / macos | `sh scripts/core/macos.sh` |
-| e2e / backend | `sh scripts/e2e/backend.sh` |
-| e2e / macos | `sh scripts/e2e/macos.sh` |
-
-`sh scripts/check.sh` runs all offline checks. Use a scoped name, such as
-`sh scripts/check.sh core/backend`, to run one entry point. E2E stays opt-in.
-Native UI E2E uses Java 17 by default; append `--runtime docker` to use Docker.
-
-| Directory | Purpose |
-| --- | --- |
-| `core/` | Offline checks, coverage, performance, size and dependency policy; `install.sh` installs check tools. |
-| `e2e/` | Backend and macOS entry points, server orchestration, native driver and synthetic Keychain cleanup. |
-| `package/` | macOS packaging, icon conversion and dependency notices. |
+| `check.sh` | Select a local check or an explicit end-to-end suite. |
+| `core/` | Local checks, tool installation, coverage, performance, size, and dependency policy. |
+| `e2e/` | Disposable servers, test orchestration, native driver entry point, and synthetic credential cleanup. |
+| `package/` | macOS packaging, icon conversion, and dependency notices. |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |
 | `generate/` | Reproducible Thrift binding generation. |
-| `tests/` | Tests for automation, fixtures, policy and hook isolation. |
-
-CI installs platform tools before invoking checks and runs coverage, script
-checks, performance and packaging as additional steps. The `e2e / gate` remains
-in the workflow because it reports GitHub job outcomes on the tested commit.
+| `tests/` | Automation, fixture, policy, and hook tests. |
