@@ -119,7 +119,7 @@ impl Saver {
 #[cfg(target_os = "macos")]
 pub fn password(id: Uuid) -> Result<Zeroizing<String>> {
     let bytes = Zeroizing::new(security_framework::passwords::get_generic_password("io.qrow.connection", &id.to_string())
-        .context("Could not read the password from macOS Keychain. Edit the connection to save a password.")?);
+        .context("Could not read the password from macOS Keychain. Edit the connection to save a password:")?);
     Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
 }
 

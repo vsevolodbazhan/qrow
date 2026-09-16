@@ -309,31 +309,7 @@ impl Qrow {
                     .gap_3()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        Button::new("output-panel-tab")
-                            .ghost()
-                            .small()
-                            .label(if tab.panel.unread_error {
-                                "Logs · Error"
-                            } else {
-                                "Logs"
-                            })
-                            .accessibility_label("Logs Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("results-panel-tab")
-                            .ghost()
-                            .small()
-                            .label("Results")
-                            .selected(true)
-                            .accessibility_label("Results Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
-                            ),
-                    )
+                    .child(self.panel_switcher(cx))
                     .child(
                         div()
                             .text_xs()

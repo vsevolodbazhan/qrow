@@ -31,6 +31,38 @@ fn timestamp_label(timestamp: SystemTime) -> String {
 }
 
 impl Qrow {
+    pub(super) fn panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = self.tabs[self.active].panel.selected;
+        h_flex()
+            .id("panel-switcher")
+            .items_stretch()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded_md()
+            .overflow_hidden()
+            .child(
+                Button::new("output-panel-tab")
+                    .ghost()
+                    .small()
+                    .rounded_none()
+                    .label("Logs")
+                    .selected(selected == Panel::Output)
+                    .accessibility_label("Logs Panel")
+                    .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx))),
+            )
+            .child(div().w_px().bg(cx.theme().border))
+            .child(
+                Button::new("results-panel-tab")
+                    .ghost()
+                    .small()
+                    .rounded_none()
+                    .label("Results")
+                    .selected(selected == Panel::Results)
+                    .accessibility_label("Results Panel")
+                    .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx))),
+            )
+    }
+
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let all_text = tab.output.copy_all();
@@ -96,31 +128,7 @@ impl Qrow {
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(
-                        Button::new("output-panel-tab")
-                            .ghost()
-                            .small()
-                            .label(if tab.panel.unread_error {
-                                "Logs · Error"
-                            } else {
-                                "Logs"
-                            })
-                            .selected(true)
-                            .accessibility_label("Logs Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
-                            ),
-                    )
-                    .child(
-                        Button::new("results-panel-tab")
-                            .ghost()
-                            .small()
-                            .label("Results")
-                            .accessibility_label("Results Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
-                            ),
-                    )
+                    .child(self.panel_switcher(cx))
                     .child(
                         div()
                             .text_xs()

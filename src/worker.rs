@@ -159,10 +159,7 @@ impl Worker {
                             runner.execution_id(),
                             Severity::Info,
                             ActivityKind::ExecutionCompleted,
-                            format!(
-                                "Execution failed after {}",
-                                format_duration(runner.execution_duration())
-                            ),
+                            format_execution_failure(runner.execution_duration()),
                             runner.execution_duration(),
                         );
                     }
@@ -329,7 +326,7 @@ impl Runner {
             ActivityKind::ExecutionCompleted,
             format!(
                 "Execution completed on the server, result set: {has_results} (client measurement: {})",
-                format_duration(Some(duration))
+                format_duration(duration)
             ),
             Some(duration),
         );
@@ -361,7 +358,7 @@ impl Runner {
                 format!(
                     "Connected to {} (client measurement: {})",
                     self.profile.as_ref().unwrap().name,
-                    format_duration(Some(connect_started.elapsed()))
+                    format_duration(connect_started.elapsed())
                 ),
                 Some(connect_started.elapsed()),
             );
@@ -578,7 +575,7 @@ impl Runner {
             format!(
                 "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
                 self.rows,
-                format_duration(Some(started.elapsed()))
+                format_duration(started.elapsed())
             ),
             Some(started.elapsed()),
         );
@@ -606,8 +603,13 @@ impl Runner {
     }
 }
 
-fn format_duration(duration: Option<Duration>) -> String {
-    duration
-        .map(|duration| format!("{:.2} s", duration.as_secs_f64()))
-        .unwrap_or_else(|| "not measured".into())
+fn format_duration(duration: Duration) -> String {
+    format!("{:.2} s", duration.as_secs_f64())
+}
+
+fn format_execution_failure(duration: Option<Duration>) -> String {
+    duration.map_or_else(
+        || "Execution failed before query submission".into(),
+        |duration| format!("Execution failed after {}", format_duration(duration)),
+    )
 }
