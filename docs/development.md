@@ -96,8 +96,11 @@ script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
 script checks, including changes to its README.
 
 The [core workflow](../.github/workflows/core.yml) selects jobs from changed
-paths. Linux runs headless core and automation checks. macOS builds the
-application, measures SQL validation, and packages the release. A manual dispatch runs every core job. Coverage and package reports are retained for 14 days. See [End-to-end testing](end-to-end-testing.md#continuous-integration) for the real-server workflow and merge gate.
+paths. Draft pull requests run only the change filter. Mark a pull request
+ready for review to run the selected checks. Linux runs headless core and
+automation checks. macOS builds the application, measures SQL validation, and
+packages the release. A manual dispatch runs every core job. Coverage and
+package reports are retained for 14 days. See [End-to-end testing](end-to-end-testing.md#continuous-integration) for the real-server workflow and merge gate.
 
 ## Test boundaries and budgets
 
