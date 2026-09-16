@@ -1,6 +1,6 @@
 use super::*;
 use gpui_kit::base::SelectableText;
-use gpui_kit::component::{Selectable, h_flex, v_flex};
+use gpui_kit::component::{h_flex, v_flex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn timestamp_label(timestamp: SystemTime) -> String {
@@ -41,25 +41,43 @@ impl Qrow {
             .rounded_md()
             .overflow_hidden()
             .child(
-                Button::new("output-panel-tab")
-                    .ghost()
-                    .small()
-                    .rounded_none()
-                    .label("Logs")
-                    .selected(selected == Panel::Output)
-                    .accessibility_label("Logs Panel")
-                    .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx))),
+                div()
+                    .h_6()
+                    .when(selected == Panel::Output, |el| {
+                        el.bg(cx.theme().tokens.secondary_active)
+                    })
+                    .child(
+                        Button::new("output-panel-tab")
+                            .ghost()
+                            .small()
+                            .rounded_none()
+                            .label("Logs")
+                            .toggled(selected == Panel::Output)
+                            .accessibility_label("Logs Panel")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
+                            ),
+                    ),
             )
             .child(div().w_px().bg(cx.theme().border))
             .child(
-                Button::new("results-panel-tab")
-                    .ghost()
-                    .small()
-                    .rounded_none()
-                    .label("Results")
-                    .selected(selected == Panel::Results)
-                    .accessibility_label("Results Panel")
-                    .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx))),
+                div()
+                    .h_6()
+                    .when(selected == Panel::Results, |el| {
+                        el.bg(cx.theme().tokens.secondary_active)
+                    })
+                    .child(
+                        Button::new("results-panel-tab")
+                            .ghost()
+                            .small()
+                            .rounded_none()
+                            .label("Results")
+                            .toggled(selected == Panel::Results)
+                            .accessibility_label("Results Panel")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
+                            ),
+                    ),
             )
     }
 
