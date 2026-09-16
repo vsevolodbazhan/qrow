@@ -116,6 +116,11 @@ Or, after building the release executable:
 ./target/release/qrow --demo
 ```
 
+## Documentation
+
+See the [documentation index](docs/README.md) for application behavior,
+architecture, development, and end-to-end testing.
+
 ## Contributions
 
 Issues and discussion are welcome, but the project isn't set up for external pull requests right now.

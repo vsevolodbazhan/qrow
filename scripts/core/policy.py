@@ -21,7 +21,7 @@ def check(today=None):
         if not match or datetime.date.fromisoformat(match[1]) < today:
             errors.append(f"Missing or expired review date: {waiver.get('id', waiver)}")
     exceptions = policy.get("licenses", {}).get("exceptions", [])
-    reviews_path = ROOT / "docs/dependency-reviews.toml"
+    reviews_path = ROOT / "dependency-reviews.toml"
     reviews = tomllib.loads(reviews_path.read_text()).get("license", []) if reviews_path.exists() else []
     for exception in exceptions:
         review = next((entry for entry in reviews if
