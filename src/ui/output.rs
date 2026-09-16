@@ -67,8 +67,6 @@ impl Qrow {
         let tab = &self.tabs[self.active];
         let all_text = tab.output.copy_all();
         let error_text = tab.output.copy_error();
-        let at_latest = tab.output_scroll.offset().y
-            <= -tab.output_scroll.max_offset().y + px(8. * self.settings.ui_scale);
         let entries: Vec<_> = tab.output.entries().collect();
         let content = if entries.is_empty() {
             div()
@@ -144,16 +142,6 @@ impl Qrow {
                         )
                     })
                     .child(div().flex_1())
-                    .when(!at_latest, |el| {
-                        el.child(
-                            Button::new("output-latest")
-                                .ghost()
-                                .small()
-                                .label("Latest")
-                                .accessibility_label("Scroll to Latest Logs")
-                                .on_click(cx.listener(|this, _, _, cx| this.output_latest(cx))),
-                        )
-                    })
                     .child(
                         Button::new("output-copy-all")
                             .ghost()

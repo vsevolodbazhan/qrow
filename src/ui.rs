@@ -476,10 +476,6 @@ impl Qrow {
         tab.output_scroll.set_offset(point(px(0.), px(0.)));
         cx.notify();
     }
-    fn output_latest(&mut self, cx: &mut Context<Self>) {
-        self.tabs[self.active].output_scroll.scroll_to_bottom();
-        cx.notify();
-    }
     fn copy_output(&self, cx: &mut App) {
         cx.write_to_clipboard(ClipboardItem::new_string(
             self.tabs[self.active].output.copy_all(),
