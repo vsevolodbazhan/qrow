@@ -365,16 +365,16 @@ impl Qrow {
             .child(section("UI"))
             .child(row(
                 "Scale",
-                "Resize text and controls.",
-                setting_stepper(&form.scale, "%", "Scale", window, cx).into_any_element(),
+                "Text and controls size.",
+                setting_stepper(&form.scale, "%", "UI Scale", window, cx).into_any_element(),
             ))
             .child(
                 rows.last_row(
                     "Font Family",
-                    "Used for controls and query results.",
+                    "Font used for text and controls.",
                     Select::new(&form.ui_font)
                         .w_full()
-                        .accessibility_label("Interface Font Family")
+                        .accessibility_label("UI Font Family")
                         .into_any_element(),
                     cx,
                 ),
@@ -382,7 +382,7 @@ impl Qrow {
             .child(section("Editor"))
             .child(row(
                 "Font Family",
-                "Used for SQL. A monospace font is recommended.",
+                "A monospace font is recommended.",
                 Select::new(&form.editor_font)
                     .w_full()
                     .accessibility_label("Editor Font Family")
@@ -390,14 +390,14 @@ impl Qrow {
             ))
             .child(row(
                 "Font Size",
-                "SQL text size before scaling.",
+                "Font size before scaling.",
                 setting_stepper(&form.editor_font_size, "px", "Editor Font Size", window, cx)
                     .into_any_element(),
             ))
             .child(
                 rows.last_row(
                     "Line Height",
-                    "Line spacing multiplier for SQL.",
+                    "Multiplier for the vertical spacing between lines.",
                     setting_stepper(
                         &form.editor_line_height,
                         "x",
@@ -412,7 +412,7 @@ impl Qrow {
             .child(section("Logs"))
             .child(row(
                 "Font Family",
-                "Used for Logs. A monospace font is recommended.",
+                "A monospace font is recommended.",
                 Select::new(&form.logs_font)
                     .w_full()
                     .accessibility_label("Logs Font Family")
@@ -420,14 +420,14 @@ impl Qrow {
             ))
             .child(row(
                 "Font Size",
-                "Logs text size before scaling.",
+                "Font size before scaling.",
                 setting_stepper(&form.logs_font_size, "px", "Logs Font Size", window, cx)
                     .into_any_element(),
             ))
             .child(
                 rows.last_row(
                     "Line Height",
-                    "Line spacing multiplier for Logs.",
+                    "Multiplier for the vertical spacing between lines.",
                     setting_stepper(&form.logs_line_height, "x", "Logs Line Height", window, cx)
                         .into_any_element(),
                     cx,
