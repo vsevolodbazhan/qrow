@@ -1,3 +1,4 @@
+mod button_pair;
 mod connection_form;
 mod output;
 mod profile_view;

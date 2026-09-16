@@ -1,6 +1,6 @@
 use super::*;
 use gpui_kit::base::SelectableText;
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::{Selectable, h_flex, v_flex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn timestamp_label(timestamp: SystemTime) -> String {
@@ -33,52 +33,26 @@ fn timestamp_label(timestamp: SystemTime) -> String {
 impl Qrow {
     pub(super) fn panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = self.tabs[self.active].panel.selected;
-        h_flex()
-            .id("panel-switcher")
-            .items_stretch()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
-            .overflow_hidden()
-            .child(
-                div()
-                    .h_6()
-                    .when(selected == Panel::Output, |el| {
-                        el.bg(cx.theme().tokens.secondary_active)
-                    })
-                    .child(
-                        Button::new("output-panel-tab")
-                            .ghost()
-                            .small()
-                            .rounded_none()
-                            .label("Logs")
-                            .toggled(selected == Panel::Output)
-                            .accessibility_label("Logs Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
-                            ),
-                    ),
-            )
-            .child(div().w_px().bg(cx.theme().border))
-            .child(
-                div()
-                    .h_6()
-                    .when(selected == Panel::Results, |el| {
-                        el.bg(cx.theme().tokens.secondary_active)
-                    })
-                    .child(
-                        Button::new("results-panel-tab")
-                            .ghost()
-                            .small()
-                            .rounded_none()
-                            .label("Results")
-                            .toggled(selected == Panel::Results)
-                            .accessibility_label("Results Panel")
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
-                            ),
-                    ),
-            )
+        button_pair::button_pair(
+            "panel-switcher",
+            Button::new("output-panel-tab")
+                .ghost()
+                .small()
+                .label("Logs")
+                .selected(selected == Panel::Output)
+                .toggled(selected == Panel::Output)
+                .accessibility_label("Logs Panel")
+                .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx))),
+            Button::new("results-panel-tab")
+                .ghost()
+                .small()
+                .label("Results")
+                .selected(selected == Panel::Results)
+                .toggled(selected == Panel::Results)
+                .accessibility_label("Results Panel")
+                .on_click(cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx))),
+            cx,
+        )
     }
 
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {

@@ -325,36 +325,24 @@ impl Qrow {
                             .aria_label(page_label.clone())
                             .child(page_label),
                     )
-                    .child(
-                        h_flex()
-                            .flex_shrink_0()
-                            .items_stretch()
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded_md()
-                            .overflow_hidden()
-                            .child(
-                                Button::new("previous-page")
-                                    .small()
-                                    .ghost()
-                                    .rounded_none()
-                                    .w_24()
-                                    .label("Previous")
-                                    .disabled(page == 0)
-                                    .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                            )
-                            .child(div().w_px().bg(cx.theme().border))
-                            .child(
-                                Button::new("next-page")
-                                    .small()
-                                    .ghost()
-                                    .rounded_none()
-                                    .w_24()
-                                    .label("Next")
-                                    .disabled(page + 1 >= pages && (!tab.more || tab.busy))
-                                    .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                            ),
-                    ),
+                    .child(button_pair::button_pair(
+                        "pagination-buttons",
+                        Button::new("previous-page")
+                            .small()
+                            .ghost()
+                            .w_24()
+                            .label("Previous")
+                            .disabled(page == 0)
+                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                        Button::new("next-page")
+                            .small()
+                            .ghost()
+                            .w_24()
+                            .label("Next")
+                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                        cx,
+                    )),
             )
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
