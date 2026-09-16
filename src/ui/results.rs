@@ -220,11 +220,11 @@ impl TableDelegate for Results {
             .collect::<Vec<_>>()
             .join("\t");
         menu.when_some(cell, |menu, text| {
-            menu.item(PopupMenuItem::new("Copy cell").on_click(move |_, _, cx| {
+            menu.item(PopupMenuItem::new("Copy Cell").on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
             }))
         })
-        .item(PopupMenuItem::new("Copy row").on_click(move |_, _, cx| {
+        .item(PopupMenuItem::new("Copy Row").on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         }))
     }

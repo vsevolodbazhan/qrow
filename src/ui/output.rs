@@ -101,12 +101,12 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label(if tab.panel.unread_error {
-                                "Logs · error"
+                                "Logs · Error"
                             } else {
                                 "Logs"
                             })
                             .selected(true)
-                            .accessibility_label("Logs panel")
+                            .accessibility_label("Logs Panel")
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
                             ),
@@ -116,7 +116,7 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label("Results")
-                            .accessibility_label("Results panel")
+                            .accessibility_label("Results Panel")
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
                             ),
@@ -142,7 +142,7 @@ impl Qrow {
                                 .ghost()
                                 .small()
                                 .label("Latest")
-                                .accessibility_label("Scroll to latest logs")
+                                .accessibility_label("Scroll to Latest Logs")
                                 .on_click(cx.listener(|this, _, _, cx| this.output_latest(cx))),
                         )
                     })
@@ -150,18 +150,18 @@ impl Qrow {
                         Button::new("output-copy-all")
                             .ghost()
                             .small()
-                            .label("Copy all")
+                            .label("Copy All")
                             .disabled(all_text.is_empty())
-                            .accessibility_label("Copy all logs")
+                            .accessibility_label("Copy All Logs")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
                     )
                     .child(
                         Button::new("output-copy-error")
                             .ghost()
                             .small()
-                            .label("Copy error")
+                            .label("Copy Error")
                             .disabled(error_text.is_none())
-                            .accessibility_label("Copy latest error")
+                            .accessibility_label("Copy Latest Error")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
                     )
                     .child(
@@ -169,7 +169,7 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label("Clear")
-                            .accessibility_label("Clear logs history")
+                            .accessibility_label("Clear Logs History")
                             .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
                     ),
             )

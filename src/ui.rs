@@ -109,7 +109,7 @@ pub fn init(cx: &mut App) {
             name: "Query".into(),
             items: vec![
                 MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle sidebar", ToggleSidebar),
+                MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },
     ]);
@@ -1076,7 +1076,7 @@ impl Qrow {
             cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_tab(tab, window, cx));
         self.open_context_menu(
             position,
-            move |menu, _, _| menu.item(PopupMenuItem::new("Edit tab…").on_click(edit)),
+            move |menu, _, _| menu.item(PopupMenuItem::new("Edit Tab…").on_click(edit)),
             window,
             cx,
         );
@@ -1115,7 +1115,7 @@ impl Qrow {
             position,
             move |menu, _, _| {
                 menu.item(
-                    PopupMenuItem::new("Edit connection…")
+                    PopupMenuItem::new("Edit Connection…")
                         .on_click(edit)
                         .disabled(busy),
                 )

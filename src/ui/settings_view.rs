@@ -12,7 +12,7 @@ const DIALOG_HEIGHT_REMS: f32 = 64.;
 const CONTROL_REMS: f32 = 10.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
-const SYSTEM_FONT_LABEL: &str = "System font";
+const SYSTEM_FONT_LABEL: &str = "System Font";
 
 #[derive(Clone, Copy)]
 enum NumberSetting {
@@ -364,44 +364,44 @@ impl Qrow {
             .pb_4()
             .child(section("UI"))
             .child(row(
-                "Interface scale",
+                "Scale",
                 "Resize text and controls.",
-                setting_stepper(&form.scale, "%", "Interface scale", window, cx).into_any_element(),
+                setting_stepper(&form.scale, "%", "Scale", window, cx).into_any_element(),
             ))
             .child(
                 rows.last_row(
-                    "Interface font",
+                    "Font Family",
                     "Used for controls and query results.",
                     Select::new(&form.ui_font)
                         .w_full()
-                        .accessibility_label("Interface font")
+                        .accessibility_label("Interface Font Family")
                         .into_any_element(),
                     cx,
                 ),
             )
             .child(section("Editor"))
             .child(row(
-                "Editor font",
+                "Font Family",
                 "Used for SQL. A monospace font is recommended.",
                 Select::new(&form.editor_font)
                     .w_full()
-                    .accessibility_label("Editor font")
+                    .accessibility_label("Editor Font Family")
                     .into_any_element(),
             ))
             .child(row(
-                "Editor font size",
+                "Font Size",
                 "SQL text size before scaling.",
-                setting_stepper(&form.editor_font_size, "px", "Editor font size", window, cx)
+                setting_stepper(&form.editor_font_size, "px", "Editor Font Size", window, cx)
                     .into_any_element(),
             ))
             .child(
                 rows.last_row(
-                    "Editor line height",
+                    "Line Height",
                     "Line spacing multiplier for SQL.",
                     setting_stepper(
                         &form.editor_line_height,
                         "x",
-                        "Editor line height",
+                        "Editor Line Height",
                         window,
                         cx,
                     )
@@ -411,24 +411,24 @@ impl Qrow {
             )
             .child(section("Logs"))
             .child(row(
-                "Logs font",
+                "Font Family",
                 "Used for Logs. A monospace font is recommended.",
                 Select::new(&form.logs_font)
                     .w_full()
-                    .accessibility_label("Logs font")
+                    .accessibility_label("Logs Font Family")
                     .into_any_element(),
             ))
             .child(row(
-                "Logs font size",
+                "Font Size",
                 "Logs text size before scaling.",
-                setting_stepper(&form.logs_font_size, "px", "Logs font size", window, cx)
+                setting_stepper(&form.logs_font_size, "px", "Logs Font Size", window, cx)
                     .into_any_element(),
             ))
             .child(
                 rows.last_row(
-                    "Logs line height",
+                    "Line Height",
                     "Line spacing multiplier for Logs.",
-                    setting_stepper(&form.logs_line_height, "x", "Logs line height", window, cx)
+                    setting_stepper(&form.logs_line_height, "x", "Logs Line Height", window, cx)
                         .into_any_element(),
                     cx,
                 ),

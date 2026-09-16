@@ -41,8 +41,8 @@ impl Qrow {
                             .h(action_size)
                             .flex_shrink_0()
                             .icon(IconName::Plus)
-                            .accessibility_label("New connection")
-                            .tooltip("New connection…")
+                            .accessibility_label("New Connection")
+                            .tooltip("New Connection…")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.edit_profile(Profile::default(), true, window, cx)
                             })),
@@ -136,8 +136,8 @@ impl Qrow {
                         .h(self.ui_px(28.))
                         .flex_shrink_0()
                         .icon(IconName::PanelLeft)
-                        .accessibility_label("Toggle sidebar")
-                        .tooltip("Toggle sidebar · ⌘B")
+                        .accessibility_label("Toggle Sidebar")
+                        .tooltip("Toggle Sidebar · ⌘B")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar = !this.sidebar;
                             cx.notify();
@@ -198,7 +198,7 @@ impl Qrow {
                                 .small()
                                 .icon(IconName::Close)
                                 .accessibility_label(format!("Close {}", tab.saved.title))
-                                .tooltip("Close tab · ⌘W")
+                                .tooltip("Close Tab · ⌘W")
                                 .disabled(tab.busy)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -220,8 +220,8 @@ impl Qrow {
                         .w(self.ui_px(28.))
                         .h(self.ui_px(28.))
                         .icon(IconName::Plus)
-                        .accessibility_label("New tab")
-                        .tooltip("New tab · ⌘T")
+                        .accessibility_label("New Tab")
+                        .tooltip("New Tab · ⌘T")
                         .on_click(
                             cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
                         ),
@@ -314,11 +314,11 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label(if tab.panel.unread_error {
-                                "Logs · error"
+                                "Logs · Error"
                             } else {
                                 "Logs"
                             })
-                            .accessibility_label("Logs panel")
+                            .accessibility_label("Logs Panel")
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.select_panel(Panel::Output, cx)),
                             ),
@@ -329,7 +329,7 @@ impl Qrow {
                             .small()
                             .label("Results")
                             .selected(true)
-                            .accessibility_label("Results panel")
+                            .accessibility_label("Results Panel")
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.select_panel(Panel::Results, cx)),
                             ),
@@ -576,7 +576,7 @@ impl Render for Qrow {
                                             .font_family(self.settings.editor_font_family.clone())
                                             .text_size(self.ui_px(self.settings.editor_font_size))
                                             .size_full()
-                                            .aria_label("SQL editor"),
+                                            .aria_label("SQL Editor"),
                                     ),
                             )
                             .child(self.splitter(false, cx))

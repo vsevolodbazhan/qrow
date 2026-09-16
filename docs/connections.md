@@ -23,7 +23,7 @@ macOS can request Keychain access when you save the password.
 
 ## Edit, duplicate, or delete a profile
 
-Right-click a profile to use **Edit connection…**, **Duplicate**, or **Delete**.
+Right-click a profile to use **Edit Connection…**, **Duplicate**, or **Delete**.
 An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier and requires a password.
 
@@ -40,12 +40,12 @@ Each tab has its own session. Tabs can execute SQL concurrently, including when
 they use the same profile. Separate sessions do not necessarily use separate
 Spark engines. Engine sharing depends on the Kyuubi configuration.
 
-The **When idle** setting controls each session:
+The **When Idle** setting controls each session:
 
 | Choice | Behavior |
 | --- | --- |
 | **Disconnect after** | Releases the session after the specified idle time. The default is 900 seconds. Reading results and editing SQL do not reset the timer. Running work is not interrupted. |
-| **Keep connected** | Sends periodic heartbeat SQL while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
+| **Keep Connected** | Sends periodic heartbeat SQL while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
 
 Use a lightweight, read-only statement for heartbeat SQL. Qrow checks that the
 text contains one statement, but does not enforce read-only behavior. Heartbeats

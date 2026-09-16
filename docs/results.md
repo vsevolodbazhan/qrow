@@ -21,7 +21,7 @@ Scroll vertically to see more rows and horizontally to see more columns.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
-Right-click a cell to use **Copy cell** or **Copy row**. Copy actions use full
+Right-click a cell to use **Copy Cell** or **Copy Row**. Copy actions use full
 stored values from the displayed page. Long cells show a shortened preview,
 but their stored and copied values are not shortened. File export is not
 implemented.

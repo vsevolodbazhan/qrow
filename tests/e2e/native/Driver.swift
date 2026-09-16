@@ -200,7 +200,7 @@ final class Driver {
         }
     }
     func query(_ sql: String) throws {
-        try fill("SQL editor", sql)
+        try fill("SQL Editor", sql)
         try press("Run")
     }
     func snapshot(_ name: String) throws {
@@ -226,7 +226,7 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
-        _ = try wait("New connection", timeout: 20)
+        _ = try wait("New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -248,10 +248,10 @@ final class Driver {
     }
     func test() throws {
         try start()
-        try press("New connection")
+        try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
-                               ("Port", env["QROW_E2E_PORT"]!), ("LDAP username", "qrow"),
-                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
+                               ("Port", env["QROW_E2E_PORT"]!), ("LDAP Username", "qrow"),
+                               ("Password", "qrow-test-password"), ("Initial Database", "default")] {
             try fill(label, value)
         }
         try press("Save")
@@ -261,14 +261,14 @@ final class Driver {
         // Connection actions now live in the row context menu. Exercise each
         // action on the disposable fixture profile before opening its session.
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
-        _ = try wait("Edit connection…")
+        _ = try wait("Edit Connection…")
         _ = try wait("Duplicate")
         _ = try wait("Delete")
         key(53)
-        try waitGone("Edit connection…")
+        try waitGone("Edit Connection…")
 
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
-        try click(try wait("Edit connection…"))
+        try click(try wait("Edit Connection…"))
         _ = try wait("Password", role: kAXTextFieldRole)
         try press("Cancel")
         try waitGone("Cancel")
@@ -294,28 +294,28 @@ final class Driver {
 
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit tab…"))
-        _ = try wait("Tab name", role: kAXTextFieldRole)
-        try fill("Tab name", String(repeating: "x", count: 61))
+        try click(try wait("Edit Tab…"))
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", String(repeating: "x", count: 61))
         try press("Save")
         // Validation text is not exposed by GPUI's accessibility tree. A
         // rejected save leaves the editor open and the tab title unchanged.
-        _ = try wait("Tab name", role: kAXTextFieldRole)
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
         try press("Cancel")
-        try waitGone("Tab name")
+        try waitGone("Tab Name")
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit tab…"))
-        _ = try wait("Tab name", role: kAXTextFieldRole)
-        try fill("Tab name", "Renamed tab")
+        try click(try wait("Edit Tab…"))
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", "Renamed tab")
         try press("Save")
-        try waitGone("Tab name")
+        try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
         try rightClick(try waitExact("Renamed tab"))
-        try click(try wait("Edit tab…"))
-        _ = try wait("Tab name", role: kAXTextFieldRole)
+        try click(try wait("Edit Tab…"))
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
         try press("Save")
-        try waitGone("Tab name")
+        try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
 
         try query("SELECT concat('row-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(1001) ORDER BY id")
@@ -329,7 +329,7 @@ final class Driver {
         try snapshot("pagination")
 
         // A bad prefix proves only the selected statement reaches Spark. Selection is UTF-16.
-        try fill("SQL editor", "invalid prefix;\nSELECT '日本語😀' AS selected_value")
+        try fill("SQL Editor", "invalid prefix;\nSELECT '日本語😀' AS selected_value")
         key(123, flags: [.maskCommand, .maskShift])
         key(36, flags: .maskCommand)
         _ = try wait("日本語😀")
@@ -348,15 +348,15 @@ final class Driver {
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         // GPUI exposes these as disabled menu items visually, but does not
         // publish AXEnabled on macOS. Verify their observable no-op behavior.
-        try click(try wait("Edit connection…"))
+        try click(try wait("Edit Connection…"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened while the connection was busy")
         try click(try wait("Delete"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Delete", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
         key(53)
-        try waitGone("Edit connection…")
-        try press("New tab")
+        try waitGone("Edit Connection…")
+        try press("New Tab")
         try press("Qrow E2E")
         try query("SELECT 'other-tab-works' AS result")
         _ = try wait("other-tab-works")

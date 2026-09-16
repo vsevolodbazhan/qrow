@@ -121,7 +121,7 @@ and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
-ends when the New connection control becomes accessible. This does not measure
+ends when the New Connection control becomes accessible. This does not measure
 cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.

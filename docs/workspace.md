@@ -5,11 +5,10 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the interface font, editor font, editor font
-size, editor line height, Logs font, Logs font size, Logs line height, or
-interface scale. The interface font applies to controls and results. Editor
-settings apply only to SQL. Logs settings apply only to Logs. Line height is a
-multiplier.
+Open **Qrow → Settings…** to change **Scale** and **Font Family** in the UI
+section, or **Font Family**, **Font Size**, and **Line Height** in the Editor and
+Logs sections. The UI font applies to controls and results. Editor settings
+apply only to SQL. Logs settings apply only to Logs. Line height is a multiplier.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
 resets all appearance settings, including the system interface font. If a saved

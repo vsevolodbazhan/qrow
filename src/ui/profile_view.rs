@@ -26,7 +26,7 @@ impl Qrow {
             let viewport = window.viewport_size();
             let height = (rem * 48.).min(viewport.height - rem * 4.);
             dialog
-                .title("Connection settings")
+                .title("Connection Settings")
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
@@ -90,9 +90,9 @@ impl Qrow {
                     ))
                     .child(rows.row("Port", "Thrift port on that host.", field(2, "Port"), cx))
                     .child(rows.row(
-                        "LDAP username",
+                        "LDAP Username",
                         "User name for LDAP authentication.",
-                        field(3, "LDAP username"),
+                        field(3, "LDAP Username"),
                         cx,
                     ))
                     .child(rows.row(
@@ -106,14 +106,14 @@ impl Qrow {
                         cx,
                     ))
                     .child(rows.row(
-                        "Initial database",
+                        "Initial Database",
                         "Selected when the session opens.",
-                        field(5, "Initial database"),
+                        field(5, "Initial Database"),
                         cx,
                     ))
                     .child(
                         rows.row(
-                            "Session parameters",
+                            "Session Parameters",
                             "JSON object with string values.",
                             // A one-entry pretty-printed object uses four lines.
                             // Keep the control to that height so it does not show
@@ -122,7 +122,7 @@ impl Qrow {
                                 .h(rems(6.))
                                 .disabled(saving)
                                 .font_family("Menlo")
-                                .aria_label("Session parameters")
+                                .aria_label("Session Parameters")
                                 .into_any_element(),
                             cx,
                         ),
@@ -167,7 +167,7 @@ impl Qrow {
                         Button::new("save-profile")
                             .primary()
                             .label(if saving { "Saving" } else { "Save" })
-                            .tooltip("Save connection · ⌘Enter")
+                            .tooltip("Save Connection · ⌘Enter")
                             .disabled(saving)
                             .on_click(cx.listener(|this, _, _, cx| this.save_profile(cx))),
                     ),

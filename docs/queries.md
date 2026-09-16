@@ -27,15 +27,15 @@ execution completion, preview page fetches, cancellation, and errors. Each
 entry starts with a wall-clock timestamp in brackets, followed by its message.
 Errors use the error color. Durations are client measurements.
 
-Use **Logs font**, **Logs font size**, and **Logs line height** in Settings to
-change the Logs text. The default line-height multiplier is 1.2.
+Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
+Settings to change the Logs text. The default line-height multiplier is 1.2.
 
 Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
 batches or successful keep-alive checks. It shows keep-alive failures.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
-deletes that history. **Clear** deletes the current history. **Copy all** and
-**Copy error** copy the stored text. Text selection and copying preserve
+deletes that history. **Clear** deletes the current history. **Copy All** and
+**Copy Error** copy the stored text. Text selection and copying preserve
 multiline and Unicode error details.
 
 Qrow selects Logs when the active query fails. A failed background query does
@@ -54,7 +54,7 @@ shows a retention notice when it removes old groups.
 Press **⌘T** or click **+** in the tab strip to create a tab. The new tab uses
 the active tab's selected profile, but has its own session.
 
-Right-click a tab and choose **Edit tab…** to rename it. The current name appears
+Right-click a tab and choose **Edit Tab…** to rename it. The current name appears
 as the placeholder. Leave the field empty to keep that name. Renaming preserves
 the SQL, connection, and downloaded results.
 
