@@ -8,6 +8,7 @@ use gpui_kit::component::{
 };
 
 const DIALOG_REMS: f32 = 56.;
+const DIALOG_HEIGHT_REMS: f32 = 64.;
 const CONTROL_REMS: f32 = 10.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
@@ -245,7 +246,7 @@ impl Qrow {
             let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
             let rem = window.rem_size();
             let viewport = window.viewport_size();
-            let height = (rem * 56.).min(viewport.height - rem * 4.);
+            let height = (rem * DIALOG_HEIGHT_REMS).min(viewport.height - rem * 4.);
             dialog
                 .title("Settings")
                 .w(Rows::dialog_width(window, DIALOG_REMS))
@@ -341,10 +342,27 @@ impl Qrow {
         let row = |label: &'static str, description: &'static str, control: AnyElement| {
             rows.row(label, description, control, cx)
         };
+        let section = |label: &'static str| {
+            div()
+                .w_full()
+                .pt_4()
+                .pb_2()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(cx.theme().muted_foreground)
+                        .child(label),
+                )
+        };
         v_flex()
             .w_full()
             .flex_shrink_0()
             .pt_3()
+            .pb_4()
+            .child(section("UI"))
             .child(row(
                 "Interface scale",
                 "Resize text and controls.",
@@ -358,6 +376,7 @@ impl Qrow {
                     .accessibility_label("Interface font")
                     .into_any_element(),
             ))
+            .child(section("Editor"))
             .child(row(
                 "Editor font",
                 "Used for SQL. A monospace font is recommended.",
@@ -384,6 +403,7 @@ impl Qrow {
                 )
                 .into_any_element(),
             ))
+            .child(section("Logs"))
             .child(row(
                 "Logs font",
                 "Used for Logs. A monospace font is recommended.",
