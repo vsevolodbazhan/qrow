@@ -11,6 +11,9 @@
 - Report what changed, what you verified, and any remaining verification gaps.
   Do not present attempted checks as successful checks.
 - Write pull request titles and descriptions in English.
+- Create all pull requests as draft pull requests.
+- Promote a draft pull request to "Ready for review" explicitly when it is
+  ready for review.
 - Update affected docs in the same change as behavior, configuration, development
   commands, or testing workflows. Remove obsolete statements.
 - Describe current behavior and known limitations. Keep limitations with their topics.
