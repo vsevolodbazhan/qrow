@@ -19,7 +19,7 @@ else
         backend=true
         dependencies=true
     fi
-    if changed '^(\.githooks/|\.github/workflows/|scripts/)'; then scripts=true; fi
+    if changed '^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/)'; then scripts=true; fi
 fi
 
 if [ "$backend" = true ]; then
