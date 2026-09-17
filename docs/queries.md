@@ -15,8 +15,11 @@ Without a selection, Qrow submits the full editor contents. It does not select
 the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
-A new execution clears the previous preview. Results appear as Qrow fetches
-them. The Logs panel remains across executions in the tab. See
+A new execution clears the previous preview and the previous Error badge. The
+badge stays clear while the execution runs unless that execution fails. Results
+appear as Qrow fetches them.
+The Logs panel remains across executions in the tab. A successful execution
+also clears the badge, even if you selected Logs after the failure. See
 [Results](results.md) for paging and storage limits.
 
 ## Logs
