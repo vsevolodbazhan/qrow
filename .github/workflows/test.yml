@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core-dependencies:
-    name: core-dependencies
+  dependencies:
+    name: dependencies
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -36,9 +36,9 @@ jobs:
       - run: sh scripts/core/install.sh
       - run: sh scripts/core/dependencies.sh
 
-  core-scripts:
-    name: core-scripts
-    needs: core-dependencies
+  scripts:
+    name: scripts
+    needs: dependencies
     if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -58,9 +58,9 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: sh scripts/core/scripts.sh
 
-  core-backend:
-    name: core-backend
-    needs: core-scripts
+  backend:
+    name: backend
+    needs: scripts
     if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -87,9 +87,9 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-  core-macos:
-    name: core-macos
-    needs: core-backend
+  macos:
+    name: macos
+    needs: backend
     if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: macos-15
     timeout-minutes: 30

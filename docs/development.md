@@ -107,25 +107,24 @@ draft pull request, including a `converted_to_draft` event, starts no jobs.
 The workflow runs one job at a time in this order:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> core-macos
+dependencies -> scripts -> backend -> macos
 ```
 
 A failed job skips all jobs that follow it. Every job checks out the same pull
 request merge result. A newer run cancels an older run for the same pull request
 or branch, including manual runs.
 
-E2E tests are not part of the GitHub Actions workflow. Run them locally using
-the [end-to-end testing guide](end-to-end-testing.md).
+E2E tests run locally only. They do not run in GitHub Actions. Use the
+[end-to-end testing guide](end-to-end-testing.md) to run them.
 
 The workflow retains `core-coverage` and `macos-package-and-performance` for 14
-days. Configure these
-individual checks as required branch-protection checks:
+days. Configure these individual checks as required branch-protection checks:
 
 ```text
-test / core-dependencies
-test / core-scripts
-test / core-backend
-test / core-macos
+test / dependencies
+test / scripts
+test / backend
+test / macos
 ```
 
 There is no aggregate CI gate. See

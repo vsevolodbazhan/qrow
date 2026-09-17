@@ -139,7 +139,7 @@ The [test workflow](../.github/workflows/test.yml) runs the core jobs only, in
 one serial chain:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> core-macos
+dependencies -> scripts -> backend -> macos
 ```
 
 It runs the core chain for pushes to `main`, manual dispatches, and pull
@@ -150,9 +150,9 @@ follows it. A newer run cancels an older run for the same pull request or
 branch, including manual runs. Every job checks out the pull request merge
 result.
 
-E2E tests do not run in GitHub Actions. Run them locally with the commands in
-this guide. Core uploads are success-only. The core artifacts are retained for
-14 days:
+E2E tests run locally only. They do not run in GitHub Actions. Use the commands
+in this guide. Core uploads are success-only. The core artifacts are retained
+for 14 days:
 
 ```text
 core-coverage
@@ -163,10 +163,10 @@ Configure the four individual core jobs as required checks. The required check
 names are:
 
 ```text
-test / core-dependencies
-test / core-scripts
-test / core-backend
-test / core-macos
+test / dependencies
+test / scripts
+test / backend
+test / macos
 ```
 
 There is no aggregate gate. Local checks cannot verify GitHub event filters, run

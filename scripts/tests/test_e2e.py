@@ -91,10 +91,10 @@ class AcceptanceTests(unittest.TestCase):
     def test_unified_workflow_has_one_serial_chain(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
         chain = [
-            ("core-dependencies", None),
-            ("core-scripts", "core-dependencies"),
-            ("core-backend", "core-scripts"),
-            ("core-macos", "core-backend"),
+            ("dependencies", None),
+            ("scripts", "dependencies"),
+            ("backend", "scripts"),
+            ("macos", "backend"),
         ]
         for job, dependency in chain:
             with self.subTest(job=job):
@@ -110,7 +110,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
+        for job in ["dependencies", "scripts", "backend", "macos"]:
             with self.subTest(job=job):
                 self.assertIn("!github.event.pull_request.draft", self.workflow_job(job))
                 self.assertNotIn("head.repo.full_name", self.workflow_job(job))
