@@ -371,6 +371,66 @@ fn idle_disconnect_and_heartbeat_preserve_expected_session_state() -> Result<()>
 
 #[test]
 #[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
+fn lifecycle_edits_preserve_live_session_state() -> Result<()> {
+    let mut client = Client::new()?;
+    client.profile.lifecycle.keep_alive_seconds = 60;
+    client.profile.lifecycle.keep_alive_sql = "SELECT 1".into();
+    client.query("CREATE TEMPORARY VIEW qrow_live AS SELECT 1")?;
+
+    let page = client.query("SELECT id FROM range(1250) ORDER BY id")?;
+    ensure!(page.more, "Expected an unfetched result page");
+    assert_eq!(page.rows.len(), 1000);
+
+    let mut updated = client.profile.clone();
+    updated.name = "Qrow lifecycle update".into();
+    updated.lifecycle.keep_alive_seconds = 1;
+    updated.lifecycle.keep_alive_sql = "SELECT 1".into();
+    client.worker.update_profile(updated.clone())?;
+    client.profile = updated;
+    loop {
+        if matches!(
+            client.event(Instant::now() + TIMEOUT)?,
+            Event::KeepAliveFinished
+        ) {
+            break;
+        }
+    }
+
+    client.worker.more();
+    let page = client.page()?;
+    assert_eq!(
+        page.rows,
+        (1000..1250)
+            .map(|n| vec![Some(n.to_string())])
+            .collect::<Vec<_>>()
+    );
+    scalar(&client.query("SELECT * FROM qrow_live")?, "1");
+
+    let mut disconnected = client.profile.clone();
+    disconnected.lifecycle.keep_alive_seconds = 0;
+    disconnected.lifecycle.idle_seconds = 2;
+    client.worker.update_profile(disconnected.clone())?;
+    client.profile = disconnected;
+    loop {
+        if matches!(
+            client.event(Instant::now() + TIMEOUT)?,
+            Event::IdleDisconnected
+        ) {
+            break;
+        }
+    }
+
+    client.run("SELECT * FROM qrow_live");
+    ensure!(
+        !client.failure()?,
+        "A missing temporary view must not discard the new session"
+    );
+    scalar(&client.query("SELECT 1")?, "1");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
 fn engine_and_transport_failure_never_replay_sql() -> Result<()> {
     for action in ["kill-engine", "restart-server"] {
         let client = Client::new()?;

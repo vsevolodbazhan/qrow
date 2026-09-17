@@ -166,6 +166,20 @@ impl Default for Profile {
 }
 
 impl Profile {
+    /// Return whether two profiles open the same authenticated session.
+    ///
+    /// The display name and idle policy can change while a session remains
+    /// usable. The profile id stays part of the identity because it selects
+    /// the stored password.
+    pub fn connection_identity_eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.host == other.host
+            && self.port == other.port
+            && self.username == other.username
+            && self.database == other.database
+            && self.parameters == other.parameters
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.name.trim().is_empty(), "Give this connection a name.");
         anyhow::ensure!(
@@ -295,6 +309,21 @@ mod tests {
         let restored: ConnectionLifecycle =
             serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
         assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn connection_identity_excludes_name_and_lifecycle() {
+        let original = Profile::default();
+        let mut updated = original.clone();
+        updated.name = "Renamed".into();
+        updated.lifecycle.idle_seconds = 60;
+        assert!(original.connection_identity_eq(&updated));
+
+        updated.host = "other-host".into();
+        assert!(!original.connection_identity_eq(&updated));
+        updated = original.clone();
+        updated.id = uuid::Uuid::new_v4();
+        assert!(!original.connection_identity_eq(&updated));
     }
 
     #[test]

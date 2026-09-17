@@ -43,21 +43,34 @@ func key(_ code: CGKeyCode, flags: CGEventFlags = []) {
         event.postToPid(inputPID)
     }
 }
-func click(_ element: AXUIElement) throws {
-    // Dialog accessibility nodes appear before their opening animation settles.
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard let position = attribute(element, kAXPositionAttribute),
-          let size = attribute(element, kAXSizeAttribute) else { throw Failure("Element has no bounds") }
+func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
+    let deadline = clock.now.advanced(by: .seconds(5))
+    var position: CFTypeRef?
+    var size: CFTypeRef?
+    repeat {
+        position = attribute(element, kAXPositionAttribute)
+        size = attribute(element, kAXSizeAttribute)
+        if position != nil && size != nil { break }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+    } while clock.now < deadline
+    guard let position, let size else { throw Failure("Element has no bounds") }
     var point = CGPoint.zero
     var extent = CGSize.zero
     try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")
     AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point)
     AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
+    return (point, extent)
+}
+func click(_ element: AXUIElement) throws {
+    // Dialog accessibility nodes appear before their opening animation settles.
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    let (point, extent) = try elementBounds(element)
     print("Click \(strings(element)): \(point) \(extent)")
-    point.x += extent.width / 2
-    point.y += extent.height / 2
+    var clickPoint = point
+    clickPoint.x += extent.width / 2
+    clickPoint.y += extent.height / 2
     for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
-        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .left)!
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .left)!
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.flags = []
         event.post(tap: .cghidEventTap)
@@ -65,18 +78,13 @@ func click(_ element: AXUIElement) throws {
 }
 func rightClick(_ element: AXUIElement) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-    guard let position = attribute(element, kAXPositionAttribute),
-          let size = attribute(element, kAXSizeAttribute) else { throw Failure("Element has no bounds") }
-    var point = CGPoint.zero
-    var extent = CGSize.zero
-    try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")
-    AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point)
-    AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
-    point.x += extent.width / 2
-    point.y += extent.height / 2
+    let (point, extent) = try elementBounds(element)
+    var clickPoint = point
+    clickPoint.x += extent.width / 2
+    clickPoint.y += extent.height / 2
     print("Right click \(strings(element)): \(point) \(extent)")
     for eventType in [CGEventType.rightMouseDown, .rightMouseUp] {
-        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .right)!
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .right)!
         event.setIntegerValueField(.mouseEventClickState, value: 1)
         event.flags = []
         event.post(tap: .cghidEventTap)
@@ -293,6 +301,28 @@ final class Driver {
         _ = try wait("qrow-ui-connected")
         try snapshot("connected")
 
+        // A profile metadata edit keeps the session in both tabs. Temporary
+        // views prove that the workers did not reconnect when the form was saved.
+        try query("CREATE TEMPORARY VIEW qrow_ui_live AS SELECT 'preserved' AS value")
+        _ = try wait("Complete")
+        try press("New Tab")
+        try press("Qrow E2E")
+        try query("CREATE TEMPORARY VIEW qrow_ui_live AS SELECT 'preserved' AS value")
+        _ = try wait("Complete")
+        try click(try waitExact("Query 1"))
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        try fill("Name", "Qrow E2E live")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E live")
+        try query("SELECT * FROM qrow_ui_live")
+        _ = try wait("preserved")
+        try click(try waitExact("Query 2"))
+        try query("SELECT * FROM qrow_ui_live")
+        _ = try wait("preserved")
+        try click(try waitExact("Query 1"))
+
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
         try click(try wait("Edit Tab…"))
@@ -398,7 +428,7 @@ final class Driver {
             try require(clock.now < deadline, "Spark executor never started UI query")
             Thread.sleep(forTimeInterval: 0.1)
         }
-        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try rightClick(try waitExact("Qrow E2E live", role: kAXButtonRole))
         // GPUI exposes these as disabled menu items visually, but does not
         // publish AXEnabled on macOS. Verify their observable no-op behavior.
         try click(try wait("Edit Connection…"))
@@ -410,7 +440,7 @@ final class Driver {
         key(53)
         try waitGone("Edit Connection…")
         try press("New Tab")
-        try press("Qrow E2E")
+        try press("Qrow E2E live")
         try query("SELECT 'other-tab-works' AS result")
         _ = try wait("other-tab-works")
         try click(try wait("Renamed tab, running"))
