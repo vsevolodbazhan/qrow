@@ -80,81 +80,74 @@ impl Qrow {
                             Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 this.confirm_delete_profile(id, window, cx)
                             }));
+                        let button = Button::new(SharedString::from(format!("profile-{id}")))
+                            .ghost()
+                            .small()
+                            .h_full()
+                            .flex_1()
+                            .min_w_0()
+                            .accessibility_label(profile.name.clone())
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .text_base()
+                                    .gap_2()
+                                    .child(
+                                        gpui_kit::component::Icon::default()
+                                            .path(crate::assets::SPARK_ICON)
+                                            .size_4()
+                                            .flex_shrink_0(),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .child(profile.name.clone()),
+                                    ),
+                            )
+                            .selected(active == Some(id))
+                            .text_color(cx.theme().sidebar_foreground)
+                            .when(active == Some(id), |button| {
+                                button
+                                    .bg(cx.theme().sidebar_accent)
+                                    .text_color(cx.theme().sidebar_accent_foreground)
+                            })
+                            .disabled(busy)
+                            .tooltip(format!("{} · {}", profile.host, profile.database))
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.switch_profile(id, cx)),
+                            );
                         h_flex()
                             .id(SharedString::from(format!("connection-{id}")))
                             .h(self.ui_px(32.))
                             .flex_shrink_0()
-                            .child(
-                                Button::new(SharedString::from(format!("profile-{id}")))
-                                    .ghost()
-                                    .small()
-                                    .h_full()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .accessibility_label(profile.name.clone())
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .text_base()
-                                            .gap_2()
-                                            .child(
-                                                gpui_kit::component::Icon::default()
-                                                    .path(crate::assets::SPARK_ICON)
-                                                    .size_4()
-                                                    .flex_shrink_0(),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .truncate()
-                                                    .child(profile.name.clone()),
-                                            ),
+                            .child(button)
+                            .context_menu(move |menu, _, _| {
+                                menu.action_context(restore.clone())
+                                    .item(
+                                        PopupMenuItem::new("Edit connection…")
+                                            .on_click({
+                                                let edit = edit.clone();
+                                                move |event, window, cx| edit(event, window, cx)
+                                            })
+                                            .disabled(busy),
                                     )
-                                    .selected(active == Some(id))
-                                    .text_color(cx.theme().sidebar_foreground)
-                                    .when(active == Some(id), |button| {
-                                        button
-                                            .bg(cx.theme().sidebar_accent)
-                                            .text_color(cx.theme().sidebar_accent_foreground)
-                                    })
-                                    .disabled(busy)
-                                    .tooltip(format!("{} · {}", profile.host, profile.database))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.switch_profile(id, cx)
+                                    .item(PopupMenuItem::new("Duplicate").on_click({
+                                        let duplicate = duplicate.clone();
+                                        move |event, window, cx| duplicate(event, window, cx)
                                     }))
-                                    .context_menu(move |menu, _, _| {
-                                        menu.action_context(restore.clone())
-                                            .item(
-                                                PopupMenuItem::new("Edit connection…")
-                                                    .on_click({
-                                                        let edit = edit.clone();
-                                                        move |event, window, cx| {
-                                                            edit(event, window, cx)
-                                                        }
-                                                    })
-                                                    .disabled(busy),
-                                            )
-                                            .item(PopupMenuItem::new("Duplicate").on_click({
-                                                let duplicate = duplicate.clone();
-                                                move |event, window, cx| {
-                                                    duplicate(event, window, cx)
-                                                }
-                                            }))
-                                            .separator()
-                                            .item(
-                                                PopupMenuItem::new("Delete")
-                                                    .on_click({
-                                                        let delete = delete.clone();
-                                                        move |event, window, cx| {
-                                                            delete(event, window, cx)
-                                                        }
-                                                    })
-                                                    .disabled(busy),
-                                            )
-                                    }),
-                            )
+                                    .separator()
+                                    .item(
+                                        PopupMenuItem::new("Delete")
+                                            .on_click({
+                                                let delete = delete.clone();
+                                                move |event, window, cx| delete(event, window, cx)
+                                            })
+                                            .disabled(busy),
+                                    )
+                            })
                     })),
             )
     }
