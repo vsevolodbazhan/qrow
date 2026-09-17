@@ -99,6 +99,14 @@ impl Results {
             ..Self::default()
         };
     }
+
+    fn empty_state(&self, cx: &App) -> Div {
+        super::panel_empty_state(
+            self.empty_message
+                .unwrap_or("Run a query to preview its results"),
+            cx,
+        )
+    }
 }
 impl TableDelegate for Results {
     fn columns_count(&self, _: &App) -> usize {
@@ -220,11 +228,11 @@ impl TableDelegate for Results {
             .collect::<Vec<_>>()
             .join("\t");
         menu.when_some(cell, |menu, text| {
-            menu.item(PopupMenuItem::new("Copy cell").on_click(move |_, _, cx| {
+            menu.item(PopupMenuItem::new("Copy Cell").on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
             }))
         })
-        .item(PopupMenuItem::new("Copy row").on_click(move |_, _, cx| {
+        .item(PopupMenuItem::new("Copy Row").on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         }))
     }
@@ -233,17 +241,7 @@ impl TableDelegate for Results {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .items_center()
-            .justify_center()
-            .text_color(cx.theme().muted_foreground)
-            .text_size(rems(13. / 14.))
-            .child(
-                self.empty_message
-                    .unwrap_or("Run a query to preview its results"),
-            )
+        self.empty_state(cx)
     }
 }
 
@@ -303,7 +301,12 @@ pub(super) fn view(
     modal: bool,
     scale: f32,
     cx: &App,
-) -> impl IntoElement {
+) -> AnyElement {
+    let data = table.read(cx).delegate();
+    if data.columns.is_empty() {
+        return data.empty_state(cx).into_any_element();
+    }
+
     div()
         .flex()
         .flex_col()
@@ -329,6 +332,7 @@ pub(super) fn view(
         .child(div().h_3().w_full().flex_shrink_0().relative().child(
             Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
         ))
+        .into_any_element()
 }
 
 /// Move within downloaded results and reset selection and vertical position.

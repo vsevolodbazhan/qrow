@@ -1,4 +1,6 @@
+mod button_pair;
 mod connection_form;
+mod output;
 mod profile_view;
 mod results;
 mod setting_row;
@@ -18,9 +20,13 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use qrow::{
+    activity::{
+        ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
+    },
     model::{
-        MAX_EDITOR_FONT_SIZE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_UI_SCALE, Profile, SavedTab,
-        Settings, UI_SCALE_STEP, Workspace,
+        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_UI_SCALE,
+        MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab, Settings,
+        UI_SCALE_STEP, Workspace,
     },
     sql,
     storage::{self, Saver},
@@ -104,7 +110,7 @@ pub fn init(cx: &mut App) {
             name: "Query".into(),
             items: vec![
                 MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle sidebar", ToggleSidebar),
+                MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },
     ]);
@@ -121,9 +127,13 @@ struct Tab {
     more: bool,
     pending_page: Option<usize>,
     status: String,
-    error: Option<String>,
     started: Option<Instant>,
     elapsed: Option<Duration>,
+    output: ActivityLog,
+    panel: PanelState,
+    output_scroll: ScrollHandle,
+    current_execution: Option<ExecutionId>,
+    next_execution_id: u64,
 }
 struct ProfileEditor {
     profile: Profile,
@@ -184,6 +194,18 @@ fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     theme.mono_font_size = px(13. * settings.ui_scale);
     window.set_rem_size(theme.font_size);
     window.refresh();
+}
+
+fn panel_empty_state(message: &'static str, cx: &App) -> Div {
+    div()
+        .size_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family(cx.theme().font_family.clone())
+        .text_size(rems(13. / 14.))
+        .text_color(cx.theme().muted_foreground)
+        .child(message)
 }
 
 pub struct Qrow {
@@ -247,6 +269,20 @@ impl Qrow {
             message.get_or_insert_with(|| {
                 "The saved editor font is unavailable, so Qrow is using Menlo.".into()
             });
+        }
+        if !fonts
+            .iter()
+            .any(|font| font == &workspace.settings.logs_font_family)
+        {
+            workspace.settings.logs_font_family = Settings::default().logs_font_family;
+            unavailable_font = true;
+            let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
         }
         if workspace.settings.ui_font_family != Settings::default().ui_font_family
             && !fonts.contains(&workspace.settings.ui_font_family)
@@ -366,9 +402,13 @@ impl Qrow {
             more: false,
             pending_page: None,
             status: "Not connected".into(),
-            error: None,
             started: None,
             elapsed: None,
+            output: ActivityLog::default(),
+            panel: PanelState::default(),
+            output_scroll: ScrollHandle::new(),
+            current_execution: None,
+            next_execution_id: 1,
         }
     }
     fn snapshot(&self, cx: &App) -> Workspace {
@@ -409,9 +449,70 @@ impl Qrow {
         let _ = self.wake.try_send(());
         cx.notify();
     }
+    fn record_activity(tab: &mut Tab, event: ActivityEvent) {
+        let at_bottom =
+            tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
+        tab.output.record(event);
+        if at_bottom {
+            tab.output_scroll.scroll_to_bottom();
+        }
+    }
+    fn record_local_activity(
+        tab: &mut Tab,
+        severity: Severity,
+        kind: ActivityKind,
+        text: impl Into<String>,
+    ) {
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(tab.current_execution, severity, kind, text),
+        );
+    }
+    fn record_failure(tab: &mut Tab, active: bool) {
+        tab.output_scroll.scroll_to_bottom();
+        tab.panel.failure(active);
+    }
+    fn select_panel(&mut self, panel: Panel, cx: &mut Context<Self>) {
+        self.tabs[self.active].panel.user_select(panel);
+        cx.notify();
+    }
+    fn allocate_execution_id(tab: &mut Tab) -> ExecutionId {
+        let execution_id = ExecutionId(tab.next_execution_id);
+        tab.next_execution_id = tab.next_execution_id.saturating_add(1);
+        execution_id
+    }
+    fn clear_output(&mut self, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[self.active];
+        tab.output.clear();
+        tab.output_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    }
+    fn copy_output(&self, cx: &mut App) {
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            self.tabs[self.active].output.copy_all(),
+        ));
+    }
+    fn copy_output_error(&self, cx: &mut App) {
+        if let Some(error) = self.tabs[self.active].output.copy_error() {
+            cx.write_to_clipboard(ClipboardItem::new_string(error));
+        }
+    }
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        for tab in &mut self.tabs {
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let activities: Vec<_> = tab
+                .worker
+                .as_ref()
+                .map(|worker| worker.activities.try_iter().collect())
+                .unwrap_or_default();
+            changed |= !activities.is_empty();
+            for activity in activities {
+                let error = activity.severity == Severity::Error;
+                Self::record_activity(tab, activity);
+                if error {
+                    Self::record_failure(tab, index == self.active);
+                }
+            }
             let events: Vec<_> = tab
                 .worker
                 .as_ref()
@@ -462,6 +563,7 @@ impl Qrow {
                         }
                     }
                     Event::Ready { more, limited } => {
+                        let was_cancelling = tab.cancelling;
                         tab.more = more;
                         tab.pending_page = None;
                         tab.busy = false;
@@ -475,6 +577,9 @@ impl Qrow {
                             "Complete"
                         }
                         .into();
+                        if !was_cancelling {
+                            tab.panel.success();
+                        }
                     }
                     Event::Cancelled => {
                         tab.busy = false;
@@ -485,7 +590,7 @@ impl Qrow {
                         tab.status = "Cancelled · partial preview retained".into();
                     }
                     Event::Error {
-                        message,
+                        message: _,
                         disconnected,
                     } => {
                         tab.busy = false;
@@ -502,10 +607,16 @@ impl Qrow {
                             "Query failed"
                         }
                         .into();
-                        tab.error = Some(message);
+                        Self::record_failure(tab, index == self.active);
                     }
                     Event::CancelError(message) => {
-                        tab.error = Some(message);
+                        Self::record_local_activity(
+                            tab,
+                            Severity::Error,
+                            ActivityKind::Error,
+                            message,
+                        );
+                        Self::record_failure(tab, index == self.active);
                         tab.cancelling = false;
                     }
                     Event::Disconnected | Event::IdleDisconnected => {
@@ -589,6 +700,7 @@ impl Qrow {
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = index;
+        self.tabs[index].panel.output_visible();
         self.tabs[index]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
@@ -652,11 +764,25 @@ impl Qrow {
         if let Some(worker) = tab.worker.take() {
             worker.shutdown();
         }
+        let connection_name = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_else(|| "Unknown connection".into());
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(
+                None,
+                Severity::Info,
+                ActivityKind::ConnectionChanged,
+                format!("Selected connection: {connection_name}"),
+            ),
+        );
         tab.saved.profile = Some(id);
         tab.connected = false;
         tab.more = false;
         tab.pending_page = None;
-        tab.error = None;
         tab.elapsed = None;
         tab.status = "Not connected".into();
         tab.table.update(cx, |t, cx| {
@@ -687,7 +813,13 @@ impl Qrow {
                 .unwrap_or_else(|| s.value().to_string())
         });
         if let Err(e) = sql::validate_single(&query) {
-            tab.error = Some(e.to_string());
+            let message = e.to_string();
+            Self::record_activity(
+                tab,
+                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+            );
+            Self::record_failure(tab, true);
+            tab.status = format!("Rejected · {message}");
             cx.notify();
             return;
         }
@@ -697,7 +829,13 @@ impl Qrow {
             .find(|p| Some(p.id) == tab.saved.profile)
             .cloned()
         else {
-            tab.error = Some("Choose a connection before running SQL.".into());
+            let message = "Choose a connection before running SQL.";
+            Self::record_activity(
+                tab,
+                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message),
+            );
+            Self::record_failure(tab, true);
+            tab.status = format!("Rejected · {message}");
             cx.notify();
             return;
         };
@@ -717,13 +855,26 @@ impl Qrow {
         });
         tab.more = false;
         tab.pending_page = None;
-        tab.error = None;
         tab.elapsed = None;
         tab.busy = true;
         tab.cancelling = false;
         tab.started = Some(Instant::now());
         tab.status = "Preparing query…".into();
-        tab.worker.as_ref().unwrap().run(profile, query);
+        let execution_id = Self::allocate_execution_id(tab);
+        tab.worker
+            .as_ref()
+            .unwrap()
+            .run_with_id(profile.clone(), query.clone(), execution_id);
+        tab.current_execution = Some(execution_id);
+        let submission = ActivityEvent::new(
+            Some(execution_id),
+            Severity::Info,
+            ActivityKind::Submitted,
+            format!("Submitted query:\n{query}"),
+        )
+        .with_connection(profile.name)
+        .with_sql(query);
+        Self::record_activity(tab, submission);
         cx.notify();
     }
     fn next_page(&mut self, cx: &mut Context<Self>) {
@@ -740,7 +891,6 @@ impl Qrow {
             tab.pending_page = Some(page);
             tab.busy = true;
             tab.cancelling = false;
-            tab.error = None;
             tab.started = Some(Instant::now());
             tab.status = "Fetching next page…".into();
             worker.more();
@@ -757,11 +907,14 @@ impl Qrow {
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
         let t = &mut self.tabs[self.active];
-        if t.busy
-            && !t.cancelling
-            && let Some(w) = &t.worker
-        {
-            w.cancel();
+        if t.busy && !t.cancelling && t.worker.is_some() {
+            Self::record_local_activity(
+                t,
+                Severity::Info,
+                ActivityKind::CancelRequested,
+                "Cancellation requested by user",
+            );
+            t.worker.as_ref().unwrap().cancel();
             t.cancelling = true;
             t.status = "Cancelling…".into();
         }
@@ -772,8 +925,17 @@ impl Qrow {
         if tab.busy || !tab.connected || self.form.is_some() || self.settings_open {
             return;
         }
-        if let Some(worker) = &tab.worker {
-            worker.disconnect();
+        if tab.worker.is_some() {
+            Self::record_activity(
+                tab,
+                ActivityEvent::new(
+                    None,
+                    Severity::Info,
+                    ActivityKind::Disconnected,
+                    "Disconnect requested",
+                ),
+            );
+            tab.worker.as_ref().unwrap().disconnect();
             tab.busy = true;
             tab.status = "Disconnecting…".into();
         }
@@ -834,6 +996,14 @@ impl Qrow {
             self.changed(cx);
         }
     }
+    fn set_logs_font(&mut self, font: String, cx: &mut Context<Self>) {
+        if self.fonts.iter().any(|available| available == &font)
+            && self.settings.logs_font_family != font
+        {
+            self.settings.logs_font_family = font;
+            self.changed(cx);
+        }
+    }
     fn set_ui_font(&mut self, font: String, window: &mut Window, cx: &mut Context<Self>) {
         if (font == Settings::default().ui_font_family || self.fonts.contains(&font))
             && self.settings.ui_font_family != font
@@ -848,6 +1018,10 @@ impl Qrow {
         self.settings.ui_font_family = settings.ui_font_family;
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
+        self.settings.editor_line_height = settings.editor_line_height;
+        self.settings.logs_font_family = settings.logs_font_family;
+        self.settings.logs_font_size = settings.logs_font_size;
+        self.settings.logs_line_height = settings.logs_line_height;
         self.apply_ui_scale(settings.ui_scale, window, cx);
         apply_ui_theme(&self.settings, window, cx);
         self.changed(cx);
@@ -906,7 +1080,7 @@ impl Qrow {
             cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_tab(tab, window, cx));
         self.open_context_menu(
             position,
-            move |menu, _, _| menu.item(PopupMenuItem::new("Edit tab…").on_click(edit)),
+            move |menu, _, _| menu.item(PopupMenuItem::new("Edit Tab…").on_click(edit)),
             window,
             cx,
         );
@@ -1157,6 +1331,48 @@ impl Qrow {
     }
     fn seed_demo(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
+        let execution_id = Self::allocate_execution_id(tab);
+        let sql = tab.input.read(cx).value().to_string();
+        tab.current_execution = Some(execution_id);
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(
+                Some(execution_id),
+                Severity::Info,
+                ActivityKind::Connected,
+                "Connected to rivendell-s (demo)",
+            )
+            .with_connection("rivendell-s"),
+        );
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(
+                Some(execution_id),
+                Severity::Info,
+                ActivityKind::Submitted,
+                format!("Submitted query:\n{sql}"),
+            )
+            .with_connection("rivendell-s")
+            .with_sql(sql),
+        );
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(
+                Some(execution_id),
+                Severity::Info,
+                ActivityKind::ExecutionCompleted,
+                "Execution completed on the server, result set: true (demo)",
+            ),
+        );
+        Self::record_activity(
+            tab,
+            ActivityEvent::new(
+                Some(execution_id),
+                Severity::Info,
+                ActivityKind::FetchCompleted,
+                "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
+            ),
+        );
         tab.table.update(cx, |t, cx| {
             let data = t.delegate_mut();
             data.clear();
@@ -1215,6 +1431,7 @@ impl Qrow {
         });
         tab.status = "Complete · demo data".into();
         tab.elapsed = Some(Duration::from_millis(842));
+        tab.panel.success();
     }
 }
 fn demo_workspace() -> Workspace {

@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod connector;
 pub mod model;
 pub mod pagination;

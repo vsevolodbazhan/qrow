@@ -5,9 +5,10 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the interface font, editor font, editor font
-size, or interface scale. The interface font applies to controls and results.
-The editor font applies to SQL. Editor font size uses pixels before scaling.
+Open **Qrow → Settings…** to change **Scale** and **Font Family** in the UI
+section, or **Font Family**, **Font Size**, and **Line Height** in the Editor and
+Logs sections. The UI font applies to controls and results. Editor settings
+apply only to SQL. Logs settings apply only to Logs. Line height is a multiplier.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
 resets all appearance settings, including the system interface font. If a saved
@@ -17,13 +18,15 @@ The application uses its bundled dark theme, independent of the macOS appearance
 There is no light-theme setting.
 
 Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
-to change its width. Drag the divider above Results to change the editor height.
+to change its width. Drag the divider above Results or Logs to change the
+editor height.
 These layout positions are not saved in the workspace.
 
 ## Saved state
 
 The workspace file contains connection profiles, open tabs, tab names, SQL,
-selected profiles, the active tab, and appearance settings. Its default path is:
+selected profiles, the active tab, and appearance settings. It does not contain
+result rows or Logs history. Its default path is:
 
 ```text
 ~/Library/Application Support/Qrow/workspace.json
@@ -54,10 +57,10 @@ databases or Keychain.
 ## Design
 
 The [workspace model](../src/model.rs) holds saved data separately from live
-sessions and results. [Storage](../src/storage.rs) writes through a background
-saver. It writes a temporary file, flushes it, and renames it to replace the
-workspace. This avoids leaving a partially written workspace after a normal
-write failure.
+sessions, results, and Logs history. [Storage](../src/storage.rs) writes
+through a background saver. It writes a temporary file, flushes it, and renames
+it to replace the workspace. This avoids leaving a partially written workspace
+after a normal write failure.
 
 The [UI](../src/ui.rs) schedules saves after edits and flushes the latest state
 on shutdown. Existing workspace versions, profile UUIDs, and Keychain service

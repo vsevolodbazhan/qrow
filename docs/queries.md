@@ -1,7 +1,8 @@
 # Queries
 
-Each query tab contains SQL, a selected connection, and a result preview. A tab
-can run one query at a time. Other tabs can run concurrently.
+Each query tab contains SQL, a selected connection, a result preview, and a
+Logs panel. A tab can run one query at a time. Other tabs can run
+concurrently.
 
 ## Run SQL
 
@@ -15,14 +16,48 @@ the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
 A new execution clears the previous preview. Results appear as Qrow fetches
-them. See [Results](results.md) for paging and storage limits.
+them. The Logs panel remains across executions in the tab. See
+[Results](results.md) for paging and storage limits.
+
+## Logs
+
+Select **Logs** beside **Results** to inspect Qrow activity. The history shows
+connection changes, the exact SQL submitted to the selected connection,
+execution completion, preview page fetches, cancellation, and errors. Each
+entry starts with a wall-clock timestamp in brackets, followed by its message.
+Errors use the error color. Durations are client measurements.
+
+Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
+Settings to change the Logs text. The default line-height multiplier is 1.2.
+
+The Logs panel also shows each keep-alive query, its outcome, and its duration.
+Successful keep-alive queries do not change the selected panel or query results.
+Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
+batches.
+
+Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
+deletes that history. **Clear** deletes the current history. **Copy All** and
+**Copy Error** copy the stored text. Text selection and copying preserve
+multiline and Unicode error details.
+
+Qrow selects Logs when a query fails. It selects Results when a query succeeds,
+after the first preview fetch or completion without a result set. This applies
+even if you selected Logs before completion. You can select either panel again
+after completion. Background queries update their own panel without changing
+the active query tab. A failed background query shows an unread error indicator
+on its tab.
+
+Qrow limits history to 100 activity groups and 8 MiB per query tab. Qrow
+removes complete old groups when a limit is reached. The latest execution and
+its complete error are kept. A single latest execution can exceed 8 MiB. Qrow
+shows a retention notice when it removes old groups.
 
 ## Manage tabs
 
 Press **⌘T** or click **+** in the tab strip to create a tab. The new tab uses
 the active tab's selected profile, but has its own session.
 
-Right-click a tab and choose **Edit tab…** to rename it. The current name appears
+Right-click a tab and choose **Edit Tab…** to rename it. The current name appears
 as the placeholder. Leave the field empty to keep that name. Renaming preserves
 the SQL, connection, and downloaded results.
 
@@ -49,7 +84,9 @@ abandoned resources.
 
 ## Errors and limitations
 
-SQL and downloaded rows remain available after a query or fetch failure. Reconnection requires an explicit Run and does not restore session settings from earlier SQL statements.
+SQL, Logs history, and downloaded rows remain available after a query or
+fetch failure. Reconnection requires an explicit Run and does not restore
+session settings from earlier SQL statements.
 
 ## Syntax
 

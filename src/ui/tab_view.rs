@@ -16,7 +16,7 @@ impl Qrow {
                 .ok();
             let footer = weak.update(cx, |this, cx| this.tab_footer(cx)).ok();
             dialog
-                .title("Tab settings")
+                .title("Tab Settings")
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .overlay_closable(false)
                 .on_ok(move |_, window, cx| {
@@ -49,7 +49,7 @@ impl Qrow {
                     "Name",
                     "Leave blank to keep the current name.",
                     Input::new(&form.title)
-                        .aria_label("Tab name")
+                        .aria_label("Tab Name")
                         .into_any_element(),
                     cx,
                 ),
@@ -89,7 +89,7 @@ impl Qrow {
                         Button::new("save-tab")
                             .primary()
                             .label("Save")
-                            .tooltip("Rename tab · ⌘Enter")
+                            .tooltip("Rename Tab · ⌘Enter")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.rename_tab(window, cx)),
                             ),

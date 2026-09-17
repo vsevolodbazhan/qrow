@@ -47,7 +47,7 @@ pub(super) fn render_lifecycle(
     let choice: AnyElement = v_flex()
         .gap_2()
         .children(
-            [(false, "Disconnect"), (true, "Keep connected")].map(|(value, label)| {
+            [(false, "Disconnect"), (true, "Keep Connected")].map(|(value, label)| {
                 Radio::new(label)
                     .label(label)
                     .checked(keep == value)
@@ -63,24 +63,24 @@ pub(super) fn render_lifecycle(
         .into_any_element();
     v_flex()
         .child(rows.row(
-            "When idle",
+            "When Idle",
             "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
             choice,
             cx,
         ))
         .when(!keep, |el| {
             el.child(rows.row(
-                "Idle timeout",
+                "Idle Timeout",
                 "Seconds of inactivity before the session is released.",
-                field(7, "Idle timeout in seconds"),
+                field(7, "Idle Timeout in Seconds"),
                 cx,
             ))
         })
         .when(keep, |el| {
             el.child(rows.row(
-                "Heartbeat interval",
+                "Heartbeat Interval",
                 "Seconds between keep-alive queries.",
-                field(8, "Heartbeat interval in seconds"),
+                field(8, "Heartbeat Interval in Seconds"),
                 cx,
             ))
             .child(rows.row(
