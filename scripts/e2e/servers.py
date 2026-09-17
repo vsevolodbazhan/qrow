@@ -95,7 +95,7 @@ def distribution(item, label=None):
             initial_received = partial.stat().st_size if partial.exists() else 0
             if initial_received:
                 announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
-            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--continue-at", "-", "--max-time", "600",
+            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-", "--max-time", "600",
                        "--output", str(partial), item["url"]]
             total_text = f" ({human_size(total)} total)" if total else ""
             announce(f"{label}: downloading {item['url']}{total_text}.")
