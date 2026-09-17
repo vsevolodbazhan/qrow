@@ -42,11 +42,14 @@ Use [scripts/check.sh](../scripts/check.sh) as the check entry point:
 | `sh scripts/check.sh` | Full local suite, excluding packaging and end-to-end tests. |
 | `sh scripts/check.sh core/backend` | Formatting, core lint, core tests, and Rust API documentation. |
 | `sh scripts/check.sh core/macos` | Full application lint and tests on macOS. |
-| `sh scripts/check.sh core/scripts` | Shell and workflow lint, automation tests, and policy checks. |
-| `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, and unused dependencies. |
+| `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, and script unit tests. |
+| `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, unused dependencies, and `policy.py`. |
 | `sh scripts/check.sh core/coverage` | Core line coverage with an enforced floor. |
 | `sh scripts/check.sh core/performance` | SQL validation benchmarks with enforced budgets. |
 | `sh scripts/check.sh hook` | Fast checks used by the pre-commit hook. |
+
+The `dependencies.sh` script owns the `policy.py` check. The `scripts.sh`
+script does not run `policy.py`.
 
 Use `core/backend` for backend changes, `core/macos` for UI changes, and
 `core/scripts` for automation changes. Run the full suite for dependency changes
@@ -95,12 +98,47 @@ does not prove that the staged snapshot passes. Markdown changes outside the
 script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
 script checks, including changes to its README.
 
-The [core workflow](../.github/workflows/core.yml) selects jobs from changed
-paths. Draft pull requests skip the change filter and selected checks. Mark a
-pull request ready for review to run them. Linux runs headless core and
-automation checks. macOS builds the application, measures SQL validation, and
-packages the release. A manual dispatch runs every core job. Coverage and
-package reports are retained for 14 days. See [End-to-end testing](end-to-end-testing.md#continuous-integration) for the real-server workflow and merge gate.
+The [test workflow](../.github/workflows/test.yml) is the only CI workflow. It
+runs for pushes to `main`, manual dispatches, and pull requests with the
+`opened`, `reopened`, `synchronize`, `ready_for_review`, and
+`converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
+draft pull request, including a `converted_to_draft` event, starts no jobs.
+
+The workflow runs one job at a time in this order:
+
+```text
+core-dependencies -> core-scripts -> core-backend -> core-macos ->
+e2e-backend -> e2e-macos
+```
+
+A failed job skips all jobs that follow it. Every job checks out the same pull
+request merge result. Core jobs run for fork pull requests. E2E jobs skip fork
+pull requests. A newer run cancels an older run for the same pull request or
+branch, including manual runs.
+
+The `e2e-macos` job reuses the package from `core-macos` by default. A manual
+dispatch has the `reuse_macos_package` input. Set it to `false` to build the
+package in the E2E job. A selected package that is missing or invalid fails the
+job. The job does not build a replacement package.
+
+The workflow retains `core-coverage`, `macos-package-and-performance`,
+`backend-evidence`, and `macos-evidence` for 14 days. Configure these
+individual checks as required branch-protection checks:
+
+```text
+test / core-dependencies
+test / core-scripts
+test / core-backend
+test / core-macos
+test / e2e-backend
+test / e2e-macos
+```
+
+There is no aggregate CI gate. See
+[End-to-end testing](end-to-end-testing.md#continuous-integration) for the
+real-server and native UI details. Local checks cannot verify GitHub event
+filters, run cancellation, artifact transfer, fork behavior, or branch
+protection settings.
 
 ## Test boundaries and budgets
 

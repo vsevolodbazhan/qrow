@@ -8,4 +8,3 @@ find scripts -type f -name '*.sh' -exec shellcheck {} +
 shellcheck .githooks/*
 actionlint .github/workflows/*.yml
 uv run --locked python -m unittest discover -s scripts/tests
-uv run --locked python scripts/core/policy.py

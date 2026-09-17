@@ -2,6 +2,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -81,82 +82,50 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("assertion failed", failures[0].read_text())
 
-    def gate_step(self, name):
-        """Return the shell body of a named workflow step, as GitHub Actions would run it."""
-        workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
-        body = workflow.split(f"      - name: {name}\n", 1)[1].split("        run: |\n", 1)[1]
-        lines = []
-        for line in body.splitlines():
-            if line.strip() and not line.startswith(" " * 10):
-                break
-            lines.append(line[10:])
-        return "\n".join(lines)
+    def workflow_job(self, name):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        match = re.search(rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)", workflow, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(match, f"Missing workflow job: {name}")
+        return match.group("body")
 
-    def evaluate(self, changes="success", e2e_required="true", backend="success", ui="success"):
-        """Run the gate's evaluate-suites step and return its step outputs."""
-        script = self.gate_step("evaluate-suites")
-        with tempfile.TemporaryDirectory() as directory:
-            outputs = Path(directory) / "outputs"
-            outputs.touch()
-            result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True, check=False,
-                                    env={"GITHUB_OUTPUT": str(outputs), "CHANGES_RESULT": changes,
-                                         "E2E_REQUIRED": e2e_required, "BACKEND_RESULT": backend, "UI_RESULT": ui})
-            self.assertEqual(result.returncode, 0, result.stderr)
-            return dict(line.split("=", 1) for line in outputs.read_text().splitlines() if line)
+    def test_unified_workflow_has_one_serial_chain(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        chain = [
+            ("core-dependencies", None),
+            ("core-scripts", "core-dependencies"),
+            ("core-backend", "core-scripts"),
+            ("core-macos", "core-backend"),
+            ("e2e-backend", "core-macos"),
+            ("e2e-macos", "e2e-backend"),
+        ]
+        for job, dependency in chain:
+            with self.subTest(job=job):
+                body = self.workflow_job(job)
+                if dependency:
+                    self.assertIn(f"needs: {dependency}", body)
+                else:
+                    self.assertNotIn("needs:", body)
+                self.assertIn("ref: ${{ github.sha }}", body)
+        self.assertNotIn("statuses:", workflow)
 
-    def test_required_gate_does_not_accept_skipped_jobs(self):
-        workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
-        self.assertNotIn("pull_request_target", workflow)
-        self.assertIn("needs: changes", workflow)
-        self.assertIn("needs: [changes, backend, macos]", workflow)
-        # Execute the actual gate's shell conditions for each possible Actions outcome.
-        require = self.gate_step("require-both-suites")
-        for backend, ui, expected in [("success", "success", 0), ("skipped", "skipped", 1),
-                                      ("failure", "skipped", 1), ("success", "cancelled", 1),
-                                      ("success", "failure", 1)]:
-            with self.subTest(backend=backend, ui=ui):
-                outputs = self.evaluate(backend=backend, ui=ui)
-                result = subprocess.run(["/bin/bash", "-c", require], capture_output=True, check=False,
-                                        env={"STATE": outputs["state"], "REASON": outputs["reason"]})
-                self.assertEqual(result.returncode, expected)
-        self.assertEqual(self.evaluate(e2e_required="false", backend="skipped", ui="skipped")["state"], "success")
+    def test_unified_workflow_handles_drafts_and_forks(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos", "e2e-backend", "e2e-macos"]:
+            with self.subTest(job=job):
+                self.assertIn("!github.event.pull_request.draft", self.workflow_job(job))
+        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
+            with self.subTest(core_job=job):
+                self.assertNotIn("head.repo.full_name", self.workflow_job(job))
+        for job in ["e2e-backend", "e2e-macos"]:
+            with self.subTest(e2e_job=job):
+                self.assertIn("head.repo.full_name == github.repository", self.workflow_job(job))
+        self.assertIn("converted_to_draft", workflow)
 
-    def test_gate_fails_closed_when_the_change_filter_is_unusable(self):
-        """An unresolved e2e requirement must never be read as "no e2e needed"."""
-        for changes, e2e_required in [("failure", ""), ("cancelled", ""), ("skipped", ""),
-                                      ("success", ""), ("success", "unexpected")]:
-            with self.subTest(changes=changes, e2e_required=e2e_required):
-                outputs = self.evaluate(changes=changes, e2e_required=e2e_required, backend="skipped", ui="skipped")
-                self.assertEqual(outputs["state"], "failure")
-
-    def test_change_filter_resolves_the_repository_without_a_checkout(self):
-        """gh needs an explicit repository: the filter job never checks the code out."""
-        workflow = (ROOT / ".github/workflows/e2e.yml").read_text()
-        filter_job = workflow.split("      - id: filter\n", 1)[1].split("\n  backend:", 1)[0]
-        self.assertIn("GH_REPO: ${{ github.repository }}", filter_job)
-        self.assertNotIn("actions/checkout", filter_job)
-
-    def test_commit_gate_reports_both_suite_results(self):
-        publish = self.gate_step("publish-commit-gate")
-        with tempfile.TemporaryDirectory() as directory:
-            gh = Path(directory) / "gh"
-            gh.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
-            gh.chmod(0o755)
-            cases = [("success", "success", "success"), ("failure", "skipped", "failure"),
-                     ("success", "cancelled", "failure")]
-            for backend, ui, state in cases:
-                with self.subTest(backend=backend, ui=ui):
-                    outputs = self.evaluate(backend=backend, ui=ui)
-                    self.assertEqual(outputs["state"], state)
-                    result = subprocess.run(["/bin/bash", "-c", publish], check=True, capture_output=True, text=True,
-                                            env={"PATH": directory, "GITHUB_REPOSITORY": "owner/repo", "TESTED_SHA": "candidate-sha",
-                                                 "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
-                                                 "STATE": outputs["state"]})
-                    self.assertIn("repos/owner/repo/statuses/candidate-sha", result.stdout)
-                    self.assertIn(f"state={state}\n", result.stdout)
-                    self.assertIn("context=e2e / gate\n", result.stdout)
-            # A crashed or skipped evaluate-suites step leaves STATE empty and must publish a failure.
-            result = subprocess.run(["/bin/bash", "-c", publish], check=True, capture_output=True, text=True,
-                                    env={"PATH": directory, "GITHUB_REPOSITORY": "owner/repo", "TESTED_SHA": "candidate-sha",
-                                         "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123", "STATE": ""})
-            self.assertIn("state=failure\n", result.stdout)
+    def test_native_e2e_can_reuse_the_core_macos_package(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        driver = (ROOT / "scripts/e2e/driver.sh").read_text()
+        self.assertIn("reuse_macos_package", workflow)
+        self.assertIn("actions/download-artifact@", workflow)
+        self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE", driver)
+        self.assertIn("ditto -x -k", driver)
+        self.assertIn("QROW_E2E_BUNDLE/Contents/MacOS/qrow", driver)
