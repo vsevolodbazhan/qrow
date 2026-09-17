@@ -851,6 +851,7 @@ impl Qrow {
         tab.pending_page = None;
         tab.elapsed = None;
         tab.busy = true;
+        tab.panel.execution_started();
         tab.cancelling = false;
         tab.started = Some(Instant::now());
         tab.status = "Preparing query…".into();

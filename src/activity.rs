@@ -339,6 +339,10 @@ pub struct PanelState {
 }
 
 impl PanelState {
+    pub fn execution_started(&mut self) {
+        self.unread_error = false;
+    }
+
     pub fn user_select(&mut self, panel: Panel) {
         self.selected = panel;
         if panel == Panel::Output {
@@ -503,5 +507,38 @@ mod tests {
             assert_eq!(panel.selected, Panel::Results);
             assert!(!panel.unread_error);
         }
+    }
+
+    #[test]
+    fn execution_start_clears_error_without_changing_panel_selection() {
+        let mut panel = PanelState::default();
+        panel.failure(true);
+        assert_eq!(panel.selected, Panel::Output);
+        assert!(panel.unread_error);
+
+        panel.execution_started();
+        assert_eq!(panel.selected, Panel::Output);
+        assert!(!panel.unread_error);
+
+        panel.user_select(Panel::Results);
+        panel.failure(true);
+        panel.user_select(Panel::Results);
+        panel.execution_started();
+        assert_eq!(panel.selected, Panel::Results);
+        assert!(!panel.unread_error);
+    }
+
+    #[test]
+    fn execution_start_does_not_clear_another_tabs_error() {
+        let mut retrying_tab = PanelState::default();
+        let mut background_tab = PanelState::default();
+        retrying_tab.failure(true);
+        background_tab.failure(false);
+
+        retrying_tab.execution_started();
+
+        assert!(!retrying_tab.unread_error);
+        assert!(background_tab.unread_error);
+        assert_eq!(background_tab.selected, Panel::Output);
     }
 }

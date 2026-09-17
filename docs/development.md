@@ -16,6 +16,8 @@ Install the script linters:
 brew install shellcheck actionlint
 ```
 
+Ruff is installed by `uv` from the locked development dependency group.
+
 Install the pinned Cargo check tools:
 
 ```sh
@@ -30,8 +32,8 @@ sh scripts/hooks/install.sh
 
 [rust-toolchain.toml](../rust-toolchain.toml) selects Rust, rustfmt, and Clippy.
 The [tool installer](../scripts/core/install.sh) selects the dependency and
-coverage tools. Cargo checks use the lockfile. Python scripts use `uv` and the
-repository's pinned environment.
+coverage tools. Cargo checks use the lockfile. Python scripts use `uv`, the
+repository's pinned environment, and Ruff.
 
 ## Run checks
 
@@ -42,7 +44,7 @@ Use [scripts/check.sh](../scripts/check.sh) as the check entry point:
 | `sh scripts/check.sh` | Full local suite, excluding packaging and end-to-end tests. |
 | `sh scripts/check.sh core/backend` | Formatting, core lint, core tests, and Rust API documentation. |
 | `sh scripts/check.sh core/macos` | Full application lint and tests on macOS. |
-| `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, and script unit tests. |
+| `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, Ruff, and script unit tests. |
 | `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, unused dependencies, and `policy.py`. |
 | `sh scripts/check.sh core/coverage` | Core line coverage with an enforced floor. |
 | `sh scripts/check.sh core/performance` | SQL validation benchmarks with enforced budgets. |

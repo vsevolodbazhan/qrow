@@ -145,8 +145,9 @@ final class Driver {
     func press(_ label: String) throws {
         let deadline = clock.now.advanced(by: .seconds(150))
         repeat {
-            if let button = find(label, role: kAXButtonRole), attribute(button, kAXEnabledAttribute) as? Bool != false {
-                try click(button)
+            let control = find(label, role: kAXButtonRole) ?? find(label, role: kAXCheckBoxRole)
+            if let control, attribute(control, kAXEnabledAttribute) as? Bool != false {
+                try click(control)
                 return
             }
             try require(process.isRunning, "Qrow exited while waiting for button: \(label)")
@@ -380,9 +381,61 @@ final class Driver {
         try query("CREATE TEMPORARY FUNCTION qrow_block AS 'io.qrow.fixture.Blocking'")
         try waitGone("日本語😀")
         _ = try wait("Complete")
+
+        // Issue #40: a retry must clear the previous Error badge before the
+        // replacement query finishes, even after the user selected Results.
+        try query("SELECT missing_column AS value FROM range(1)")
+        _ = try wait("Query failed", timeout: 30)
+        _ = try waitExact("Renamed tab, unread error", timeout: 30)
+        try press("Results Panel")
+        try require(
+            findExact("Renamed tab, unread error") != nil,
+            "Selecting Results acknowledged an unread error",
+        )
+        let retryToken = "badge-" + UUID().uuidString.lowercased()
+        try query("SELECT qrow_block(id, '\(retryToken)', CAST(3000 AS BIGINT)) AS value FROM range(1)")
+        var deadline = clock.now.advanced(by: .seconds(30))
+        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(retryToken).started"]) != "1" {
+            try require(clock.now < deadline, "Spark executor never started the badge retry")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        _ = try waitExact("Renamed tab, running", timeout: 20)
+        try require(
+            findExact("Renamed tab, running, unread error") == nil,
+            "Retry still displayed the previous Error badge while running",
+        )
+        try press("Logs Panel")
+        _ = try waitExact("Renamed tab", timeout: 30)
+        try require(
+            findExact("Renamed tab, unread error") == nil,
+            "Successful retry kept the Error badge",
+        )
+        try snapshot("error-badge-cleared")
+
+        // Repeat the basic reproduction without an intervening panel click.
+        try query("SELECT missing_column AS value FROM range(1)")
+        _ = try waitExact("Renamed tab, unread error", timeout: 30)
+        let secondRetryToken = "badge-" + UUID().uuidString.lowercased()
+        try query("SELECT qrow_block(id, '\(secondRetryToken)', CAST(1000 AS BIGINT)) AS value FROM range(1)")
+        deadline = clock.now.advanced(by: .seconds(30))
+        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(secondRetryToken).started"]) != "1" {
+            try require(clock.now < deadline, "Spark executor never started the second badge retry")
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        _ = try waitExact("Renamed tab, running", timeout: 20)
+        try require(
+            findExact("Renamed tab, running, unread error") == nil,
+            "Second retry still displayed the previous Error badge while running",
+        )
+        _ = try waitExact("Renamed tab", timeout: 30)
+        try require(
+            findExact("Renamed tab, unread error") == nil,
+            "Second successful retry kept the Error badge",
+        )
+
         let token = "ui-" + UUID().uuidString.lowercased()
         try query("SELECT qrow_block(id, '\(token)', CAST(60000 AS BIGINT)) FROM range(1)")
-        var deadline = clock.now.advanced(by: .seconds(150))
+        deadline = clock.now.advanced(by: .seconds(150))
         while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).started"]) != "1" {
             try require(clock.now < deadline, "Spark executor never started UI query")
             Thread.sleep(forTimeInterval: 0.1)
