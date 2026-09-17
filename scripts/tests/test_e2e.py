@@ -95,8 +95,6 @@ class AcceptanceTests(unittest.TestCase):
             ("core-scripts", "core-dependencies"),
             ("core-backend", "core-scripts"),
             ("core-macos", "core-backend"),
-            ("e2e-backend", "core-macos"),
-            ("e2e-macos", "e2e-backend"),
         ]
         for job, dependency in chain:
             with self.subTest(job=job):
@@ -107,25 +105,19 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertNotIn("needs:", body)
                 self.assertIn("ref: ${{ github.sha }}", body)
         self.assertNotIn("statuses:", workflow)
+        self.assertNotIn("e2e-backend:", workflow)
+        self.assertNotIn("e2e-macos:", workflow)
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos", "e2e-backend", "e2e-macos"]:
+        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
             with self.subTest(job=job):
                 self.assertIn("!github.event.pull_request.draft", self.workflow_job(job))
-        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
-            with self.subTest(core_job=job):
                 self.assertNotIn("head.repo.full_name", self.workflow_job(job))
-        for job in ["e2e-backend", "e2e-macos"]:
-            with self.subTest(e2e_job=job):
-                self.assertIn("head.repo.full_name == github.repository", self.workflow_job(job))
         self.assertIn("converted_to_draft", workflow)
 
-    def test_native_e2e_can_reuse_the_core_macos_package(self):
-        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+    def test_native_e2e_package_mode_validates_bundle(self):
         driver = (ROOT / "scripts/e2e/driver.sh").read_text()
-        self.assertIn("reuse_macos_package", workflow)
-        self.assertIn("actions/download-artifact@", workflow)
         self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE", driver)
         self.assertIn("ditto -x -k", driver)
         self.assertIn("QROW_E2E_BUNDLE/Contents/MacOS/qrow", driver)

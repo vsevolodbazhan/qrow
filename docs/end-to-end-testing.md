@@ -87,8 +87,8 @@ UI failures. Failed runs keep their artifacts after fixture cleanup.
 The E2E orchestrator prints each fixture phase. Native archive downloads report
 received bytes, total bytes, percentage, transfer rate, and estimated time left
 every 15 seconds. Long package, backend, and native-driver commands print a
-heartbeat every 30 seconds and stream their output to the workflow log. The
-saved command logs contain the same command output.
+heartbeat every 30 seconds and stream their output to the run log. The saved
+command logs contain the same command output.
 
 A missing fixture, failed assertion, deadline, or cleanup failure fails the run.
 The suite does not automatically rerun failed tests. Readiness checks can retry
@@ -119,10 +119,8 @@ including Spark engines and executors, after the run.
 [Docker fixture sources](../tests/e2e/fixture/) pin base images by digest.
 [Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
 sizes, and SHA-512 checksums. Verified native downloads are cached under
-`target/e2e-downloads`. CI also stores this directory in a checksum-keyed
-GitHub Actions cache. Failed download runs save partial files in a run-scoped
-cache, and the next run resumes them. The first run after a dependency change
-still downloads from the public archive service, which can be slow.
+`target/e2e-downloads` between local runs. The first run after a dependency
+change still downloads from the public archive service, which can be slow.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
@@ -137,48 +135,39 @@ Passing on a larger runner does not establish performance on that target.
 
 ## Continuous integration
 
-The [test workflow](../.github/workflows/test.yml) runs the core and E2E jobs
-in one serial chain:
+The [test workflow](../.github/workflows/test.yml) runs the core jobs only, in
+one serial chain:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> core-macos ->
-e2e-backend -> e2e-macos
+core-dependencies -> core-scripts -> core-backend -> core-macos
 ```
 
-It runs the full chain for pushes to `main`, manual dispatches, and pull
+It runs the core chain for pushes to `main`, manual dispatches, and pull
 requests with the `opened`, `reopened`, `synchronize`, `ready_for_review`, and
 `converted_to_draft` actions. Draft pull requests do not start jobs. The
-`converted_to_draft` event also starts no jobs. Core jobs run for fork pull
-requests. E2E jobs skip fork pull requests. A failed job skips every job that
+`converted_to_draft` event also starts no jobs. A failed job skips every job that
 follows it. A newer run cancels an older run for the same pull request or
-branch, including manual runs.
+branch, including manual runs. Every job checks out the pull request merge
+result.
 
-Each job checks out the pull request merge result. The native E2E job runs on
-the standard ARM `macos-15` runner. It downloads the
-`macos-package-and-performance` artifact from `core-macos` and reuses its
-`Qrow-macos.zip` package by default. A manual dispatch exposes the boolean
-`reuse_macos_package` input. Set the input to `false` to build the package in
-the E2E job.
-
-When reuse is selected, a missing or invalid package fails the native E2E job
-before the driver starts. The job does not silently build a replacement. The
-native suite keeps its isolated workspace, synthetic Keychain data, and
-evidence directory in both package modes.
-
-Core uploads are success-only. The `backend-evidence` and `macos-evidence`
-uploads run on success and failure. All four artifacts are retained for 14
-days:
+E2E tests do not run in GitHub Actions. Run them locally with the commands in
+this guide. Core uploads are success-only. The core artifacts are retained for
+14 days:
 
 ```text
 core-coverage
 macos-package-and-performance
-backend-evidence
-macos-evidence
 ```
 
-Configure the six individual workflow jobs as required checks. The required
-check names are `test / core-dependencies`, `test / core-scripts`,
-`test / core-backend`, `test / core-macos`, `test / e2e-backend`, and
-`test / e2e-macos`. There is no separate E2E status or aggregate gate. Local
-checks cannot verify GitHub event filters, run cancellation, artifact transfer,
-fork behavior, or branch protection settings.
+Configure the four individual core jobs as required checks. The required check
+names are:
+
+```text
+test / core-dependencies
+test / core-scripts
+test / core-backend
+test / core-macos
+```
+
+There is no aggregate gate. Local checks cannot verify GitHub event filters, run
+cancellation, artifact transfer, or branch protection settings.

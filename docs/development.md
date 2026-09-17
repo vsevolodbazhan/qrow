@@ -107,25 +107,18 @@ draft pull request, including a `converted_to_draft` event, starts no jobs.
 The workflow runs one job at a time in this order:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> core-macos ->
-e2e-backend -> e2e-macos
+core-dependencies -> core-scripts -> core-backend -> core-macos
 ```
 
 A failed job skips all jobs that follow it. Every job checks out the same pull
-request merge result. Core jobs run for fork pull requests. E2E jobs skip fork
-pull requests. A newer run cancels an older run for the same pull request or
-branch, including manual runs.
+request merge result. A newer run cancels an older run for the same pull request
+or branch, including manual runs.
 
-The `e2e-macos` job reuses the package from `core-macos` by default. A manual
-dispatch has the `reuse_macos_package` input. Set it to `false` to build the
-package in the E2E job. A selected package that is missing or invalid fails the
-job. The job does not build a replacement package. The native server
-distributions use a checksum-keyed Actions cache. Failed download runs preserve
-partial files in a run-scoped cache, and the next run resumes them. A cache miss
-downloads them from the public archive service.
+E2E tests are not part of the GitHub Actions workflow. Run them locally using
+the [end-to-end testing guide](end-to-end-testing.md).
 
-The workflow retains `core-coverage`, `macos-package-and-performance`,
-`backend-evidence`, and `macos-evidence` for 14 days. Configure these
+The workflow retains `core-coverage` and `macos-package-and-performance` for 14
+days. Configure these
 individual checks as required branch-protection checks:
 
 ```text
@@ -133,15 +126,12 @@ test / core-dependencies
 test / core-scripts
 test / core-backend
 test / core-macos
-test / e2e-backend
-test / e2e-macos
 ```
 
 There is no aggregate CI gate. See
 [End-to-end testing](end-to-end-testing.md#continuous-integration) for the
 real-server and native UI details. Local checks cannot verify GitHub event
-filters, run cancellation, artifact transfer, fork behavior, or branch
-protection settings.
+filters, run cancellation, artifact transfer, or branch protection settings.
 
 ## Test boundaries and budgets
 
