@@ -37,6 +37,30 @@ def elapsed_seconds(started):
     return f"{time.monotonic() - started:.0f}s"
 
 
+def human_duration(seconds):
+    seconds = max(0, round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
+def report_download_progress(label, received, total, started):
+    elapsed = max(time.monotonic() - started, 1)
+    rate = received / elapsed
+    if total:
+        percent = min(received / total * 100, 100)
+        eta = human_duration((total - received) / rate) if rate else "unknown"
+        progress = (f"{human_size(received)} / {human_size(total)} received ({percent:.1f}%; "
+                    f"{human_size(rate)}/s; ETA {eta}; {elapsed:.0f}s elapsed)")
+    else:
+        progress = f"{human_size(received)} received ({human_size(rate)}/s; {elapsed:.0f}s elapsed; total unavailable)"
+    announce(f"{label}: download in progress: {progress}.")
+
+
 def preflight():
     if os.uname().sysname != "Darwin":
         raise RuntimeError("Native E2E tests require macOS")
@@ -55,6 +79,7 @@ def preflight():
 
 def distribution(item, label=None):
     label = label or item["directory"]
+    total = item.get("bytes")
     cache = ROOT / "target/e2e-downloads"
     cache.mkdir(parents=True, exist_ok=True)
     archive = cache / item["url"].rsplit("/", 1)[1]
@@ -62,7 +87,8 @@ def distribution(item, label=None):
         partial = archive.with_suffix(".partial")
         command = ["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--max-time", "600",
                    "--output", str(partial), item["url"]]
-        announce(f"{label}: downloading {item['url']}.")
+        total_text = f" ({human_size(total)} total)" if total else ""
+        announce(f"{label}: downloading {item['url']}{total_text}.")
         started = time.monotonic()
         process = subprocess.Popen(command)
         try:
@@ -71,15 +97,15 @@ def distribution(item, label=None):
                 now = time.monotonic()
                 if now >= next_report:
                     received = partial.stat().st_size if partial.exists() else 0
-                    rate = received / max(now - started, 1)
-                    announce(f"{label}: download in progress: {human_size(received)} received "
-                             f"({human_size(rate)}/s, {elapsed_seconds(started)} elapsed).")
+                    report_download_progress(label, received, total, started)
                     next_report = now + DOWNLOAD_REPORT_INTERVAL
                 if now - started >= 650:
                     raise subprocess.TimeoutExpired(command, 650)
                 time.sleep(1)
             if process.returncode:
                 raise subprocess.CalledProcessError(process.returncode, command)
+            if total and partial.stat().st_size != total:
+                raise ValueError(f"Size mismatch for {partial}: expected {total}, got {partial.stat().st_size}")
         except BaseException as error:
             if process.poll() is None:
                 process.kill()
@@ -91,6 +117,8 @@ def distribution(item, label=None):
                  f"in {elapsed_seconds(started)}.")
     else:
         announce(f"{label}: using cached archive {archive.name} ({human_size(archive.stat().st_size)}).")
+    if total and archive.stat().st_size != total:
+        raise ValueError(f"Size mismatch for {archive}: expected {total}, got {archive.stat().st_size}")
     announce(f"{label}: verifying SHA-512 checksum.")
     with archive.open("rb") as source:
         digest = hashlib.file_digest(source, "sha512").hexdigest()

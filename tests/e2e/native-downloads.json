@@ -1,21 +1,25 @@
 {
   "spark": {
     "url": "https://archive.apache.org/dist/spark/spark-3.5.3/spark-3.5.3-bin-hadoop3.tgz",
+    "bytes": 400864419,
     "sha512": "3b041e538282c15ad3b0ab2f05d558e1be2d16e047c2a98ca9c08176c4a50e7101bd2199aec97a66fdabf4b3f490c2c1cefd547bbe35a1b3e3143e066948ee6d",
     "directory": "spark-3.5.3-bin-hadoop3"
   },
   "kyuubi": {
     "url": "https://archive.apache.org/dist/kyuubi/kyuubi-1.12.0/apache-kyuubi-1.12.0-bin.tgz",
+    "bytes": 273490940,
     "sha512": "1d4c3276301be1b373e7606f6e25ab78472bd783a8398d845dfaa750265a843ddf871b5aaa408ef68b42e6850b48d301213539cc429343391355782e56f2875a",
     "directory": "apache-kyuubi-1.12.0-bin"
   },
   "zookeeper": {
     "url": "https://archive.apache.org/dist/zookeeper/zookeeper-3.9.3/apache-zookeeper-3.9.3-bin.tar.gz",
+    "bytes": 20655617,
     "sha512": "d44d870c1691662efbf1a8baf1859c901b820dc5ff163b36e81beb27b6fbf3cd31b5f1f075697edaaf6d3e7a4cb0cc92f924dcff64b294ef13d535589bdaf143",
     "directory": "apache-zookeeper-3.9.3-bin"
   },
   "ldap": {
     "url": "https://repo.maven.apache.org/maven2/com/unboundid/unboundid-ldapsdk/7.0.3/unboundid-ldapsdk-7.0.3.jar",
+    "bytes": 5895907,
     "sha512": "25fef7f28e06bedfa54672370e0e4cfb5ef8041f1bd5abf2826ad022e5131bf1d3791314888a939f3fe25edbc28d28afffdd7125cfae16876ead0bf50c68351a",
     "directory": "unboundid-ldapsdk-7.0.3.jar"
   }

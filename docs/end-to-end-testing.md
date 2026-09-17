@@ -85,10 +85,10 @@ and execution failures. Use screenshots and accessibility snapshots to inspect
 UI failures. Failed runs keep their artifacts after fixture cleanup.
 
 The E2E orchestrator prints each fixture phase. Native archive downloads report
-received bytes, transfer rate, and elapsed time every 15 seconds. Long package,
-backend, and native-driver commands print a heartbeat every 30 seconds and
-stream their output to the workflow log. The saved command logs contain the
-same command output.
+received bytes, total bytes, percentage, transfer rate, and estimated time left
+every 15 seconds. Long package, backend, and native-driver commands print a
+heartbeat every 30 seconds and stream their output to the workflow log. The
+saved command logs contain the same command output.
 
 A missing fixture, failed assertion, deadline, or cleanup failure fails the run.
 The suite does not automatically rerun failed tests. Readiness checks can retry
@@ -117,9 +117,11 @@ servers to reduce peak resource use. It terminates server process groups,
 including Spark engines and executors, after the run.
 
 [Docker fixture sources](../tests/e2e/fixture/) pin base images by digest.
-[Native downloads](../tests/e2e/native-downloads.json) pin archive versions and
-SHA-512 checksums. Verified native downloads are cached under
-`target/e2e-downloads`.
+[Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
+sizes, and SHA-512 checksums. Verified native downloads are cached under
+`target/e2e-downloads`. CI also stores this directory in a checksum-keyed
+GitHub Actions cache. The first run after a dependency change still downloads
+from the public archive service, which can be slow.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them

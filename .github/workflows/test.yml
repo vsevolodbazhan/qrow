@@ -180,6 +180,11 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
+      - name: Cache native E2E dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/e2e-downloads
+          key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
       - name: check-native-automation-permissions
         run: sh scripts/e2e/driver.sh --preflight
       - name: select-java-17

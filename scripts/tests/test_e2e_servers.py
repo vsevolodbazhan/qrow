@@ -14,6 +14,14 @@ spec.loader.exec_module(native_fixture)
 
 
 class NativeFixtureTests(unittest.TestCase):
+    def test_download_progress_reports_total_and_eta(self):
+        with patch.object(native_fixture, "announce") as announce, patch.object(native_fixture.time, "monotonic", return_value=10):
+            native_fixture.report_download_progress("spark", 100, 200, 0)
+        message = announce.call_args.args[0]
+        self.assertIn("100.0 B / 200.0 B received", message)
+        self.assertIn("50.0%", message)
+        self.assertIn("ETA 10s", message)
+
     def test_cached_download_is_verified_before_use(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
