@@ -63,17 +63,6 @@ impl Qrow {
                             .id(SharedString::from(format!("connection-{id}")))
                             .h(self.ui_px(32.))
                             .flex_shrink_0()
-                            // Editing, duplicating, and deleting all live in the
-                            // context menu, so the row keeps its full width.
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |_, event: &MouseDownEvent, window, cx| {
-                                    let position = event.position;
-                                    cx.defer_in(window, move |this, window, cx| {
-                                        this.open_connection_menu(id, position, window, cx)
-                                    });
-                                }),
-                            )
                             .child(
                                 Button::new(SharedString::from(format!("profile-{id}")))
                                     .ghost()
@@ -111,6 +100,23 @@ impl Qrow {
                                     })
                                     .disabled(busy)
                                     .tooltip(format!("{} · {}", profile.host, profile.database))
+                                    // The button owns the row's hitbox. Attach the
+                                    // context-menu listener to it so the right-click
+                                    // handler remains hovered when the pointer is over
+                                    // the connection label.
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(
+                                            move |_, event: &MouseDownEvent, window, cx| {
+                                                let position = event.position;
+                                                cx.defer_in(window, move |this, window, cx| {
+                                                    this.open_connection_menu(
+                                                        id, position, window, cx,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.switch_profile(id, cx)
                                     })),
