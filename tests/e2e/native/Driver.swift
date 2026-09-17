@@ -145,8 +145,9 @@ final class Driver {
     func press(_ label: String) throws {
         let deadline = clock.now.advanced(by: .seconds(150))
         repeat {
-            if let button = find(label, role: kAXButtonRole), attribute(button, kAXEnabledAttribute) as? Bool != false {
-                try click(button)
+            let control = find(label, role: kAXButtonRole) ?? find(label, role: kAXCheckBoxRole)
+            if let control, attribute(control, kAXEnabledAttribute) as? Bool != false {
+                try click(control)
                 return
             }
             try require(process.isRunning, "Qrow exited while waiting for button: \(label)")
