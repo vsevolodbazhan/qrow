@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import uuid
 
-FIXTURE_PROFILE_NAMES = {"Qrow E2E", "Qrow E2E copy"}
+FIXTURE_PROFILE_NAMES = {"Qrow E2E", "Qrow E2E copy", "Qrow E2E live"}
 
 
 def fixture_profile_ids(profiles):

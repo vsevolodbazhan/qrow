@@ -183,6 +183,135 @@ fn preview_is_bounded_and_session_reused_until_profile_changes() {
 }
 
 #[test]
+fn live_profile_update_preserves_the_session_and_unfetched_rows() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let profile = Profile::default();
+    worker.run(profile.clone(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+
+    let mut updated = profile;
+    updated.name = "Renamed".into();
+    updated.lifecycle.idle_seconds = 60;
+    worker.update_profile(updated).unwrap();
+    worker.more();
+
+    assert_eq!(ready(&worker), (250, false));
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn running_with_only_metadata_changes_reuses_the_session() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let profile = Profile::default();
+    worker.run(profile.clone(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+
+    let mut updated = profile;
+    updated.name = "Renamed".into();
+    updated.lifecycle.keep_alive_seconds = 60;
+    updated.lifecycle.keep_alive_sql = "SELECT 2".into();
+    worker.run(updated, "select".into());
+
+    assert_eq!(ready(&worker), (1000, true));
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn lifecycle_update_recomputes_the_heartbeat_deadline() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 60;
+    profile.lifecycle.keep_alive_sql = "SELECT old".into();
+    worker.run(profile.clone(), "select".into());
+    ready(&worker);
+
+    let mut updated = profile;
+    updated.lifecycle.keep_alive_seconds = 1;
+    updated.lifecycle.keep_alive_sql = "SELECT new".into();
+    worker.update_profile(updated).unwrap();
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    assert!(matches!(next(&worker), Event::KeepAliveFinished));
+
+    let activities: Vec<_> = worker.activities.try_iter().collect();
+    assert!(activities.iter().any(|event| {
+        event.kind == ActivityKind::KeepAliveStarted && event.sql.as_deref() == Some("SELECT new")
+    }));
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn switching_to_disconnect_starts_a_new_idle_timeout() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 60;
+    worker.run(profile.clone(), "select".into());
+    ready(&worker);
+
+    let mut updated = profile;
+    updated.lifecycle.keep_alive_seconds = 0;
+    updated.lifecycle.idle_seconds = 1;
+    worker.update_profile(updated).unwrap();
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+    assert!(matches!(next(&worker), Event::IdleDisconnected));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn invalid_or_stale_profile_updates_do_not_change_the_session() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let profile = Profile::default();
+    worker.run(profile.clone(), "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+
+    let mut invalid = profile.clone();
+    invalid.lifecycle.keep_alive_seconds = 1;
+    invalid.lifecycle.keep_alive_sql = "SELECT 1; SELECT 2".into();
+    assert!(worker.update_profile(invalid).is_err());
+    worker.more();
+    assert_eq!(ready(&worker), (250, false));
+
+    let mut stale = profile.clone();
+    stale.username = "other-user".into();
+    stale.name = "Wrong profile".into();
+    worker.update_profile(stale).unwrap();
+    worker.run(profile, "select".into());
+    assert_eq!(ready(&worker), (1000, true));
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn profile_update_before_connect_does_not_open_a_session() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let profile = Profile {
+        name: "Updated before connect".into(),
+        ..Profile::default()
+    };
+    worker.update_profile(profile).unwrap();
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn concurrent_tabs_and_cancellation_do_not_block_each_other() {
     let fixture = Arc::new(Fixture::default());
     let slow = worker(fixture.clone());

@@ -151,8 +151,35 @@ struct ProfileEditor {
     parameters: Entity<TextareaState>,
     is_new: bool,
     error: Option<String>,
-    saving: Option<mpsc::Receiver<Result<Profile, String>>>,
+    saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
     keep_connected: bool,
+}
+struct ProfileSave {
+    profile: Profile,
+    password_changed: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProfileSaveAction {
+    Keep,
+    Update,
+    Reconnect,
+}
+
+fn profile_save_action(
+    previous: Option<&Profile>,
+    updated: &Profile,
+    password_changed: bool,
+) -> ProfileSaveAction {
+    let Some(previous) = previous else {
+        return ProfileSaveAction::Keep;
+    };
+    if password_changed || !previous.connection_identity_eq(updated) {
+        ProfileSaveAction::Reconnect
+    } else if previous != updated {
+        ProfileSaveAction::Update
+    } else {
+        ProfileSaveAction::Keep
+    }
 }
 /// A tab keeps its identity while it is renamed, so the editor holds the tab's
 /// id rather than its position in the bar.
@@ -556,7 +583,17 @@ impl Qrow {
                     Event::KeepAliveFinished => {
                         tab.busy = false;
                         tab.cancelling = false;
-                        tab.status = "Connected · keep-alive enabled".into();
+                        tab.status = if self
+                            .profiles
+                            .iter()
+                            .find(|profile| Some(profile.id) == tab.worker_profile)
+                            .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
+                        {
+                            "Connected · keep-alive enabled"
+                        } else {
+                            "Connected"
+                        }
+                        .into();
                     }
                     Event::Columns(columns) => {
                         tab.table.update(cx, |t, cx| {
@@ -670,15 +707,24 @@ impl Qrow {
             .and_then(|r| r.try_recv().ok());
         if let Some(result) = result {
             match result {
-                Ok(profile) => {
+                Ok(saved) => {
+                    let ProfileSave {
+                        profile,
+                        password_changed,
+                    } = saved;
                     let id = profile.id;
+                    let previous = self.profiles.iter().find(|p| p.id == id).cloned();
+                    let action = profile_save_action(previous.as_ref(), &profile, password_changed);
                     if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == id) {
-                        *existing = profile;
+                        *existing = profile.clone();
                     } else {
-                        self.profiles.push(profile);
+                        self.profiles.push(profile.clone());
                     }
-                    for tab in &mut self.tabs {
-                        if tab.worker_profile == Some(id) {
+                    if action == ProfileSaveAction::Reconnect {
+                        for tab in &mut self.tabs {
+                            if tab.worker_profile != Some(id) {
+                                continue;
+                            }
                             if let Some(worker) = tab.worker.take() {
                                 worker.shutdown();
                             }
@@ -689,6 +735,19 @@ impl Qrow {
                             tab.more = false;
                             tab.pending_page = None;
                             tab.status = "Not connected".into();
+                        }
+                    } else if action == ProfileSaveAction::Update {
+                        for tab in &mut self.tabs {
+                            if tab.worker_profile == Some(id) {
+                                if let Some(worker) = &tab.worker {
+                                    let _ = worker.update_profile(profile.clone());
+                                }
+                                if profile.lifecycle.keep_alive_seconds == 0
+                                    && tab.status == "Connected · keep-alive enabled"
+                                {
+                                    tab.status = "Connected".into();
+                                }
+                            }
                         }
                     }
                     if self.tabs[self.active].saved.profile.is_none() {
@@ -1261,13 +1320,17 @@ impl Qrow {
         let _ = self.wake.try_send(());
         form.error = None;
         let demo = self.demo;
+        let password_changed = !password.is_empty();
         std::thread::spawn(move || {
             let result = if !demo && !password.is_empty() {
                 storage::set_password(profile.id, &password).map_err(|e| e.to_string())
             } else {
                 Ok(())
             };
-            let _ = send.send(result.map(|()| profile));
+            let _ = send.send(result.map(|()| ProfileSave {
+                profile,
+                password_changed,
+            }));
         });
         cx.notify();
     }

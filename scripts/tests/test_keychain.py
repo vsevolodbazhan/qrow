@@ -19,8 +19,8 @@ class KeychainTests(unittest.TestCase):
             "host": "127.0.0.1",
         }
 
-    def test_accepts_both_native_fixture_profiles(self):
-        profiles = [self.profile("Qrow E2E"), self.profile("Qrow E2E copy")]
+    def test_accepts_native_fixture_profiles(self):
+        profiles = [self.profile(name) for name in ("Qrow E2E", "Qrow E2E copy", "Qrow E2E live")]
         self.assertEqual(
             keychain.fixture_profile_ids(profiles),
             [profile["id"] for profile in profiles],

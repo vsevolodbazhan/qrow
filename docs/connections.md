@@ -29,12 +29,19 @@ Right-click a profile to use **Edit Connection…**, **Duplicate**, or **Delete*
 An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier and requires a password.
 
-Saving an edit disconnects idle sessions that use the profile, even when a
-different profile is selected for the next query. Their SQL and
-downloaded results remain available. The next Run uses the updated settings.
+Saving an edit keeps live sessions that use the profile when you change only the
+name or the Connection Lifecycle fields. This also applies when another profile
+is selected for the next query. The worker applies the new lifecycle
+policy after active query, fetch, or heartbeat work finishes. A shorter
+heartbeat interval starts from the policy update. Switching to Disconnect
+starts a new idle timeout from the policy update.
+
+Changing the host, port, username, database, session parameters, or password
+releases the matching sessions. Their SQL and downloaded results remain
+available. The next Run opens a session with the updated connection settings.
 Editing and deletion are disabled while a session using the profile is busy.
 Deletion requires confirmation. Qrow closes sessions that use the deleted
-profile. Qrow removes the profile and requests deletion
+profile, even when another profile is selected. Qrow removes the profile and requests deletion
 of its stored password. Keychain deletion failures are not reported in the UI,
 so a failed deletion can leave the password in Keychain.
 
@@ -102,8 +109,9 @@ and network calls run on background threads. The
 opening a session, then selects the initial database.
 
 [Idle maintenance](../src/worker/lifecycle.rs) waits for a command or the next
-session deadline. It does not require continuous UI polling. The heartbeat uses
-a separate operation in the same session so it can preserve the result cursor.
+session deadline. A lifecycle update wakes the worker so it can recalculate the
+next deadline. It does not require continuous UI polling. The heartbeat uses a
+separate operation in the same session so it can preserve the result cursor.
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable

@@ -20,6 +20,7 @@ mod lifecycle;
 
 pub enum Command {
     Run(Box<Profile>, String, ExecutionId),
+    UpdateProfile(Box<Profile>),
     More,
     Disconnect,
     Shutdown,
@@ -113,6 +114,10 @@ impl Worker {
                 let result = match command {
                     Command::Run(profile, sql, execution_id) => {
                         runner.run(*profile, sql, execution_id)
+                    }
+                    Command::UpdateProfile(profile) => {
+                        runner.update_profile(*profile);
+                        Ok(())
                     }
                     Command::More => runner.fetch_preview(),
                     Command::Disconnect => {
@@ -208,6 +213,11 @@ impl Worker {
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.cancelled.store(false, Ordering::SeqCst);
         let _ = self.tx.send(Command::More);
+    }
+    pub fn update_profile(&self, profile: Profile) -> Result<()> {
+        profile.lifecycle.validate()?;
+        let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
+        Ok(())
     }
     pub fn disconnect(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -341,13 +351,28 @@ impl Runner {
         }
         self.profile = None;
     }
+    fn update_profile(&mut self, profile: Profile) {
+        if self.session.is_some()
+            && self
+                .profile
+                .as_ref()
+                .is_some_and(|current| current.connection_identity_eq(&profile))
+        {
+            self.profile = Some(profile);
+        }
+    }
     fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
         self.current_execution = Some(execution_id);
         self.execution = None;
         profile.lifecycle.validate()?;
         self.rows = 0;
         self.bytes = 0;
-        if self.profile.as_ref() != Some(&profile) || self.session.is_none() {
+        let reconnect = self.session.is_none()
+            || self
+                .profile
+                .as_ref()
+                .is_none_or(|current| !current.connection_identity_eq(&profile));
+        if reconnect {
             self.disconnect();
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
@@ -366,6 +391,8 @@ impl Runner {
                 Some(connect_started.elapsed()),
             );
             self.emit(Event::Connected);
+        } else {
+            self.profile = Some(profile);
         }
         if self.cancelled.load(Ordering::SeqCst) {
             self.activity(
