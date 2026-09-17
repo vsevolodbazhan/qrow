@@ -10,11 +10,31 @@ import shutil
 import socket
 import subprocess
 import tarfile
+import threading
 import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/e2e/fixture"
+DOWNLOAD_REPORT_INTERVAL = 15
+OUTPUT_LOCK = threading.Lock()
+
+
+def announce(message):
+    with OUTPUT_LOCK:
+        print(f"[native-e2e] {message}", flush=True)
+
+
+def human_size(size):
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if value < 1024 or unit == "GiB":
+            return f"{value:.1f} {unit}"
+        value /= 1024
+
+
+def elapsed_seconds(started):
+    return f"{time.monotonic() - started:.0f}s"
 
 
 def preflight():
@@ -33,30 +53,68 @@ def preflight():
     return Path(java_home)
 
 
-def distribution(item):
+def distribution(item, label=None):
+    label = label or item["directory"]
     cache = ROOT / "target/e2e-downloads"
     cache.mkdir(parents=True, exist_ok=True)
     archive = cache / item["url"].rsplit("/", 1)[1]
     if not archive.exists():
         partial = archive.with_suffix(".partial")
-        subprocess.run(["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--max-time", "600",
-                        "--output", str(partial), item["url"]], check=True, timeout=650)
+        command = ["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--max-time", "600",
+                   "--output", str(partial), item["url"]]
+        announce(f"{label}: downloading {item['url']}.")
+        started = time.monotonic()
+        process = subprocess.Popen(command)
+        try:
+            next_report = started + DOWNLOAD_REPORT_INTERVAL
+            while process.poll() is None:
+                now = time.monotonic()
+                if now >= next_report:
+                    received = partial.stat().st_size if partial.exists() else 0
+                    rate = received / max(now - started, 1)
+                    announce(f"{label}: download in progress: {human_size(received)} received "
+                             f"({human_size(rate)}/s, {elapsed_seconds(started)} elapsed).")
+                    next_report = now + DOWNLOAD_REPORT_INTERVAL
+                if now - started >= 650:
+                    raise subprocess.TimeoutExpired(command, 650)
+                time.sleep(1)
+            if process.returncode:
+                raise subprocess.CalledProcessError(process.returncode, command)
+        except BaseException as error:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            announce(f"{label}: download failed after {elapsed_seconds(started)}: {error}")
+            raise
         partial.rename(archive)
+        announce(f"{label}: download complete: {human_size(archive.stat().st_size)} "
+                 f"in {elapsed_seconds(started)}.")
+    else:
+        announce(f"{label}: using cached archive {archive.name} ({human_size(archive.stat().st_size)}).")
+    announce(f"{label}: verifying SHA-512 checksum.")
     with archive.open("rb") as source:
         digest = hashlib.file_digest(source, "sha512").hexdigest()
     if digest != item["sha512"]:
         raise ValueError(f"Checksum mismatch: {archive}")
+    announce(f"{label}: checksum verified.")
     destination = cache / item["directory"]
     if archive.suffix != ".jar" and not destination.exists():
+        announce(f"{label}: extracting {archive.name}.")
         with tarfile.open(archive) as source:
             source.extractall(cache, filter="data")
+        announce(f"{label}: extraction complete.")
+    elif archive.suffix != ".jar":
+        announce(f"{label}: using cached extracted directory {destination}.")
     return destination
 
 
 def downloads():
     manifest = json.loads((ROOT / "tests/e2e/native-downloads.json").read_text())
+    cache = ROOT / "target/e2e-downloads"
+    announce(f"Checking {len(manifest)} native fixture dependencies in {cache}.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        paths = list(executor.map(distribution, manifest.values()))
+        paths = list(executor.map(distribution, manifest.values(), manifest.keys()))
+    announce("Native fixture dependencies are ready.")
     return dict(zip(manifest, paths))
 
 
@@ -67,11 +125,14 @@ class Servers:
         self.logs = []
 
     def start(self, name, args, env):
-        output = (self.artifacts / f"{name}.log").open("w")
+        path = self.artifacts / f"{name}.log"
+        announce(f"Starting {name} (log: {path}).")
+        output = path.open("w")
         self.logs.append(output)
         process = subprocess.Popen(args, cwd=self.artifacts, env=env, stdout=output,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         self.processes.append((name, process))
+        announce(f"Started {name} (pid {process.pid}).")
 
     def check(self):
         for name, process in self.processes:
@@ -80,6 +141,9 @@ class Servers:
 
     def stop(self):
         # Include Spark executors and Kyuubi engines, not only their parent JVMs.
+        if not self.processes:
+            return
+        announce("Stopping native fixture server process groups.")
         for _, process in reversed(self.processes):
             try:
                 os.killpg(process.pid, signal.SIGTERM)
@@ -98,6 +162,7 @@ class Servers:
             process.wait(timeout=5)
         for output in self.logs:
             output.close()
+        announce("Native fixture server process groups stopped.")
 
 
 def run():
@@ -114,7 +179,10 @@ def run():
 def run_fixture():
     import run as runner
     java_home = preflight()
+    announce(f"Native fixture preflight passed (JAVA_HOME={java_home}).")
+    announce("Checking native driver automation permissions.")
     runner.run(["sh", "scripts/e2e/driver.sh", "--preflight"])
+    announce("Native driver preflight passed.")
     java = str(java_home / "bin/java")
     paths = downloads()
     artifacts = ROOT / "target/e2e" / ("qrow-e2e-" + uuid.uuid4().hex[:12])
@@ -123,15 +191,20 @@ def run_fixture():
     evidence = artifacts / "executor-evidence"
     evidence.mkdir()
     os.environ["QROW_E2E_NATIVE_EVIDENCE"] = str(evidence)
-    print(f"Artifacts: {artifacts}", flush=True)
+    announce(f"Artifacts: {artifacts}")
     # Build before starting the JVMs to keep compiler and server memory separate.
+    announce("Preparing the Qrow application package for the native driver.")
     runner.bounded_command(["sh", "scripts/e2e/driver.sh", "--prepare"], 1200, artifacts / "package.log")
+    announce("Qrow application package prepared.")
     classes = artifacts / "classes"
     classes.mkdir()
+    announce("Compiling Java fixture classes.")
     runner.run([str(java_home / "bin/javac"), "-cp", f"{paths['spark']}/jars/*:{paths['ldap']}",
              "-d", str(classes), str(FIXTURE / "Blocking.java"), str(FIXTURE / "Ldap.java")])
     jar = artifacts / "qrow-fixture.jar"
+    announce("Packaging the Java fixture JAR.")
     runner.run([str(java_home / "bin/jar"), "cf", str(jar), "-C", str(classes), "."])
+    announce(f"Java fixture JAR ready: {jar}.")
     listeners = [socket.socket() for _ in range(5)]
     try:
         for listener in listeners:
@@ -140,6 +213,8 @@ def run_fixture():
     finally:
         for listener in listeners:
             listener.close()
+    announce(f"Allocated fixture ports: LDAP={ldap_port}, ZooKeeper={zk_port}, "
+             f"Spark master={master_port}, Spark worker={worker_port}, Kyuubi={port}.")
     os.environ["QROW_E2E_PORT"] = str(port)
     conf = artifacts / "conf"
     conf.mkdir()
@@ -161,6 +236,7 @@ def run_fixture():
                SPARK_LOG_DIR=str(artifacts / "spark-logs"), SPARK_WORKER_DIR=str(artifacts / "spark-work"))
     servers = Servers(artifacts)
     try:
+        announce("Starting LDAP, ZooKeeper, Spark master, Spark worker, and Kyuubi.")
         servers.start("ldap", [java, "-Xmx128m", "-cp", f"{jar}:{paths['ldap']}", "io.qrow.fixture.Ldap", str(ldap_port), str(FIXTURE / "users.ldif")], env)
         servers.start("zookeeper", [java, "-Xmx256m", "-cp", f"{paths['zookeeper']}/*:{paths['zookeeper']}/lib/*:{paths['zookeeper']}/conf", "org.apache.zookeeper.server.quorum.QuorumPeerMain", str(conf / "zoo.cfg")], env)
         spark = str(paths["spark"] / "bin/spark-class")
@@ -168,26 +244,46 @@ def run_fixture():
         servers.start("spark-worker", [spark, "org.apache.spark.deploy.worker.Worker", "--host", "127.0.0.1", "--port", str(worker_port), "--webui-port", "0", "--cores", "2", "--memory", "2g", f"spark://127.0.0.1:{master_port}"], env)
         servers.start("kyuubi", [str(paths["kyuubi"] / "bin/kyuubi"), "run"], env)
         deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
+        started = deadline - 180
+        attempt = 0
+        last_report = started
+        fixture_ready = False
+        announce("Waiting for authenticated Kyuubi SQL readiness (timeout: 180s).")
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                break
+            attempt += 1
             servers.check()
             result = subprocess.run([str(paths["kyuubi"] / "bin/beeline"), "-u", f"jdbc:hive2://127.0.0.1:{port}/default", "-n", "qrow", "-p", "qrow-test-password", "-e", "SELECT 1"],
                                     env=env, capture_output=True, text=True, timeout=150)
             (artifacts / "readiness.log").write_text(result.stdout + result.stderr)
             if result.returncode == 0:
+                announce(f"Kyuubi is ready after {time.monotonic() - started:.0f}s (attempt {attempt}).")
+                fixture_ready = True
                 break
+            if now - last_report >= 15:
+                announce(f"Still waiting for Kyuubi readiness after {now - started:.0f}s "
+                         f"(attempt {attempt}, last exit code {result.returncode}).")
+                last_report = now
             time.sleep(2)
-        else:
+        if not fixture_ready:
             raise RuntimeError("Native fixture never became ready; see readiness.log")
         servers.check()
+        announce("Native fixture is ready; starting the native UI driver.")
         (artifacts / "reference.json").write_text(json.dumps({"kyuubi": "1.12.0", "spark": "3.5.3", "authentication": "LDAP", "spark_master": "standalone", "fixture": "native-jvm", "architecture": os.uname().machine}, indent=2) + "\n")
         runner.bounded_command(["sh", "scripts/e2e/driver.sh", "--prepared"], 1200, artifacts / "native-ui.log")
+        announce("Native UI driver completed successfully.")
         servers.check()
     except BaseException as error:
+        announce(f"Native fixture failed: {error}")
         (artifacts / "failure.txt").write_text(str(error) + "\n")
         raise
     finally:
+        announce("Cleaning up the native fixture.")
         servers.stop()
         runner.run(["python3", "scripts/e2e/keychain.py"])
+        announce("Native fixture cleanup complete.")
 
 
 if __name__ == "__main__":
