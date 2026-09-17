@@ -25,3 +25,5 @@
 - Keep this file limited to agent working instructions. Put product behavior,
   architecture, and workflow details in the relevant docs.
 - Add and run tests (including end-to-end) for new functionality and changes.
+- Prioritize running end-to-end tests using the Docker runtime; fall back to the native environment if needed.
+- If Docker is present on the machine but not running, ask the user to start it.
