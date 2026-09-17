@@ -16,7 +16,7 @@ if artifacts.parent != root or not artifacts.name.startswith("qrow-e2e-"):
 workspace = artifacts / "workspace/workspace.json"
 if workspace.exists():
     for profile in json.loads(workspace.read_text())["profiles"]:
-        if profile["name"] != "Qrow E2E" or profile["username"] != "qrow" or profile["host"] != "127.0.0.1":
+        if profile["name"] not in {"Qrow E2E", "Qrow E2E live"} or profile["username"] != "qrow" or profile["host"] != "127.0.0.1":
             raise ValueError("Unexpected non-fixture profile")
         identifier = str(uuid.UUID(profile["id"]))
         result = subprocess.run(["security", "delete-generic-password", "-s", "io.qrow.connection",
