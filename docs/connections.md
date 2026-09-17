@@ -1,7 +1,9 @@
 # Connections
 
 A connection profile stores the settings for a Kyuubi endpoint. Select a profile
-in the Connections sidebar to use it in the active query tab.
+in the Connections sidebar to use it for the next query in the active query tab.
+The current result preview stays visible until the next accepted query replaces
+it.
 
 ## Create a profile
 
@@ -55,7 +57,9 @@ disconnects the session and stops background queries until the next explicit Run
 Click **Disconnect** to release the active tab's session. This action is disabled
 while a query or heartbeat runs. Manual and idle disconnection preserve SQL and
 downloaded results. Unfetched rows and session state, such as temporary views or
-settings applied with SQL, are lost. 
+settings applied with SQL, are lost. Selecting another profile also releases the
+current session and keeps downloaded results visible. The next Run uses the new
+profile.
 
 Qrow's session idle timeout is separate from the server's engine idle timeout.
 Disconnecting a Qrow tab does not guarantee that its Spark engine stops. Other

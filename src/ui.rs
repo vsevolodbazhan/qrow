@@ -785,13 +785,7 @@ impl Qrow {
         tab.pending_page = None;
         tab.elapsed = None;
         tab.status = "Not connected".into();
-        tab.table.update(cx, |t, cx| {
-            t.delegate_mut().clear();
-            t.clear_selection(cx);
-            t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
-            t.scroll_to_row(0, cx);
-            t.refresh(cx);
-        });
+        // Keep the current preview. A new accepted query replaces it.
         self.changed(cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {

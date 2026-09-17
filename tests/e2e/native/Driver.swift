@@ -276,7 +276,7 @@ final class Driver {
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Duplicate"))
         _ = try wait("Password", role: kAXTextFieldRole)
-        try fill("Password", "qrow-test-password-copy")
+        try fill("Password", "qrow-test-password")
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
@@ -291,6 +291,48 @@ final class Driver {
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected")
         try snapshot("connected")
+
+        // Create a second disposable profile for the connection-switch test.
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Duplicate"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Password", "qrow-test-password")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E copy")
+
+        // Download two pages on the first connection, then change connections.
+        // The downloaded rows stay visible, but the old session cannot fetch the
+        // remaining rows after the profile switch.
+        try query("SELECT concat('switch-a-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(2001) ORDER BY id")
+        _ = try wait("switch-a-0000")
+        try press("Next")
+        _ = try wait("switch-a-1000")
+        _ = try wait("Page 2")
+        try press("Qrow E2E copy")
+        _ = try wait("switch-a-1000")
+        let nextAfterSwitch = try wait("Next", role: kAXButtonRole)
+        // GPUI does not expose AXEnabled for every disabled button. Click the
+        // visible control and verify that the retained preview does not fetch
+        // the final row after the old session was released.
+        try click(nextAfterSwitch)
+        let fetchDeadline = clock.now.advanced(by: .seconds(3))
+        repeat {
+            try require(find("switch-a-2000") == nil,
+                        "Next fetched rows after the connection switch")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < fetchDeadline
+        try press("Qrow E2E")
+        _ = try wait("switch-a-1000")
+
+        // A new query replaces the retained preview. Selecting the first
+        // connection again must not restore the older rows.
+        try press("Qrow E2E copy")
+        try query("SELECT 'switch-b' AS value")
+        _ = try wait("switch-b")
+        try press("Qrow E2E")
+        _ = try wait("switch-b")
+        try snapshot("connection-switch")
 
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
@@ -382,7 +424,7 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
-        print("PASS: connection menus, tab rename, connection form, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 

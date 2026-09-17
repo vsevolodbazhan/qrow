@@ -133,6 +133,13 @@ cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.
 
+The native scenario also checks result retention across connection changes. It
+runs a query on one profile, downloads more than one page, selects a second
+profile, and checks that the downloaded rows remain visible. It then runs a new
+query and checks that the new result replaces the old result. The old session is
+closed when the profile changes, so the test also checks that Qrow does not fetch
+unfetched rows from that session.
+
 ## Continuous integration
 
 End-to-end tests are currently not run in CI/CD.
