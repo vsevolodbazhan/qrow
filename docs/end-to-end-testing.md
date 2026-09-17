@@ -135,10 +135,13 @@ Passing on a larger runner does not establish performance on that target.
 
 The native scenario also checks result retention across connection changes. It
 runs a query on one profile, downloads more than one page, selects a second
-profile, and checks that the downloaded rows remain visible. It then runs a new
-query and checks that the new result replaces the old result. The old session is
-closed when the profile changes, so the test also checks that Qrow does not fetch
-unfetched rows from that session.
+profile during a heartbeat, and checks that the downloaded rows remain visible.
+It checks that keep-alive continues and that Qrow can fetch more rows from the
+original session.
+Returning to the first profile preserves its session settings. A query on the
+second profile opens a new session and replaces the preview. The scenario also
+checks that profile edits and deletion close the correct session when the
+selected profile differs from the session's profile.
 
 ## Continuous integration
 

@@ -18,8 +18,9 @@ Qrow rejects multiple statements before sending them to the server.
 A new accepted execution clears the previous preview and the previous Error
 badge. The badge stays clear while the execution runs unless that execution
 fails. Results appear as Qrow fetches them. Selecting another connection does
-not clear the preview. The next query replaces it, regardless of which
-connection produced the previous rows.
+not clear the preview or close its session. The next query uses the selected
+connection and replaces the preview, regardless of which connection produced
+the previous rows.
 The Logs panel remains across executions in the tab. A successful execution
 also clears the badge, even if you selected Logs after the failure. See
 [Results](results.md) for paging and storage limits.
@@ -66,8 +67,9 @@ Right-click a tab and choose **Edit Tab…** to rename it. The current name appe
 as the placeholder. Leave the field empty to keep that name. Renaming preserves
 the SQL, connection, and downloaded results.
 
-A busy tab cannot close or switch profiles. Switching tabs does not stop work
-in another tab. See [Connections](connections.md) for session behavior.
+A busy tab cannot close. You can select a profile for its next query while
+work continues on the current session. Switching tabs does not stop work in
+another tab. See [Connections](connections.md) for session behavior.
 
 ## Cancel work
 

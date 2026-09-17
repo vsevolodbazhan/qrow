@@ -55,8 +55,10 @@ transport frame limit can also reject large server responses.
 
 Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows, but the downloaded rows remain visible. Selecting another
-connection also keeps the preview. The next accepted query replaces the
-previous preview, regardless of the selected connection.
+connection keeps the preview and its session. **Next** can fetch remaining
+rows from that session, even when another connection is selected. The next
+accepted query replaces the previous preview, regardless of the selected
+connection.
 
 Results are not restored after application restart. Logs history is separate and
 is also not restored after application restart.
