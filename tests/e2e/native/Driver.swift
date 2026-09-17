@@ -377,12 +377,8 @@ final class Driver {
         _ = try wait("switch-a-1000")
         _ = try wait("Connected · keep-alive enabled", timeout: 20)
         _ = try wait("switch-a-1000")
-        // B has no session. Its disabled Disconnect control must not close A.
-        // AXEnabled is not available for every disabled GPUI button, so click
-        // it and verify that A can still fetch the remaining page.
-        try click(try wait("Disconnect", role: kAXButtonRole))
         try press("Next")
-        _ = try wait("switch-a-2000", timeout: 20)
+        _ = try wait("switch-a-2000")
         _ = try wait("Page 3")
         try snapshot("connection-switch-keep-alive")
         try press("Previous")
@@ -399,6 +395,13 @@ final class Driver {
         _ = try wait("switch-b-0000-UTC")
         try selectConnection("Qrow E2E")
         _ = try wait("switch-b-0000-UTC")
+        // B is idle with no heartbeat, so only the different selection can
+        // disable Disconnect. AXEnabled is not available for every GPUI button.
+        _ = try wait("Preview · more rows available")
+        try click(try wait("Disconnect", role: kAXButtonRole))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(find("Disconnecting…") == nil && find("Disconnected · run to reconnect") == nil,
+                    "Disconnect closed the unselected profile's session")
         try snapshot("connection-switch")
 
         // Editing selected A must not close B's session. Restore A's default
