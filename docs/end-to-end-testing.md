@@ -84,6 +84,12 @@ Start with the failed command or assertion. Use server logs to inspect connectio
 and execution failures. Use screenshots and accessibility snapshots to inspect
 UI failures. Failed runs keep their artifacts after fixture cleanup.
 
+The E2E orchestrator prints each fixture phase. Native archive downloads report
+received bytes, transfer rate, and elapsed time every 15 seconds. Long package,
+backend, and native-driver commands print a heartbeat every 30 seconds and
+stream their output to the workflow log. The saved command logs contain the
+same command output.
+
 A missing fixture, failed assertion, deadline, or cleanup failure fails the run.
 The suite does not automatically rerun failed tests. Readiness checks can retry
 `SELECT 1` while waiting for servers to become available.

@@ -1,20 +1,34 @@
 #!/usr/bin/env python3
 """Disposable real-server acceptance tests. No saved profiles or production credentials."""
 import argparse
+import io
 import json
 import os
 from pathlib import Path
 import re
-import signal
+import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "tests/e2e/compose.yml"
+COMMAND_HEARTBEAT_SECONDS = 30
+OUTPUT_LOCK = threading.Lock()
+
+
+def announce(message):
+    with OUTPUT_LOCK:
+        print(f"[e2e] {message}", flush=True)
+
+
+def command_text(args):
+    return shlex.join(str(arg) for arg in args)
 
 
 def run(args, *, timeout=180, check=True, capture=False):
@@ -38,13 +52,26 @@ def compose(*args, **kwargs):
 def ready():
     # Readiness is an authenticated SQL round trip; an open port is insufficient.
     deadline = time.monotonic() + 180
-    while time.monotonic() < deadline:
+    started = deadline - 180
+    attempt = 0
+    last_report = started
+    announce("Waiting for authenticated Kyuubi SQL readiness (timeout: 180s).")
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        attempt += 1
         result = compose("exec", "-T", "kyuubi", "/opt/kyuubi/bin/beeline",
                          "-u", "jdbc:hive2://localhost:10009/default", "-n", "qrow",
                          "-p", "qrow-test-password", "-e", "SELECT 1",
                          timeout=150, check=False, capture=True)
         if result.returncode == 0:
+            announce(f"Kyuubi is ready after {time.monotonic() - started:.0f}s (attempt {attempt}).")
             return
+        if now - last_report >= 15:
+            announce(f"Still waiting for Kyuubi readiness after {now - started:.0f}s "
+                     f"(attempt {attempt}, last exit code {result.returncode}).")
+            last_report = now
         time.sleep(2)
     raise RuntimeError("Kyuubi never became ready for authenticated SQL: " + result.stderr[-4000:])
 
@@ -89,17 +116,59 @@ def native_evidence_count(root, token):
 
 
 def bounded_command(args, timeout, log):
-    # A timed-out Rust test can leave network threads blocked. Kill the whole test process group.
+    # A timed-out command can leave child processes blocked. Kill the whole process group.
+    command = command_text(args)
+    started = time.monotonic()
+    announce(f"Running {command} (timeout: {timeout}s; live log: {log}).")
     with log.open("w") as output:
-        process = subprocess.Popen(args, cwd=ROOT, stdout=output, stderr=subprocess.STDOUT,
+        process = subprocess.Popen(args, cwd=ROOT, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1,
                                    start_new_session=True)
+        reader = None
+        if isinstance(process.stdout, io.TextIOBase):
+            def forward_output():
+                try:
+                    for line in iter(process.stdout.readline, ""):
+                        with OUTPUT_LOCK:
+                            output.write(line)
+                            output.flush()
+                            print(line, end="", flush=True)
+                except (OSError, ValueError):
+                    pass
+
+            reader = threading.Thread(target=forward_output, daemon=True)
+            reader.start()
+
+        heartbeat_stop = threading.Event()
+
+        def report_progress():
+            while not heartbeat_stop.wait(COMMAND_HEARTBEAT_SECONDS):
+                announce(f"Still running {command} ({time.monotonic() - started:.0f}s elapsed; "
+                         f"live log: {log}).")
+
+        heartbeat = threading.Thread(target=report_progress, daemon=True)
+        heartbeat.start()
         try:
             code = process.wait(timeout=timeout)
-        except BaseException:
+        except BaseException as error:
+            announce(f"Stopping {command} after {time.monotonic() - started:.0f}s: {error}")
             os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             raise
-    print(log.read_text())
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=1)
+            if reader is not None:
+                reader.join(timeout=5)
+                if reader.is_alive():
+                    process.stdout.close()
+                    reader.join(timeout=1)
+            output.flush()
+    if reader is None and log.exists():
+        contents = log.read_text()
+        if contents:
+            print(contents, end="", flush=True)
+    announce(f"Finished {command} with exit code {code} after {time.monotonic() - started:.0f}s.")
     if code:
         raise RuntimeError(f"Command failed ({code}); see {log}")
 
@@ -139,6 +208,7 @@ def main():
         return
     if args.suite == "macos" and args.runtime == "native":
         require_commands("curl")
+        announce("Starting native macOS E2E with the isolated Java fixture.")
         import servers
         servers.run()
         return
@@ -150,10 +220,11 @@ def main():
     artifacts = ROOT / "target/e2e" / project
     artifacts.mkdir(parents=True)
     os.environ["QROW_E2E_ARTIFACTS"] = str(artifacts)
-    print(f"Artifacts: {artifacts}", flush=True)
+    announce(f"Artifacts: {artifacts}")
     failure = None
     try:
         os.environ["QROW_E2E_BIND_PORT"] = str(free_port())
+        announce(f"Starting disposable Docker fixture {project}.")
         compose("up", "-d", "--build", timeout=900)
         local_port = int(compose("port", "kyuubi", "10009", capture=True).stdout.strip().rsplit(":", 1)[1])
         os.environ["QROW_E2E_PORT"] = str(local_port)
@@ -173,12 +244,16 @@ def main():
         (artifacts / "failure.txt").write_text(str(error) + "\n")
     finally:
         try:
+            announce(f"Collecting E2E evidence in {artifacts}.")
             collect(artifacts)
+            announce("E2E evidence collection complete.")
         except Exception as error:
             print(f"Artifact collection failed: {error}", file=sys.stderr)
             failure = failure or error
         try:
+            announce(f"Removing disposable Docker fixture {project}.")
             compose("down", "--volumes", "--remove-orphans", timeout=90)
+            announce("Disposable Docker fixture removed.")
         except Exception as error:
             print(f"Fixture cleanup failed: {error}", file=sys.stderr)
             failure = failure or error
