@@ -48,9 +48,9 @@ def human_duration(seconds):
     return f"{hours}h {minutes:02d}m"
 
 
-def report_download_progress(label, received, total, started):
+def report_download_progress(label, received, total, started, initial_received=0):
     elapsed = max(time.monotonic() - started, 1)
-    rate = received / elapsed
+    rate = max(received - initial_received, 0) / elapsed
     if total:
         percent = min(received / total * 100, 100)
         eta = human_duration((total - received) / rate) if rate else "unknown"
@@ -85,36 +85,46 @@ def distribution(item, label=None):
     archive = cache / item["url"].rsplit("/", 1)[1]
     if not archive.exists():
         partial = archive.with_suffix(".partial")
-        command = ["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--max-time", "600",
-                   "--output", str(partial), item["url"]]
-        total_text = f" ({human_size(total)} total)" if total else ""
-        announce(f"{label}: downloading {item['url']}{total_text}.")
-        started = time.monotonic()
-        process = subprocess.Popen(command)
-        try:
-            next_report = started + DOWNLOAD_REPORT_INTERVAL
-            while process.poll() is None:
-                now = time.monotonic()
-                if now >= next_report:
-                    received = partial.stat().st_size if partial.exists() else 0
-                    report_download_progress(label, received, total, started)
-                    next_report = now + DOWNLOAD_REPORT_INTERVAL
-                if now - started >= 650:
-                    raise subprocess.TimeoutExpired(command, 650)
-                time.sleep(1)
-            if process.returncode:
-                raise subprocess.CalledProcessError(process.returncode, command)
-            if total and partial.stat().st_size != total:
-                raise ValueError(f"Size mismatch for {partial}: expected {total}, got {partial.stat().st_size}")
-        except BaseException as error:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            announce(f"{label}: download failed after {elapsed_seconds(started)}: {error}")
-            raise
-        partial.rename(archive)
-        announce(f"{label}: download complete: {human_size(archive.stat().st_size)} "
-                 f"in {elapsed_seconds(started)}.")
+        if total and partial.exists() and partial.stat().st_size == total:
+            announce(f"{label}: completed partial download found ({human_size(total)}).")
+            partial.rename(archive)
+        else:
+            if total and partial.exists() and partial.stat().st_size > total:
+                announce(f"{label}: discarding oversized partial download ({human_size(partial.stat().st_size)}).")
+                partial.unlink()
+            initial_received = partial.stat().st_size if partial.exists() else 0
+            if initial_received:
+                announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
+            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--retry", "3", "--continue-at", "-", "--max-time", "600",
+                       "--output", str(partial), item["url"]]
+            total_text = f" ({human_size(total)} total)" if total else ""
+            announce(f"{label}: downloading {item['url']}{total_text}.")
+            started = time.monotonic()
+            process = subprocess.Popen(command)
+            try:
+                next_report = started + DOWNLOAD_REPORT_INTERVAL
+                while process.poll() is None:
+                    now = time.monotonic()
+                    if now >= next_report:
+                        received = partial.stat().st_size if partial.exists() else initial_received
+                        report_download_progress(label, received, total, started, initial_received)
+                        next_report = now + DOWNLOAD_REPORT_INTERVAL
+                    if now - started >= 650:
+                        raise subprocess.TimeoutExpired(command, 650)
+                    time.sleep(1)
+                if process.returncode:
+                    raise subprocess.CalledProcessError(process.returncode, command)
+                if total and partial.stat().st_size != total:
+                    raise ValueError(f"Size mismatch for {partial}: expected {total}, got {partial.stat().st_size}")
+            except BaseException as error:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                announce(f"{label}: download failed after {elapsed_seconds(started)}: {error}")
+                raise
+            partial.rename(archive)
+            announce(f"{label}: download complete: {human_size(archive.stat().st_size)} "
+                     f"in {elapsed_seconds(started)}.")
     else:
         announce(f"{label}: using cached archive {archive.name} ({human_size(archive.stat().st_size)}).")
     if total and archive.stat().st_size != total:
@@ -139,9 +149,13 @@ def distribution(item, label=None):
 def downloads():
     manifest = json.loads((ROOT / "tests/e2e/native-downloads.json").read_text())
     cache = ROOT / "target/e2e-downloads"
+    marker = cache / ".complete"
+    if marker.exists():
+        marker.unlink()
     announce(f"Checking {len(manifest)} native fixture dependencies in {cache}.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         paths = list(executor.map(distribution, manifest.values(), manifest.keys()))
+    marker.write_text("All native fixture dependencies were verified.\n")
     announce("Native fixture dependencies are ready.")
     return dict(zip(manifest, paths))
 

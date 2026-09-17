@@ -120,8 +120,9 @@ The `e2e-macos` job reuses the package from `core-macos` by default. A manual
 dispatch has the `reuse_macos_package` input. Set it to `false` to build the
 package in the E2E job. A selected package that is missing or invalid fails the
 job. The job does not build a replacement package. The native server
-distributions use a checksum-keyed Actions cache. A cache miss downloads them
-from the public archive service.
+distributions use a checksum-keyed Actions cache. Failed download runs preserve
+partial files in a run-scoped cache, and the next run resumes them. A cache miss
+downloads them from the public archive service.
 
 The workflow retains `core-coverage`, `macos-package-and-performance`,
 `backend-evidence`, and `macos-evidence` for 14 days. Configure these

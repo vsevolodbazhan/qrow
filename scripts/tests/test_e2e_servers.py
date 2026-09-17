@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 spec = importlib.util.spec_from_file_location("native_fixture", Path(__file__).resolve().parents[1] / "e2e/servers.py")
 native_fixture = importlib.util.module_from_spec(spec)
@@ -21,6 +21,29 @@ class NativeFixtureTests(unittest.TestCase):
         self.assertIn("100.0 B / 200.0 B received", message)
         self.assertIn("50.0%", message)
         self.assertIn("ETA 10s", message)
+
+    def test_download_resumes_a_partial_archive(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "target/e2e-downloads"
+            cache.mkdir(parents=True)
+            partial = cache / "fixture.partial"
+            partial.write_bytes(b"ab")
+            payload = b"abcd"
+            item = {"url": "https://example.invalid/fixture.jar", "directory": "fixture.jar", "bytes": len(payload),
+                    "sha512": hashlib.sha512(payload).hexdigest()}
+
+            def start(command):
+                Path(command[command.index("--output") + 1]).write_bytes(payload)
+                process = MagicMock()
+                process.poll.return_value = 0
+                process.returncode = 0
+                return process
+
+            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
+                self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
+            command = popen.call_args.args[0]
+            self.assertEqual(command[command.index("--continue-at") + 1], "-")
 
     def test_cached_download_is_verified_before_use(self):
         with tempfile.TemporaryDirectory() as directory:

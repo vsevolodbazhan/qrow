@@ -120,8 +120,9 @@ including Spark engines and executors, after the run.
 [Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
 sizes, and SHA-512 checksums. Verified native downloads are cached under
 `target/e2e-downloads`. CI also stores this directory in a checksum-keyed
-GitHub Actions cache. The first run after a dependency change still downloads
-from the public archive service, which can be slow.
+GitHub Actions cache. Failed download runs save partial files in a run-scoped
+cache, and the next run resumes them. The first run after a dependency change
+still downloads from the public archive service, which can be slow.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
