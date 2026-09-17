@@ -135,39 +135,4 @@ Passing on a larger runner does not establish performance on that target.
 
 ## Continuous integration
 
-The [test workflow](../.github/workflows/test.yml) runs the core jobs only, in
-one serial chain:
-
-```text
-dependencies -> scripts -> backend -> macos
-```
-
-It runs the core chain for pushes to `main`, manual dispatches, and pull
-requests with the `opened`, `reopened`, `synchronize`, `ready_for_review`, and
-`converted_to_draft` actions. Draft pull requests do not start jobs. The
-`converted_to_draft` event also starts no jobs. A failed job skips every job that
-follows it. A newer run cancels an older run for the same pull request or
-branch, including manual runs. Every job checks out the pull request merge
-result.
-
-E2E tests run locally only. They do not run in GitHub Actions. Use the commands
-in this guide. Core uploads are success-only. The core artifacts are retained
-for 14 days:
-
-```text
-core-coverage
-macos-package-and-performance
-```
-
-Configure the four individual core jobs as required checks. The required check
-names are:
-
-```text
-test / dependencies
-test / scripts
-test / backend
-test / macos
-```
-
-There is no aggregate gate. Local checks cannot verify GitHub event filters, run
-cancellation, artifact transfer, or branch protection settings.
+End-to-end tests are currently not run in CI/CD.
