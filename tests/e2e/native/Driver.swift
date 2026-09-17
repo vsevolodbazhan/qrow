@@ -90,6 +90,24 @@ func rightClick(_ element: AXUIElement) throws {
         event.post(tap: .cghidEventTap)
     }
 }
+func scrollDown(_ element: AXUIElement) throws {
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    guard let position = attribute(element, kAXPositionAttribute),
+          let size = attribute(element, kAXSizeAttribute) else { throw Failure("Element has no bounds") }
+    var point = CGPoint.zero
+    var extent = CGSize.zero
+    try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")
+    AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point)
+    AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
+    point.x += extent.width / 2
+    point.y += extent.height / 2
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -1200, wheel2: 0, wheel3: 0)!
+    scroll.location = point
+    scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -212,6 +230,28 @@ final class Driver {
         try fill("SQL Editor", sql)
         try press("Run")
     }
+    func selectConnection(_ name: String) throws {
+        try press(name)
+        // Button styling does not expose selection through accessibility.
+        // Check the isolated workspace to catch a click that was ignored.
+        let workspaceURL = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(5))
+        repeat {
+            if let data = try? Data(contentsOf: workspaceURL),
+               let workspace = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let profiles = workspace["profiles"] as? [[String: Any]],
+               let tabs = workspace["tabs"] as? [[String: Any]],
+               let active = workspace["active_tab"] as? Int,
+               tabs.indices.contains(active),
+               let selected = tabs[active]["profile"] as? String,
+               profiles.contains(where: { $0["id"] as? String == selected && $0["name"] as? String == name }) {
+                return
+            }
+            try require(process.isRunning, "Qrow exited while selecting \(name)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Connection selection was not saved: \(name)")
+    }
     func snapshot(_ name: String) throws {
         let text = elements().map { "\(attribute($0, kAXRoleAttribute) ?? "?" as CFString) \(strings($0))" }.joined(separator: "\n")
         try text.write(toFile: "\(artifacts)/\(name)-accessibility.txt", atomically: true, encoding: .utf8)
@@ -285,7 +325,7 @@ final class Driver {
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Duplicate"))
         _ = try wait("Password", role: kAXTextFieldRole)
-        try fill("Password", "qrow-test-password-copy")
+        try fill("Password", "qrow-test-password")
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
@@ -300,6 +340,133 @@ final class Driver {
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected")
         try snapshot("connected")
+
+        // Create a second disposable profile for the connection-switch test.
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Duplicate"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Password", "qrow-test-password")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E copy")
+
+        // Keep A alive while B is selected. B keeps its default idle policy.
+        let heartbeatToken = "heartbeat-" + UUID().uuidString.lowercased()
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
+        try click(try wait("Keep Connected", role: kAXRadioButtonRole))
+        try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
+        try fill("Heartbeat Interval in Seconds", "3")
+        try fill("Heartbeat SQL", "SELECT qrow_keep_alive(id, '\(heartbeatToken)', CAST(10000 AS BIGINT)) FROM range(1)")
+        try press("Save")
+        try waitGone("Cancel")
+        try query("CREATE TEMPORARY FUNCTION qrow_keep_alive AS 'io.qrow.fixture.Blocking'")
+        _ = try wait("Complete")
+        try query("SET spark.sql.session.timeZone=Asia/Tokyo")
+        _ = try wait("Asia/Tokyo", role: kAXCellRole)
+
+        // Selection preserves the original cursor as well as downloaded rows.
+        try query("SELECT concat('switch-a-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(2001) ORDER BY id")
+        _ = try wait("switch-a-0000")
+        try press("Next")
+        _ = try wait("switch-a-1000")
+        _ = try wait("Page 2")
+        _ = try wait("Sending keep-alive…", timeout: 20)
+        try selectConnection("Qrow E2E copy")
+        // The running heartbeat belongs to A even though B is selected.
+        try require(find("Sending keep-alive…") != nil, "Fixture heartbeat ended before the busy-profile edit check")
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened during the original session's heartbeat")
+        key(53)
+        try waitGone("Edit Connection…")
+        _ = try wait("switch-a-1000")
+        _ = try wait("Connected · keep-alive enabled", timeout: 20)
+        _ = try wait("switch-a-1000")
+        try press("Next")
+        _ = try wait("switch-a-2000")
+        _ = try wait("Page 3")
+        try snapshot("connection-switch-keep-alive")
+        try press("Previous")
+        _ = try wait("switch-a-1000")
+        try selectConnection("Qrow E2E")
+        _ = try wait("switch-a-1000")
+        try query("SELECT concat('same-session-', current_timezone()) AS value")
+        _ = try wait("same-session-Asia/Tokyo")
+
+        // Run on B changes the live session and replaces A's preview. B uses
+        // the server's default time zone, not A's session setting.
+        try selectConnection("Qrow E2E copy")
+        try query("SELECT concat('switch-b-', lpad(CAST(id AS STRING), 4, '0'), '-', current_timezone()) AS value FROM range(2001) ORDER BY id")
+        _ = try wait("switch-b-0000-UTC")
+        try selectConnection("Qrow E2E")
+        _ = try wait("switch-b-0000-UTC")
+        // B is idle with no heartbeat, so only the different selection can
+        // disable Disconnect. AXEnabled is not available for every GPUI button.
+        _ = try wait("Preview · more rows available")
+        try click(try wait("Disconnect", role: kAXButtonRole))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        try require(find("Disconnecting…") == nil && find("Disconnected · run to reconnect") == nil,
+                    "Disconnect closed the unselected profile's session")
+        try snapshot("connection-switch")
+
+        // Editing selected A must not close B's session. Restore A's default
+        // idle policy for the remaining scenarios, then fetch through B's cursor.
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
+        try click(try wait("Disconnect", role: kAXRadioButtonRole))
+        try press("Save")
+        try waitGone("Cancel")
+        try press("Next")
+        _ = try wait("switch-b-1000-UTC")
+
+        // A lifecycle edit updates B's live session while A remains selected.
+        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
+        try click(try wait("Keep Connected", role: kAXRadioButtonRole))
+        try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
+        try fill("Heartbeat Interval in Seconds", "3")
+        try fill("Heartbeat SQL", "SELECT 'updated-b'")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Connected · keep-alive enabled", timeout: 20)
+        _ = try wait("switch-b-1000-UTC")
+        try press("Next")
+        _ = try wait("switch-b-2000-UTC")
+
+        // Replacing B's password closes B even while A is selected. Restore
+        // B's default idle policy for the remaining disconnect scenarios.
+        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        try fill("Password", "qrow-test-password")
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
+        try click(try wait("Disconnect", role: kAXRadioButtonRole))
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Not connected")
+        _ = try wait("switch-b-2000-UTC")
+        try selectConnection("Qrow E2E copy")
+        try query("SELECT 'switch-b-reconnected' AS value")
+        _ = try wait("switch-b-reconnected")
+        try selectConnection("Qrow E2E")
+        // Returning to the session's profile enables Disconnect without a Run.
+        try selectConnection("Qrow E2E copy")
+        try press("Disconnect")
+        _ = try wait("Disconnected · run to reconnect", timeout: 10)
+        _ = try wait("switch-b-reconnected")
+        try query("SELECT 'switch-b-after-disconnect' AS value")
+        _ = try wait("switch-b-after-disconnect")
+        try selectConnection("Qrow E2E")
+        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try click(try wait("Delete"))
+        try press("Delete")
+        try waitGone("Qrow E2E copy")
+        _ = try wait("Not connected")
+        _ = try wait("switch-b-after-disconnect")
 
         // A profile metadata edit keeps the session in both tabs. Temporary
         // views prove that the workers did not reconnect when the form was saved.
@@ -319,6 +486,8 @@ final class Driver {
         try query("SELECT * FROM qrow_ui_live")
         _ = try wait("preserved")
         try click(try waitExact("Query 2"))
+        // Wait for the new tab's editor before fill captures its accessibility node.
+        _ = try wait("CREATE TEMPORARY VIEW qrow_ui_live AS SELECT 'preserved' AS value", role: kAXTextAreaRole)
         try query("SELECT * FROM qrow_ui_live")
         _ = try wait("preserved")
         try click(try waitExact("Query 1"))
@@ -465,7 +634,7 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
-        print("PASS: connection menus, tab rename, connection form, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 

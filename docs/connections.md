@@ -1,7 +1,9 @@
 # Connections
 
 A connection profile stores the settings for a Kyuubi endpoint. Select a profile
-in the Connections sidebar to use it in the active query tab.
+in the Connections sidebar to use it for the next query in the active query tab.
+The current result preview stays visible until the next accepted query replaces
+it. Profile selection keeps the tab's current session and its idle policy.
 
 ## Create a profile
 
@@ -28,7 +30,8 @@ An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier and requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name or the Connection Lifecycle fields. The worker applies the new lifecycle
+name or the Connection Lifecycle fields. This also applies when another profile
+is selected for the next query. The worker applies the new lifecycle
 policy after active query, fetch, or heartbeat work finishes. A shorter
 heartbeat interval starts from the policy update. Switching to Disconnect
 starts a new idle timeout from the policy update.
@@ -36,16 +39,26 @@ starts a new idle timeout from the policy update.
 Changing the host, port, username, database, session parameters, or password
 releases the matching sessions. Their SQL and downloaded results remain
 available. The next Run opens a session with the updated connection settings.
-Editing and deletion are disabled while a tab using the profile is busy.
-Deletion requires confirmation. Qrow removes the profile and requests deletion
+Editing and deletion are disabled while a session using the profile is busy.
+Deletion requires confirmation. Qrow closes sessions that use the deleted
+profile, even when another profile is selected. Qrow removes the profile and requests deletion
 of its stored password. Keychain deletion failures are not reported in the UI,
 so a failed deletion can leave the password in Keychain.
 
 ## Sessions and idle behavior
 
-Each tab has its own session. Tabs can execute SQL concurrently, including when
-they use the same profile. Separate sessions do not necessarily use separate
-Spark engines. Engine sharing depends on the Kyuubi configuration.
+Each tab can have one session. Selecting a different profile keeps that session,
+its result cursor, and its connection status. Its idle policy continues to
+apply, including keep-alive queries. Returning to the original profile reuses
+the session. Running SQL on a different profile closes the old session and
+opens a session for the selected profile.
+
+You can select the next query's profile while a query or heartbeat runs.
+Selection does not stop the current work.
+
+Tabs can execute SQL concurrently, including when they use the same profile.
+Separate sessions do not necessarily use separate Spark engines. Engine sharing
+depends on the Kyuubi configuration.
 
 The **When Idle** setting controls each session:
 
@@ -59,10 +72,15 @@ text contains one statement, but does not enforce read-only behavior. Heartbeats
 use the existing session and preserve its result cursor. A failed heartbeat
 disconnects the session and stops background queries until the next explicit Run.
 
-Click **Disconnect** to release the active tab's session. This action is disabled
-while a query or heartbeat runs. Manual and idle disconnection preserve SQL and
-downloaded results. Unfetched rows and session state, such as temporary views or
-settings applied with SQL, are lost. 
+To release the active tab's session, select its profile and click **Disconnect**.
+This action is disabled while a query or heartbeat runs. It is also disabled
+when the selected profile has no live session in the active tab. Selecting
+another profile keeps the original session open. Select the original profile
+again to disconnect it.
+
+Manual and idle disconnection preserve SQL and downloaded results. Unfetched
+rows and session state, such as temporary views or settings applied with SQL,
+are lost.
 
 Qrow's session idle timeout is separate from the server's engine idle timeout.
 Disconnecting a Qrow tab does not guarantee that its Spark engine stops. Other

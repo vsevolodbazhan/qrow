@@ -121,6 +121,8 @@ struct Tab {
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
     worker: Option<Worker>,
+    // The last Run target can differ from the profile selected for the next Run.
+    worker_profile: Option<Uuid>,
     busy: bool,
     cancelling: bool,
     connected: bool,
@@ -134,6 +136,14 @@ struct Tab {
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     next_execution_id: u64,
+}
+impl Tab {
+    fn can_disconnect(&self) -> bool {
+        !self.busy
+            && self.connected
+            && self.worker_profile.is_some()
+            && self.worker_profile == self.saved.profile
+    }
 }
 struct ProfileEditor {
     profile: Profile,
@@ -423,6 +433,7 @@ impl Qrow {
             table,
             _subscription: subscription,
             worker: None,
+            worker_profile: None,
             busy: false,
             cancelling: false,
             connected: false,
@@ -556,6 +567,7 @@ impl Qrow {
                 }
                 match event {
                     Event::Connecting => {
+                        tab.connected = false;
                         tab.busy = true;
                         tab.status = "Connecting to Spark (HiveServer2)…".into();
                     }
@@ -574,7 +586,7 @@ impl Qrow {
                         tab.status = if self
                             .profiles
                             .iter()
-                            .find(|profile| Some(profile.id) == tab.saved.profile)
+                            .find(|profile| Some(profile.id) == tab.worker_profile)
                             .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
                         {
                             "Connected · keep-alive enabled"
@@ -710,12 +722,13 @@ impl Qrow {
                     }
                     if action == ProfileSaveAction::Reconnect {
                         for tab in &mut self.tabs {
-                            if tab.saved.profile != Some(id) {
+                            if tab.worker_profile != Some(id) {
                                 continue;
                             }
                             if let Some(worker) = tab.worker.take() {
                                 worker.shutdown();
                             }
+                            tab.worker_profile = None;
                             tab.connected = false;
                             tab.busy = false;
                             tab.cancelling = false;
@@ -725,7 +738,7 @@ impl Qrow {
                         }
                     } else if action == ProfileSaveAction::Update {
                         for tab in &mut self.tabs {
-                            if tab.saved.profile == Some(id) {
+                            if tab.worker_profile == Some(id) {
                                 if let Some(worker) = &tab.worker {
                                     let _ = worker.update_profile(profile.clone());
                                 }
@@ -817,11 +830,8 @@ impl Qrow {
     }
     fn switch_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
-        if tab.busy || tab.saved.profile == Some(id) {
+        if tab.saved.profile == Some(id) {
             return;
-        }
-        if let Some(worker) = tab.worker.take() {
-            worker.shutdown();
         }
         let connection_name = self
             .profiles
@@ -839,18 +849,7 @@ impl Qrow {
             ),
         );
         tab.saved.profile = Some(id);
-        tab.connected = false;
-        tab.more = false;
-        tab.pending_page = None;
-        tab.elapsed = None;
-        tab.status = "Not connected".into();
-        tab.table.update(cx, |t, cx| {
-            t.delegate_mut().clear();
-            t.clear_selection(cx);
-            t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
-            t.scroll_to_row(0, cx);
-            t.refresh(cx);
-        });
+        // Selection changes only the next Run target. Keep the session and cursor.
         self.changed(cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
@@ -898,6 +897,17 @@ impl Qrow {
             cx.notify();
             return;
         };
+        if let Err(error) = profile.validate() {
+            let message = error.to_string();
+            Self::record_activity(
+                tab,
+                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+            );
+            Self::record_failure(tab, true);
+            tab.status = format!("Rejected · {message}");
+            cx.notify();
+            return;
+        }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
             tab.worker = Some(Worker::new(Arc::new(move || {
@@ -921,6 +931,7 @@ impl Qrow {
         tab.started = Some(Instant::now());
         tab.status = "Preparing query…".into();
         let execution_id = Self::allocate_execution_id(tab);
+        tab.worker_profile = Some(profile.id);
         tab.worker
             .as_ref()
             .unwrap()
@@ -982,7 +993,7 @@ impl Qrow {
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
-        if tab.busy || !tab.connected || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
             return;
         }
         if tab.worker.is_some() {
@@ -1193,12 +1204,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !is_new
-            && self
-                .tabs
-                .iter()
-                .any(|t| t.saved.profile == Some(profile.id) && t.busy)
-        {
+        if !is_new && self.profile_busy(profile.id) {
             self.message =
                 Some("Wait for queries using this connection to finish before editing it.".into());
             cx.notify();
@@ -1329,6 +1335,9 @@ impl Qrow {
         cx.notify();
     }
     fn confirm_delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        if self.profile_busy(id) {
+            return;
+        }
         let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
             return;
         };
@@ -1368,18 +1377,22 @@ impl Qrow {
         cx.notify();
     }
     fn delete_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if !self.profiles.iter().any(|p| p.id == id) {
+        if self.profile_busy(id) || !self.profiles.iter().any(|p| p.id == id) {
             return;
         }
         self.profiles.retain(|p| p.id != id);
         for tab in &mut self.tabs {
             if tab.saved.profile == Some(id) {
+                tab.saved.profile = None;
+            }
+            if tab.worker_profile == Some(id) {
                 if let Some(w) = tab.worker.take() {
                     w.shutdown();
                 }
-                tab.saved.profile = None;
+                tab.worker_profile = None;
                 tab.connected = false;
                 tab.more = false;
+                tab.pending_page = None;
                 tab.status = "Not connected".into();
             }
         }
@@ -1392,6 +1405,11 @@ impl Qrow {
         }
         self.form = None;
         self.changed(cx);
+    }
+    fn profile_busy(&self, id: Uuid) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| tab.worker_profile == Some(id) && tab.busy)
     }
     fn seed_demo(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];

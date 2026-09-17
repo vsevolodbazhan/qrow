@@ -59,10 +59,7 @@ impl Qrow {
                     .gap_1()
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
-                        let busy = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.saved.profile == Some(id) && tab.busy);
+                        let busy = self.profile_busy(id);
                         let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
                         let edited = profile.clone();
                         let duplicated = profile.clone();
@@ -114,7 +111,6 @@ impl Qrow {
                                     .bg(cx.theme().sidebar_accent)
                                     .text_color(cx.theme().sidebar_accent_foreground)
                             })
-                            .disabled(busy)
                             .tooltip(format!("{} · {}", profile.host, profile.database))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.switch_profile(id, cx)),
@@ -303,7 +299,7 @@ impl Qrow {
                     .ghost()
                     .small()
                     .label("Disconnect")
-                    .disabled(tab.busy || !tab.connected)
+                    .disabled(!tab.can_disconnect())
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
     }

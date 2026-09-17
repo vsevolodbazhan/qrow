@@ -133,6 +133,18 @@ cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.
 
+The native scenario also checks result retention across connection changes. It
+runs a query on one profile, downloads more than one page, selects a second
+profile during a heartbeat, and checks that the downloaded rows remain visible.
+It checks that keep-alive continues and that Qrow can fetch more rows from the
+original session. Returning to the first profile preserves its session settings.
+A query on the second profile opens a new session and replaces the preview.
+The scenario also checks profile edits while another profile is selected.
+Lifecycle edits preserve the session and cursor. Password changes and deletion
+close the matching session. It checks that **Disconnect**
+cannot close a different profile's session. Returning to the session's profile
+makes **Disconnect** available again.
+
 ## Continuous integration
 
 End-to-end tests are currently not run in CI/CD.
