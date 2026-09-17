@@ -65,11 +65,15 @@ text contains one statement, but does not enforce read-only behavior. Heartbeats
 use the existing session and preserve its result cursor. A failed heartbeat
 disconnects the session and stops background queries until the next explicit Run.
 
-Click **Disconnect** to release the active tab's session. This action is disabled
-while a query or heartbeat runs. Manual and idle disconnection preserve SQL and
-downloaded results. Unfetched rows and session state, such as temporary views or
-settings applied with SQL, are lost. **Disconnect** acts on the tab's current
-session, even when a different profile is selected for the next query.
+To release the active tab's session, select its profile and click **Disconnect**.
+This action is disabled while a query or heartbeat runs. It is also disabled
+when the selected profile has no live session in the active tab. Selecting
+another profile keeps the original session open. Select the original profile
+again to disconnect it.
+
+Manual and idle disconnection preserve SQL and downloaded results. Unfetched
+rows and session state, such as temporary views or settings applied with SQL,
+are lost.
 
 Qrow's session idle timeout is separate from the server's engine idle timeout.
 Disconnecting a Qrow tab does not guarantee that its Spark engine stops. Other

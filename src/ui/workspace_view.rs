@@ -299,7 +299,7 @@ impl Qrow {
                     .ghost()
                     .small()
                     .label("Disconnect")
-                    .disabled(tab.busy || !tab.connected)
+                    .disabled(!tab.can_disconnect())
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
     }

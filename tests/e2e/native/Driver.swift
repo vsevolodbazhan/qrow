@@ -377,8 +377,12 @@ final class Driver {
         _ = try wait("switch-a-1000")
         _ = try wait("Connected · keep-alive enabled", timeout: 20)
         _ = try wait("switch-a-1000")
+        // B has no session. Its disabled Disconnect control must not close A.
+        // AXEnabled is not available for every disabled GPUI button, so click
+        // it and verify that A can still fetch the remaining page.
+        try click(try wait("Disconnect", role: kAXButtonRole))
         try press("Next")
-        _ = try wait("switch-a-2000")
+        _ = try wait("switch-a-2000", timeout: 20)
         _ = try wait("Page 3")
         try snapshot("connection-switch-keep-alive")
         try press("Previous")
@@ -420,12 +424,20 @@ final class Driver {
         try query("SELECT 'switch-b-reconnected' AS value")
         _ = try wait("switch-b-reconnected")
         try selectConnection("Qrow E2E")
+        // Returning to the session's profile enables Disconnect without a Run.
+        try selectConnection("Qrow E2E copy")
+        try press("Disconnect")
+        _ = try wait("Disconnected · run to reconnect", timeout: 10)
+        _ = try wait("switch-b-reconnected")
+        try query("SELECT 'switch-b-after-disconnect' AS value")
+        _ = try wait("switch-b-after-disconnect")
+        try selectConnection("Qrow E2E")
         try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Delete"))
         try press("Delete")
         try waitGone("Qrow E2E copy")
         _ = try wait("Not connected")
-        _ = try wait("switch-b-reconnected")
+        _ = try wait("switch-b-after-disconnect")
 
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))

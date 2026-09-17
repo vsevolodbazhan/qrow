@@ -137,6 +137,14 @@ struct Tab {
     current_execution: Option<ExecutionId>,
     next_execution_id: u64,
 }
+impl Tab {
+    fn can_disconnect(&self) -> bool {
+        !self.busy
+            && self.connected
+            && self.worker_profile.is_some()
+            && self.worker_profile == self.saved.profile
+    }
+}
 struct ProfileEditor {
     profile: Profile,
     fields: Vec<Entity<InputState>>,
@@ -926,7 +934,7 @@ impl Qrow {
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];
-        if tab.busy || !tab.connected || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
             return;
         }
         if tab.worker.is_some() {

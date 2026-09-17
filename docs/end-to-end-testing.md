@@ -138,6 +138,8 @@ runs a query on one profile, downloads more than one page, selects a second
 profile during a heartbeat, and checks that the downloaded rows remain visible.
 It checks that keep-alive continues and that Qrow can fetch more rows from the
 original session.
+It checks that **Disconnect** cannot close a different profile's session.
+Returning to the session's profile makes **Disconnect** available again.
 Returning to the first profile preserves its session settings. A query on the
 second profile opens a new session and replaces the preview. The scenario also
 checks that profile edits and deletion close the correct session when the
