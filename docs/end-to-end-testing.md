@@ -128,24 +128,48 @@ Passing on a larger runner does not establish performance on that target.
 
 ## Continuous integration
 
-The [end-to-end workflow](../.github/workflows/e2e.yml) follows a successful
-[core workflow](../.github/workflows/core.yml). It uses the core change filter
-to decide whether real-server tests are needed. When required, backend tests
-run first on Linux. Native UI tests then run against a fresh fixture on the
-standard ARM `macos-15` runner.
+The [test workflow](../.github/workflows/test.yml) runs the core and E2E jobs
+in one serial chain:
 
-Draft pull requests do not run the acceptance suites. The `ready_for_review`
-pull request event starts the core workflow for a pull request that is ready.
+```text
+core-dependencies -> core-scripts -> core-backend -> core-macos ->
+e2e-backend -> e2e-macos
+```
 
-Both suites check out the core run's tested SHA. No runner waits for core to
-finish. Test artifacts are retained for 14 days.
+It runs the full chain for pushes to `main`, manual dispatches, and pull
+requests with the `opened`, `reopened`, `synchronize`, `ready_for_review`, and
+`converted_to_draft` actions. Draft pull requests do not start jobs. The
+`converted_to_draft` event also starts no jobs. Core jobs run for fork pull
+requests. E2E jobs skip fork pull requests. A failed job skips every job that
+follows it. A newer run cancels an older run for the same pull request or
+branch, including manual runs.
 
-The `e2e / gate` commit status requires both suites to pass when the change
-filter requires end-to-end tests. Changes that do not require these tests can
-pass the gate without running them. Fork code does not run acceptance tests.
-A fork change that requires them needs maintainer review and an internal branch.
+Each job checks out the pull request merge result. The native E2E job runs on
+the standard ARM `macos-15` runner. It downloads the
+`macos-package-and-performance` artifact from `core-macos` and reuses its
+`Qrow-macos.zip` package by default. A manual dispatch exposes the boolean
+`reuse_macos_package` input. Set the input to `false` to build the package in
+the E2E job.
 
-Configure `core / backend`, `core / macos`, `core / dependencies`, and
-`e2e / gate` as required checks in branch protection. Workflow files cannot
-enforce that repository setting. The gate publishes its status on the tested
-commit because the workflow uses `workflow_run`.
+When reuse is selected, a missing or invalid package fails the native E2E job
+before the driver starts. The job does not silently build a replacement. The
+native suite keeps its isolated workspace, synthetic Keychain data, and
+evidence directory in both package modes.
+
+Core uploads are success-only. The `backend-evidence` and `macos-evidence`
+uploads run on success and failure. All four artifacts are retained for 14
+days:
+
+```text
+core-coverage
+macos-package-and-performance
+backend-evidence
+macos-evidence
+```
+
+Configure the six individual workflow jobs as required checks. The required
+check names are `test / core-dependencies`, `test / core-scripts`,
+`test / core-backend`, `test / core-macos`, `test / e2e-backend`, and
+`test / e2e-macos`. There is no separate E2E status or aggregate gate. Local
+checks cannot verify GitHub event filters, run cancellation, artifact transfer,
+fork behavior, or branch protection settings.
