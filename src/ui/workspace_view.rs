@@ -5,13 +5,13 @@ use gpui_kit::component::{
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
+use std::rc::Rc;
 
 const TAB_BAR_HEIGHT: f32 = 36.;
 
 impl Qrow {
     fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.tabs[self.active].saved.profile;
-        let busy = self.tabs[self.active].busy;
         let action_size = self.ui_px(28.);
         v_flex()
             .size_full()
@@ -59,6 +59,27 @@ impl Qrow {
                     .gap_1()
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
+                        let busy = self
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.saved.profile == Some(id) && tab.busy);
+                        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+                        let edited = profile.clone();
+                        let duplicated = profile.clone();
+                        let edit = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.edit_profile(edited.clone(), false, window, cx)
+                        }));
+                        let duplicate =
+                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                let mut profile = duplicated.clone();
+                                profile.id = Uuid::new_v4();
+                                profile.name.push_str(" copy");
+                                this.edit_profile(profile, true, window, cx);
+                            }));
+                        let delete =
+                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                this.confirm_delete_profile(id, window, cx)
+                            }));
                         h_flex()
                             .id(SharedString::from(format!("connection-{id}")))
                             .h(self.ui_px(32.))
@@ -100,26 +121,39 @@ impl Qrow {
                                     })
                                     .disabled(busy)
                                     .tooltip(format!("{} · {}", profile.host, profile.database))
-                                    // The button owns the row's hitbox. Attach the
-                                    // context-menu listener to it so the right-click
-                                    // handler remains hovered when the pointer is over
-                                    // the connection label.
-                                    .on_mouse_down(
-                                        MouseButton::Right,
-                                        cx.listener(
-                                            move |_, event: &MouseDownEvent, window, cx| {
-                                                let position = event.position;
-                                                cx.defer_in(window, move |this, window, cx| {
-                                                    this.open_connection_menu(
-                                                        id, position, window, cx,
-                                                    )
-                                                });
-                                            },
-                                        ),
-                                    )
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.switch_profile(id, cx)
-                                    })),
+                                    }))
+                                    .context_menu(move |menu, _, _| {
+                                        menu.action_context(restore.clone())
+                                            .item(
+                                                PopupMenuItem::new("Edit connection…")
+                                                    .on_click({
+                                                        let edit = edit.clone();
+                                                        move |event, window, cx| {
+                                                            edit(event, window, cx)
+                                                        }
+                                                    })
+                                                    .disabled(busy),
+                                            )
+                                            .item(PopupMenuItem::new("Duplicate").on_click({
+                                                let duplicate = duplicate.clone();
+                                                move |event, window, cx| {
+                                                    duplicate(event, window, cx)
+                                                }
+                                            }))
+                                            .separator()
+                                            .item(
+                                                PopupMenuItem::new("Delete")
+                                                    .on_click({
+                                                        let delete = delete.clone();
+                                                        move |event, window, cx| {
+                                                            delete(event, window, cx)
+                                                        }
+                                                    })
+                                                    .disabled(busy),
+                                            )
+                                    }),
                             )
                     })),
             )

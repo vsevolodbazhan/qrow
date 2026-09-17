@@ -12,7 +12,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogFooter,
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
-    menu::{PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -907,52 +907,6 @@ impl Qrow {
         self.open_context_menu(
             position,
             move |menu, _, _| menu.item(PopupMenuItem::new("Edit tab…").on_click(edit)),
-            window,
-            cx,
-        );
-    }
-    fn open_connection_menu(
-        &mut self,
-        id: Uuid,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
-            return;
-        };
-        // Editing or removing a connection under a running query is the same
-        // hazard the sidebar button used to guard against.
-        let busy = self
-            .tabs
-            .iter()
-            .any(|t| t.saved.profile == Some(id) && t.busy);
-        let edited = profile.clone();
-        let duplicated = profile.clone();
-        let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.edit_profile(edited.clone(), false, window, cx)
-        });
-        let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            let mut profile = duplicated.clone();
-            profile.id = Uuid::new_v4();
-            profile.name.push_str(" copy");
-            this.edit_profile(profile, true, window, cx);
-        });
-        let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.confirm_delete_profile(id, window, cx)
-        });
-        self.open_context_menu(
-            position,
-            move |menu, _, _| {
-                menu.item(
-                    PopupMenuItem::new("Edit connection…")
-                        .on_click(edit)
-                        .disabled(busy),
-                )
-                .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
-                .separator()
-                .item(PopupMenuItem::new("Delete").on_click(delete).disabled(busy))
-            },
             window,
             cx,
         );
