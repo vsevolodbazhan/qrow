@@ -24,3 +24,4 @@
 - Use ASD-STE100 Simplified Technical English when writing or updating documentation.
 - Keep this file limited to agent working instructions. Put product behavior,
   architecture, and workflow details in the relevant docs.
+- Add and run tests (including end-to-end) for new functionality and changes.
