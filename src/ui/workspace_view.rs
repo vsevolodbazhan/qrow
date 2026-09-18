@@ -499,6 +499,7 @@ impl Render for Qrow {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))

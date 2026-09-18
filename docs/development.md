@@ -182,6 +182,28 @@ Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
 
+## Build identity
+
+The [build script](../build.rs) records the short Git commit of the working tree
+in the executable. The About dialog shows it with the package version. Cargo runs
+the script again when `HEAD` or a reference changes. A build without Git history
+reports the version alone. Set `QROW_COMMIT` to record the commit for such a
+build:
+
+```sh
+QROW_COMMIT=dcc75d4fd874 cargo build --locked --release --bin qrow
+```
+
+## Generated icon asset
+
+The executable embeds [the small application icon](../assets/app-icons/qrow-256.png)
+for the About dialog. After a change of the
+[source icon](../assets/app-icons/macos/qrow.png), make the asset again:
+
+```sh
+uv run --locked python scripts/generate/app_icon.py
+```
+
 ## Generated bindings
 
 Building Qrow does not require the Thrift compiler. To regenerate the checked-in
