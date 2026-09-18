@@ -33,8 +33,7 @@ engines and restart servers. The suite must control disposable resources.
 
 ## Run native UI tests
 
-Use an unlocked, logged-in macOS desktop session. The native driver takes focus
-and sends real input events. Save work in other applications before the run.
+Use an unlocked, logged-in macOS desktop session. The native driver takes focus and sends real input events. Save work in other applications before the run.
 
 Check automation access:
 

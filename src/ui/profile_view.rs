@@ -70,7 +70,7 @@ impl Qrow {
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Spark (HiveServer2) · LDAP authentication"),
+                    .child("Spark (HiveServer2)"),
             )
             .child(
                 v_flex()
@@ -90,18 +90,14 @@ impl Qrow {
                     ))
                     .child(rows.row("Port", "Thrift port on that host.", field(2, "Port"), cx))
                     .child(rows.row(
-                        "LDAP Username",
-                        "User name for LDAP authentication.",
-                        field(3, "LDAP Username"),
+                        "Username",
+                        "Used for LDAP authentication.",
+                        field(3, "Username"),
                         cx,
                     ))
                     .child(rows.row(
                         "Password",
-                        if self.demo {
-                            "Demo credentials are never stored."
-                        } else {
-                            "Leave blank to keep the stored password."
-                        },
+                        "Used for LDAP authentication.",
                         field(4, "Password"),
                         cx,
                     ))
