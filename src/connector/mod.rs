@@ -1,4 +1,5 @@
 pub mod hive;
+pub mod protocol;
 pub mod sasl;
 #[allow(clippy::all)]
 #[rustfmt::skip]
@@ -43,4 +44,19 @@ pub trait Session: Send {
 
 pub trait Connector: Send + Sync {
     fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>>;
+}
+
+/// Include the diagnostic that Thrift omits from its Display implementation.
+pub fn error_message(error: &anyhow::Error) -> String {
+    let message = format!("{error:#}");
+    let detail = match error.downcast_ref::<thrift::Error>() {
+        Some(thrift::Error::Protocol(error)) => &error.message,
+        Some(thrift::Error::Transport(error)) => &error.message,
+        _ => return message,
+    };
+    if detail.is_empty() || message.contains(detail) {
+        message
+    } else {
+        format!("{message}: {detail}")
+    }
 }

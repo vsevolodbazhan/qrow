@@ -1,5 +1,8 @@
 Qrow
 
+Copyright (c) 2026 Vsevolod Bazhan
+Qrow uses the MIT License. See LICENSE for the license text.
+
 The HiveServer2 interface in vendor/TCLIService.thrift is from Apache Hive 3.1.3:
 https://github.com/apache/hive/blob/rel/release-3.1.3/service-rpc/if/TCLIService.thrift
 Copyright The Apache Software Foundation. Licensed under the Apache License 2.0.

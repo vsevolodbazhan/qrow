@@ -36,8 +36,10 @@ Passwords remain in [macOS Keychain](connections.md#authentication-and-connectio
 Passwords and result sets are not written to the workspace file. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.
 
-Qrow saves after a short editing delay. It also flushes saved state on application
-quit and when the last window closes.
+Qrow saves after a short editing delay. **Qrow → Quit Qrow**, **⌘Q**, and the
+window close button wait for confirmation that the latest workspace is saved.
+You can continue to edit while a save is in progress. Qrow saves those new edits
+before it exits.
 
 ## Load and save failures
 
@@ -46,8 +48,22 @@ reports the failure. It leaves the file untouched and disables saving for that
 run. New edits from that run will not be saved. Preserve the original file before
 attempting recovery. Qrow does not provide an automatic repair tool.
 
+Only one Qrow process can write to a workspace directory. If another process
+has the workspace open, the new process reports the conflict and disables
+saving. Use the original process. The operating system releases the lock when
+that process exits or crashes. Do not delete `workspace.lock` to remove a lock.
+
 A save failure is reported in the application. Do not assume changes reached
-disk after a save error.
+disk after a save error. If a save fails during Quit or window close, Qrow keeps
+the window open. Select **Keep Editing** to retain access to your SQL. Correct
+the file access problem, then select **Retry Save and Quit**. **Quit Without
+Saving** exits without confirmation that the latest edits reached disk.
+
+The current framework cannot cancel termination requested through the macOS
+Dock or system shutdown. Qrow attempts a final save for those requests, but a
+failure cannot keep the window open. Use **Qrow → Quit Qrow** or **⌘Q** for
+save confirmation. A force quit or system crash can lose edits that are not yet
+saved.
 
 For isolated development, see [Development](development.md#check-the-native-ui).
 `QROW_DATA_DIR` changes the workspace directory, but does not isolate Keychain.
@@ -58,12 +74,14 @@ databases or Keychain.
 
 The [workspace model](../src/model.rs) holds saved data separately from live
 sessions, results, and Logs history. [Storage](../src/storage.rs) writes
-through a background saver. It writes a temporary file, flushes it, and renames
-it to replace the workspace. This avoids leaving a partially written workspace
-after a normal write failure.
+through a background saver. Storage claims an operating-system lock before it
+loads a writable workspace. It holds that lock until the saver stops. Each save
+uses a unique temporary file. Storage flushes the file, replaces the workspace,
+and flushes the parent directory before it confirms success. This avoids a
+partially written workspace after a normal write failure.
 
 The [UI](../src/ui.rs) schedules saves after edits and flushes the latest state
-on shutdown. Existing workspace versions, profile UUIDs, and Keychain service
+before confirmed quit. Existing workspace versions, profile UUIDs, and Keychain service
 identifiers must remain compatible.
 
 Native focus, window dragging, double-click behavior, appearance changes, and

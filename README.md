@@ -128,4 +128,5 @@ You are free to fork it, though.
 
 ## License
 
-[MIT](LICENSE)
+Qrow uses the [MIT License](LICENSE).
+Third-party code retains its original licenses. See [NOTICE](NOTICE).

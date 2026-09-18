@@ -1,5 +1,5 @@
 use super::{Cancellation, Connector, QueryError, QueryState, Session, sasl, t_c_l_i_service::*};
-use crate::model::{Batch, Column, Profile, Row};
+use crate::model::{Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row};
 use anyhow::{Context, Result, ensure};
 use std::{sync::Arc, thread, time::Duration};
 use zeroize::Zeroizing;
@@ -338,11 +338,12 @@ impl Session for HiveSession {
             results.rows.is_empty(),
             "Expected columnar results from HiveServer2 protocol V6"
         );
-        let rows = decode_columns(results.columns.unwrap_or_default(), self.column_count)?;
-        ensure!(
-            rows.len() <= count.min(1000),
-            "Kyuubi returned more rows than requested"
-        );
+        let rows = decode_columns_limited(
+            results.columns.unwrap_or_default(),
+            self.column_count,
+            count.min(1000),
+            MAX_RESULT_BYTES,
+        )?;
         // Older Hive-compatible servers report hasMoreRows=false even when more rows exist.
         // An empty fetch is the portable end-of-results signal used by PyHive.
         Ok(Batch {
@@ -421,6 +422,15 @@ fn type_label(desc: &TTypeDesc) -> String {
 }
 
 pub fn decode_columns(columns: Vec<TColumn>, expected: usize) -> Result<Vec<Row>> {
+    decode_columns_limited(columns, expected, MAX_RESULT_ROWS, MAX_RESULT_BYTES)
+}
+
+fn decode_columns_limited(
+    columns: Vec<TColumn>,
+    expected: usize,
+    max_rows: usize,
+    max_bytes: usize,
+) -> Result<Vec<Row>> {
     if columns.is_empty() {
         return Ok(vec![]);
     }
@@ -428,60 +438,145 @@ pub fn decode_columns(columns: Vec<TColumn>, expected: usize) -> Result<Vec<Row>
         columns.len() == expected,
         "Result column count does not match schema"
     );
-    let mut decoded = Vec::with_capacity(columns.len());
-    for column in columns {
-        macro_rules! values {
-            ($c:expr, $format:expr) => {{
+    let mut length = None;
+    let mut bytes = 0usize;
+    // Check shape and expanded storage before allocating rows or formatting binary values.
+    for column in &columns {
+        macro_rules! measure {
+            ($c:expr, $size:expr) => {{
                 let c = $c;
-                c.values
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, value)| {
-                        let null = c
-                            .nulls
-                            .get(i / 8)
-                            .is_some_and(|byte| byte & (1 << (i % 8)) != 0);
-                        if null { None } else { Some(($format)(value)) }
-                    })
-                    .collect::<Vec<Option<String>>>()
+                ensure!(
+                    c.values.len() <= max_rows,
+                    "Kyuubi returned more rows than requested"
+                );
+                if let Some(length) = length {
+                    ensure!(
+                        c.values.len() == length,
+                        "Result columns have inconsistent lengths"
+                    );
+                } else {
+                    length = Some(c.values.len());
+                }
+                for (i, value) in c.values.iter().enumerate() {
+                    if !is_null(&c.nulls, i) {
+                        bytes = bytes
+                            .checked_add(($size)(value))
+                            .context("Decoded result size overflow")?;
+                        ensure!(bytes <= max_bytes, "Decoded result exceeds memory limit");
+                    }
+                }
             }};
         }
-        let values = match column {
-            TColumn::BoolVal(c) => values!(c, |v: bool| v.to_string()),
-            TColumn::ByteVal(c) => values!(c, |v: i8| v.to_string()),
-            TColumn::I16Val(c) => values!(c, |v: i16| v.to_string()),
-            TColumn::I32Val(c) => values!(c, |v: i32| v.to_string()),
-            TColumn::I64Val(c) => values!(c, |v: i64| v.to_string()),
-            TColumn::DoubleVal(c) => values!(c, |v: thrift::OrderedFloat<f64>| v.to_string()),
-            TColumn::StringVal(c) => values!(c, |v| v),
-            TColumn::BinaryVal(c) => values!(c, |v: Vec<u8>| {
+        match column {
+            TColumn::BoolVal(c) => measure!(c, |v: &bool| v.to_string().capacity()),
+            TColumn::ByteVal(c) => measure!(c, |v: &i8| v.to_string().capacity()),
+            TColumn::I16Val(c) => measure!(c, |v: &i16| v.to_string().capacity()),
+            TColumn::I32Val(c) => measure!(c, |v: &i32| v.to_string().capacity()),
+            TColumn::I64Val(c) => measure!(c, |v: &i64| v.to_string().capacity()),
+            TColumn::DoubleVal(c) => {
+                measure!(c, |v: &thrift::OrderedFloat<f64>| v.to_string().capacity())
+            }
+            TColumn::StringVal(c) => measure!(c, |v: &String| v.capacity()),
+            TColumn::BinaryVal(c) => {
+                measure!(c, |v: &Vec<u8>| v.len().saturating_mul(2).saturating_add(2))
+            }
+        }
+    }
+    let length = length.unwrap_or(0);
+    let row_bytes = expected
+        .checked_mul(std::mem::size_of::<Option<String>>())
+        .and_then(|size| size.checked_add(std::mem::size_of::<Row>()))
+        .and_then(|size| size.checked_mul(length))
+        .context("Decoded result size overflow")?;
+    ensure!(
+        bytes
+            .checked_add(row_bytes)
+            .is_some_and(|bytes| bytes <= max_bytes),
+        "Decoded result exceeds memory limit"
+    );
+    let mut rows: Vec<Row> = (0..length).map(|_| Vec::with_capacity(expected)).collect();
+    for column in columns {
+        macro_rules! append {
+            ($c:expr, $format:expr) => {{
+                let c = $c;
+                for (i, (row, value)) in rows.iter_mut().zip(c.values).enumerate() {
+                    row.push(if is_null(&c.nulls, i) {
+                        None
+                    } else {
+                        Some(($format)(value))
+                    });
+                }
+            }};
+        }
+        match column {
+            TColumn::BoolVal(c) => append!(c, |v: bool| v.to_string()),
+            TColumn::ByteVal(c) => append!(c, |v: i8| v.to_string()),
+            TColumn::I16Val(c) => append!(c, |v: i16| v.to_string()),
+            TColumn::I32Val(c) => append!(c, |v: i32| v.to_string()),
+            TColumn::I64Val(c) => append!(c, |v: i64| v.to_string()),
+            TColumn::DoubleVal(c) => append!(c, |v: thrift::OrderedFloat<f64>| v.to_string()),
+            TColumn::StringVal(c) => append!(c, |v| v),
+            TColumn::BinaryVal(c) => append!(c, |v: Vec<u8>| {
                 use std::fmt::Write;
-                let mut out = String::from("0x");
+                let mut out = String::with_capacity(2 + v.len() * 2);
+                out.push_str("0x");
                 for b in v {
                     let _ = write!(out, "{b:02x}");
                 }
                 out
             }),
-        };
-        decoded.push(values);
-    }
-    let length = decoded[0].len();
-    ensure!(
-        decoded.iter().all(|c| c.len() == length),
-        "Result columns have inconsistent lengths"
-    );
-    let mut rows = vec![Vec::with_capacity(expected); length];
-    for column in decoded {
-        for (row, cell) in rows.iter_mut().zip(column) {
-            row.push(cell);
         }
     }
     Ok(rows)
 }
 
+fn is_null(nulls: &[u8], index: usize) -> bool {
+    nulls
+        .get(index / 8)
+        .is_some_and(|byte| byte & (1 << (index % 8)) != 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reject_excess_rows_and_binary_expansion_before_building_preview() {
+        let columns = vec![TColumn::BinaryVal(TBinaryColumn::new(
+            vec![vec![7; 32]],
+            vec![],
+        ))];
+        assert!(
+            decode_columns_limited(columns.clone(), 1, 0, 1024)
+                .unwrap_err()
+                .to_string()
+                .contains("more rows than requested")
+        );
+        assert!(
+            decode_columns_limited(columns.clone(), 1, 1, 64)
+                .unwrap_err()
+                .to_string()
+                .contains("memory limit")
+        );
+        let rows = decode_columns_limited(columns, 1, 1, 114).unwrap();
+        assert_eq!(
+            rows[0][0].as_deref(),
+            Some(format!("0x{}", "07".repeat(32)).as_str())
+        );
+    }
+
+    #[test]
+    fn decode_budget_accounts_for_row_storage_and_ignores_null_payloads() {
+        let columns = vec![TColumn::StringVal(TStringColumn::new(
+            vec!["x".repeat(100)],
+            vec![1],
+        ))];
+        assert!(decode_columns_limited(columns.clone(), 1, 1, 47).is_err());
+        assert_eq!(
+            decode_columns_limited(columns, 1, 1, 48).unwrap(),
+            vec![vec![None]]
+        );
+    }
 
     #[test]
     fn wrapped_session_failures_do_not_preserve_the_connection() {

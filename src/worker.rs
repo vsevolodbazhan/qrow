@@ -135,7 +135,7 @@ impl Worker {
                     Command::Shutdown => break,
                 };
                 if let Err(error) = result {
-                    let message = format!("{error:#}");
+                    let message = crate::connector::error_message(&error);
                     let execution_completed = runner
                         .execution
                         .as_ref()

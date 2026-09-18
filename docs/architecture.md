@@ -15,7 +15,8 @@ the [end-to-end tests](end-to-end-testing.md) belongs to the server fixture.
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
-| [Storage](../src/storage.rs) | Save the workspace and access macOS Keychain. |
+| [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
+| [Storage](../src/storage.rs) | Lock and save the workspace, and access macOS Keychain. |
 
 The [core library](../src/lib.rs) builds without the `ui` feature. UI code belongs
 to the application binary. This separation permits headless core tests and keeps
@@ -50,7 +51,10 @@ concurrently. [Connections](connections.md), [Queries](queries.md), and
 ## Responsiveness and state
 
 Network calls and Keychain access run on background threads. Workspace writes
-use a background saver. Idle UI work waits for notifications. Temporary timers
+use a background saver with exclusive workspace ownership. Quit and window
+close wait for a save acknowledgement. [Workspace](workspace.md) describes
+save recovery and the native termination limitation. Idle UI work waits for
+notifications. Temporary timers
 handle pending saves and forms; active server operations have their own status
 checks. There is no continuous idle repaint loop.
 
