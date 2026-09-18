@@ -590,9 +590,12 @@ impl Render for Qrow {
             .when_some(self.message.clone(), |el, message| {
                 el.child(
                     div()
+                        .id("workspace-message")
                         .px_3()
                         .py_2()
                         .text_color(cx.theme().warning)
+                        .role(Role::Status)
+                        .aria_label(message.clone())
                         .child(message),
                 )
             })
@@ -614,6 +617,10 @@ impl Render for WindowView {
         use gpui_kit::component::Root;
         div()
             .size_full()
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                this.content
+                    .update(cx, |content, cx| content.request_quit(window, cx));
+            }))
             // Capture above editor and dialog focus scopes, before text input consumes keys.
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 let key = &event.keystroke;

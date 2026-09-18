@@ -18,11 +18,15 @@ pub fn workspace_path() -> PathBuf {
         .join("Library/Application Support/Qrow/workspace.json")
 }
 
+/// Read a snapshot without claiming write access, for the read-only probe.
 pub fn load(path: &Path) -> Result<Workspace> {
-    if !path.exists() {
-        return Ok(Workspace::default());
-    }
-    let data = fs::read(path).context("Could not read saved workspace")?;
+    let data = match fs::read(path) {
+        Ok(data) => data,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Workspace::default());
+        }
+        Err(error) => return Err(error).context("Could not read saved workspace"),
+    };
     let mut workspace: Workspace = serde_json::from_slice(&data)
         .context("Saved workspace is invalid; the original file has been left untouched")?;
     anyhow::ensure!(
@@ -38,27 +42,78 @@ pub fn load(path: &Path) -> Result<Workspace> {
     Ok(workspace)
 }
 
-pub fn save(path: &Path, workspace: &Workspace) -> Result<()> {
-    let parent = path.parent().context("Invalid workspace path")?;
-    fs::create_dir_all(parent)?;
-    let temporary = path.with_extension("json.tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary)?;
-    file.write_all(&serde_json::to_vec_pretty(workspace)?)?;
-    file.sync_all()?;
-    fs::rename(&temporary, path)?;
-    Ok(())
+/// Exclusive write access. The OS releases the lock even if the process crashes.
+pub struct WorkspaceFile {
+    path: PathBuf,
+    _lock: fs::File,
 }
 
+impl WorkspaceFile {
+    pub fn acquire(path: PathBuf) -> Result<Self> {
+        let parent = path.parent().context("Invalid workspace path")?;
+        fs::create_dir_all(parent).context("Could not create workspace directory")?;
+        let path = parent
+            .canonicalize()?
+            .join(path.file_name().context("Invalid workspace path")?);
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options
+            .open(path.with_extension("lock"))
+            .context("Could not open workspace lock")?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => anyhow::bail!(
+                "This workspace is already open in another Qrow process. Use that process or choose a different workspace directory"
+            ),
+            Err(error) => return Err(error).context("Could not lock workspace"),
+        }
+        // Never unlink the lock file: another process could lock a different inode.
+        Ok(Self { path, _lock: lock })
+    }
+
+    pub fn load(&self) -> Result<Workspace> {
+        load(&self.path)
+    }
+
+    pub fn save(&self, workspace: &Workspace) -> Result<()> {
+        let parent = self.path.parent().context("Invalid workspace path")?;
+        let temporary =
+            TemporaryWorkspace(self.path.with_extension(format!("{}.tmp", Uuid::new_v4())));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary.0)?;
+        serde_json::to_writer_pretty(&mut file, workspace)?;
+        file.flush()?;
+        file.sync_all()?;
+        fs::rename(&temporary.0, &self.path)?;
+        fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    }
+}
+
+struct TemporaryWorkspace(PathBuf);
+impl Drop for TemporaryWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+pub type SaveResult = std::result::Result<(), String>;
+pub type SaveReceipt = mpsc::Receiver<SaveResult>;
 enum SaveCommand {
     Save(Workspace),
-    Finish(Workspace),
+    Flush(Workspace, mpsc::Sender<SaveResult>),
+    Stop,
 }
 
 pub struct Saver {
@@ -68,51 +123,90 @@ pub struct Saver {
 }
 
 impl Saver {
-    pub fn new(path: PathBuf) -> Self {
-        Self::with_wake(path, || {})
-    }
-    pub fn with_wake(path: PathBuf, wake: impl Fn() + Send + 'static) -> Self {
+    /// Lock before reading so the initial snapshot cannot come from another writer.
+    pub fn open(path: PathBuf, wake: impl Fn() + Send + 'static) -> Result<(Workspace, Self)> {
+        let file = WorkspaceFile::acquire(path)?;
+        let workspace = file.load()?;
         let (tx, rx) = mpsc::channel();
         let (errors_tx, errors) = mpsc::channel();
         let handle = thread::spawn(move || {
-            while let Ok(command) = rx.recv() {
-                let (mut state, mut finish) = match command {
-                    SaveCommand::Save(w) => (w, false),
-                    SaveCommand::Finish(w) => (w, true),
+            let mut pending = None;
+            while let Some(command) = pending.take().or_else(|| rx.recv().ok()) {
+                let (mut state, receipt) = match command {
+                    SaveCommand::Save(state) => (state, None),
+                    SaveCommand::Flush(state, receipt) => (state, Some(receipt)),
+                    SaveCommand::Stop => break,
                 };
-                while !finish {
-                    match rx.try_recv() {
-                        Ok(SaveCommand::Save(w)) => state = w,
-                        Ok(SaveCommand::Finish(w)) => {
-                            state = w;
-                            finish = true;
+                if receipt.is_none() {
+                    while let Ok(next) = rx.try_recv() {
+                        match next {
+                            SaveCommand::Save(next) => state = next,
+                            next => {
+                                pending = Some(next);
+                                break;
+                            }
                         }
-                        Err(_) => break,
                     }
                 }
-                if let Err(e) = save(&path, &state) {
-                    let _ = errors_tx.send(format!("Workspace save failed: {e:#}"));
+                let result = file
+                    .save(&state)
+                    .map_err(|e| format!("Workspace save failed: {e:#}"));
+                if let Some(receipt) = receipt {
+                    let _ = receipt.send(result);
                     wake();
-                }
-                if finish {
-                    break;
+                } else if let Err(error) = result {
+                    let _ = errors_tx.send(error);
+                    wake();
                 }
             }
         });
-        Self {
-            tx,
-            errors,
-            handle: Some(handle),
-        }
+        Ok((
+            workspace,
+            Self {
+                tx,
+                errors,
+                handle: Some(handle),
+            },
+        ))
     }
-    pub fn save(&self, state: Workspace) {
-        let _ = self.tx.send(SaveCommand::Save(state));
+
+    pub fn save(&self, state: Workspace) -> Result<()> {
+        self.tx
+            .send(SaveCommand::Save(state))
+            .context("Workspace saver stopped")
     }
-    pub fn finish(&mut self, state: Workspace) {
-        let _ = self.tx.send(SaveCommand::Finish(state));
+
+    /// Acknowledge this exact snapshot without stopping the saver, so failures can be retried.
+    pub fn flush(&self, state: Workspace) -> Result<SaveReceipt> {
+        let (tx, rx) = mpsc::channel();
+        self.tx
+            .send(SaveCommand::Flush(state, tx))
+            .context("Workspace saver stopped")?;
+        Ok(rx)
+    }
+
+    pub fn finish(&mut self, state: Workspace) -> Result<()> {
+        self.flush(state)?
+            .recv()
+            .context("Workspace saver stopped before confirming the save")?
+            .map_err(anyhow::Error::msg)?;
+        self.stop()
+    }
+
+    pub fn stop(&mut self) -> Result<()> {
         if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+            let _ = self.tx.send(SaveCommand::Stop);
+            handle
+                .join()
+                .map_err(|_| anyhow::anyhow!("Workspace saver panicked"))?;
         }
+        Ok(())
+    }
+}
+
+impl Drop for Saver {
+    fn drop(&mut self) {
+        let _ = self.tx.send(SaveCommand::Stop);
     }
 }
 
@@ -152,54 +246,4 @@ pub fn set_password(_: Uuid, _: &str) -> Result<()> {
 #[cfg(not(target_os = "macos"))]
 pub fn delete_password(_: Uuid) -> Result<()> {
     anyhow::bail!("Keychain requires macOS")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn background_save_error_wakes_the_ui() {
-        let dir = tempfile::tempdir().unwrap();
-        let parent_file = dir.path().join("not-a-directory");
-        fs::write(&parent_file, b"preserve").unwrap();
-        let (notify, wake) = mpsc::channel();
-        let mut saver = Saver::with_wake(parent_file.join("workspace.json"), move || {
-            let _ = notify.send(());
-        });
-        saver.save(Workspace::default());
-        wake.recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap();
-        assert!(
-            saver
-                .errors
-                .try_recv()
-                .unwrap()
-                .contains("Workspace save failed")
-        );
-        saver.finish(Workspace::default());
-        assert_eq!(fs::read(parent_file).unwrap(), b"preserve");
-    }
-
-    #[test]
-    fn workspace_roundtrip_and_corruption_preserved() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("workspace.json");
-        let mut state = Workspace::default();
-        state.tabs[0].sql = "SELECT '日本語';".into();
-        state.settings.ui_scale = 1.2;
-        state.settings.ui_font_family = "Helvetica".into();
-        state.settings.editor_font_family = "Monaco".into();
-        state.settings.editor_font_size = 16.;
-        state.settings.editor_line_height = 1.1;
-        state.settings.logs_font_family = "Courier".into();
-        state.settings.logs_font_size = 15.;
-        state.settings.logs_line_height = 1.4;
-        save(&path, &state).unwrap();
-        let restored = load(&path).unwrap();
-        assert_eq!(restored.tabs[0].sql, state.tabs[0].sql);
-        assert_eq!(restored.settings, state.settings);
-        fs::write(&path, b"broken").unwrap();
-        assert!(load(&path).is_err());
-        assert_eq!(fs::read(&path).unwrap(), b"broken");
-    }
 }

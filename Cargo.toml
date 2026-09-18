@@ -3,7 +3,7 @@ name = "qrow"
 version = "0.1.0"
 edition = "2024"
 description = "A native SQL workbench for Spark through Kyuubi"
-license = "Apache-2.0"
+license = "MIT"
 default-run = "qrow"
 
 [features]

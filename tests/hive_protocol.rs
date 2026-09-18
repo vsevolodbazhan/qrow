@@ -3,7 +3,7 @@ use qrow::{
     connector::{
         Connector, QueryState,
         hive::HiveConnector,
-        sasl::{FrameReader, FrameWriter},
+        sasl::{FrameReader, FrameWriter, MAX_FRAME},
         t_c_l_i_service::*,
     },
     model::Profile,
@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 struct Peer {
     input: TBinaryInputProtocol<FrameReader<TcpStream>>,
     output: TBinaryOutputProtocol<FrameWriter<TcpStream>>,
+    socket: TcpStream,
     sequence: i32,
     method: String,
 }
@@ -49,6 +50,7 @@ impl Peer {
         socket.write_all(&[5, 0, 0, 0, 0]).unwrap();
         Self {
             input: TBinaryInputProtocol::new(FrameReader::new(socket.try_clone().unwrap()), true),
+            socket: socket.try_clone().unwrap(),
             output: TBinaryOutputProtocol::new(FrameWriter::new(socket), true),
             sequence: 0,
             method: String::new(),
@@ -432,5 +434,56 @@ fn heartbeat_closes_its_own_operation_and_preserves_the_preview_cursor() {
     session.close_keep_alive().unwrap();
     assert!(!session.fetch(250).unwrap().more);
     session.close().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn connector_rejects_aggregate_response_before_reading_oversized_string() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        let _: TOpenSessionReq = peer.read("OpenSession");
+        let mut bytes = Vec::new();
+        let mut output = TBinaryOutputProtocol::new(&mut bytes, true);
+        output
+            .write_message_begin(&TMessageIdentifier::new(
+                "OpenSession",
+                TMessageType::Reply,
+                peer.sequence,
+            ))
+            .unwrap();
+        output
+            .write_field_begin(&TFieldIdentifier::new("success", TType::Struct, 0))
+            .unwrap();
+        output
+            .write_field_begin(&TFieldIdentifier::new("status", TType::Struct, 1))
+            .unwrap();
+        output
+            .write_field_begin(&TFieldIdentifier::new("statusCode", TType::I32, 1))
+            .unwrap();
+        output.write_i32(0).unwrap();
+        output
+            .write_field_begin(&TFieldIdentifier::new("infoMessages", TType::List, 2))
+            .unwrap();
+        output
+            .write_list_begin(&TListIdentifier::new(TType::String, 2))
+            .unwrap();
+        output.write_string(&"x".repeat(MAX_FRAME / 2)).unwrap();
+        // The second string alone fits, but the response including its first
+        // string does not. Omit its payload: the error must precede any read.
+        output.write_i32((MAX_FRAME / 2) as i32).unwrap();
+        for frame in bytes.chunks(64 * 1024) {
+            peer.socket
+                .write_all(&(frame.len() as u32).to_be_bytes())
+                .unwrap();
+            peer.socket.write_all(frame).unwrap();
+        }
+    });
+    let error = match HiveConnector.connect(&p, Zeroizing::new("test-password".into())) {
+        Ok(_) => panic!("Oversized server response was accepted"),
+        Err(error) => error,
+    };
+    assert!(qrow::connector::error_message(&error).contains("remaining response byte limit"));
     server.join().unwrap();
 }

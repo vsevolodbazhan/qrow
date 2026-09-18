@@ -145,6 +145,13 @@ close the matching session. It checks that **Disconnect**
 cannot close a different profile's session. Returning to the session's profile
 makes **Disconnect** available again.
 
+The driver also blocks writes to its temporary workspace before **⌘Q** and
+window close. It checks that failed saves keep the editor open and preserve
+SQL text. It selects **Keep Editing**, restores write access, and retries the
+save. After Qrow exits, the driver checks the saved SQL. The second case starts
+a new Qrow process with the same workspace. Core storage tests separately check
+competing processes and lock release after a process is killed.
+
 ## Continuous integration
 
 End-to-end tests are currently not run in CI/CD.

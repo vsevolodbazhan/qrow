@@ -69,7 +69,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", RenameTab, Some("TabSettings")),
     ]);
-    cx.on_action(|_: &Quit, cx| cx.quit());
     cx.set_menus(vec![
         Menu {
             disabled: false,
@@ -266,6 +265,9 @@ pub struct Qrow {
     resize: Option<(bool, Point<Pixels>, Pixels)>,
     focus: FocusHandle,
     _quit: Subscription,
+    pending_quit: Option<(Workspace, storage::SaveReceipt)>,
+    quit_confirmed: bool,
+    finished: bool,
     wake: async_channel::Sender<()>,
 }
 impl Qrow {
@@ -279,18 +281,14 @@ impl Qrow {
         let (mut workspace, mut message, saver) = if demo {
             (demo_workspace(), None, None)
         } else {
-            match storage::load(&path) {
-                Ok(w) => (
-                    w,
-                    None,
-                    Some(Saver::with_wake(path, move || {
-                        let _ = save_wake.try_send(());
-                    })),
-                ),
+            match Saver::open(path, move || {
+                let _ = save_wake.try_send(());
+            }) {
+                Ok((workspace, saver)) => (workspace, None, Some(saver)),
                 Err(e) => (
                     Workspace::default(),
                     Some(format!(
-                        "Cannot load workspace: {e}. Saving disabled to protect the existing file."
+                        "Cannot open workspace: {e}. Saving disabled to protect the existing file."
                     )),
                     None,
                 ),
@@ -362,6 +360,9 @@ impl Qrow {
             resize: None,
             focus: cx.focus_handle(),
             _quit: quit,
+            pending_quit: None,
+            quit_confirmed: false,
+            finished: false,
             wake,
         };
         for tab in workspace.tabs {
@@ -400,7 +401,14 @@ impl Qrow {
             }
         })
         .detach();
-        // Save on window release as well as Cmd-Q; closing the last window releases its root first.
+        let weak = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            weak.update(cx, |this, cx| {
+                this.request_quit(window, cx);
+            })
+            .is_err()
+        });
+        // Native termination may bypass our Quit action and the window close guard.
         cx.on_release(|this, cx| this.finish(cx)).detach();
         eprintln!(
             "Qrow GPUI initialized in {:.0} ms{}",
@@ -467,8 +475,19 @@ impl Qrow {
         }
     }
     fn finish(&mut self, cx: &App) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
         if let Some(mut saver) = self.saver.take() {
-            saver.finish(self.snapshot(cx));
+            let result = if self.quit_confirmed {
+                saver.stop()
+            } else {
+                saver.finish(self.snapshot(cx))
+            };
+            if let Err(error) = result {
+                eprintln!("Could not save workspace during native termination: {error:#}");
+            }
         }
         for tab in &self.tabs {
             if let Some(worker) = &tab.worker {
@@ -482,6 +501,86 @@ impl Qrow {
             }
         }
     }
+    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_quit.is_some() || self.quit_confirmed {
+            return;
+        }
+        if self.demo {
+            self.quit_confirmed = true;
+            cx.quit();
+            return;
+        }
+        if self.form.as_ref().is_some_and(|form| form.saving.is_some()) {
+            self.message =
+                Some("Wait for the connection to finish saving, then quit again.".into());
+            cx.notify();
+            return;
+        }
+        let snapshot = self.snapshot(cx);
+        let result = self
+            .saver
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Workspace saving is disabled. Your edits have not been saved.")
+            })
+            .and_then(|saver| saver.flush(snapshot.clone()));
+        match result {
+            Ok(receipt) => {
+                self.pending_quit = Some((snapshot, receipt));
+                self.message = Some("Saving workspace before quitting…".into());
+                let _ = self.wake.try_send(());
+            }
+            Err(error) => self.quit_failed(format!("{error:#}"), window, cx),
+        }
+        cx.notify();
+    }
+
+    fn quit_failed(&mut self, error: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.message = Some(error.clone());
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let retry = weak.clone();
+            let discard = weak.clone();
+            alert
+                .title("Could not save workspace")
+                .description(format!(
+                    "{error} Your edits are still available in this window."
+                ))
+                .width(px(560.))
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("quit-without-saving")
+                                .label("Quit Without Saving")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, _, cx| {
+                                    let _ = discard.update(cx, |this, cx| {
+                                        this.quit_confirmed = true;
+                                        cx.quit();
+                                    });
+                                }),
+                        )
+                        .child(Button::new("keep-editing").label("Keep Editing").on_click(
+                            |_, window, cx| {
+                                window.close_dialog(cx);
+                            },
+                        ))
+                        .child(
+                            Button::new("retry-save-and-quit")
+                                .primary()
+                                .label("Retry Save and Quit")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ =
+                                        retry.update(cx, |this, cx| this.request_quit(window, cx));
+                                }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
@@ -688,8 +787,11 @@ impl Qrow {
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
         {
-            if let Some(saver) = &self.saver {
-                saver.save(self.snapshot(cx));
+            if self.pending_quit.is_none()
+                && let Some(saver) = &self.saver
+                && let Err(error) = saver.save(self.snapshot(cx))
+            {
+                self.message = Some(format!("{error:#}"));
             }
             self.dirty = None;
             changed = true;
@@ -765,10 +867,37 @@ impl Qrow {
             }
             changed = true;
         }
+        let quit_result =
+            self.pending_quit
+                .as_ref()
+                .and_then(|(_, receipt)| match receipt.try_recv() {
+                    Ok(result) => Some(result),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => Some(Err(
+                        "Workspace saver stopped before confirming the save".into(),
+                    )),
+                });
+        if let Some(result) = quit_result {
+            let (saved, _) = self.pending_quit.take().unwrap();
+            match result {
+                Ok(())
+                    if saved == self.snapshot(cx)
+                        && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
+                {
+                    self.quit_confirmed = true;
+                    cx.quit();
+                }
+                Ok(()) => self.request_quit(window, cx),
+                Err(error) => self.quit_failed(error, window, cx),
+            }
+            changed = true;
+        }
         if changed {
             cx.notify();
         }
-        self.dirty.is_some() || self.form.as_ref().is_some_and(|f| f.saving.is_some())
+        self.dirty.is_some()
+            || self.pending_quit.is_some()
+            || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.active = index;

@@ -1,18 +1,18 @@
 //! HiveServer2 SASL PLAIN negotiation and length-prefixed, unencrypted frames.
 //! LDAP verification happens on Kyuubi, as with PyHive's LDAP transport.
-use super::t_c_l_i_service::TCLIServiceSyncClient;
+use super::{protocol::ResponseProtocol, t_c_l_i_service::TCLIServiceSyncClient};
 use anyhow::{Context, Result, ensure};
 use std::{
-    io::{self, Cursor, Read, Write},
+    io::{self, BufReader, Read, Write},
     net::{TcpStream, ToSocketAddrs},
     time::Duration,
 };
-use thrift::protocol::{TBinaryInputProtocol, TBinaryOutputProtocol};
+use thrift::protocol::TBinaryOutputProtocol;
 use zeroize::Zeroizing;
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 pub type Client = TCLIServiceSyncClient<
-    TBinaryInputProtocol<FrameReader<TcpStream>>,
+    ResponseProtocol<TcpStream>,
     TBinaryOutputProtocol<FrameWriter<TcpStream>>,
 >;
 
@@ -43,14 +43,8 @@ pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<
     negotiate(&mut stream, username, password)?;
     let reader = FrameReader::new(stream.try_clone()?);
     let writer = FrameWriter::new(stream);
-    let config = thrift::TConfiguration::builder()
-        .max_message_size(Some(MAX_FRAME))
-        .max_frame_size(Some(MAX_FRAME))
-        .max_string_size(Some(MAX_FRAME))
-        .max_container_size(Some(100_000))
-        .build()?;
     Ok(TCLIServiceSyncClient::new(
-        TBinaryInputProtocol::with_config(reader, true, config),
+        ResponseProtocol::new(reader, MAX_FRAME)?,
         TBinaryOutputProtocol::new(writer, true),
     ))
 }
@@ -92,15 +86,25 @@ fn send_handshake(stream: &mut impl Write, status: u8, payload: &[u8]) -> io::Re
 }
 
 pub struct FrameReader<R> {
-    inner: R,
-    frame: Cursor<Vec<u8>>,
+    inner: BufReader<R>,
+    frame_remaining: usize,
+    response_remaining: usize,
 }
-impl<R> FrameReader<R> {
+impl<R: Read> FrameReader<R> {
     pub fn new(inner: R) -> Self {
         Self {
-            inner,
-            frame: Cursor::new(vec![]),
+            inner: BufReader::new(inner),
+            frame_remaining: 0,
+            response_remaining: usize::MAX,
         }
+    }
+
+    pub(super) fn begin_response(&mut self, limit: usize) {
+        self.response_remaining = limit;
+    }
+
+    pub(super) fn response_remaining(&self) -> usize {
+        self.response_remaining
     }
 }
 impl<R: Read> Read for FrameReader<R> {
@@ -108,7 +112,13 @@ impl<R: Read> Read for FrameReader<R> {
         if buffer.is_empty() {
             return Ok(0);
         }
-        if self.frame.position() as usize >= self.frame.get_ref().len() {
+        if self.response_remaining == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Server response exceeds byte limit",
+            ));
+        }
+        if self.frame_remaining == 0 {
             let mut header = [0; 4];
             self.inner.read_exact(&mut header)?;
             let length = u32::from_be_bytes(header) as usize;
@@ -118,11 +128,17 @@ impl<R: Read> Read for FrameReader<R> {
                     "Invalid SASL frame length",
                 ));
             }
-            let mut bytes = vec![0; length];
-            self.inner.read_exact(&mut bytes)?;
-            self.frame = Cursor::new(bytes);
+            self.frame_remaining = length;
         }
-        self.frame.read(buffer)
+        // Stream frame payloads into the caller's buffer, without a second frame-sized allocation.
+        let count = buffer
+            .len()
+            .min(self.frame_remaining)
+            .min(self.response_remaining);
+        let read = self.inner.read(&mut buffer[..count])?;
+        self.frame_remaining -= read;
+        self.response_remaining -= read;
+        Ok(read)
     }
 }
 
@@ -163,6 +179,7 @@ impl<W: Write> Write for FrameWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     #[test]
     fn frame_boundaries_and_oversized_frames() {
         let mut writer = FrameWriter::new(vec![]);

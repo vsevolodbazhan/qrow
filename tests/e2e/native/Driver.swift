@@ -122,6 +122,8 @@ func command(_ args: [String]) throws -> String {
 }
 
 final class Driver {
+    let name: String
+    init(name: String = "qrow") { self.name = name }
     let process = Process()
     var app: AXUIElement!
     var log: FileHandle!
@@ -263,7 +265,7 @@ final class Driver {
     }
     func start() throws {
         let bundle = env["QROW_E2E_BUNDLE"]!
-        let logURL = URL(fileURLWithPath: "\(artifacts)/qrow.log")
+        let logURL = URL(fileURLWithPath: "\(artifacts)/\(name).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         log = try FileHandle(forWritingTo: logURL)
         process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
@@ -292,8 +294,69 @@ final class Driver {
             while process.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
             if process.isRunning { process.terminate() }
         }
-        try? samples.joined(separator: "\n").write(toFile: "\(artifacts)/qrow-resources.txt", atomically: true, encoding: .utf8)
+        try? samples.joined(separator: "\n").write(toFile: "\(artifacts)/\(name)-resources.txt", atomically: true, encoding: .utf8)
         try? log?.close()
+    }
+    func savedSQL(_ sql: String, at url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url),
+              let workspace = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tabs = workspace["tabs"] as? [[String: Any]] else { return false }
+        return tabs.contains { $0["sql"] as? String == sql }
+    }
+    func testFailedSaveExit(closeWindow: Bool) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let backup = workspace.deletingLastPathComponent().appendingPathComponent("workspace-before-quit.json")
+        let baseline = "SELECT 'saved-before-quit' -- " + UUID().uuidString
+        try fill("SQL Editor", baseline)
+        var deadline = clock.now.advanced(by: .seconds(10))
+        while !savedSQL(baseline, at: workspace) {
+            try require(clock.now < deadline, "Initial workspace autosave did not complete")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try FileManager.default.moveItem(at: workspace, to: backup)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false)
+        defer {
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try? FileManager.default.removeItem(at: workspace)
+                try? FileManager.default.moveItem(at: backup, to: workspace)
+            }
+        }
+        let finalSQL = "SELECT 'unsaved 日本語😀' -- " + UUID().uuidString
+        try fill("SQL Editor", finalSQL)
+        func requestQuit() throws {
+            if closeWindow {
+                guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
+                      let close = attribute(window, kAXCloseButtonAttribute) else {
+                    throw Failure("Window close button is unavailable")
+                }
+                try click(unsafeBitCast(close, to: AXUIElement.self))
+            } else {
+                key(12, flags: .maskCommand)
+            }
+        }
+        try requestQuit()
+        _ = try wait("Keep Editing", timeout: 10)
+        try require(process.isRunning, "Failed final save closed the application")
+        try require(savedSQL(baseline, at: backup), "Failed save changed the previous workspace")
+        try snapshot(closeWindow ? "failed-save-window-close" : "failed-save-quit")
+        try press("Keep Editing")
+        try waitGone("Keep Editing")
+        guard let editor = find("SQL Editor", role: kAXTextAreaRole) ?? find("SQL Editor", role: kAXTextFieldRole) else {
+            throw Failure("SQL editor is unavailable after failed save")
+        }
+        try require(attribute(editor, kAXValueAttribute) as? String == finalSQL, "Failed save lost the current SQL edit")
+        try requestQuit()
+        _ = try wait("Retry Save and Quit", timeout: 10)
+        try FileManager.default.removeItem(at: workspace)
+        try FileManager.default.moveItem(at: backup, to: workspace)
+        try press("Retry Save and Quit")
+        deadline = clock.now.advanced(by: .seconds(10))
+        while process.isRunning {
+            try require(clock.now < deadline, "Save retry did not finish quitting")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try require(savedSQL(finalSQL, at: workspace), "Quit completed without saving the final SQL edit")
+        print("PASS: failed save preserves edits, Keep Editing, retry and durable save before \(closeWindow ? "window close" : "Quit")")
     }
     func test() throws {
         try start()
@@ -634,6 +697,7 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
+        try testFailedSaveExit(closeWindow: false)
         print("PASS: connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
@@ -643,8 +707,26 @@ do {
     try require(CGPreflightScreenCaptureAccess(), "Native UI tests require Screen Recording permission for failure screenshots. No UI tests ran.")
     if !CommandLine.arguments.contains("--preflight") {
         let driver = Driver()
-        do { try driver.test(); driver.stop() }
+        do {
+            if CommandLine.arguments.contains("--persistence-only") {
+                try driver.start()
+                try driver.testFailedSaveExit(closeWindow: false)
+            } else {
+                try driver.test()
+            }
+            driver.stop()
+        }
         catch { if driver.app != nil { try? driver.snapshot("failure") }; driver.stop(); throw error }
+        let windowDriver = Driver(name: "qrow-window-close")
+        do {
+            try windowDriver.start()
+            try windowDriver.testFailedSaveExit(closeWindow: true)
+            windowDriver.stop()
+        } catch {
+            if windowDriver.app != nil { try? windowDriver.snapshot("failure-window-close") }
+            windowDriver.stop()
+            throw error
+        }
     }
 } catch {
     fputs("\(error)\n", stderr)

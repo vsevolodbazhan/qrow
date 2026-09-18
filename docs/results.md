@@ -50,8 +50,18 @@ closes the cursor. Previously downloaded rows remain available. The memory
 limit measures retained row storage, not the total application memory.
 
 Qrow fetches batches of up to 250 rows. It does not add a SQL `LIMIT` clause.
-Client preview limits do not guarantee less server work. A separate 64 MiB
-transport frame limit can also reject large server responses.
+Client preview limits do not guarantee less server work. Each server response
+has a 64 MiB byte limit across all transport frames. Each frame also has a
+64 MiB limit. Before the decoder allocates strings or containers, it checks
+the declared sizes against a separate 64 MiB allocation budget. Container
+estimates are conservative and can reject a response below the byte limit.
+
+Before it builds display rows, the connector checks the requested row count,
+column lengths, and expanded storage size. This includes binary values that
+expand to hexadecimal text. A rejected response leaves downloaded rows
+available and requires reconnection. These limits do not cap total application
+memory. Encoded values, display rows, and other tabs can occupy memory at the
+same time.
 
 Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows, but the downloaded rows remain visible. Selecting another

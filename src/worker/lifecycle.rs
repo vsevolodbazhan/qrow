@@ -53,7 +53,10 @@ impl Runner {
         if let Err(error) = result {
             // A failed maintenance query must not repeat unattended.
             self.disconnect();
-            let message = format!("Keep-alive failed: {error:#}");
+            let message = format!(
+                "Keep-alive failed: {}",
+                crate::connector::error_message(&error)
+            );
             self.activity(
                 None,
                 Severity::Error,
