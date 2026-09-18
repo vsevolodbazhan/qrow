@@ -86,7 +86,7 @@ UI failures. Failed runs keep their artifacts after fixture cleanup.
 The E2E orchestrator prints each fixture phase. Native archive downloads report
 received bytes, total bytes, percentage, transfer rate, and estimated time left
 every 15 seconds. Long package, backend, and native-driver commands print a
-heartbeat every 30 seconds and stream their output to the run log. The saved
+keep-alive every 30 seconds and stream their output to the run log. The saved
 command logs contain the same command output.
 
 A missing fixture, failed assertion, deadline, or cleanup failure fails the run.
@@ -134,7 +134,7 @@ Passing on a larger runner does not establish performance on that target.
 
 The native scenario also checks result retention across connection changes. It
 runs a query on one profile, downloads more than one page, selects a second
-profile during a heartbeat, and checks that the downloaded rows remain visible.
+profile during a keep-alive, and checks that the downloaded rows remain visible.
 It checks that keep-alive continues and that Qrow can fetch more rows from the
 original session. Returning to the first profile preserves its session settings.
 A query on the second profile opens a new session and replaces the preview.

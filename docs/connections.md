@@ -32,7 +32,7 @@ has a new profile identifier and requires a password.
 Saving an edit keeps live sessions that use the profile when you change only the
 name or the Connection Lifecycle fields. This also applies when another profile
 is selected for the next query. The worker applies the new lifecycle
-policy after active query, fetch, or heartbeat work finishes. A shorter
+policy after active query, fetch, or keep-alive work finishes. A shorter
 keep-alive interval starts from the policy update. Switching to Disconnect
 starts a new idle timeout from the policy update.
 
@@ -53,7 +53,7 @@ apply, including keep-alive queries. Returning to the original profile reuses
 the session. Running SQL on a different profile closes the old session and
 opens a session for the selected profile.
 
-You can select the next query's profile while a query or heartbeat runs.
+You can select the next query's profile while a query or keep-alive runs.
 Selection does not stop the current work.
 
 Tabs can execute SQL concurrently, including when they use the same profile.
@@ -68,12 +68,12 @@ The **When Idle** setting controls each session:
 | **Keep Connected** | Sends periodic keep-alive query while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
 
 Use a lightweight, read-only statement for keep-alive query. Qrow checks that the
-text contains one statement, but does not enforce read-only behavior. Heartbeats
-use the existing session and preserve its result cursor. A failed heartbeat
+text contains one statement, but does not enforce read-only behavior. keep-alives
+use the existing session and preserve its result cursor. A failed keep-alive
 disconnects the session and stops background queries until the next explicit Run.
 
 To release the active tab's session, select its profile and click **Disconnect**.
-This action is disabled while a query or heartbeat runs. It is also disabled
+This action is disabled while a query or keep-alive runs. It is also disabled
 when the selected profile has no live session in the active tab. Selecting
 another profile keeps the original session open. Select the original profile
 again to disconnect it.
@@ -110,7 +110,7 @@ opening a session, then selects the initial database.
 
 [Idle maintenance](../src/worker/lifecycle.rs) waits for a command or the next
 session deadline. A lifecycle update wakes the worker so it can recalculate the
-next deadline. It does not require continuous UI polling. The heartbeat uses a
+next deadline. It does not require continuous UI polling. The keep-alive uses a
 separate operation in the same session so it can preserve the result cursor.
 
 [Credential storage](../src/storage.rs) uses Keychain service
