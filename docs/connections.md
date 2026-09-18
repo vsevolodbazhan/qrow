@@ -33,7 +33,7 @@ Saving an edit keeps live sessions that use the profile when you change only the
 name or the Connection Lifecycle fields. This also applies when another profile
 is selected for the next query. The worker applies the new lifecycle
 policy after active query, fetch, or heartbeat work finishes. A shorter
-heartbeat interval starts from the policy update. Switching to Disconnect
+keep-alive interval starts from the policy update. Switching to Disconnect
 starts a new idle timeout from the policy update.
 
 Changing the host, port, username, database, session parameters, or password
@@ -65,9 +65,9 @@ The **When Idle** setting controls each session:
 | Choice | Behavior |
 | --- | --- |
 | **Disconnect after** | Releases the session after the specified idle time. The default is 900 seconds. Reading results and editing SQL do not reset the timer. Running work is not interrupted. |
-| **Keep Connected** | Sends periodic heartbeat SQL while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
+| **Keep Connected** | Sends periodic keep-alive query while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
 
-Use a lightweight, read-only statement for heartbeat SQL. Qrow checks that the
+Use a lightweight, read-only statement for keep-alive query. Qrow checks that the
 text contains one statement, but does not enforce read-only behavior. Heartbeats
 use the existing session and preserve its result cursor. A failed heartbeat
 disconnects the session and stops background queries until the next explicit Run.

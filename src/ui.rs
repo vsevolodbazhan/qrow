@@ -668,7 +668,7 @@ impl Qrow {
                     Event::Connecting => {
                         tab.connected = false;
                         tab.busy = true;
-                        tab.status = "Connecting to Spark (HiveServer2)…".into();
+                        tab.status = "Connecting…".into();
                     }
                     Event::Connected => tab.connected = true,
                     Event::Running => {
@@ -688,7 +688,7 @@ impl Qrow {
                             .find(|profile| Some(profile.id) == tab.worker_profile)
                             .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
                         {
-                            "Connected · keep-alive enabled"
+                            "Connected · Keep-alive enabled"
                         } else {
                             "Connected"
                         }
@@ -718,9 +718,9 @@ impl Qrow {
                         tab.cancelling = false;
                         tab.elapsed = tab.started.take().map(|t| t.elapsed());
                         tab.status = if limited {
-                            "Preview limit reached · 64 MiB or 100,000 rows"
+                            "Preview · Limit reached"
                         } else if more {
-                            "Preview · more rows available"
+                            "Preview · More rows available"
                         } else {
                             "Complete"
                         }
@@ -735,7 +735,7 @@ impl Qrow {
                         tab.more = false;
                         tab.pending_page = None;
                         tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                        tab.status = "Cancelled · partial preview retained".into();
+                        tab.status = "Cancelled · Partial preview retained".into();
                     }
                     Event::Error {
                         message: _,
@@ -750,9 +750,9 @@ impl Qrow {
                         }
                         tab.elapsed = tab.started.take().map(|t| t.elapsed());
                         tab.status = if disconnected {
-                            "Disconnected · run again to reconnect"
+                            "Error · Connection lost"
                         } else {
-                            "Query failed"
+                            "Error · Query failed"
                         }
                         .into();
                         Self::record_failure(tab, index == self.active);
@@ -774,9 +774,9 @@ impl Qrow {
                         tab.busy = false;
                         tab.cancelling = false;
                         tab.status = if matches!(event, Event::IdleDisconnected) {
-                            "Disconnected after idle timeout · run to reconnect"
+                            "Disconnected · Idle timeout"
                         } else {
-                            "Disconnected · run to reconnect"
+                            "Disconnected"
                         }
                         .into();
                     }
@@ -845,7 +845,7 @@ impl Qrow {
                                     let _ = worker.update_profile(profile.clone());
                                 }
                                 if profile.lifecycle.keep_alive_seconds == 0
-                                    && tab.status == "Connected · keep-alive enabled"
+                                    && tab.status == "Connected · Keep-alive enabled"
                                 {
                                     tab.status = "Connected".into();
                                 }
@@ -1363,7 +1363,7 @@ impl Qrow {
                     let input = InputState::new(window, cx).default_value(value);
                     if i == 4 {
                         input.masked(true).placeholder(if is_new {
-                            "LDAP password"
+                            ""
                         } else {
                             "Leave blank to keep stored password"
                         })

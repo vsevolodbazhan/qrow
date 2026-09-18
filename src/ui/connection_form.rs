@@ -8,11 +8,11 @@ pub(super) fn parse_lifecycle(
     let mut policy = previous.clone();
     if keep_connected {
         policy.keep_alive_seconds = values[1].trim().parse().map_err(|_| {
-            anyhow::anyhow!("Heartbeat interval must be a whole number of seconds.")
+            anyhow::anyhow!("Keep-alive interval must be a whole number of seconds.")
         })?;
         anyhow::ensure!(
             policy.keep_alive_seconds > 0,
-            "Heartbeat interval must be greater than zero."
+            "Keep-alive interval must be greater than zero."
         );
         policy.keep_alive_sql = values[2].trim().to_owned();
     } else {
@@ -78,15 +78,15 @@ pub(super) fn render_lifecycle(
         })
         .when(keep, |el| {
             el.child(rows.row(
-                "Heartbeat Interval",
+                "Keep-alive Interval",
                 "Seconds between keep-alive queries.",
-                field(8, "Heartbeat Interval in Seconds"),
+                field(8, "Keep-alive Interval in Seconds"),
                 cx,
             ))
             .child(rows.row(
-                "Heartbeat SQL",
+                "Keep-alive Query",
                 "Runs only while idle, and keeps the engine active. Use a lightweight, read-only query.",
-                field(9, "Heartbeat SQL"),
+                field(9, "Keep-alive Query"),
                 cx,
             ))
         })

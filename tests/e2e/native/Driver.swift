@@ -362,7 +362,7 @@ final class Driver {
         try start()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
-                               ("Port", env["QROW_E2E_PORT"]!), ("LDAP Username", "qrow"),
+                               ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
                                ("Password", "qrow-test-password"), ("Initial Database", "default")] {
             try fill(label, value)
         }
@@ -414,14 +414,14 @@ final class Driver {
         _ = try wait("Qrow E2E copy")
 
         // Keep A alive while B is selected. B keeps its default idle policy.
-        let heartbeatToken = "heartbeat-" + UUID().uuidString.lowercased()
+        let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
         try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
-        try fill("Heartbeat Interval in Seconds", "3")
-        try fill("Heartbeat SQL", "SELECT qrow_keep_alive(id, '\(heartbeatToken)', CAST(10000 AS BIGINT)) FROM range(1)")
+        try fill("Keep-alive Interval in Seconds", "3")
+        try fill("Keep-alive Query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(10000 AS BIGINT)) FROM range(1)")
         try press("Save")
         try waitGone("Cancel")
         try query("CREATE TEMPORARY FUNCTION qrow_keep_alive AS 'io.qrow.fixture.Blocking'")
@@ -446,7 +446,7 @@ final class Driver {
         key(53)
         try waitGone("Edit Connection…")
         _ = try wait("switch-a-1000")
-        _ = try wait("Connected · keep-alive enabled", timeout: 20)
+        _ = try wait("Connected · Keep-alive enabled", timeout: 20)
         _ = try wait("switch-a-1000")
         try press("Next")
         _ = try wait("switch-a-2000")
@@ -468,10 +468,10 @@ final class Driver {
         _ = try wait("switch-b-0000-UTC")
         // B is idle with no heartbeat, so only the different selection can
         // disable Disconnect. AXEnabled is not available for every GPUI button.
-        _ = try wait("Preview · more rows available")
+        _ = try wait("Preview · More rows available")
         try click(try wait("Disconnect", role: kAXButtonRole))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        try require(find("Disconnecting…") == nil && find("Disconnected · run to reconnect") == nil,
+        try require(find("Disconnecting…") == nil && find("Disconnected") == nil,
                     "Disconnect closed the unselected profile's session")
         try snapshot("connection-switch")
 
@@ -492,11 +492,11 @@ final class Driver {
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
         try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
-        try fill("Heartbeat Interval in Seconds", "3")
-        try fill("Heartbeat SQL", "SELECT 'updated-b'")
+        try fill("Keep-alive Interval in Seconds", "3")
+        try fill("Keep-alive Query", "SELECT 'updated-b'")
         try press("Save")
         try waitGone("Cancel")
-        _ = try wait("Connected · keep-alive enabled", timeout: 20)
+        _ = try wait("Connected · Keep-alive enabled", timeout: 20)
         _ = try wait("switch-b-1000-UTC")
         try press("Next")
         _ = try wait("switch-b-2000-UTC")
@@ -519,7 +519,7 @@ final class Driver {
         // Returning to the session's profile enables Disconnect without a Run.
         try selectConnection("Qrow E2E copy")
         try press("Disconnect")
-        _ = try wait("Disconnected · run to reconnect", timeout: 10)
+        _ = try wait("Disconnected", timeout: 10)
         _ = try wait("switch-b-reconnected")
         try query("SELECT 'switch-b-after-disconnect' AS value")
         _ = try wait("switch-b-after-disconnect")
@@ -605,7 +605,7 @@ final class Driver {
         // Issue #40: a retry must clear the previous Error badge before the
         // replacement query finishes, even after the user selected Results.
         try query("SELECT missing_column AS value FROM range(1)")
-        _ = try wait("Query failed", timeout: 30)
+        _ = try wait("Error · Query failed", timeout: 30)
         _ = try waitExact("Renamed tab, unread error", timeout: 30)
         try press("Results Panel")
         try require(
@@ -687,7 +687,7 @@ final class Driver {
             try require(clock.now < deadline, "Spark driver did not confirm terminal task within 10 seconds")
             Thread.sleep(forTimeInterval: 0.1)
         }
-        _ = try wait("Cancelled · partial preview retained", timeout: 2)
+        _ = try wait("Cancelled · Partial preview retained", timeout: 2)
         try require(clock.now <= deadline, "UI cancellation exceeded 10 seconds")
         try require(try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
         try snapshot("cancelled")

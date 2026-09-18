@@ -45,9 +45,9 @@ impl Qrow {
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
             .w_full()
             .child(
-                rows.row(
+                rows.last_row(
                     "Name",
-                    "Leave blank to keep the current name.",
+                    "The name displayed on the tab.",
                     Input::new(&form.title)
                         .aria_label("Tab Name")
                         .into_any_element(),
