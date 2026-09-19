@@ -183,6 +183,22 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Button never became enabled: \(label)")
     }
+    func newTab(_ expected: String) throws {
+        // A successful click can return before GPUI publishes the new tab to
+        // the accessibility tree. Confirm the tab before sending the next
+        // input, and retry only if the tab was not created.
+        for _ in 0..<2 {
+            if findExact(expected, role: kAXRadioButtonRole) != nil { return }
+            try press("New Tab")
+            let deadline = clock.now.advanced(by: .seconds(5))
+            repeat {
+                if findExact(expected, role: kAXRadioButtonRole) != nil { return }
+                try require(process.isRunning, "Qrow exited while waiting for \(expected)")
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+            } while clock.now < deadline
+        }
+        throw Failure("Timed out waiting for \(expected) after creating a tab")
+    }
     func fill(_ label: String, _ value: String) throws {
         // GPUI exposes inputs as text fields or text areas depending on the control.
         let deadline = clock.now.advanced(by: .seconds(10))
@@ -485,6 +501,9 @@ final class Driver {
         try press("Next")
         _ = try wait("switch-a-1000")
         _ = try wait("Page 2")
+        // Rows arrive before Ready while the worker is still fetching the page.
+        // Wait for the completed preview before expecting idle maintenance.
+        _ = try wait("Preview · More rows available")
         _ = try wait("Sending keep-alive…", timeout: 20)
         try selectConnection("Qrow E2E copy")
         // The running heartbeat belongs to A even though B is selected.
@@ -585,7 +604,7 @@ final class Driver {
         // views prove that the workers did not reconnect when the form was saved.
         try query("CREATE TEMPORARY VIEW qrow_ui_live AS SELECT 'preserved' AS value")
         _ = try wait("Complete")
-        try press("New Tab")
+        try newTab("Query 2")
         try press("Qrow E2E")
         try query("CREATE TEMPORARY VIEW qrow_ui_live AS SELECT 'preserved' AS value")
         _ = try wait("Complete")
@@ -721,7 +740,7 @@ final class Driver {
         try require(find("Delete", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
         key(53)
         try waitGone("Edit Connection…")
-        try press("New Tab")
+        try newTab("Query 3")
         try press("Qrow E2E live")
         try query("SELECT 'other-tab-works' AS result")
         _ = try wait("other-tab-works")
