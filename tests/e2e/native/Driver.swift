@@ -531,6 +531,7 @@ final class Driver {
             "Move carried results to the destination tab",
         )
         try selectConnection("Qrow E2E")
+        _ = try waitExact("Query 1", timeout: 10)
         try require(
             find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
             "Move left the source SQL on its original connection",

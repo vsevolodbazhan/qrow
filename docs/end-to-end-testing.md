@@ -146,8 +146,10 @@ Lifecycle edits preserve the session and cursor. Password changes and deletion
 close the matching sessions. It checks that **Disconnect** acts on the active
 tab only. Returning to a connection makes its tabs visible again. It also
 checks Copy to Connection and Move to Connection from nested tab menus. The
-resulting tab has the source SQL, a unique tab name, and no result rows. See
-[Connections](connections.md) for tab copy and move behavior.
+new tab has the source SQL, a unique tab name, and no result rows. After a
+copy, the source tab keeps its rows. After moving its last tab, the source
+connection has a new empty tab. See [Connections](connections.md) for tab copy
+and move behavior.
 
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve
