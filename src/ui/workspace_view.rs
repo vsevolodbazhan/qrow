@@ -64,6 +64,12 @@ impl Qrow {
                             .tabs
                             .iter()
                             .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
+                        let accessibility_label = format!(
+                            "{}{}{}",
+                            profile.name,
+                            if busy { ", running" } else { "" },
+                            if unread_error { ", unread error" } else { "" }
+                        );
                         let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
                         let edited = profile.clone();
                         let duplicated = profile.clone();
@@ -87,7 +93,7 @@ impl Qrow {
                             .h_full()
                             .flex_1()
                             .min_w_0()
-                            .accessibility_label(profile.name.clone())
+                            .accessibility_label(accessibility_label)
                             .child(
                                 h_flex()
                                     .w_full()
@@ -279,6 +285,7 @@ impl Qrow {
                         .w(self.ui_px(28.))
                         .h(self.ui_px(28.))
                         .icon(IconName::Plus)
+                        .disabled(self.active_profile().is_none())
                         .accessibility_label("New Tab")
                         .tooltip("New Tab · ⌘T")
                         .on_click(

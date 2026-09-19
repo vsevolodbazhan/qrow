@@ -826,6 +826,7 @@ impl Qrow {
                     } = saved;
                     let id = profile.id;
                     let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
+                    let had_profiles = !self.profiles.is_empty();
                     let previous = self.profiles.iter().find(|p| p.id == id).cloned();
                     let action = profile_save_action(previous.as_ref(), &profile, password_changed);
                     if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == id) {
@@ -834,9 +835,22 @@ impl Qrow {
                         self.profiles.push(profile.clone());
                     }
                     if is_new {
-                        let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
-                        self.tabs.push(tab);
-                        self.activate(self.tabs.len() - 1, window, cx);
+                        if had_profiles {
+                            let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
+                            self.tabs.push(tab);
+                            self.activate(self.tabs.len() - 1, window, cx);
+                        } else {
+                            for tab in &mut self.tabs {
+                                tab.saved.profile = Some(id);
+                            }
+                            if let Some(index) = self
+                                .tabs
+                                .iter()
+                                .position(|tab| tab.saved.profile == Some(id))
+                            {
+                                self.activate(index, window, cx);
+                            }
+                        }
                     }
                     if action == ProfileSaveAction::Reconnect {
                         for tab in &mut self.tabs {
@@ -972,7 +986,7 @@ impl Qrow {
             .unwrap_or(0)
             + 1;
         let profile = self.active_profile();
-        if profile.is_none() && !self.profiles.is_empty() {
+        if profile.is_none() {
             return;
         }
         let tab = self.make_tab(SavedTab::new(number, profile), window, cx);

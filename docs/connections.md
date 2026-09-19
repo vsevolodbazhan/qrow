@@ -1,9 +1,11 @@
 # Connections
 
-A connection profile stores the settings for a Kyuubi endpoint. Select a profile
-in the Connections sidebar to use it for the next query in the active query tab.
-The current result preview stays visible until the next accepted query replaces
-it. Profile selection keeps the tab's current session and its idle policy.
+A connection profile stores the settings for a Kyuubi endpoint. Each connection
+owns one or more query tabs. Select a profile in the Connections sidebar to show
+its tabs. Qrow restores the last tab selected for that connection.
+
+Each tab has its own session. Switching connections keeps sessions, SQL, results,
+and Logs history in hidden tabs. A hidden tab can continue to run a query.
 
 ## Create a profile
 
@@ -30,8 +32,7 @@ An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier and requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name or the Connection Lifecycle fields. This also applies when another profile
-is selected for the next query. The worker applies the new lifecycle
+name or the Connection Lifecycle fields. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. A shorter
 keep-alive interval starts from the policy update. Switching to Disconnect
 starts a new idle timeout from the policy update.
@@ -47,14 +48,9 @@ so a failed deletion can leave the password in Keychain.
 
 ## Sessions and idle behavior
 
-Each tab can have one session. Selecting a different profile keeps that session,
-its result cursor, and its connection status. Its idle policy continues to
-apply, including keep-alive queries. Returning to the original profile reuses
-the session. Running SQL on a different profile closes the old session and
-opens a session for the selected profile.
-
-You can select the next query's profile while a query or keep-alive runs.
-Selection does not stop the current work.
+Each tab has one session for its owning profile. Selecting a different profile
+changes the visible tab set. It does not stop work in hidden tabs. Each tab keeps
+its result cursor and connection status while hidden.
 
 Tabs can execute SQL concurrently, including when they use the same profile.
 Separate sessions do not necessarily use separate Spark engines. Engine sharing
@@ -72,11 +68,9 @@ text contains one statement, but does not enforce read-only behavior. keep-alive
 use the existing session and preserve its result cursor. A failed keep-alive
 disconnects the session and stops background queries until the next explicit Run.
 
-To release the active tab's session, select its profile and click **Disconnect**.
+To release the active tab's session, select its connection and click **Disconnect**.
 This action is disabled while a query or keep-alive runs. It is also disabled
-when the selected profile has no live session in the active tab. Selecting
-another profile keeps the original session open. Select the original profile
-again to disconnect it.
+when the active tab has no live session for its owning connection.
 
 Manual and idle disconnection preserve SQL and downloaded results. Unfetched
 rows and session state, such as temporary views or settings applied with SQL,
@@ -85,6 +79,24 @@ are lost.
 Qrow's session idle timeout is separate from the server's engine idle timeout.
 Disconnecting a Qrow tab does not guarantee that its Spark engine stops. Other
 tabs, clients, and server policies can keep the engine active.
+
+## Manage tabs under a connection
+
+Each connection always has at least one tab. Creating a connection creates a
+blank tab. Closing or moving the last tab creates a blank replacement for the
+source connection.
+
+Right-click a tab to choose **Edit Tab…**, **Duplicate**, **Copy to
+Connection…**, or **Move to Connection…**. Duplicate copies the tab within its
+connection. Copy and move select the destination connection and the resulting
+tab. Move is disabled while the tab is busy.
+
+These actions copy only the current SQL text and tab name. They do not copy
+results, Logs history, session state, or execution status. They do not run SQL.
+
+Deleting a connection requires confirmation. The confirmation states that all
+owned tabs and SQL will be deleted. Deletion is disabled while any owned tab is
+busy.
 
 ## Authentication and connection failures
 
