@@ -5,14 +5,22 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change **Scale** and **Font Family** in the UI
-section, or **Font Family**, **Font Size**, and **Line Height** in the Editor and
-Logs sections. The UI font applies to controls and results. Editor settings
-apply only to SQL. Logs settings apply only to Logs. Line height is a multiplier.
+Open **Qrow → Settings…** to change the appearance. The dialog shows the
+**Interface**, **Editor**, and **Logs** sections on one page. The Interface
+section has **Scale** and **Font Family**. The Editor and Logs sections have
+**Font Family**, **Font Size**, and **Line Height**. The interface font applies
+to controls and results. Editor settings apply only to SQL. Logs settings apply
+only to Logs. Line height is a multiplier.
+
+Select a section in the list at the left to move to that section. Use the search
+box above the list to show only the settings that match a word in their name or
+description. The section list needs the pointer. All controls stay on the page,
+so the keyboard reaches each of them without the list.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
-resets all appearance settings, including the system interface font. If a saved
-font is unavailable, Qrow uses a default font and reports the substitution.
+restores the defaults of all appearance settings, including the system interface
+font. If a saved font is unavailable, Qrow uses a default font and reports the
+substitution.
 
 The application uses its bundled dark theme, independent of the macOS appearance.
 There is no light-theme setting.

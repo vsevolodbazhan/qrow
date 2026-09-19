@@ -10,27 +10,14 @@ use gpui_kit::component::{
 #[derive(Clone, Copy)]
 pub(super) struct Rows {
     label_width: Pixels,
-    /// `None` lets the control fill its column instead of hugging the right
-    /// edge. A stepper or a select looks deliberate right-aligned; a text
-    /// field just leaves a gap.
-    control_width: Option<Pixels>,
     compact: bool,
 }
 
 impl Rows {
-    /// `control` is the width of the right-hand column, in rems.
-    pub(super) fn new(width: Pixels, rem: Pixels, control: f32) -> Self {
-        Self {
-            control_width: Some(rem * control),
-            ..Self::filling(width, rem)
-        }
-    }
-
     /// Rows whose control spans its whole column.
     pub(super) fn filling(width: Pixels, rem: Pixels) -> Self {
         Self {
             label_width: (width - rem * 6.) * 0.60,
-            control_width: None,
             compact: width < rem * 42.,
         }
     }
@@ -48,27 +35,6 @@ impl Rows {
         control: AnyElement,
         cx: &App,
     ) -> impl IntoElement {
-        self.row_with_divider(label, description, control, true, cx)
-    }
-
-    pub(super) fn last_row(
-        &self,
-        label: &'static str,
-        description: impl Into<SharedString>,
-        control: AnyElement,
-        cx: &App,
-    ) -> impl IntoElement {
-        self.row_with_divider(label, description, control, false, cx)
-    }
-
-    fn row_with_divider(
-        &self,
-        label: &'static str,
-        description: impl Into<SharedString>,
-        control: AnyElement,
-        divider: bool,
-        cx: &App,
-    ) -> impl IntoElement {
         let description = description.into();
         let form = if self.compact {
             Form::vertical()
@@ -78,9 +44,8 @@ impl Rows {
         form.child(
             Field::new()
                 .py_4()
-                .when(divider, |field| {
-                    field.border_b_1().border_color(cx.theme().border)
-                })
+                .border_b_1()
+                .border_color(cx.theme().border)
                 .items_center()
                 .label_fn(move |_, cx| {
                     v_flex()
@@ -103,15 +68,7 @@ impl Rows {
                 .child(
                     h_flex()
                         .w_full()
-                        .when(self.control_width.is_some(), |el| el.child(div().flex_1()))
-                        .child(
-                            div()
-                                .when_some(self.control_width, |el, width| {
-                                    el.w(width).flex_shrink_0()
-                                })
-                                .when(self.control_width.is_none(), |el| el.flex_1().min_w_0())
-                                .child(control),
-                        ),
+                        .child(div().flex_1().min_w_0().child(control)),
                 ),
         )
     }

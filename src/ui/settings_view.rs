@@ -1,20 +1,33 @@
 use super::setting_row::Rows;
 use super::*;
 use gpui_kit::component::{
+    group_box::GroupBoxVariant,
     h_flex,
     input::{NumberInputEvent, StepAction},
     select::{SearchableVec, Select, SelectEvent, SelectState},
-    v_flex,
+    setting::{
+        RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
+        Settings as SettingsPanel,
+    },
 };
+use std::cell::Cell;
 
 const DIALOG_REMS: f32 = 56.;
-const DIALOG_HEIGHT_REMS: f32 = 64.;
-const CONTROL_REMS: f32 = 10.;
+const DIALOG_HEIGHT_REMS: f32 = 44.;
+const SIDEBAR_REMS: f32 = 11.;
+const SIDEBAR_MIN_REMS: f32 = 8.;
+const SIDEBAR_MAX_REMS: f32 = 18.;
+/// Width of the control column while a page keeps label and control side by
+/// side. A stacked page gives the control the full width instead.
+const CONTROL_REMS: f32 = 12.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
-#[derive(Clone, Copy)]
+/// A setting the dialog edits with a stepper. The variants carry their own
+/// units, bounds, and formatting so that one control and one commit path serve
+/// all of them.
+#[derive(Clone, Copy, PartialEq)]
 enum NumberSetting {
     Scale,
     EditorFontSize,
@@ -23,92 +36,157 @@ enum NumberSetting {
     LogsLineHeight,
 }
 
+impl NumberSetting {
+    const ALL: [Self; 5] = [
+        Self::Scale,
+        Self::EditorFontSize,
+        Self::EditorLineHeight,
+        Self::LogsFontSize,
+        Self::LogsLineHeight,
+    ];
+
+    /// The value as the dialog shows it. The scale is a percentage; the others
+    /// keep the unit they are stored in.
+    fn value(self, settings: &Settings) -> f32 {
+        match self {
+            Self::Scale => settings.ui_scale * 100.,
+            Self::EditorFontSize => settings.editor_font_size,
+            Self::EditorLineHeight => settings.editor_line_height,
+            Self::LogsFontSize => settings.logs_font_size,
+            Self::LogsLineHeight => settings.logs_line_height,
+        }
+    }
+
+    /// Minimum, maximum, and step, in the displayed unit.
+    fn range(self) -> (f32, f32, f32) {
+        match self {
+            Self::Scale => (
+                MIN_UI_SCALE * 100.,
+                MAX_UI_SCALE * 100.,
+                UI_SCALE_STEP * 100.,
+            ),
+            Self::EditorFontSize | Self::LogsFontSize => {
+                (MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, 1.)
+            }
+            Self::EditorLineHeight | Self::LogsLineHeight => {
+                (MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP)
+            }
+        }
+    }
+
+    /// Line heights carry one decimal. The others are whole numbers.
+    fn fractional(self) -> bool {
+        matches!(self, Self::EditorLineHeight | Self::LogsLineHeight)
+    }
+
+    fn format(self, value: f32) -> String {
+        if self.fractional() {
+            format!("{value:.1}")
+        } else {
+            format!("{value:.0}")
+        }
+    }
+
+    fn unit(self) -> &'static str {
+        match self {
+            Self::Scale => "%",
+            Self::EditorFontSize | Self::LogsFontSize => "px",
+            Self::EditorLineHeight | Self::LogsLineHeight => "x",
+        }
+    }
+
+    /// Accessibility label. A group title is not part of the accessible name,
+    /// so each control names its own scope.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Scale => "UI Scale",
+            Self::EditorFontSize => "Editor Font Size",
+            Self::EditorLineHeight => "Editor Line Height",
+            Self::LogsFontSize => "Logs Font Size",
+            Self::LogsLineHeight => "Logs Line Height",
+        }
+    }
+}
+
+/// A font family the dialog edits with a searchable select.
+#[derive(Clone, Copy, PartialEq)]
+enum FontSetting {
+    Ui,
+    Editor,
+    Logs,
+}
+
+impl FontSetting {
+    const ALL: [Self; 3] = [Self::Ui, Self::Editor, Self::Logs];
+
+    fn family(self, settings: &Settings) -> &str {
+        match self {
+            Self::Ui => &settings.ui_font_family,
+            Self::Editor => &settings.editor_font_family,
+            Self::Logs => &settings.logs_font_family,
+        }
+    }
+
+    /// The option the select shows. The interface font falls back to a named
+    /// entry, because the stored default is a system font identifier.
+    fn selected(self, settings: &Settings) -> String {
+        let family = self.family(settings);
+        if self == Self::Ui && family == Settings::default().ui_font_family {
+            SYSTEM_FONT_LABEL.to_owned()
+        } else {
+            family.to_owned()
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ui => "UI Font Family",
+            Self::Editor => "Editor Font Family",
+            Self::Logs => "Logs Font Family",
+        }
+    }
+}
+
 pub(super) struct SettingsForm {
-    scale: Entity<InputState>,
-    editor_font: SettingSelect,
-    editor_font_size: Entity<InputState>,
-    editor_line_height: Entity<InputState>,
-    logs_font: SettingSelect,
-    logs_font_size: Entity<InputState>,
-    logs_line_height: Entity<InputState>,
-    ui_font: SettingSelect,
-    displayed_scale: std::cell::Cell<f32>,
-    displayed_editor_font_size: std::cell::Cell<f32>,
-    displayed_editor_line_height: std::cell::Cell<f32>,
-    displayed_logs_font_size: std::cell::Cell<f32>,
-    displayed_logs_line_height: std::cell::Cell<f32>,
+    /// Each stepper with the value it last displayed, so that a change made
+    /// outside the dialog can be pushed back into the input.
+    numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
+    fonts: Vec<(FontSetting, SettingSelect)>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl SettingsForm {
+    fn number(&self, setting: NumberSetting) -> &Entity<InputState> {
+        &self
+            .numbers
+            .iter()
+            .find(|(candidate, ..)| *candidate == setting)
+            .expect("the form holds every number setting")
+            .1
+    }
+
+    fn font(&self, setting: FontSetting) -> &SettingSelect {
+        &self
+            .fonts
+            .iter()
+            .find(|(candidate, _)| *candidate == setting)
+            .expect("the form holds every font setting")
+            .1
+    }
 }
 
 impl Qrow {
     pub(super) fn init_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let scale = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(format!("{:.0}", self.settings.ui_scale * 100.))
-        });
-        let editor_font = cx.new(|cx| {
-            SelectState::new(SearchableVec::new(self.fonts.clone()), None, window, cx)
-                .searchable(true)
-        });
-        let editor_font_size = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(format!("{:.0}", self.settings.editor_font_size))
-        });
-        let editor_line_height = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(format!("{:.1}", self.settings.editor_line_height))
-        });
-        let logs_font = cx.new(|cx| {
-            SelectState::new(SearchableVec::new(self.fonts.clone()), None, window, cx)
-                .searchable(true)
-        });
-        let logs_font_size = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(format!("{:.0}", self.settings.logs_font_size))
-        });
-        let logs_line_height = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(format!("{:.1}", self.settings.logs_line_height))
-        });
-        let ui_font = cx.new(|cx| {
-            let mut fonts = self.fonts.clone();
-            fonts.retain(|font| font != &Settings::default().ui_font_family);
-            fonts.insert(0, SYSTEM_FONT_LABEL.into());
-            SelectState::new(SearchableVec::new(fonts), None, window, cx).searchable(true)
-        });
-        let mut subscriptions = vec![cx.subscribe(&editor_font, |this, _, event, cx| {
-            if let SelectEvent::Confirm(Some(value)) = event {
-                this.set_editor_font(value.clone(), cx);
-            }
-        })];
-        subscriptions.push(cx.subscribe(&logs_font, |this, _, event, cx| {
-            if let SelectEvent::Confirm(Some(value)) = event {
-                this.set_logs_font(value.clone(), cx);
-            }
-        }));
-        subscriptions.push(
-            cx.subscribe_in(&ui_font, window, |this, _, event, window, cx| {
-                if let SelectEvent::Confirm(Some(value)) = event {
-                    let font = if value == SYSTEM_FONT_LABEL {
-                        Settings::default().ui_font_family
-                    } else {
-                        value.clone()
-                    };
-                    this.set_ui_font(font, window, cx);
-                }
-            }),
-        );
-        for (input, setting) in [
-            (&scale, NumberSetting::Scale),
-            (&editor_font_size, NumberSetting::EditorFontSize),
-            (&editor_line_height, NumberSetting::EditorLineHeight),
-            (&logs_font_size, NumberSetting::LogsFontSize),
-            (&logs_line_height, NumberSetting::LogsLineHeight),
-        ] {
+        let mut subscriptions = Vec::new();
+        let mut numbers = Vec::new();
+        for setting in NumberSetting::ALL {
+            let value = setting.value(&self.settings);
+            let input =
+                cx.new(|cx| InputState::new(window, cx).default_value(setting.format(value)));
             // Handle steps here instead of InputState's default one-unit step.
             input.update(cx, |input, cx| input.set_step(None, window, cx));
             subscriptions.push(cx.subscribe_in(
-                input,
+                &input,
                 window,
                 move |this, input, event: &NumberInputEvent, window, cx| {
                     let NumberInputEvent::Step(action) = event;
@@ -121,7 +199,7 @@ impl Qrow {
                 },
             ));
             subscriptions.push(cx.subscribe_in(
-                input,
+                &input,
                 window,
                 move |this, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
@@ -131,21 +209,34 @@ impl Qrow {
                     }
                 },
             ));
+            numbers.push((setting, input, Cell::new(value)));
+        }
+        let mut interface_fonts = self.fonts.clone();
+        interface_fonts.retain(|font| font != &Settings::default().ui_font_family);
+        interface_fonts.insert(0, SYSTEM_FONT_LABEL.into());
+        let mut fonts = Vec::new();
+        for setting in FontSetting::ALL {
+            let options = match setting {
+                FontSetting::Ui => interface_fonts.clone(),
+                _ => self.fonts.clone(),
+            };
+            let select = cx.new(|cx| {
+                SelectState::new(SearchableVec::new(options), None, window, cx).searchable(true)
+            });
+            subscriptions.push(cx.subscribe_in(
+                &select,
+                window,
+                move |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                    if let SelectEvent::Confirm(Some(value)) = event {
+                        this.set_font(setting, value.clone(), window, cx);
+                    }
+                },
+            ));
+            fonts.push((setting, select));
         }
         self.settings_form = Some(SettingsForm {
-            displayed_scale: std::cell::Cell::new(self.settings.ui_scale * 100.),
-            displayed_editor_font_size: std::cell::Cell::new(self.settings.editor_font_size),
-            displayed_editor_line_height: std::cell::Cell::new(self.settings.editor_line_height),
-            displayed_logs_font_size: std::cell::Cell::new(self.settings.logs_font_size),
-            displayed_logs_line_height: std::cell::Cell::new(self.settings.logs_line_height),
-            scale,
-            editor_font,
-            editor_font_size,
-            editor_line_height,
-            logs_font,
-            logs_font_size,
-            logs_line_height,
-            ui_font,
+            numbers,
+            fonts,
             _subscriptions: subscriptions,
         });
     }
@@ -158,38 +249,8 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (current, min, max, step) = match setting {
-            NumberSetting::Scale => (
-                self.settings.ui_scale * 100.,
-                MIN_UI_SCALE * 100.,
-                MAX_UI_SCALE * 100.,
-                UI_SCALE_STEP * 100.,
-            ),
-            NumberSetting::EditorFontSize => (
-                self.settings.editor_font_size,
-                MIN_EDITOR_FONT_SIZE,
-                MAX_EDITOR_FONT_SIZE,
-                1.,
-            ),
-            NumberSetting::EditorLineHeight => (
-                self.settings.editor_line_height,
-                MIN_LINE_HEIGHT,
-                MAX_LINE_HEIGHT,
-                LINE_HEIGHT_STEP,
-            ),
-            NumberSetting::LogsFontSize => (
-                self.settings.logs_font_size,
-                MIN_EDITOR_FONT_SIZE,
-                MAX_EDITOR_FONT_SIZE,
-                1.,
-            ),
-            NumberSetting::LogsLineHeight => (
-                self.settings.logs_line_height,
-                MIN_LINE_HEIGHT,
-                MAX_LINE_HEIGHT,
-                LINE_HEIGHT_STEP,
-            ),
-        };
+        let (min, max, step) = setting.range();
+        let current = setting.value(&self.settings);
         let value = input
             .read(cx)
             .value()
@@ -198,22 +259,26 @@ impl Qrow {
             .ok()
             .filter(|value| value.is_finite())
             .unwrap_or(current);
-        let value = match setting {
-            NumberSetting::EditorLineHeight | NumberSetting::LogsLineHeight => {
-                ((value * 10.).round() + direction * step * 10.).round() / 10.
-            }
-            _ => value.round() + direction * step,
+        // Step on the tenth a line height displays, so that the value stays on
+        // the grid the field shows.
+        let value = if setting.fractional() {
+            ((value * 10.).round() + direction * step * 10.).round() / 10.
+        } else {
+            value.round() + direction * step
         }
         .clamp(min, max);
-        let displayed = if matches!(
-            setting,
-            NumberSetting::EditorLineHeight | NumberSetting::LogsLineHeight
-        ) {
-            format!("{value:.1}")
-        } else {
-            format!("{value:.0}")
-        };
+        let displayed = setting.format(value);
         input.update(cx, |input, cx| input.set_value(displayed, window, cx));
+        self.apply_number_setting(setting, value, window, cx);
+    }
+
+    fn apply_number_setting(
+        &mut self,
+        setting: NumberSetting,
+        value: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match setting {
             NumberSetting::Scale => self.apply_ui_scale(value / 100., window, cx),
             NumberSetting::EditorFontSize if self.settings.editor_font_size != value => {
@@ -236,13 +301,32 @@ impl Qrow {
         }
     }
 
+    fn set_font(
+        &mut self,
+        setting: FontSetting,
+        font: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match setting {
+            FontSetting::Ui => {
+                let font = if font == SYSTEM_FONT_LABEL {
+                    Settings::default().ui_font_family
+                } else {
+                    font
+                };
+                self.set_ui_font(font, window, cx);
+            }
+            FontSetting::Editor => self.set_editor_font(font, cx),
+            FontSetting::Logs => self.set_logs_font(font, cx),
+        }
+    }
+
     pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let close = weak.clone();
-            let content = weak
-                .update(cx, |this, cx| this.settings_content(window, cx))
-                .ok();
+            let body = weak.clone();
             let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
             let rem = window.rem_size();
             let viewport = window.viewport_size();
@@ -254,7 +338,12 @@ impl Qrow {
                 .margin_top((viewport.height - height) / 2.)
                 .overlay_closable(false)
                 .on_ok(|_, _, _| false)
-                .children(content)
+                .content(move |content, window, cx| {
+                    let panel = body
+                        .update(cx, |this, cx| this.settings_content(window, cx))
+                        .ok();
+                    content.children(panel)
+                })
                 .when_some(footer, |dialog, footer| dialog.footer(footer))
                 .on_close(move |_, _, cx| {
                     let _ = close.update(cx, |this, cx| {
@@ -270,168 +359,37 @@ impl Qrow {
         let Some(form) = &self.settings_form else {
             return div().into_any_element();
         };
-        // Keep the controls in sync with shortcuts and Restore defaults.
-        for (control, displayed, value) in [
-            (
-                &form.scale,
-                &form.displayed_scale,
-                self.settings.ui_scale * 100.,
-            ),
-            (
-                &form.editor_font_size,
-                &form.displayed_editor_font_size,
-                self.settings.editor_font_size,
-            ),
-            (
-                &form.logs_font_size,
-                &form.displayed_logs_font_size,
-                self.settings.logs_font_size,
-            ),
-        ] {
+        // Keep the controls in sync with the scale shortcuts and Restore
+        // defaults.
+        for (setting, input, displayed) in &form.numbers {
+            let value = setting.value(&self.settings);
             if displayed.get() != value {
                 displayed.set(value);
-                control.update(cx, |state, cx| {
-                    state.set_value(format!("{value:.0}"), window, cx)
+                let text = setting.format(value);
+                input.update(cx, |input, cx| input.set_value(text, window, cx));
+            }
+        }
+        for (setting, select) in &form.fonts {
+            let selected = setting.selected(&self.settings);
+            if select.read(cx).selected_value() != Some(&selected) {
+                select.update(cx, |state, cx| {
+                    state.set_selected_value(&selected, window, cx)
                 });
             }
         }
-        for (control, displayed, value) in [
-            (
-                &form.editor_line_height,
-                &form.displayed_editor_line_height,
-                self.settings.editor_line_height,
-            ),
-            (
-                &form.logs_line_height,
-                &form.displayed_logs_line_height,
-                self.settings.logs_line_height,
-            ),
-        ] {
-            if displayed.get() != value {
-                displayed.set(value);
-                control.update(cx, |state, cx| {
-                    state.set_value(format!("{value:.1}"), window, cx)
-                });
-            }
-        }
-        if form.editor_font.read(cx).selected_value() != Some(&self.settings.editor_font_family) {
-            form.editor_font.update(cx, |state, cx| {
-                state.set_selected_value(&self.settings.editor_font_family, window, cx)
-            });
-        }
-        if form.logs_font.read(cx).selected_value() != Some(&self.settings.logs_font_family) {
-            form.logs_font.update(cx, |state, cx| {
-                state.set_selected_value(&self.settings.logs_font_family, window, cx)
-            });
-        }
-        let ui_font = if self.settings.ui_font_family == Settings::default().ui_font_family {
-            SYSTEM_FONT_LABEL.to_owned()
-        } else {
-            self.settings.ui_font_family.clone()
-        };
-        if form.ui_font.read(cx).selected_value() != Some(&ui_font) {
-            form.ui_font.update(cx, |state, cx| {
-                state.set_selected_value(&ui_font, window, cx)
-            });
-        }
-        let rows = Rows::new(
-            Rows::dialog_width(window, DIALOG_REMS),
-            window.rem_size(),
-            CONTROL_REMS,
-        );
-        let row = |label: &'static str, description: &'static str, control: AnyElement| {
-            rows.row(label, description, control, cx)
-        };
-        let section = |label: &'static str| {
-            div()
-                .w_full()
-                .pt_4()
-                .pb_2()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(cx.theme().muted_foreground)
-                        .child(label),
-                )
-        };
-        v_flex()
-            .w_full()
-            .flex_shrink_0()
-            .pt_3()
-            .pb_4()
-            .child(section("UI"))
-            .child(row(
-                "Scale",
-                "Text and controls size.",
-                setting_stepper(&form.scale, "%", "UI Scale", window, cx).into_any_element(),
-            ))
+        let rem = window.rem_size();
+        div()
+            .size_full()
+            .overflow_hidden()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
             .child(
-                rows.last_row(
-                    "Font Family",
-                    "Font used for text and controls.",
-                    Select::new(&form.ui_font)
-                        .w_full()
-                        .accessibility_label("UI Font Family")
-                        .into_any_element(),
-                    cx,
-                ),
-            )
-            .child(section("Editor"))
-            .child(row(
-                "Font Family",
-                "A monospace font is recommended.",
-                Select::new(&form.editor_font)
-                    .w_full()
-                    .accessibility_label("Editor Font Family")
-                    .into_any_element(),
-            ))
-            .child(row(
-                "Font Size",
-                "Font size before scaling.",
-                setting_stepper(&form.editor_font_size, "px", "Editor Font Size", window, cx)
-                    .into_any_element(),
-            ))
-            .child(
-                rows.last_row(
-                    "Line Height",
-                    "Multiplier for the vertical spacing between lines.",
-                    setting_stepper(
-                        &form.editor_line_height,
-                        "x",
-                        "Editor Line Height",
-                        window,
-                        cx,
-                    )
-                    .into_any_element(),
-                    cx,
-                ),
-            )
-            .child(section("Logs"))
-            .child(row(
-                "Font Family",
-                "A monospace font is recommended.",
-                Select::new(&form.logs_font)
-                    .w_full()
-                    .accessibility_label("Logs Font Family")
-                    .into_any_element(),
-            ))
-            .child(row(
-                "Font Size",
-                "Font size before scaling.",
-                setting_stepper(&form.logs_font_size, "px", "Logs Font Size", window, cx)
-                    .into_any_element(),
-            ))
-            .child(
-                rows.last_row(
-                    "Line Height",
-                    "Multiplier for the vertical spacing between lines.",
-                    setting_stepper(&form.logs_line_height, "x", "Logs Line Height", window, cx)
-                        .into_any_element(),
-                    cx,
-                ),
+                SettingsPanel::new("settings")
+                    .with_group_variant(GroupBoxVariant::Fill)
+                    .sidebar_width(rem * SIDEBAR_REMS)
+                    .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+                    .page(settings_page(form)),
             )
             .into_any_element()
     }
@@ -453,47 +411,14 @@ impl Qrow {
                     .label("Save")
                     .on_click(cx.listener(|this, _, window, cx| {
                         // Commit pending numeric edits before disposing their subscriptions.
-                        if let Some(form) = &this.settings_form {
-                            let scale = form.scale.clone();
-                            let editor_font_size = form.editor_font_size.clone();
-                            let editor_line_height = form.editor_line_height.clone();
-                            let logs_font_size = form.logs_font_size.clone();
-                            let logs_line_height = form.logs_line_height.clone();
-                            this.commit_number_setting(
-                                &scale,
-                                NumberSetting::Scale,
-                                0.,
-                                window,
-                                cx,
-                            );
-                            this.commit_number_setting(
-                                &editor_font_size,
-                                NumberSetting::EditorFontSize,
-                                0.,
-                                window,
-                                cx,
-                            );
-                            this.commit_number_setting(
-                                &editor_line_height,
-                                NumberSetting::EditorLineHeight,
-                                0.,
-                                window,
-                                cx,
-                            );
-                            this.commit_number_setting(
-                                &logs_font_size,
-                                NumberSetting::LogsFontSize,
-                                0.,
-                                window,
-                                cx,
-                            );
-                            this.commit_number_setting(
-                                &logs_line_height,
-                                NumberSetting::LogsLineHeight,
-                                0.,
-                                window,
-                                cx,
-                            );
+                        let pending: Vec<_> = this
+                            .settings_form
+                            .iter()
+                            .flat_map(|form| form.numbers.iter())
+                            .map(|(setting, input, _)| (*setting, input.clone()))
+                            .collect();
+                        for (setting, input) in pending {
+                            this.commit_number_setting(&input, setting, 0., window, cx);
                         }
                         // Programmatic close_dialog does not invoke Dialog::on_close.
                         this.settings_open = false;
@@ -504,6 +429,117 @@ impl Qrow {
             )
             .into_any_element()
     }
+}
+
+/// The settings the dialog shows. One page holds every group, so each control
+/// stays rendered and reachable from the keyboard: the sidebar entries are a
+/// pointer-only shortcut that scrolls to a group.
+fn settings_page(form: &SettingsForm) -> SettingPage {
+    SettingPage::new("Appearance")
+        .default_open(true)
+        // Restore defaults in the footer already resets this page, and it is
+        // the only page.
+        .resettable(false)
+        .group(
+            SettingGroup::new()
+                .title("Interface")
+                .item(
+                    SettingItem::new("Scale", number_field(form, NumberSetting::Scale))
+                        .description("Text and controls size.")
+                        .keywords(["zoom", "interface", "ui"]),
+                )
+                .item(
+                    SettingItem::new("Font Family", font_field(form, FontSetting::Ui))
+                        .description("Font used for text and controls.")
+                        .keywords(["interface", "ui", "typeface"]),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Editor")
+                .item(
+                    SettingItem::new("Font Family", font_field(form, FontSetting::Editor))
+                        .description("A monospace font is recommended.")
+                        .keywords(["editor", "sql", "typeface"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Font Size",
+                        number_field(form, NumberSetting::EditorFontSize),
+                    )
+                    .description("Font size before scaling.")
+                    .keywords(["editor", "sql"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Line Height",
+                        number_field(form, NumberSetting::EditorLineHeight),
+                    )
+                    .description("Multiplier for the vertical spacing between lines.")
+                    .keywords(["editor", "sql", "spacing"]),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Logs")
+                .item(
+                    SettingItem::new("Font Family", font_field(form, FontSetting::Logs))
+                        .description("A monospace font is recommended.")
+                        .keywords(["logs", "typeface"]),
+                )
+                .item(
+                    SettingItem::new("Font Size", number_field(form, NumberSetting::LogsFontSize))
+                        .description("Font size before scaling.")
+                        .keywords(["logs"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Line Height",
+                        number_field(form, NumberSetting::LogsLineHeight),
+                    )
+                    .description("Multiplier for the vertical spacing between lines.")
+                    .keywords(["logs", "spacing"]),
+                ),
+        )
+}
+
+/// Size the control column. A page that keeps the label beside the control
+/// aligns every control on one width; a stacked page fills the row.
+fn control(options: &RenderOptions, rem: Pixels, element: impl IntoElement) -> Div {
+    div()
+        .map(|this| match options.layout() {
+            Axis::Horizontal => this.w(rem * CONTROL_REMS).flex_shrink_0(),
+            Axis::Vertical => this.w_full(),
+        })
+        .child(element)
+}
+
+fn number_field(form: &SettingsForm, setting: NumberSetting) -> SettingField<SharedString> {
+    let input = form.number(setting).clone();
+    SettingField::render(
+        move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
+            control(
+                options,
+                window.rem_size(),
+                setting_stepper(&input, setting.unit(), setting.label(), window, cx),
+            )
+        },
+    )
+}
+
+fn font_field(form: &SettingsForm, setting: FontSetting) -> SettingField<SharedString> {
+    let select = form.font(setting).clone();
+    SettingField::render(
+        move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+            control(
+                options,
+                window.rem_size(),
+                Select::new(&select)
+                    .w_full()
+                    .accessibility_label(setting.label()),
+            )
+        },
+    )
 }
 
 /// Retain Kit's spinbutton behavior while grouping the value and unit in one
