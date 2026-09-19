@@ -116,6 +116,11 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertNotIn("head.repo.full_name", self.workflow_job(job))
         self.assertIn("converted_to_draft", workflow)
 
+    def test_workflow_artifacts_expire_after_one_day(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        self.assertEqual(workflow.count("retention-days: 1"), 2)
+        self.assertNotIn("retention-days: 14", workflow)
+
     def test_native_e2e_package_mode_validates_bundle(self):
         driver = (ROOT / "scripts/e2e/driver.sh").read_text()
         self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE", driver)

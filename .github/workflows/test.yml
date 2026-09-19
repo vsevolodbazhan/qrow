@@ -84,7 +84,7 @@ jobs:
         with:
           name: core-coverage
           path: target/coverage/core.lcov
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
 
   macos:
@@ -120,5 +120,5 @@ jobs:
           path: |
             dist/Qrow-macos.zip
             performance.txt
-          retention-days: 14
+          retention-days: 1
           if-no-files-found: error
