@@ -16,6 +16,7 @@ use gpui_kit::component::{
     dialog::DialogFooter,
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    notification::Notification,
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -1572,9 +1573,10 @@ impl Qrow {
                     && current.saved.title == title
             })
         {
-            if let Some(form) = &mut self.tab_form {
-                form.error = Some("A tab with this name already exists on this connection.".into());
-            }
+            window.push_notification(
+                Notification::error("A tab with this name already exists on this connection."),
+                cx,
+            );
             cx.notify();
             return;
         }

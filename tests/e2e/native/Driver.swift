@@ -702,12 +702,14 @@ final class Driver {
         _ = try waitExact("Query 1 (Copy 2)")
         try click(try waitExact("Query 1"))
 
-        // A rename cannot take another tab's name on this connection.
+        // A rename cannot take another tab's name on this connection. The
+        // error toast explains why, while the editor stays open for correction.
         try rightClick(try waitExact("Query 1"))
         try click(try wait("Edit Tab…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", "Query 2")
         try press("Save")
+        _ = try wait("A tab with this name already exists on this connection.")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
         try press("Cancel")
