@@ -257,6 +257,7 @@ pub struct Qrow {
     profiles: Vec<Profile>,
     tabs: Vec<Tab>,
     active: usize,
+    active_tabs: BTreeMap<Uuid, Uuid>,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     menu: Option<ContextMenu>,
@@ -300,6 +301,7 @@ impl Qrow {
             }
         };
         let fonts = installed_fonts(cx);
+        workspace.normalize();
         workspace.settings.sanitize();
         let mut unavailable_font = !fonts
             .iter()
@@ -353,6 +355,7 @@ impl Qrow {
             profiles: workspace.profiles,
             tabs: vec![],
             active: workspace.active_tab,
+            active_tabs: workspace.active_tabs.clone(),
             form: None,
             tab_form: None,
             menu: None,
@@ -465,7 +468,7 @@ impl Qrow {
     }
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
-            version: 1,
+            version: 2,
             settings: self.settings.clone(),
             profiles: self.profiles.clone(),
             tabs: self
@@ -478,6 +481,7 @@ impl Qrow {
                 })
                 .collect(),
             active_tab: self.active,
+            active_tabs: self.active_tabs.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -1672,10 +1676,11 @@ fn demo_workspace() -> Workspace {
     tab.title = "Route overview".into();
     tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
-        version: 1,
+        version: 2,
         settings: Settings::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
+        active_tabs: BTreeMap::new(),
     }
 }

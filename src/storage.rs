@@ -30,7 +30,7 @@ pub fn load(path: &Path) -> Result<Workspace> {
     let mut workspace: Workspace = serde_json::from_slice(&data)
         .context("Saved workspace is invalid; the original file has been left untouched")?;
     anyhow::ensure!(
-        workspace.version == 1,
+        (1..=2).contains(&workspace.version),
         "Unsupported workspace version {}; the file has been left untouched",
         workspace.version
     );
@@ -38,6 +38,7 @@ pub fn load(path: &Path) -> Result<Workspace> {
         workspace.tabs = Workspace::default().tabs;
     }
     workspace.active_tab = workspace.active_tab.min(workspace.tabs.len() - 1);
+    workspace.normalize();
     workspace.settings.sanitize();
     Ok(workspace)
 }
