@@ -478,7 +478,7 @@ final class Driver {
 
         try press("Qrow E2E")
         try query("SELECT 'qrow-ui-connected' AS result")
-        _ = try wait("qrow-ui-connected")
+        _ = try wait("qrow-ui-connected", role: kAXCellRole)
         try snapshot("connected")
 
         // Create a second disposable profile for the connection-switch test.
@@ -515,6 +515,7 @@ final class Driver {
         )
         try selectConnection("Qrow E2E")
         _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        _ = try wait("qrow-ui-connected", timeout: 10, role: kAXCellRole)
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
