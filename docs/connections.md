@@ -89,11 +89,12 @@ source connection.
 
 Right-click a tab to choose **Edit Tab…**, **Duplicate**, **Copy to
 Connection…**, or **Move to Connection…**. Duplicate copies the tab within its
-connection. Copy and move select the destination connection and the resulting
-tab. Move is disabled while the tab is busy. Tab names must be unique within a
-connection. A duplicate or copied tab uses the source name with **(Copy)**;
-later copies add a number when needed. A move keeps the source name when it is
-available and adds a copy suffix if the destination already uses that name.
+connection. Copy and move show a submenu of destination connections. Choosing
+a destination selects the resulting tab. Move is disabled while the tab is
+busy. Tab names must be unique within a connection. A duplicate or copied tab
+uses the source name with **(Copy)**; later copies add a number when needed. A
+move keeps the source name when it is available and adds a copy suffix if the
+destination already uses that name.
 
 These actions copy only the current SQL text and tab name. Duplicate and copy
 update the name as described above. They do not copy

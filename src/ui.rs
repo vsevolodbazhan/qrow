@@ -1389,88 +1389,54 @@ impl Qrow {
                 this.copy_tab(tab, profile, false, window, cx);
             }
         });
-        let copy = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.open_tab_destination_picker(tab, false, window, cx);
-        });
-        let move_tab = cx.listener(move |this, _: &ClickEvent, window, cx| {
-            this.open_tab_destination_picker(tab, true, window, cx);
-        });
-        let has_destinations = self
-            .profiles
-            .iter()
-            .any(|profile| Some(profile.id) != source_profile);
-        self.open_context_menu(
-            position,
-            move |menu, _, _| {
-                menu.item(PopupMenuItem::new("Edit Tab…").on_click(edit))
-                    .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
-                    .item(
-                        PopupMenuItem::new("Copy to Connection…")
-                            .on_click(copy)
-                            .disabled(!has_destinations),
-                    )
-                    .item(
-                        PopupMenuItem::new("Move to Connection…")
-                            .on_click(move_tab)
-                            .disabled(!has_destinations || source_busy),
-                    )
-            },
-            window,
-            cx,
-        );
-    }
-    fn open_tab_destination_picker(
-        &mut self,
-        tab: Uuid,
-        move_tab: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(source) = self.tabs.iter().find(|t| t.saved.id == tab) else {
-            return;
-        };
-        if move_tab && source.busy {
-            return;
-        }
-        let source_profile = source.saved.profile;
         let destinations: Vec<_> = self
             .profiles
             .iter()
             .filter(|profile| Some(profile.id) != source_profile)
             .map(|profile| (profile.id, profile.name.clone()))
             .collect();
-        if destinations.is_empty() {
-            return;
-        }
         let weak = cx.weak_entity();
-        window.open_alert_dialog(cx, move |alert, _, _| {
-            let title = if move_tab {
-                "Move tab to connection"
-            } else {
-                "Copy tab to connection"
-            };
-            let footer = destinations.iter().cloned().fold(
-                DialogFooter::new().justify_end().child(
-                    Button::new("cancel-tab-destination")
-                        .label("Cancel")
-                        .on_click(|_, window, cx| window.close_dialog(cx)),
-                ),
-                |footer, (id, name)| {
+        self.open_context_menu(
+            position,
+            move |menu, window, cx| {
+                let menu = menu
+                    .item(PopupMenuItem::new("Edit Tab…").on_click(edit))
+                    .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
+                let menu = if destinations.is_empty() {
+                    menu.item(PopupMenuItem::new("Copy to Connection…").disabled(true))
+                } else {
+                    let destinations = destinations.clone();
                     let weak = weak.clone();
-                    footer.child(
-                        Button::new(SharedString::from(format!("tab-destination-{id}")))
-                            .label(name)
-                            .on_click(move |_, window, cx| {
+                    menu.submenu("Copy to Connection…", window, cx, move |menu, _, _| {
+                        destinations.iter().cloned().fold(menu, |menu, (id, name)| {
+                            let weak = weak.clone();
+                            menu.item(PopupMenuItem::new(name).on_click(move |_, window, cx| {
                                 let _ = weak.update(cx, |this, cx| {
-                                    this.copy_tab(tab, id, move_tab, window, cx)
+                                    this.copy_tab(tab, id, false, window, cx)
                                 });
-                                window.close_dialog(cx);
-                            }),
-                    )
-                },
-            );
-            alert.title(title).footer(footer)
-        });
+                            }))
+                        })
+                    })
+                };
+                if destinations.is_empty() || source_busy {
+                    menu.item(PopupMenuItem::new("Move to Connection…").disabled(true))
+                } else {
+                    let weak = weak.clone();
+                    menu.submenu("Move to Connection…", window, cx, move |menu, _, _| {
+                        destinations.iter().cloned().fold(menu, |menu, (id, name)| {
+                            let weak = weak.clone();
+                            menu.item(PopupMenuItem::new(name).on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.copy_tab(tab, id, true, window, cx)
+                                });
+                            }))
+                        })
+                    })
+                }
+            },
+            window,
+            cx,
+        );
     }
     fn copy_tab(
         &mut self,
