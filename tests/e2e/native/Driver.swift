@@ -703,7 +703,7 @@ final class Driver {
         try click(try waitExact("Query 1"))
 
         // A rename cannot take another tab's name on this connection. The
-        // error toast explains why, while the editor stays open for correction.
+        // error alert explains why, while the editor stays open for correction.
         try rightClick(try waitExact("Query 1"))
         try click(try wait("Edit Tab…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)

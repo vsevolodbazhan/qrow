@@ -1,6 +1,6 @@
 use super::setting_row::Rows;
 use super::*;
-use gpui_kit::component::{h_flex, v_flex};
+use gpui_kit::component::{alert::Alert, h_flex, v_flex};
 
 /// Matches the settings dialogs: label and description left, control right.
 const DIALOG_REMS: f32 = 44.;
@@ -44,6 +44,10 @@ impl Qrow {
             .key_context("TabSettings")
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
             .w_full()
+            .gap_3()
+            .when_some(form.error.clone(), |content, error| {
+                content.child(Alert::error("tab-name-error", error))
+            })
             .child(
                 rows.last_row(
                     "Name",
@@ -58,17 +62,14 @@ impl Qrow {
     }
 
     fn tab_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(form) = &self.tab_form else {
+        if self.tab_form.is_none() {
             return div().into_any_element();
-        };
+        }
         v_flex()
             .w_full()
             .gap_2()
             .key_context("TabSettings")
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
-            .when_some(form.error.clone(), |el, error| {
-                el.child(div().text_color(cx.theme().danger).child(error))
-            })
             .child(
                 h_flex()
                     .gap_2()
