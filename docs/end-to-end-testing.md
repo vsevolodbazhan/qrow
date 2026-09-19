@@ -144,7 +144,9 @@ hidden tabs. Returning to the first profile restores its last active tab.
 The scenario also checks profile edits while another profile is selected.
 Lifecycle edits preserve the session and cursor. Password changes and deletion
 close the matching sessions. It checks that **Disconnect** acts on the active
-tab only. Returning to a connection makes its tabs visible again.
+tab only. Returning to a connection makes its tabs visible again. It also
+checks Copy to Connection and Move to Connection from nested tab menus. These
+actions transfer the tab name and SQL, but do not transfer result rows.
 
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve

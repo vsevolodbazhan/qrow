@@ -507,10 +507,14 @@ final class Driver {
         key(36)
         try waitGone("Copy to Connection…")
         try selectConnection("Qrow E2E copy")
-        _ = try waitExact("Query 1 (Copy)")
-        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
+        _ = try waitExact("Query 1 (Copy)", timeout: 10)
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Copy carried results to the destination tab",
+        )
         try selectConnection("Qrow E2E")
-        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
@@ -519,8 +523,12 @@ final class Driver {
         key(36)
         try waitGone("Move to Connection…")
         try selectConnection("Qrow E2E copy")
-        _ = try waitExact("Query 1 (Copy 2)")
-        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
+        _ = try waitExact("Query 1 (Copy 2)", timeout: 10)
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Move carried results to the destination tab",
+        )
         try selectConnection("Qrow E2E")
         try require(
             find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
