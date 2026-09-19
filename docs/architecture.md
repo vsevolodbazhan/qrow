@@ -35,9 +35,11 @@ flowchart LR
     Worker -->|Timestamped activity| Activity[Logs history]
 ```
 
-The UI reads the selection and validates statement boundaries. The worker opens
-a session when needed, runs the SQL, and fetches a bounded preview. Worker events
-wake the UI to update status and results.
+The UI reads the selection and validates statement boundaries. The workspace
+groups tabs by their owning connection while the worker keeps one session per
+tab. The worker opens a session when needed, runs the SQL, and fetches a bounded
+preview. Worker events wake the UI to update status and results. Selecting a
+connection changes the visible tab group and does not stop hidden workers.
 
 The worker sends activity events through a separate channel. Activity events
 carry a wall-clock timestamp, an execution ID, an event kind, and a measured

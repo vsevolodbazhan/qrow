@@ -458,16 +458,27 @@ final class Driver {
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Duplicate"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Password", "qrow-test-password")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E copy 2")
+        try rightClick(try waitExact("Qrow E2E copy 2", role: kAXButtonRole))
+        try click(try wait("Delete"))
+        try press("Delete connection")
+        try waitGone("Qrow E2E copy 2")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Delete"))
         // Alert titles are not exposed by GPUI's macOS accessibility tree.
         // The confirmation button proves that the alert replaced the menu.
-        try press("Delete")
+        try press("Delete connection")
         try waitGone("Qrow E2E copy")
 
         try press("Qrow E2E")
         try query("SELECT 'qrow-ui-connected' AS result")
-        _ = try wait("qrow-ui-connected")
+        _ = try wait("qrow-ui-connected", role: kAXCellRole)
         try snapshot("connected")
 
         // Create a second disposable profile for the connection-switch test.
@@ -479,7 +490,58 @@ final class Driver {
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
 
-        // Keep A alive while B is selected. B keeps its default idle policy.
+        // Creating a connection activates its default tab. Select A explicitly
+        // before setting up its session; B keeps its default idle policy.
+        try selectConnection("Qrow E2E")
+
+        // Copy and move destination menus are nested under the tab context
+        // menu. Keyboard navigation verifies that each submenu opens and its
+        // first connection item performs the requested action.
+        try rightClick(try waitExact("Query 1"))
+        _ = try wait("Copy to Connection…")
+        for _ in 0..<3 { key(125) }
+        // The context menu has room to open this submenu to the right in the
+        // native test window.
+        key(124)
+        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        key(36)
+        try waitGone("Copy to Connection…")
+        try selectConnection("Qrow E2E copy")
+        _ = try waitExact("Query 1 (Copy)", timeout: 10)
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Copy carried results to the destination tab",
+        )
+        try selectConnection("Qrow E2E")
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        _ = try wait("qrow-ui-connected", timeout: 10, role: kAXCellRole)
+        try rightClick(try waitExact("Query 1"))
+        _ = try wait("Move to Connection…")
+        for _ in 0..<4 { key(125) }
+        key(124)
+        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        key(36)
+        try waitGone("Move to Connection…")
+        try selectConnection("Qrow E2E copy")
+        _ = try waitExact("Query 1 (Copy 2)", timeout: 10)
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Move carried results to the destination tab",
+        )
+        try selectConnection("Qrow E2E")
+        try waitGone("Query 1 (Copy 2)")
+        _ = try waitExact("Query 1", timeout: 10)
+        try require(
+            find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
+            "Move left the source SQL on its original connection",
+        )
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Move left source rows in its replacement tab",
+        )
+
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
@@ -487,7 +549,7 @@ final class Driver {
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
         try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
         try fill("Keep-alive Interval in Seconds", "3")
-        try fill("Keep-alive Query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(10000 AS BIGINT)) FROM range(1)")
+        try fill("Keep-alive Query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(30000 AS BIGINT)) FROM range(1)")
         try press("Save")
         try waitGone("Cancel")
         try query("CREATE TEMPORARY FUNCTION qrow_keep_alive AS 'io.qrow.fixture.Blocking'")
@@ -506,24 +568,24 @@ final class Driver {
         _ = try wait("Preview · More rows available")
         _ = try wait("Sending keep-alive…", timeout: 20)
         try selectConnection("Qrow E2E copy")
-        // The running heartbeat belongs to A even though B is selected.
-        try require(find("Sending keep-alive…") != nil, "Fixture heartbeat ended before the busy-profile edit check")
-        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        // A's tabs are hidden while B is selected, so use the connection row
+        // indicator to verify that A's heartbeat is still running.
+        _ = try wait("Qrow E2E, running", timeout: 5)
+        try rightClick(try wait("Qrow E2E, running", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened during the original session's heartbeat")
         key(53)
         try waitGone("Edit Connection…")
+        try selectConnection("Qrow E2E")
         _ = try wait("switch-a-1000")
-        _ = try wait("Connected · Keep-alive enabled", timeout: 20)
+        _ = try wait("Connected · Keep-alive enabled", timeout: 40)
         _ = try wait("switch-a-1000")
         try press("Next")
         _ = try wait("switch-a-2000")
         _ = try wait("Page 3")
         try snapshot("connection-switch-keep-alive")
         try press("Previous")
-        _ = try wait("switch-a-1000")
-        try selectConnection("Qrow E2E")
         _ = try wait("switch-a-1000")
         try query("SELECT concat('same-session-', current_timezone()) AS value")
         _ = try wait("same-session-Asia/Tokyo")
@@ -534,29 +596,33 @@ final class Driver {
         try query("SELECT concat('switch-b-', lpad(CAST(id AS STRING), 4, '0'), '-', current_timezone()) AS value FROM range(2001) ORDER BY id")
         _ = try wait("switch-b-0000-UTC")
         try selectConnection("Qrow E2E")
+        _ = try wait("same-session-Asia/Tokyo")
+        // Disconnect acts on the active tab only. A's session closes while
+        // B's result cursor remains available in its hidden tab.
+        try press("Disconnect")
+        _ = try wait("Disconnected", timeout: 10)
+        try selectConnection("Qrow E2E copy")
         _ = try wait("switch-b-0000-UTC")
-        // B is idle with no heartbeat, so only the different selection can
-        // disable Disconnect. AXEnabled is not available for every GPUI button.
         _ = try wait("Preview · More rows available")
-        try click(try wait("Disconnect", role: kAXButtonRole))
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        try require(find("Disconnecting…") == nil && find("Disconnected") == nil,
-                    "Disconnect closed the unselected profile's session")
+        try press("Next")
+        _ = try wait("switch-b-1000-UTC")
         try snapshot("connection-switch")
 
-        // Editing selected A must not close B's session. Restore A's default
-        // idle policy for the remaining scenarios, then fetch through B's cursor.
+        // Editing A while B is selected must not close B's session. Restore A's
+        // default idle policy, then fetch through B's cursor.
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Disconnect", role: kAXRadioButtonRole))
         try press("Save")
         try waitGone("Cancel")
+        try selectConnection("Qrow E2E copy")
         try press("Next")
-        _ = try wait("switch-b-1000-UTC")
+        _ = try wait("switch-b-2000-UTC")
 
         // A lifecycle edit updates B's live session while A remains selected.
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try selectConnection("Qrow E2E")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
@@ -565,23 +631,25 @@ final class Driver {
         try fill("Keep-alive Query", "SELECT 'updated-b'")
         try press("Save")
         try waitGone("Cancel")
+        try selectConnection("Qrow E2E copy")
         _ = try wait("Connected · Keep-alive enabled", timeout: 20)
-        _ = try wait("switch-b-1000-UTC")
-        try press("Next")
         _ = try wait("switch-b-2000-UTC")
+        try press("Next")
+        _ = try wait("switch-b-3000-UTC")
 
         // Replacing B's password closes B even while A is selected. Restore
         // B's default idle policy for the remaining disconnect scenarios.
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try selectConnection("Qrow E2E")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try fill("Password", "qrow-test-password")
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Disconnect", role: kAXRadioButtonRole))
         try press("Save")
         try waitGone("Cancel")
-        _ = try wait("Not connected")
-        _ = try wait("switch-b-2000-UTC")
         try selectConnection("Qrow E2E copy")
+        _ = try wait("Not connected")
+        _ = try wait("switch-b-3000-UTC")
         try query("SELECT 'switch-b-reconnected' AS value")
         _ = try wait("switch-b-reconnected")
         try selectConnection("Qrow E2E")
@@ -595,10 +663,9 @@ final class Driver {
         try selectConnection("Qrow E2E")
         try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Delete"))
-        try press("Delete")
+        try press("Delete connection")
         try waitGone("Qrow E2E copy")
-        _ = try wait("Not connected")
-        _ = try wait("switch-b-after-disconnect")
+        _ = try wait("Disconnected")
 
         // A profile metadata edit keeps the session in both tabs. Temporary
         // views prove that the workers did not reconnect when the form was saved.
@@ -624,29 +691,58 @@ final class Driver {
         _ = try wait("preserved")
         try click(try waitExact("Query 1"))
 
-        // The tab menu renames the tab without changing its SQL or session.
+        // Duplicate keeps tab names unique within the connection and selects
+        // the new tab. A second copy receives a numbered suffix.
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Duplicate"))
+        _ = try waitExact("Query 1 (Copy)")
+        try click(try waitExact("Query 1"))
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Duplicate"))
+        _ = try waitExact("Query 1 (Copy 2)")
+        try click(try waitExact("Query 1"))
+
+        // A rename cannot take another tab's name on this connection. The
+        // error alert explains why, while the dialog stays open for correction.
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
-        try fill("Tab Name", String(repeating: "x", count: 61))
-        try press("Save")
-        // Validation text is not exposed by GPUI's accessibility tree. A
-        // rejected save leaves the editor open and the tab title unchanged.
+        try fill("Tab Name", "Query 2")
+        try press("Rename")
+        _ = try wait("A tab with this name already exists on this connection.")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
         try press("Cancel")
         try waitGone("Tab Name")
+
+        // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", String(repeating: "x", count: 61))
+        try press("Rename")
+        // Validation text is not exposed by GPUI's accessibility tree. A
+        // rejected rename leaves the dialog open and the tab title unchanged.
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        _ = try waitExact("Query 1")
+        // A later duplicate-name error replaces the earlier length error.
+        try fill("Tab Name", "Query 2")
+        try press("Rename")
+        _ = try wait("A tab with this name already exists on this connection.")
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try press("Cancel")
+        try waitGone("Tab Name")
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", "Renamed tab")
-        try press("Save")
+        try press("Rename")
         try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
         try rightClick(try waitExact("Renamed tab"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
-        try press("Save")
+        try press("Rename")
         try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
 
@@ -737,7 +833,7 @@ final class Driver {
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened while the connection was busy")
         try click(try wait("Delete"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        try require(find("Delete", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
+        try require(find("Delete connection", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
         key(53)
         try waitGone("Edit Connection…")
         try newTab("Query 3")
@@ -767,7 +863,7 @@ final class Driver {
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, connection menus, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 

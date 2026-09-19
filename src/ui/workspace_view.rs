@@ -5,13 +5,14 @@ use gpui_kit::component::{
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
+use qrow::model::copied_profile_name;
 use std::rc::Rc;
 
 const TAB_BAR_HEIGHT: f32 = 36.;
 
 impl Qrow {
     fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.tabs[self.active].saved.profile;
+        let active = self.active_profile();
         let action_size = self.ui_px(28.);
         v_flex()
             .size_full()
@@ -60,6 +61,16 @@ impl Qrow {
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
                         let busy = self.profile_busy(id);
+                        let unread_error = self
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
+                        let accessibility_label = format!(
+                            "{}{}{}",
+                            profile.name,
+                            if busy { ", running" } else { "" },
+                            if unread_error { ", unread error" } else { "" }
+                        );
                         let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
                         let edited = profile.clone();
                         let duplicated = profile.clone();
@@ -70,7 +81,9 @@ impl Qrow {
                             Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 let mut profile = duplicated.clone();
                                 profile.id = Uuid::new_v4();
-                                profile.name.push_str(" copy");
+                                profile.name = copied_profile_name(&profile.name, |name| {
+                                    this.profiles.iter().any(|existing| existing.name == name)
+                                });
                                 this.edit_profile(profile, true, window, cx);
                             }));
                         let delete =
@@ -83,7 +96,7 @@ impl Qrow {
                             .h_full()
                             .flex_1()
                             .min_w_0()
-                            .accessibility_label(profile.name.clone())
+                            .accessibility_label(accessibility_label)
                             .child(
                                 h_flex()
                                     .w_full()
@@ -102,7 +115,23 @@ impl Qrow {
                                             .min_w_0()
                                             .truncate()
                                             .child(profile.name.clone()),
-                                    ),
+                                    )
+                                    .when(busy, |el| {
+                                        el.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Running"),
+                                        )
+                                    })
+                                    .when(unread_error, |el| {
+                                        el.child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().danger)
+                                                .child("Error"),
+                                        )
+                                    }),
                             )
                             .selected(active == Some(id))
                             .text_color(cx.theme().sidebar_foreground)
@@ -112,9 +141,9 @@ impl Qrow {
                                     .text_color(cx.theme().sidebar_accent_foreground)
                             })
                             .tooltip(format!("{} · {}", profile.host, profile.database))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.switch_profile(id, cx)),
-                            );
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.switch_profile(id, window, cx)
+                            }));
                         h_flex()
                             .id(SharedString::from(format!("connection-{id}")))
                             .h(self.ui_px(32.))
@@ -150,8 +179,14 @@ impl Qrow {
 
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
+        let visible = self.visible_tab_indices();
         TabBar::new("query-tabs")
-            .selected_index(self.active)
+            .selected_index(
+                visible
+                    .iter()
+                    .position(|index| *index == self.active)
+                    .unwrap_or(0),
+            )
             .large()
             .h(tab_height)
             .min_h(tab_height)
@@ -173,7 +208,9 @@ impl Qrow {
                         })),
                 ),
             )
-            .children(self.tabs.iter().enumerate().map(|(index, tab)| {
+            .children(visible.iter().map(|index| {
+                let index = *index;
+                let tab = &self.tabs[index];
                 let id = tab.saved.id;
                 QueryTab::new()
                     // Kit's large tab uses a fixed 36px height internally.
@@ -238,9 +275,11 @@ impl Qrow {
                             ),
                     )
             }))
-            .on_click(
-                cx.listener(|this, index: &usize, window, cx| this.activate(*index, window, cx)),
-            )
+            .on_click(cx.listener(move |this, visible_index: &usize, window, cx| {
+                if let Some(index) = this.visible_tab_indices().get(*visible_index).copied() {
+                    this.activate(index, window, cx);
+                }
+            }))
             .suffix(
                 h_flex().h(tab_height).px_2().flex_shrink_0().child(
                     Button::new("new-tab")
@@ -249,6 +288,7 @@ impl Qrow {
                         .w(self.ui_px(28.))
                         .h(self.ui_px(28.))
                         .icon(IconName::Plus)
+                        .disabled(self.active_profile().is_none())
                         .accessibility_label("New Tab")
                         .tooltip("New Tab · ⌘T")
                         .on_click(

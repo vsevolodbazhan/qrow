@@ -136,17 +136,20 @@ The native scenario starts with the application menu. It selects **About Qrow**,
 checks the version line and the copyright, closes the dialog with Escape, and
 opens the dialog again. This check does not use a server.
 
-The native scenario also checks result retention across connection changes. It
-runs a query on one profile, downloads more than one page, selects a second
-profile during a keep-alive, and checks that the downloaded rows remain visible.
-It checks that keep-alive continues and that Qrow can fetch more rows from the
-original session. Returning to the first profile preserves its session settings.
-A query on the second profile opens a new session and replaces the preview.
+The native scenario checks result retention across connection changes. It runs a
+query on one profile, downloads more than one page, switches to a second
+profile, and checks that the first tab keeps its rows and session. It checks
+that each connection restores its own tab set and that keep-alive continues in
+hidden tabs. Returning to the first profile restores its last active tab.
 The scenario also checks profile edits while another profile is selected.
 Lifecycle edits preserve the session and cursor. Password changes and deletion
-close the matching session. It checks that **Disconnect**
-cannot close a different profile's session. Returning to the session's profile
-makes **Disconnect** available again.
+close the matching sessions. It checks that **Disconnect** acts on the active
+tab only. Returning to a connection makes its tabs visible again. It also
+checks Copy to Connection and Move to Connection from nested tab menus. The
+new tab has the source SQL, a unique tab name, and no result rows. After a
+copy, the source tab keeps its rows. After the scenario moves the last tab, the
+source connection has a new blank tab. See [Connections](connections.md) for
+tab copy and move behavior.
 
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve

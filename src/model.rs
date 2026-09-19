@@ -1,11 +1,70 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
+pub const MAX_TAB_TITLE: usize = 60;
+
+fn title_with_suffix(title: &str, suffix: &str) -> String {
+    let available = MAX_TAB_TITLE.saturating_sub(suffix.chars().count());
+    let base: String = title.chars().take(available).collect();
+    format!("{base}{suffix}")
+}
+
+/// Return a unique profile name for a duplicated connection.
+pub fn copied_profile_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    for copy in 1.. {
+        let suffix = if copy == 1 {
+            " copy".to_owned()
+        } else {
+            format!(" copy {copy}")
+        };
+        let available = MAX_PROFILE_NAME.saturating_sub(suffix.chars().count());
+        let base: String = name.chars().take(available).collect();
+        let candidate = format!("{base}{suffix}");
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("profile name search must find a bounded name")
+}
+
+/// Return a copy title that is different from every title accepted by `is_taken`.
+pub fn copied_tab_title<F>(title: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    for copy in 1.. {
+        let suffix = if copy == 1 {
+            " (Copy)".to_owned()
+        } else {
+            format!(" (Copy {copy})")
+        };
+        let candidate = title_with_suffix(title, &suffix);
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+    }
+    unreachable!("copy title search must find a bounded title")
+}
+
+/// Keep a title when it is available, otherwise append a copy suffix.
+pub fn unique_tab_title<F>(title: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(title) {
+        title.to_owned()
+    } else {
+        copied_tab_title(title, is_taken)
+    }
+}
 
 pub const MIN_UI_SCALE: f32 = 0.75;
 pub const MAX_UI_SCALE: f32 = 1.50;
@@ -228,16 +287,91 @@ pub struct Workspace {
     pub profiles: Vec<Profile>,
     pub tabs: Vec<SavedTab>,
     pub active_tab: usize,
+    #[serde(default)]
+    pub active_tabs: BTreeMap<Uuid, Uuid>,
+}
+
+impl Workspace {
+    /// Upgrade the flat tab list used by version 1 workspaces. New workspaces
+    /// still use one list in storage, but every tab is normalized to an owned
+    /// connection and each connection gets an active tab.
+    pub fn normalize(&mut self) {
+        let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
+        let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
+        let fallback = fallback.or_else(|| self.profiles.first().map(|p| p.id));
+        for tab in &mut self.tabs {
+            if tab.profile.is_none() && fallback.is_some() {
+                tab.profile = fallback;
+            }
+            if tab
+                .profile
+                .is_some_and(|id| !self.profiles.iter().any(|p| p.id == id))
+            {
+                tab.profile = fallback;
+            }
+        }
+        for profile in &self.profiles {
+            if !self.tabs.iter().any(|tab| tab.profile == Some(profile.id)) {
+                self.tabs.push(SavedTab::new(1, Some(profile.id)));
+            }
+        }
+        self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
+        self.active_tabs.retain(|profile, tab| {
+            self.profiles.iter().any(|p| p.id == *profile)
+                && self
+                    .tabs
+                    .iter()
+                    .any(|candidate| candidate.id == *tab && candidate.profile == Some(*profile))
+        });
+        for profile in &self.profiles {
+            let first = self
+                .tabs
+                .iter()
+                .find(|tab| tab.profile == Some(profile.id))
+                .map(|tab| tab.id);
+            if let Some(first) = first {
+                self.active_tabs.entry(profile.id).or_insert(first);
+            }
+        }
+        if let Some(tab) = self.tabs.get(self.active_tab)
+            && let Some(profile) = tab.profile
+        {
+            self.active_tabs.insert(profile, tab.id);
+        } else if let Some(profile) = self.profiles.first().map(|p| p.id)
+            && let Some(tab) = self.tabs.iter().find(|tab| tab.profile == Some(profile))
+        {
+            self.active_tab = self
+                .tabs
+                .iter()
+                .position(|candidate| candidate.id == tab.id)
+                .unwrap_or(0);
+            self.active_tabs.insert(profile, tab.id);
+        }
+        let mut used_titles: BTreeMap<Option<Uuid>, BTreeSet<String>> = BTreeMap::new();
+        for tab in &mut self.tabs {
+            let profile = tab.profile;
+            let title = if tab.title.trim().is_empty() {
+                "Query 1".to_owned()
+            } else {
+                tab.title.trim().to_owned()
+            };
+            let used = used_titles.entry(profile).or_default();
+            tab.title = unique_tab_title(&title, |candidate| used.contains(candidate));
+            used.insert(tab.title.clone());
+        }
+        self.version = 2;
+    }
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             settings: Settings::default(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,
+            active_tabs: BTreeMap::new(),
         }
     }
 }
@@ -324,6 +458,90 @@ mod tests {
         updated = original.clone();
         updated.id = uuid::Uuid::new_v4();
         assert!(!original.connection_identity_eq(&updated));
+    }
+
+    #[test]
+    fn normalize_assigns_legacy_tabs_and_adds_one_tab_per_connection() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let mut unassigned = SavedTab::new(1, None);
+        unassigned.sql = "select λ".into();
+        let mut workspace = Workspace {
+            version: 1,
+            profiles: vec![first.clone(), second.clone()],
+            tabs: vec![unassigned],
+            active_tab: 0,
+            active_tabs: BTreeMap::new(),
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        assert_eq!(workspace.version, 2);
+        assert_eq!(workspace.tabs[0].profile, Some(first.id));
+        assert!(
+            workspace
+                .tabs
+                .iter()
+                .any(|tab| tab.profile == Some(second.id))
+        );
+        assert_eq!(workspace.active_tabs[&first.id], workspace.tabs[0].id);
+        assert!(workspace.active_tabs.contains_key(&second.id));
+        assert_eq!(workspace.tabs[0].sql, "select λ");
+    }
+
+    #[test]
+    fn copied_tab_titles_use_copy_suffixes_and_stay_within_limit() {
+        let mut used = BTreeSet::new();
+        let first = copied_tab_title("Query 1", |title| used.contains(title));
+        used.insert(first.clone());
+        let second = copied_tab_title("Query 1", |title| used.contains(title));
+        assert_eq!(first, "Query 1 (Copy)");
+        assert_eq!(second, "Query 1 (Copy 2)");
+        assert!(second.chars().count() <= MAX_TAB_TITLE);
+
+        let long = copied_tab_title(&"x".repeat(MAX_TAB_TITLE), |_| false);
+        assert_eq!(long, format!("{} (Copy)", "x".repeat(MAX_TAB_TITLE - 7)));
+    }
+
+    #[test]
+    fn copied_profile_names_are_unique_and_stay_within_limit() {
+        let mut used = BTreeSet::new();
+        let first = copied_profile_name("Spark", |name| used.contains(name));
+        used.insert(first.clone());
+        let second = copied_profile_name("Spark", |name| used.contains(name));
+        assert_eq!(first, "Spark copy");
+        assert_eq!(second, "Spark copy 2");
+        assert!(second.chars().count() <= MAX_PROFILE_NAME);
+
+        let long = copied_profile_name(&"x".repeat(MAX_PROFILE_NAME), |_| false);
+        assert_eq!(long, format!("{} copy", "x".repeat(MAX_PROFILE_NAME - 5)));
+    }
+
+    #[test]
+    fn normalize_makes_tab_titles_unique_per_connection() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_id = first.id;
+        let second_id = second.id;
+        let mut first_tab = SavedTab::new(1, Some(first_id));
+        first_tab.title = "Shared".into();
+        let mut duplicate = SavedTab::new(2, Some(first_id));
+        duplicate.title = "Shared".into();
+        let mut other_connection = SavedTab::new(1, Some(second_id));
+        other_connection.title = "Shared".into();
+        let mut workspace = Workspace {
+            version: 2,
+            profiles: vec![first, second],
+            tabs: vec![first_tab, duplicate, other_connection],
+            active_tab: 0,
+            active_tabs: BTreeMap::new(),
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        assert_eq!(workspace.tabs[0].title, "Shared");
+        assert_eq!(workspace.tabs[1].title, "Shared (Copy)");
+        assert_eq!(workspace.tabs[2].title, "Shared");
     }
 
     #[test]

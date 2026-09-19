@@ -24,8 +24,9 @@ These layout positions are not saved in the workspace.
 
 ## Saved state
 
-The workspace file contains connection profiles, open tabs, tab names, SQL,
-selected profiles, the active tab, and appearance settings. It does not contain
+The workspace file contains connection profiles, connection-owned tabs, tab
+names, SQL, the selected connection, the last active tab for each connection,
+and appearance settings. It does not contain
 result rows or Logs history. Its default path is:
 
 ```text

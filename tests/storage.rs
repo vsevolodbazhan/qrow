@@ -1,5 +1,5 @@
 use qrow::{
-    model::Workspace,
+    model::{Profile, SavedTab, Workspace},
     storage::{self, Saver, WorkspaceFile},
 };
 use std::{
@@ -155,6 +155,31 @@ fn invalid_workspace_is_preserved_and_does_not_leave_a_lock() {
         assert_eq!(fs::read(&path).unwrap(), bytes);
         assert!(WorkspaceFile::acquire(path.clone()).is_ok());
     }
+}
+
+#[test]
+fn version_one_tabs_migrate_to_connection_ownership() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let profile = Profile::default();
+    let mut tab = SavedTab::new(1, None);
+    tab.sql = "select λ".into();
+    let mut json = serde_json::to_value(Workspace {
+        version: 1,
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        active_tab: 0,
+        ..Workspace::default()
+    })
+    .unwrap();
+    json.as_object_mut().unwrap().remove("active_tabs");
+    fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let restored = qrow::storage::load(&path).unwrap();
+    assert_eq!(restored.version, 2);
+    assert_eq!(restored.tabs[0].profile, Some(profile.id));
+    assert_eq!(restored.tabs[0].sql, "select λ");
+    assert_eq!(restored.active_tabs[&profile.id], restored.tabs[0].id);
 }
 
 #[test]

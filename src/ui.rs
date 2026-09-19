@@ -25,9 +25,9 @@ use qrow::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_UI_SCALE,
+        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE,
         MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab, Settings,
-        UI_SCALE_STEP, Workspace,
+        UI_SCALE_STEP, Workspace, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -69,7 +69,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", RenameTab, Some("TabSettings")),
+        KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
     ]);
     cx.set_menus(vec![
         Menu {
@@ -199,8 +199,7 @@ struct ContextMenu {
     _subscription: Subscription,
 }
 
-/// Long names push the tab bar around without adding information.
-const MAX_TAB_TITLE: usize = 60;
+/// Sidebar labels truncate long connection names without adding information.
 const MAX_PROFILE_DISPLAY_NAME: usize = 40;
 
 fn truncate_display_name(name: &str) -> String {
@@ -257,6 +256,7 @@ pub struct Qrow {
     profiles: Vec<Profile>,
     tabs: Vec<Tab>,
     active: usize,
+    active_tabs: BTreeMap<Uuid, Uuid>,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     menu: Option<ContextMenu>,
@@ -300,6 +300,7 @@ impl Qrow {
             }
         };
         let fonts = installed_fonts(cx);
+        workspace.normalize();
         workspace.settings.sanitize();
         let mut unavailable_font = !fonts
             .iter()
@@ -353,6 +354,7 @@ impl Qrow {
             profiles: workspace.profiles,
             tabs: vec![],
             active: workspace.active_tab,
+            active_tabs: workspace.active_tabs.clone(),
             form: None,
             tab_form: None,
             menu: None,
@@ -465,7 +467,7 @@ impl Qrow {
     }
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
-            version: 1,
+            version: 2,
             settings: self.settings.clone(),
             profiles: self.profiles.clone(),
             tabs: self
@@ -478,6 +480,7 @@ impl Qrow {
                 })
                 .collect(),
             active_tab: self.active,
+            active_tabs: self.active_tabs.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -821,12 +824,32 @@ impl Qrow {
                         password_changed,
                     } = saved;
                     let id = profile.id;
+                    let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
+                    let had_profiles = !self.profiles.is_empty();
                     let previous = self.profiles.iter().find(|p| p.id == id).cloned();
                     let action = profile_save_action(previous.as_ref(), &profile, password_changed);
                     if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == id) {
                         *existing = profile.clone();
                     } else {
                         self.profiles.push(profile.clone());
+                    }
+                    if is_new {
+                        if had_profiles {
+                            let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
+                            self.tabs.push(tab);
+                            self.activate(self.tabs.len() - 1, window, cx);
+                        } else {
+                            for tab in &mut self.tabs {
+                                tab.saved.profile = Some(id);
+                            }
+                            if let Some(index) = self
+                                .tabs
+                                .iter()
+                                .position(|tab| tab.saved.profile == Some(id))
+                            {
+                                self.activate(index, window, cx);
+                            }
+                        }
                     }
                     if action == ProfileSaveAction::Reconnect {
                         for tab in &mut self.tabs {
@@ -858,7 +881,7 @@ impl Qrow {
                             }
                         }
                     }
-                    if self.tabs[self.active].saved.profile.is_none() {
+                    if !is_new && self.tabs[self.active].saved.profile.is_none() {
                         self.tabs[self.active].saved.profile = Some(id);
                     }
                     self.form = None;
@@ -906,12 +929,40 @@ impl Qrow {
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
         self.active = index;
+        if let Some(profile) = self.tabs[index].saved.profile {
+            self.active_tabs.insert(profile, self.tabs[index].saved.id);
+        }
         self.tabs[index].panel.output_visible();
         self.tabs[index]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
         self.changed(cx);
+    }
+    fn active_profile(&self) -> Option<Uuid> {
+        self.tabs.get(self.active).and_then(|tab| tab.saved.profile)
+    }
+    fn visible_tab_indices(&self) -> Vec<usize> {
+        let profile = self.active_profile();
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| (tab.saved.profile == profile).then_some(index))
+            .collect()
+    }
+    fn active_tab_for_profile(&self, profile: Uuid) -> Option<usize> {
+        self.active_tabs
+            .get(&profile)
+            .and_then(|id| self.tabs.iter().position(|tab| tab.saved.id == *id))
+            .filter(|index| self.tabs[*index].saved.profile == Some(profile))
+            .or_else(|| {
+                self.tabs
+                    .iter()
+                    .position(|tab| tab.saved.profile == Some(profile))
+            })
     }
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
@@ -921,9 +972,14 @@ impl Qrow {
         if self.dialog_open() {
             return;
         }
+        let profile = self.active_profile();
+        if profile.is_none() {
+            return;
+        }
         let number = self
             .tabs
             .iter()
+            .filter(|tab| tab.saved.profile == profile)
             .filter_map(|t| {
                 t.saved
                     .title
@@ -933,13 +989,12 @@ impl Qrow {
             .max()
             .unwrap_or(0)
             + 1;
-        let profile = self.tabs[self.active].saved.profile;
         let tab = self.make_tab(SavedTab::new(number, profile), window, cx);
         self.tabs.push(tab);
         self.activate(self.tabs.len() - 1, window, cx);
     }
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dialog_open() || self.tabs[index].busy {
+        if self.dialog_open() || index >= self.tabs.len() || self.tabs[index].busy {
             return;
         }
         // The menu names a tab that is about to disappear.
@@ -947,7 +1002,17 @@ impl Qrow {
         if let Some(w) = &self.tabs[index].worker {
             w.shutdown();
         }
+        let profile = self.tabs[index].saved.profile;
         self.tabs.remove(index);
+        if let Some(profile) = profile
+            && !self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(profile))
+        {
+            let t = self.make_tab(SavedTab::new(1, Some(profile)), window, cx);
+            self.tabs.push(t);
+        }
         if self.tabs.is_empty() {
             let t = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|p| p.id)),
@@ -956,36 +1021,54 @@ impl Qrow {
             );
             self.tabs.push(t);
         }
-        let active = if index < self.active {
-            self.active - 1
+        let old_active = self.active;
+        let active = if index < old_active {
+            old_active - 1
+        } else if index > old_active {
+            old_active
         } else {
-            self.active.min(self.tabs.len() - 1)
+            self.tabs
+                .iter()
+                .enumerate()
+                .find(|(candidate, tab)| *candidate >= index && tab.saved.profile == profile)
+                .map(|(candidate, _)| candidate)
+                .or_else(|| {
+                    self.tabs
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(candidate, tab)| *candidate < index && tab.saved.profile == profile)
+                        .map(|(candidate, _)| candidate)
+                })
+                .or_else(|| self.tabs.len().checked_sub(1))
+                .unwrap_or(0)
         };
         self.activate(active, window, cx);
     }
-    fn switch_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
-        if tab.saved.profile == Some(id) {
+    fn switch_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.profiles.iter().any(|profile| profile.id == id) {
             return;
         }
-        let connection_name = self
-            .profiles
-            .iter()
-            .find(|profile| profile.id == id)
-            .map(|profile| profile.name.clone())
-            .unwrap_or_else(|| "Unknown connection".into());
-        Self::record_activity(
-            tab,
-            ActivityEvent::new(
-                None,
-                Severity::Info,
-                ActivityKind::ConnectionChanged,
-                format!("Selected connection: {connection_name}"),
-            ),
-        );
-        tab.saved.profile = Some(id);
-        // Selection changes only the next Run target. Keep the session and cursor.
-        self.changed(cx);
+        if let Some(index) = self.active_tab_for_profile(id) {
+            if self.tabs[self.active].saved.profile != Some(id) {
+                let connection_name = self
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == id)
+                    .map(|profile| profile.name.clone())
+                    .unwrap_or_else(|| "Unknown connection".into());
+                Self::record_activity(
+                    &mut self.tabs[self.active],
+                    ActivityEvent::new(
+                        None,
+                        Severity::Info,
+                        ActivityKind::ConnectionChanged,
+                        format!("Selected connection: {connection_name}"),
+                    ),
+                );
+            }
+            self.activate(index, window, cx);
+        }
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
@@ -1289,46 +1372,211 @@ impl Qrow {
         if !self.tabs.iter().any(|t| t.saved.id == tab) {
             return;
         }
-        let edit =
-            cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_tab(tab, window, cx));
+        let Some(source) = self.tabs.iter().find(|t| t.saved.id == tab) else {
+            return;
+        };
+        let source_profile = source.saved.profile;
+        let source_busy = source.busy;
+        let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.open_tab_rename(tab, window, cx)
+        });
+        let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            if let Some(profile) = this
+                .tabs
+                .iter()
+                .find(|t| t.saved.id == tab)
+                .and_then(|t| t.saved.profile)
+            {
+                this.copy_tab(tab, profile, false, window, cx);
+            }
+        });
+        let destinations: Vec<_> = self
+            .profiles
+            .iter()
+            .filter(|profile| Some(profile.id) != source_profile)
+            .map(|profile| (profile.id, profile.name.clone()))
+            .collect();
+        let weak = cx.weak_entity();
         self.open_context_menu(
             position,
-            move |menu, _, _| menu.item(PopupMenuItem::new("Edit Tab…").on_click(edit)),
+            move |menu, window, cx| {
+                let menu = menu
+                    .item(PopupMenuItem::new("Rename…").on_click(rename))
+                    .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
+                let menu = if destinations.is_empty() {
+                    menu.item(PopupMenuItem::new("Copy to Connection…").disabled(true))
+                } else {
+                    let destinations = destinations.clone();
+                    let weak = weak.clone();
+                    menu.submenu("Copy to Connection…", window, cx, move |menu, _, _| {
+                        destinations.iter().cloned().fold(
+                            menu.scrollable(true),
+                            |menu, (id, name)| {
+                                let weak = weak.clone();
+                                menu.item(PopupMenuItem::new(name).on_click(
+                                    move |_, window, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.copy_tab(tab, id, false, window, cx)
+                                        });
+                                    },
+                                ))
+                            },
+                        )
+                    })
+                };
+                if destinations.is_empty() || source_busy {
+                    menu.item(PopupMenuItem::new("Move to Connection…").disabled(true))
+                } else {
+                    let weak = weak.clone();
+                    menu.submenu("Move to Connection…", window, cx, move |menu, _, _| {
+                        destinations.iter().cloned().fold(
+                            menu.scrollable(true),
+                            |menu, (id, name)| {
+                                let weak = weak.clone();
+                                menu.item(PopupMenuItem::new(name).on_click(
+                                    move |_, window, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.copy_tab(tab, id, true, window, cx)
+                                        });
+                                    },
+                                ))
+                            },
+                        )
+                    })
+                }
+            },
             window,
             cx,
         );
     }
-    fn edit_tab(&mut self, tab: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+    fn copy_tab(
+        &mut self,
+        tab_id: Uuid,
+        destination: Uuid,
+        move_tab: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source_index) = self.tabs.iter().position(|tab| tab.saved.id == tab_id) else {
+            return;
+        };
+        if !self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == destination)
+        {
+            return;
+        }
+        if move_tab && self.tabs[source_index].busy {
+            return;
+        }
+        let source_profile = self.tabs[source_index].saved.profile;
+        let source_was_active =
+            source_profile.is_some_and(|profile| self.active_tabs.get(&profile) == Some(&tab_id));
+        let source_title = self.tabs[source_index].saved.title.clone();
+        let title = if move_tab {
+            unique_tab_title(&source_title, |candidate| {
+                self.tabs.iter().enumerate().any(|(index, tab)| {
+                    index != source_index
+                        && tab.saved.profile == Some(destination)
+                        && tab.saved.title == candidate
+                })
+            })
+        } else {
+            copied_tab_title(&source_title, |candidate| {
+                self.tabs.iter().any(|tab| {
+                    tab.saved.profile == Some(destination) && tab.saved.title == candidate
+                })
+            })
+        };
+        let mut saved = self.tabs[source_index].saved.clone();
+        saved.profile = Some(destination);
+        saved.title = title;
+        saved.sql = self.tabs[source_index].input.read(cx).value().to_string();
+        if move_tab {
+            saved.id = tab_id;
+            if let Some(worker) = self.tabs[source_index].worker.take() {
+                worker.shutdown();
+            }
+            self.tabs.remove(source_index);
+        } else {
+            saved.id = Uuid::new_v4();
+        }
+        let new_tab = self.make_tab(saved, window, cx);
+        self.tabs.push(new_tab);
+        let new_index = self.tabs.len() - 1;
+        if move_tab
+            && let Some(source_profile) = source_profile
+            && !self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(source_profile))
+        {
+            let replacement = self.make_tab(SavedTab::new(1, Some(source_profile)), window, cx);
+            let replacement_id = replacement.saved.id;
+            self.tabs.push(replacement);
+            self.active_tabs.insert(source_profile, replacement_id);
+        } else if move_tab
+            && source_was_active
+            && let Some(source_profile) = source_profile
+            && let Some(source_tab) = self
+                .tabs
+                .iter()
+                .find(|tab| tab.saved.profile == Some(source_profile))
+        {
+            self.active_tabs.insert(source_profile, source_tab.saved.id);
+        }
+        self.activate(new_index, window, cx);
+    }
+    fn open_tab_rename(&mut self, tab: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
             return;
         }
-        let Some(current) = self.tabs.iter().find(|t| t.saved.id == tab) else {
+        if !self.tabs.iter().any(|current| current.saved.id == tab) {
             return;
-        };
-        // The current name is the placeholder, so an untouched field keeps it.
-        let title = current.saved.title.clone();
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder(title));
+        }
+        let title = cx.new(|cx| InputState::new(window, cx).placeholder("Tab Name"));
         self.tab_form = Some(TabEditor {
             tab,
             title,
             error: None,
         });
-        self.open_tab_dialog(window, cx);
+        self.open_tab_rename_dialog(window, cx);
         cx.notify();
     }
     fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.tab_form else {
+        let Some(form) = &self.tab_form else {
             return;
         };
         let title = form.title.read(cx).value().trim().to_owned();
         if title.chars().count() > MAX_TAB_TITLE {
-            form.error = Some(format!(
-                "Tab name must be {MAX_TAB_TITLE} characters or fewer."
-            ));
+            if let Some(form) = &mut self.tab_form {
+                form.error = Some(format!(
+                    "Tab name must be {MAX_TAB_TITLE} characters or fewer."
+                ));
+            }
             cx.notify();
             return;
         }
         let tab = form.tab;
+        if !title.is_empty()
+            && let Some(profile) = self
+                .tabs
+                .iter()
+                .find(|current| current.saved.id == tab)
+                .and_then(|current| current.saved.profile)
+            && self.tabs.iter().any(|current| {
+                current.saved.id != tab
+                    && current.saved.profile == Some(profile)
+                    && current.saved.title == title
+            })
+        {
+            if let Some(form) = &mut self.tab_form {
+                form.error = Some("A tab with this name already exists on this connection.".into());
+            }
+            cx.notify();
+            return;
+        }
         if !title.is_empty()
             && let Some(current) = self.tabs.iter_mut().find(|t| t.saved.id == tab)
         {
@@ -1485,15 +1733,21 @@ impl Qrow {
         };
         let name = profile.name.clone();
         let display_name = truncate_display_name(&name);
+        let tab_count = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.saved.profile == Some(id))
+            .count();
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
                 .width(px(360.))
                 .title(format!("Delete connection \"{display_name}\"?"))
-                .description(
-                    "This permanently deletes the connection settings and its saved password.",
-                )
+                .description(format!(
+                    "This deletes the connection, its {tab_count} query tab{} and all SQL in those tabs. This cannot be undone.",
+                    if tab_count == 1 { "" } else { "s" }
+                ))
                 .footer(
                     DialogFooter::new()
                         .justify_end()
@@ -1506,11 +1760,12 @@ impl Qrow {
                         )
                         .child(
                             Button::new("confirm-delete-connection")
-                                .label("Delete")
+                                .label("Delete connection")
                                 .with_variant(ButtonVariant::Danger)
                                 .on_click(move |_, window, cx| {
-                                    let _ =
-                                        confirm.update(cx, |this, cx| this.delete_profile(id, cx));
+                                    let _ = confirm.update(cx, |this, cx| {
+                                        this.delete_profile(id, window, cx)
+                                    });
                                     window.close_dialog(cx);
                                 }),
                         ),
@@ -1518,26 +1773,62 @@ impl Qrow {
         });
         cx.notify();
     }
-    fn delete_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
+    fn delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         if self.profile_busy(id) || !self.profiles.iter().any(|p| p.id == id) {
             return;
         }
-        self.profiles.retain(|p| p.id != id);
-        for tab in &mut self.tabs {
-            if tab.saved.profile == Some(id) {
-                tab.saved.profile = None;
-            }
-            if tab.worker_profile == Some(id) {
-                if let Some(w) = tab.worker.take() {
-                    w.shutdown();
-                }
-                tab.worker_profile = None;
-                tab.connected = false;
-                tab.more = false;
-                tab.pending_page = None;
-                tab.status = "Not connected".into();
+        let old_active_profile = self.active_profile();
+        let replacement_profile = self
+            .profiles
+            .iter()
+            .position(|profile| profile.id == id)
+            .and_then(|index| {
+                self.profiles
+                    .get(index + 1)
+                    .or_else(|| {
+                        index
+                            .checked_sub(1)
+                            .and_then(|previous| self.profiles.get(previous))
+                    })
+                    .map(|profile| profile.id)
+            });
+        for tab in self
+            .tabs
+            .iter_mut()
+            .filter(|tab| tab.saved.profile == Some(id))
+        {
+            if let Some(worker) = tab.worker.take() {
+                worker.shutdown();
             }
         }
+        self.tabs.retain(|tab| tab.saved.profile != Some(id));
+        self.profiles.retain(|p| p.id != id);
+        self.active_tabs.remove(&id);
+        if self.tabs.is_empty() {
+            let tab = self.make_tab(
+                SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),
+                window,
+                cx,
+            );
+            self.tabs.push(tab);
+        }
+        let target_profile = if old_active_profile == Some(id) {
+            replacement_profile.filter(|profile| {
+                self.profiles
+                    .iter()
+                    .any(|candidate| candidate.id == *profile)
+            })
+        } else {
+            old_active_profile.filter(|profile| {
+                self.profiles
+                    .iter()
+                    .any(|candidate| candidate.id == *profile)
+            })
+        };
+        let active = target_profile
+            .and_then(|profile| self.active_tab_for_profile(profile))
+            .unwrap_or_else(|| self.active.min(self.tabs.len() - 1));
+        self.activate(active, window, cx);
         // Keychain work must stay off the GPUI thread. A failure here can only
         // leave the secret behind, which is what the old behaviour did anyway.
         if !self.demo {
@@ -1672,10 +1963,11 @@ fn demo_workspace() -> Workspace {
     tab.title = "Route overview".into();
     tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
-        version: 1,
+        version: 2,
         settings: Settings::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
+        active_tabs: BTreeMap::new(),
     }
 }
