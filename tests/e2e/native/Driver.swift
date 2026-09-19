@@ -485,6 +485,9 @@ final class Driver {
         try press("Next")
         _ = try wait("switch-a-1000")
         _ = try wait("Page 2")
+        // Rows arrive before Ready while the worker is still fetching the page.
+        // Wait for the completed preview before expecting idle maintenance.
+        _ = try wait("Preview · More rows available")
         _ = try wait("Sending keep-alive…", timeout: 20)
         try selectConnection("Qrow E2E copy")
         // The running heartbeat belongs to A even though B is selected.
