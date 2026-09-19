@@ -505,17 +505,22 @@ final class Driver {
         key(124)
         _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
         key(36)
+        try waitGone("Copy to Connection…")
         try selectConnection("Qrow E2E copy")
         _ = try waitExact("Query 1 (Copy)")
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
         try selectConnection("Qrow E2E")
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
         key(124)
         _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
         key(36)
+        try waitGone("Move to Connection…")
         try selectConnection("Qrow E2E copy")
         _ = try waitExact("Query 1 (Copy 2)")
+        _ = try wait("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole)
         try selectConnection("Qrow E2E")
         try require(
             find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
