@@ -68,7 +68,8 @@ for copy and move actions.
 
 Right-click a tab and choose **Edit Tab…** to rename it. The current name appears
 as the placeholder. Leave the field empty to keep that name. Renaming preserves
-the SQL, connection, and downloaded results.
+the SQL, connection, and downloaded results. Names must be unique within the
+selected connection.
 
 A busy tab cannot close. Switching connections or tabs does not stop work in
 another tab. See [Connections](connections.md) for session behavior.

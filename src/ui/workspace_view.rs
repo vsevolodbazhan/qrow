@@ -5,6 +5,7 @@ use gpui_kit::component::{
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
+use qrow::model::copied_profile_name;
 use std::rc::Rc;
 
 const TAB_BAR_HEIGHT: f32 = 36.;
@@ -80,7 +81,9 @@ impl Qrow {
                             Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
                                 let mut profile = duplicated.clone();
                                 profile.id = Uuid::new_v4();
-                                profile.name.push_str(" copy");
+                                profile.name = copied_profile_name(&profile.name, |name| {
+                                    this.profiles.iter().any(|existing| existing.name == name)
+                                });
                                 this.edit_profile(profile, true, window, cx);
                             }));
                         let delete =

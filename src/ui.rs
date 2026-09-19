@@ -25,9 +25,9 @@ use qrow::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_UI_SCALE,
+        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE,
         MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab, Settings,
-        UI_SCALE_STEP, Workspace,
+        UI_SCALE_STEP, Workspace, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -199,8 +199,7 @@ struct ContextMenu {
     _subscription: Subscription,
 }
 
-/// Long names push the tab bar around without adding information.
-const MAX_TAB_TITLE: usize = 60;
+/// Sidebar labels truncate long connection names without adding information.
 const MAX_PROFILE_DISPLAY_NAME: usize = 40;
 
 fn truncate_display_name(name: &str) -> String {
@@ -1022,21 +1021,27 @@ impl Qrow {
             );
             self.tabs.push(t);
         }
-        let active = if self.tabs.iter().any(|tab| tab.saved.profile == profile) {
-            let visible = self
-                .tabs
-                .iter()
-                .position(|tab| tab.saved.profile == profile)
-                .unwrap_or(0);
-            if index < self.active {
-                self.active - 1
-            } else {
-                visible
-            }
-        } else if index < self.active {
-            self.active - 1
+        let old_active = self.active;
+        let active = if index < old_active {
+            old_active - 1
+        } else if index > old_active {
+            old_active
         } else {
-            self.active.min(self.tabs.len() - 1)
+            self.tabs
+                .iter()
+                .enumerate()
+                .find(|(candidate, tab)| *candidate >= index && tab.saved.profile == profile)
+                .map(|(candidate, _)| candidate)
+                .or_else(|| {
+                    self.tabs
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(candidate, tab)| *candidate < index && tab.saved.profile == profile)
+                        .map(|(candidate, _)| candidate)
+                })
+                .or_else(|| self.tabs.len().checked_sub(1))
+                .unwrap_or(0)
         };
         self.activate(active, window, cx);
     }
@@ -1045,6 +1050,23 @@ impl Qrow {
             return;
         }
         if let Some(index) = self.active_tab_for_profile(id) {
+            if self.tabs[self.active].saved.profile != Some(id) {
+                let connection_name = self
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == id)
+                    .map(|profile| profile.name.clone())
+                    .unwrap_or_else(|| "Unknown connection".into());
+                Self::record_activity(
+                    &mut self.tabs[self.active],
+                    ActivityEvent::new(
+                        None,
+                        Severity::Info,
+                        ActivityKind::ConnectionChanged,
+                        format!("Selected connection: {connection_name}"),
+                    ),
+                );
+            }
             self.activate(index, window, cx);
         }
     }
@@ -1474,8 +1496,25 @@ impl Qrow {
         let source_profile = self.tabs[source_index].saved.profile;
         let source_was_active =
             source_profile.is_some_and(|profile| self.active_tabs.get(&profile) == Some(&tab_id));
+        let source_title = self.tabs[source_index].saved.title.clone();
+        let title = if move_tab {
+            unique_tab_title(&source_title, |candidate| {
+                self.tabs.iter().enumerate().any(|(index, tab)| {
+                    index != source_index
+                        && tab.saved.profile == Some(destination)
+                        && tab.saved.title == candidate
+                })
+            })
+        } else {
+            copied_tab_title(&source_title, |candidate| {
+                self.tabs.iter().any(|tab| {
+                    tab.saved.profile == Some(destination) && tab.saved.title == candidate
+                })
+            })
+        };
         let mut saved = self.tabs[source_index].saved.clone();
         saved.profile = Some(destination);
+        saved.title = title;
         saved.sql = self.tabs[source_index].input.read(cx).value().to_string();
         if move_tab {
             saved.id = tab_id;
@@ -1531,18 +1570,38 @@ impl Qrow {
         cx.notify();
     }
     fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = &mut self.tab_form else {
+        let Some(form) = &self.tab_form else {
             return;
         };
         let title = form.title.read(cx).value().trim().to_owned();
         if title.chars().count() > MAX_TAB_TITLE {
-            form.error = Some(format!(
-                "Tab name must be {MAX_TAB_TITLE} characters or fewer."
-            ));
+            if let Some(form) = &mut self.tab_form {
+                form.error = Some(format!(
+                    "Tab name must be {MAX_TAB_TITLE} characters or fewer."
+                ));
+            }
             cx.notify();
             return;
         }
         let tab = form.tab;
+        if !title.is_empty()
+            && let Some(profile) = self
+                .tabs
+                .iter()
+                .find(|current| current.saved.id == tab)
+                .and_then(|current| current.saved.profile)
+            && self.tabs.iter().any(|current| {
+                current.saved.id != tab
+                    && current.saved.profile == Some(profile)
+                    && current.saved.title == title
+            })
+        {
+            if let Some(form) = &mut self.tab_form {
+                form.error = Some("A tab with this name already exists on this connection.".into());
+            }
+            cx.notify();
+            return;
+        }
         if !title.is_empty()
             && let Some(current) = self.tabs.iter_mut().find(|t| t.saved.id == tab)
         {
@@ -1791,13 +1850,10 @@ impl Qrow {
                     .any(|candidate| candidate.id == *profile)
             })
         };
-        if let Some(profile) = target_profile
-            && let Some(index) = self.active_tab_for_profile(profile)
-        {
-            self.active = index;
-        } else {
-            self.active = self.active.min(self.tabs.len() - 1);
-        }
+        let active = target_profile
+            .and_then(|profile| self.active_tab_for_profile(profile))
+            .unwrap_or_else(|| self.active.min(self.tabs.len() - 1));
+        self.activate(active, window, cx);
         // Keychain work must stay off the GPUI thread. A failure here can only
         // leave the secret behind, which is what the old behaviour did anyway.
         if !self.demo {

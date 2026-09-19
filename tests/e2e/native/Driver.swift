@@ -458,7 +458,18 @@ final class Driver {
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        try click(try wait("Duplicate"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Password", "qrow-test-password")
+        try press("Save")
+        try waitGone("Cancel")
+        _ = try wait("Qrow E2E copy 2")
+        try rightClick(try waitExact("Qrow E2E copy 2", role: kAXButtonRole))
+        try click(try wait("Delete"))
+        try press("Delete connection")
+        try waitGone("Qrow E2E copy 2")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Delete"))
         // Alert titles are not exposed by GPUI's macOS accessibility tree.
         // The confirmation button proves that the alert replaced the menu.
@@ -479,7 +490,9 @@ final class Driver {
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
 
-        // Keep A alive while B is selected. B keeps its default idle policy.
+        // Creating a connection activates its default tab. Select A explicitly
+        // before setting up its session; B keeps its default idle policy.
+        try selectConnection("Qrow E2E")
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
@@ -487,7 +500,7 @@ final class Driver {
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
         try scrollDown(try wait("Keep Connected", role: kAXRadioButtonRole))
         try fill("Keep-alive Interval in Seconds", "3")
-        try fill("Keep-alive Query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(10000 AS BIGINT)) FROM range(1)")
+        try fill("Keep-alive Query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(30000 AS BIGINT)) FROM range(1)")
         try press("Save")
         try waitGone("Cancel")
         try query("CREATE TEMPORARY FUNCTION qrow_keep_alive AS 'io.qrow.fixture.Blocking'")
@@ -506,24 +519,24 @@ final class Driver {
         _ = try wait("Preview · More rows available")
         _ = try wait("Sending keep-alive…", timeout: 20)
         try selectConnection("Qrow E2E copy")
-        // The running heartbeat belongs to A even though B is selected.
-        try require(find("Sending keep-alive…") != nil, "Fixture heartbeat ended before the busy-profile edit check")
-        try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
+        // A's tabs are hidden while B is selected, so use the connection row
+        // indicator to verify that A's heartbeat is still running.
+        _ = try wait("Qrow E2E, running", timeout: 5)
+        try rightClick(try wait("Qrow E2E, running", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened during the original session's heartbeat")
         key(53)
         try waitGone("Edit Connection…")
+        try selectConnection("Qrow E2E")
         _ = try wait("switch-a-1000")
-        _ = try wait("Connected · Keep-alive enabled", timeout: 20)
+        _ = try wait("Connected · Keep-alive enabled", timeout: 40)
         _ = try wait("switch-a-1000")
         try press("Next")
         _ = try wait("switch-a-2000")
         _ = try wait("Page 3")
         try snapshot("connection-switch-keep-alive")
         try press("Previous")
-        _ = try wait("switch-a-1000")
-        try selectConnection("Qrow E2E")
         _ = try wait("switch-a-1000")
         try query("SELECT concat('same-session-', current_timezone()) AS value")
         _ = try wait("same-session-Asia/Tokyo")
@@ -534,29 +547,33 @@ final class Driver {
         try query("SELECT concat('switch-b-', lpad(CAST(id AS STRING), 4, '0'), '-', current_timezone()) AS value FROM range(2001) ORDER BY id")
         _ = try wait("switch-b-0000-UTC")
         try selectConnection("Qrow E2E")
+        _ = try wait("same-session-Asia/Tokyo")
+        // Disconnect acts on the active tab only. A's session closes while
+        // B's result cursor remains available in its hidden tab.
+        try press("Disconnect")
+        _ = try wait("Disconnected", timeout: 10)
+        try selectConnection("Qrow E2E copy")
         _ = try wait("switch-b-0000-UTC")
-        // B is idle with no heartbeat, so only the different selection can
-        // disable Disconnect. AXEnabled is not available for every GPUI button.
         _ = try wait("Preview · More rows available")
-        try click(try wait("Disconnect", role: kAXButtonRole))
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        try require(find("Disconnecting…") == nil && find("Disconnected") == nil,
-                    "Disconnect closed the unselected profile's session")
+        try press("Next")
+        _ = try wait("switch-b-1000-UTC")
         try snapshot("connection-switch")
 
-        // Editing selected A must not close B's session. Restore A's default
-        // idle policy for the remaining scenarios, then fetch through B's cursor.
+        // Editing A while B is selected must not close B's session. Restore A's
+        // default idle policy, then fetch through B's cursor.
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Disconnect", role: kAXRadioButtonRole))
         try press("Save")
         try waitGone("Cancel")
+        try selectConnection("Qrow E2E copy")
         try press("Next")
-        _ = try wait("switch-b-1000-UTC")
+        _ = try wait("switch-b-2000-UTC")
 
         // A lifecycle edit updates B's live session while A remains selected.
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try selectConnection("Qrow E2E")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Keep Connected", role: kAXRadioButtonRole))
@@ -565,23 +582,25 @@ final class Driver {
         try fill("Keep-alive Query", "SELECT 'updated-b'")
         try press("Save")
         try waitGone("Cancel")
+        try selectConnection("Qrow E2E copy")
         _ = try wait("Connected · Keep-alive enabled", timeout: 20)
-        _ = try wait("switch-b-1000-UTC")
-        try press("Next")
         _ = try wait("switch-b-2000-UTC")
+        try press("Next")
+        _ = try wait("switch-b-3000-UTC")
 
         // Replacing B's password closes B even while A is selected. Restore
         // B's default idle policy for the remaining disconnect scenarios.
-        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try selectConnection("Qrow E2E")
+        try rightClick(try wait("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))
         try fill("Password", "qrow-test-password")
         try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try click(try wait("Disconnect", role: kAXRadioButtonRole))
         try press("Save")
         try waitGone("Cancel")
-        _ = try wait("Not connected")
-        _ = try wait("switch-b-2000-UTC")
         try selectConnection("Qrow E2E copy")
+        _ = try wait("Not connected")
+        _ = try wait("switch-b-3000-UTC")
         try query("SELECT 'switch-b-reconnected' AS value")
         _ = try wait("switch-b-reconnected")
         try selectConnection("Qrow E2E")
@@ -597,8 +616,7 @@ final class Driver {
         try click(try wait("Delete"))
         try press("Delete connection")
         try waitGone("Qrow E2E copy")
-        _ = try wait("Not connected")
-        _ = try wait("switch-b-after-disconnect")
+        _ = try wait("Disconnected")
 
         // A profile metadata edit keeps the session in both tabs. Temporary
         // views prove that the workers did not reconnect when the form was saved.
@@ -623,6 +641,28 @@ final class Driver {
         try query("SELECT * FROM qrow_ui_live")
         _ = try wait("preserved")
         try click(try waitExact("Query 1"))
+
+        // Duplicate keeps tab names unique within the connection and selects
+        // the new tab. A second copy receives a numbered suffix.
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Duplicate"))
+        _ = try waitExact("Query 1 (Copy)")
+        try click(try waitExact("Query 1"))
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Duplicate"))
+        _ = try waitExact("Query 1 (Copy 2)")
+        try click(try waitExact("Query 1"))
+
+        // A rename cannot take another tab's name on this connection.
+        try rightClick(try waitExact("Query 1"))
+        try click(try wait("Edit Tab…"))
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", "Query 2")
+        try press("Save")
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        _ = try waitExact("Query 1")
+        try press("Cancel")
+        try waitGone("Tab Name")
 
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
@@ -767,7 +807,7 @@ final class Driver {
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, connection menus, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 

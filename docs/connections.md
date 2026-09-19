@@ -29,7 +29,8 @@ macOS can request Keychain access when you save the password.
 
 Right-click a profile to use **Edit Connection…**, **Duplicate**, or **Delete**.
 An empty password field during an edit keeps the stored password. A duplicate
-has a new profile identifier and requires a password.
+has a new profile identifier, a unique name based on the source name, and
+requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
 name or the Connection Lifecycle fields. The worker applies the new lifecycle
@@ -89,9 +90,13 @@ source connection.
 Right-click a tab to choose **Edit Tab…**, **Duplicate**, **Copy to
 Connection…**, or **Move to Connection…**. Duplicate copies the tab within its
 connection. Copy and move select the destination connection and the resulting
-tab. Move is disabled while the tab is busy.
+tab. Move is disabled while the tab is busy. Tab names must be unique within a
+connection. A duplicate or copied tab uses the source name with **(Copy)**;
+later copies add a number when needed. A move keeps the source name when it is
+available and adds a copy suffix if the destination already uses that name.
 
-These actions copy only the current SQL text and tab name. They do not copy
+These actions copy only the current SQL text and tab name. Duplicate and copy
+update the name as described above. They do not copy
 results, Logs history, session state, or execution status. They do not run SQL.
 
 Deleting a connection requires confirmation. The confirmation states that all
