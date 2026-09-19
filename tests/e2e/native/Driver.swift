@@ -531,10 +531,15 @@ final class Driver {
             "Move carried results to the destination tab",
         )
         try selectConnection("Qrow E2E")
+        try waitGone("Query 1 (Copy 2)")
         _ = try waitExact("Query 1", timeout: 10)
         try require(
             find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
             "Move left the source SQL on its original connection",
+        )
+        try require(
+            find("qrow-ui-connected", role: kAXCellRole) == nil,
+            "Move left source rows in its replacement tab",
         )
 
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
