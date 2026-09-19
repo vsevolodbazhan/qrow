@@ -725,6 +725,11 @@ final class Driver {
         // rejected save leaves the editor open and the tab title unchanged.
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
+        // A later duplicate-name error replaces the earlier length error.
+        try fill("Tab Name", "Query 2")
+        try press("Save")
+        _ = try wait("A tab with this name already exists on this connection.")
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
         try press("Cancel")
         try waitGone("Tab Name")
         try rightClick(try waitExact("Query 1"))

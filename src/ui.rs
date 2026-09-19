@@ -1573,6 +1573,9 @@ impl Qrow {
                     && current.saved.title == title
             })
         {
+            if let Some(form) = &mut self.tab_form {
+                form.error = None;
+            }
             window.push_notification(
                 Notification::error("A tab with this name already exists on this connection."),
                 cx,
