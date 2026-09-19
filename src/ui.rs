@@ -1472,6 +1472,8 @@ impl Qrow {
             return;
         }
         let source_profile = self.tabs[source_index].saved.profile;
+        let source_was_active =
+            source_profile.is_some_and(|profile| self.active_tabs.get(&profile) == Some(&tab_id));
         let mut saved = self.tabs[source_index].saved.clone();
         saved.profile = Some(destination);
         saved.sql = self.tabs[source_index].input.read(cx).value().to_string();
@@ -1494,8 +1496,19 @@ impl Qrow {
                 .iter()
                 .any(|tab| tab.saved.profile == Some(source_profile))
         {
-            self.tabs
-                .push(self.make_tab(SavedTab::new(1, Some(source_profile)), window, cx));
+            let replacement = self.make_tab(SavedTab::new(1, Some(source_profile)), window, cx);
+            let replacement_id = replacement.saved.id;
+            self.tabs.push(replacement);
+            self.active_tabs.insert(source_profile, replacement_id);
+        } else if move_tab
+            && source_was_active
+            && let Some(source_profile) = source_profile
+            && let Some(source_tab) = self
+                .tabs
+                .iter()
+                .find(|tab| tab.saved.profile == Some(source_profile))
+        {
+            self.active_tabs.insert(source_profile, source_tab.saved.id);
         }
         self.activate(new_index, window, cx);
     }
