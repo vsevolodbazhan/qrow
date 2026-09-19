@@ -462,7 +462,7 @@ final class Driver {
         try click(try wait("Delete"))
         // Alert titles are not exposed by GPUI's macOS accessibility tree.
         // The confirmation button proves that the alert replaced the menu.
-        try press("Delete")
+        try press("Delete connection")
         try waitGone("Qrow E2E copy")
 
         try press("Qrow E2E")
@@ -595,7 +595,7 @@ final class Driver {
         try selectConnection("Qrow E2E")
         try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
         try click(try wait("Delete"))
-        try press("Delete")
+        try press("Delete connection")
         try waitGone("Qrow E2E copy")
         _ = try wait("Not connected")
         _ = try wait("switch-b-after-disconnect")
@@ -737,7 +737,7 @@ final class Driver {
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened while the connection was busy")
         try click(try wait("Delete"))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        try require(find("Delete", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
+        try require(find("Delete connection", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
         key(53)
         try waitGone("Edit Connection…")
         try newTab("Query 3")
