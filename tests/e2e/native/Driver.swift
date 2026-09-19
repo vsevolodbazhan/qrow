@@ -500,19 +500,27 @@ final class Driver {
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Copy to Connection…")
         for _ in 0..<3 { key(125) }
+        // The context menu has room to open this submenu to the right in the
+        // native test window.
         key(124)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
         key(36)
+        try selectConnection("Qrow E2E copy")
         _ = try waitExact("Query 1 (Copy)")
         try selectConnection("Qrow E2E")
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
         key(124)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
         key(36)
+        try selectConnection("Qrow E2E copy")
         _ = try waitExact("Query 1 (Copy 2)")
         try selectConnection("Qrow E2E")
+        try require(
+            find("SELECT 'qrow-ui-connected' AS result", role: kAXTextAreaRole) == nil,
+            "Move left the source SQL on its original connection",
+        )
 
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
