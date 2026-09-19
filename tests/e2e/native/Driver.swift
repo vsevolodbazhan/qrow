@@ -358,8 +358,58 @@ final class Driver {
         try require(savedSQL(finalSQL, at: workspace), "Quit completed without saving the final SQL edit")
         print("PASS: failed save preserves edits, Keep Editing, retry and durable save before \(closeWindow ? "window close" : "Quit")")
     }
+    /// A version line reads `0.1.0` or `0.1.0 (dcc75d4fd874)`.
+    func isVersion(_ text: String) -> Bool {
+        let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard let first = parts.first else { return false }
+        let numbers = first.split(separator: ".", omittingEmptySubsequences: false)
+        guard numbers.count == 3, numbers.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return false }
+        if parts.count == 1 { return true }
+        let commit = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        return commit.count == 12 && commit.allSatisfy { $0.isHexDigit && !$0.isUppercase }
+    }
+    /// Select an item of the application menu, which accessibility exposes
+    /// after the Apple menu.
+    func selectApplicationMenuItem(_ label: String) throws {
+        guard let bar = attribute(app, kAXMenuBarAttribute) else { throw Failure("Qrow has no menu bar") }
+        let menus = (attribute(unsafeBitCast(bar, to: AXUIElement.self), kAXChildrenAttribute) as? [AXUIElement]) ?? []
+        try require(menus.count > 1, "Qrow has no application menu")
+        try require(AXUIElementPerformAction(menus[1], kAXPressAction as CFString) == .success, "Cannot open the application menu")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var item: AXUIElement?
+        repeat {
+            item = descendants(menus[1]).first { strings($0).contains(label) }
+            if item != nil { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        guard let item else { throw Failure("The application menu has no item: \(label)") }
+        try require(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success, "Cannot select \(label)")
+    }
+    func testAbout() throws {
+        try selectApplicationMenuItem("About Qrow")
+        let copyright = "Copyright © 2026 Vsevolod Bazhan"
+        _ = try wait(copyright, timeout: 10)
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var version: String?
+        repeat {
+            version = elements().flatMap(strings).first(where: isVersion)
+            if version != nil { break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        guard let version else { throw Failure("The About dialog does not report a version") }
+        try snapshot("about")
+        // Escape closes the dialog, and the menu item opens it again.
+        key(53)
+        try waitGone(copyright)
+        try selectApplicationMenuItem("About Qrow")
+        _ = try wait(copyright, timeout: 10)
+        key(53)
+        try waitGone(copyright)
+        print("PASS: About dialog reports \(version)")
+    }
     func test() throws {
         try start()
+        try testAbout()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
@@ -698,7 +748,7 @@ final class Driver {
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, connection menus, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 
@@ -711,6 +761,10 @@ do {
             if CommandLine.arguments.contains("--persistence-only") {
                 try driver.start()
                 try driver.testFailedSaveExit(closeWindow: false)
+            } else if CommandLine.arguments.contains("--about-only") {
+                // The About dialog needs no server, so it can run alone.
+                try driver.start()
+                try driver.testAbout()
             } else {
                 try driver.test()
             }

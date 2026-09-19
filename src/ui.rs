@@ -1,3 +1,4 @@
+mod about_view;
 mod button_pair;
 mod connection_form;
 mod output;
@@ -48,6 +49,7 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        OpenAbout,
         OpenSettings,
         IncreaseUiScale,
         DecreaseUiScale,
@@ -74,6 +76,8 @@ pub fn init(cx: &mut App) {
             disabled: false,
             name: "Qrow".into(),
             items: vec![
+                MenuItem::action("About Qrow", OpenAbout),
+                MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
                 MenuItem::action("Quit Qrow", Quit),
@@ -248,6 +252,7 @@ pub struct Qrow {
     settings: Settings,
     fonts: Vec<String>,
     settings_open: bool,
+    about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
     tabs: Vec<Tab>,
@@ -343,6 +348,7 @@ impl Qrow {
             settings: workspace.settings,
             fonts,
             settings_open: false,
+            about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
             tabs: vec![],
@@ -909,7 +915,7 @@ impl Qrow {
     }
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
-        self.form.is_some() || self.settings_open || self.tab_form.is_some()
+        self.form.is_some() || self.settings_open || self.about_open || self.tab_form.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1146,6 +1152,13 @@ impl Qrow {
             self.settings_open = true;
             self.init_settings_form(window, cx);
             self.open_settings_dialog(window, cx);
+            cx.notify();
+        }
+    }
+    fn open_about(&mut self, _: &OpenAbout, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.dialog_open() {
+            self.about_open = true;
+            self.open_about_dialog(window, cx);
             cx.notify();
         }
     }

@@ -132,6 +132,10 @@ cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.
 
+The native scenario starts with the application menu. It selects **About Qrow**,
+checks the version line and the copyright, closes the dialog with Escape, and
+opens the dialog again. This check does not use a server.
+
 The native scenario also checks result retention across connection changes. It
 runs a query on one profile, downloads more than one page, selects a second
 profile during a keep-alive, and checks that the downloaded rows remain visible.

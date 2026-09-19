@@ -30,7 +30,10 @@ mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
 cp NOTICE "$QROW_BUNDLE/Contents/Resources/NOTICE"
 cp LICENSE "$QROW_BUNDLE/Contents/Resources/LICENSE"
 uv run --locked python scripts/package/notices.py "$QROW_BUNDLE/Contents/Resources/THIRD_PARTY_NOTICES.txt"
-cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
+# Cargo.toml is the only place that holds the version.
+QROW_VERSION="$(cargo metadata --locked --no-deps --format-version 1 |
+    uv run --locked python scripts/package/version.py)"
+cat > "$QROW_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -40,7 +43,7 @@ cat > "$QROW_BUNDLE/Contents/Info.plist" <<'PLIST'
 <key>CFBundleExecutable</key><string>qrow</string>
 <key>CFBundleIconFile</key><string>Qrow.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleShortVersionString</key><string>$QROW_VERSION</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>11.0</string>
 <key>NSHighResolutionCapable</key><true/>

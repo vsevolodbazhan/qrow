@@ -116,6 +116,12 @@ Or, after building the release executable:
 ./target/release/qrow --demo
 ```
 
+## Version
+
+Select **Qrow → About Qrow** to see the application version with the Git commit
+of the build, for example `0.1.0 (dcc75d4fd874)`. Give this line in a bug report.
+A build made outside a Git checkout shows the version alone.
+
 ## Documentation
 
 See the [documentation index](docs/README.md) for application behavior,
