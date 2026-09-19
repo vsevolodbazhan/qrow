@@ -184,8 +184,15 @@ the build requirements deliberately change.
 
 ## Build identity
 
+[Cargo.toml](../Cargo.toml) holds the version. The About dialog reads it, and
+the [packaging script](../scripts/package/macos.sh) puts it in
+`CFBundleShortVersionString` through
+[the version reader](../scripts/package/version.py). Change the version in one
+place only. macOS accepts up to three numbers in a version; packaging stops if
+the version has a different form.
+
 The [build script](../build.rs) records the short Git commit of the working tree
-in the executable. The About dialog shows it with the package version. Cargo runs
+in the executable. The About dialog shows it with the version. Cargo runs
 the script again when `HEAD` or a reference changes. A build without Git history
 reports the version alone. Set `QROW_COMMIT` to record the commit for such a
 build:
