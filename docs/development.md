@@ -119,8 +119,8 @@ or branch, including manual runs.
 E2E tests run locally only. They do not run in GitHub Actions. Use the
 [end-to-end testing guide](end-to-end-testing.md) to run them.
 
-The workflow retains `core-coverage` and `macos-package-and-performance` for 14
-days. Configure these individual checks as required branch-protection checks:
+The workflow retains `core-coverage` and `macos-package-and-performance` for one
+day. Configure these individual checks as required branch-protection checks:
 
 ```text
 test / dependencies
