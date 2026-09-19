@@ -493,6 +493,27 @@ final class Driver {
         // Creating a connection activates its default tab. Select A explicitly
         // before setting up its session; B keeps its default idle policy.
         try selectConnection("Qrow E2E")
+
+        // Copy and move destination menus are nested under the tab context
+        // menu. Keyboard navigation verifies that each submenu opens and its
+        // first connection item performs the requested action.
+        try rightClick(try waitExact("Query 1"))
+        _ = try wait("Copy to Connection…")
+        for _ in 0..<3 { key(125) }
+        key(124)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        key(36)
+        _ = try waitExact("Query 1 (Copy)")
+        try selectConnection("Qrow E2E")
+        try rightClick(try waitExact("Query 1"))
+        _ = try wait("Move to Connection…")
+        for _ in 0..<4 { key(125) }
+        key(124)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        key(36)
+        _ = try waitExact("Query 1 (Copy 2)")
+        try selectConnection("Qrow E2E")
+
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Edit Connection…"))

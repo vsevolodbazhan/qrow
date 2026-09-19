@@ -1408,14 +1408,19 @@ impl Qrow {
                     let destinations = destinations.clone();
                     let weak = weak.clone();
                     menu.submenu("Copy to Connection…", window, cx, move |menu, _, _| {
-                        destinations.iter().cloned().fold(menu, |menu, (id, name)| {
-                            let weak = weak.clone();
-                            menu.item(PopupMenuItem::new(name).on_click(move |_, window, cx| {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.copy_tab(tab, id, false, window, cx)
-                                });
-                            }))
-                        })
+                        destinations.iter().cloned().fold(
+                            menu.scrollable(true),
+                            |menu, (id, name)| {
+                                let weak = weak.clone();
+                                menu.item(PopupMenuItem::new(name).on_click(
+                                    move |_, window, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.copy_tab(tab, id, false, window, cx)
+                                        });
+                                    },
+                                ))
+                            },
+                        )
                     })
                 };
                 if destinations.is_empty() || source_busy {
@@ -1423,14 +1428,19 @@ impl Qrow {
                 } else {
                     let weak = weak.clone();
                     menu.submenu("Move to Connection…", window, cx, move |menu, _, _| {
-                        destinations.iter().cloned().fold(menu, |menu, (id, name)| {
-                            let weak = weak.clone();
-                            menu.item(PopupMenuItem::new(name).on_click(move |_, window, cx| {
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.copy_tab(tab, id, true, window, cx)
-                                });
-                            }))
-                        })
+                        destinations.iter().cloned().fold(
+                            menu.scrollable(true),
+                            |menu, (id, name)| {
+                                let weak = weak.clone();
+                                menu.item(PopupMenuItem::new(name).on_click(
+                                    move |_, window, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.copy_tab(tab, id, true, window, cx)
+                                        });
+                                    },
+                                ))
+                            },
+                        )
                     })
                 }
             },
