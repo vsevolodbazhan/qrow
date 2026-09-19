@@ -69,7 +69,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", RenameTab, Some("TabSettings")),
+        KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
     ]);
     cx.set_menus(vec![
         Menu {
@@ -1377,8 +1377,9 @@ impl Qrow {
         };
         let source_profile = source.saved.profile;
         let source_busy = source.busy;
-        let edit =
-            cx.listener(move |this, _: &ClickEvent, window, cx| this.edit_tab(tab, window, cx));
+        let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.open_tab_rename(tab, window, cx)
+        });
         let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
             if let Some(profile) = this
                 .tabs
@@ -1400,7 +1401,7 @@ impl Qrow {
             position,
             move |menu, window, cx| {
                 let menu = menu
-                    .item(PopupMenuItem::new("Edit Tab…").on_click(edit))
+                    .item(PopupMenuItem::new("Rename…").on_click(rename))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
                 let menu = if destinations.is_empty() {
                     menu.item(PopupMenuItem::new("Copy to Connection…").disabled(true))
@@ -1527,22 +1528,21 @@ impl Qrow {
         }
         self.activate(new_index, window, cx);
     }
-    fn edit_tab(&mut self, tab: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_tab_rename(&mut self, tab: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
             return;
         }
         let Some(current) = self.tabs.iter().find(|t| t.saved.id == tab) else {
             return;
         };
-        // The current name is the placeholder, so an untouched field keeps it.
         let title = current.saved.title.clone();
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder(title));
+        let title = cx.new(|cx| InputState::new(window, cx).default_value(title));
         self.tab_form = Some(TabEditor {
             tab,
             title,
             error: None,
         });
-        self.open_tab_dialog(window, cx);
+        self.open_tab_rename_dialog(window, cx);
         cx.notify();
     }
     fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {

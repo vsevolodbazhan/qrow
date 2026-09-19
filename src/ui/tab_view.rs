@@ -2,21 +2,19 @@ use super::setting_row::Rows;
 use super::*;
 use gpui_kit::component::{alert::Alert, h_flex, v_flex};
 
-/// Matches the settings dialogs: label and description left, control right.
-const DIALOG_REMS: f32 = 44.;
+/// A name is a short value, so the dialog stays narrow and focused.
+const DIALOG_REMS: f32 = 30.;
 
 impl Qrow {
-    pub(super) fn open_tab_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_tab_rename_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let close = weak.clone();
             let save = weak.clone();
-            let content = weak
-                .update(cx, |this, cx| this.tab_content(window, cx))
-                .ok();
+            let content = weak.update(cx, |this, cx| this.tab_content(cx)).ok();
             let footer = weak.update(cx, |this, cx| this.tab_footer(cx)).ok();
             dialog
-                .title("Tab Settings")
+                .title("Rename Tab")
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .overlay_closable(false)
                 .on_ok(move |_, window, cx| {
@@ -35,28 +33,26 @@ impl Qrow {
         });
     }
 
-    fn tab_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn tab_content(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = &self.tab_form else {
             return div().into_any_element();
         };
-        let rows = Rows::filling(Rows::dialog_width(window, DIALOG_REMS), window.rem_size());
         v_flex()
-            .key_context("TabSettings")
+            .id("rename-tab-form")
+            .key_context("RenameTab")
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
             .w_full()
             .gap_3()
             .when_some(form.error.clone(), |content, error| {
                 content.child(Alert::error("tab-name-error", error))
             })
+            .child(div().text_sm().child("Name"))
+            .child(Input::new(&form.title).w_full().aria_label("Tab Name"))
             .child(
-                rows.last_row(
-                    "Name",
-                    "The name displayed on the tab.",
-                    Input::new(&form.title)
-                        .aria_label("Tab Name")
-                        .into_any_element(),
-                    cx,
-                ),
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Names must be unique within this connection."),
             )
             .into_any_element()
     }
@@ -68,7 +64,7 @@ impl Qrow {
         v_flex()
             .w_full()
             .gap_2()
-            .key_context("TabSettings")
+            .key_context("RenameTab")
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
             .child(
                 h_flex()
@@ -87,9 +83,9 @@ impl Qrow {
                             })),
                     )
                     .child(
-                        Button::new("save-tab")
+                        Button::new("rename-tab")
                             .primary()
-                            .label("Save")
+                            .label("Rename")
                             .tooltip("Rename Tab · ⌘Enter")
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.rename_tab(window, cx)),

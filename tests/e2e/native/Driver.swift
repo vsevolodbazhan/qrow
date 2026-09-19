@@ -703,12 +703,12 @@ final class Driver {
         try click(try waitExact("Query 1"))
 
         // A rename cannot take another tab's name on this connection. The
-        // error alert explains why, while the editor stays open for correction.
+        // error alert explains why, while the dialog stays open for correction.
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", "Query 2")
-        try press("Save")
+        try press("Rename")
         _ = try wait("A tab with this name already exists on this connection.")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
@@ -717,32 +717,32 @@ final class Driver {
 
         // The tab menu renames the tab without changing its SQL or session.
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", String(repeating: "x", count: 61))
-        try press("Save")
+        try press("Rename")
         // Validation text is not exposed by GPUI's accessibility tree. A
-        // rejected save leaves the editor open and the tab title unchanged.
+        // rejected rename leaves the dialog open and the tab title unchanged.
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         _ = try waitExact("Query 1")
         // A later duplicate-name error replaces the earlier length error.
         try fill("Tab Name", "Query 2")
-        try press("Save")
+        try press("Rename")
         _ = try wait("A tab with this name already exists on this connection.")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try press("Cancel")
         try waitGone("Tab Name")
         try rightClick(try waitExact("Query 1"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", "Renamed tab")
-        try press("Save")
+        try press("Rename")
         try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
         try rightClick(try waitExact("Renamed tab"))
-        try click(try wait("Edit Tab…"))
+        try click(try wait("Rename…"))
         _ = try wait("Tab Name", role: kAXTextFieldRole)
-        try press("Save")
+        try press("Rename")
         try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
 

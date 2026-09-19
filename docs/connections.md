@@ -87,7 +87,7 @@ Each connection always has at least one tab. Creating a connection creates a
 blank tab. Closing or moving the last tab creates a blank replacement for the
 source connection.
 
-Right-click a tab to choose **Edit Tab…**, **Duplicate**, **Copy to
+Right-click a tab to choose **Rename…**, **Duplicate**, **Copy to
 Connection…**, or **Move to Connection…**. Duplicate copies the tab within its
 connection. Copy and move show a submenu of destination connections. Choosing
 a destination selects the resulting tab. Move is disabled while the tab is
