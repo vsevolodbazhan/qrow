@@ -973,9 +973,14 @@ impl Qrow {
         if self.dialog_open() {
             return;
         }
+        let profile = self.active_profile();
+        if profile.is_none() {
+            return;
+        }
         let number = self
             .tabs
             .iter()
+            .filter(|tab| tab.saved.profile == profile)
             .filter_map(|t| {
                 t.saved
                     .title
@@ -985,10 +990,6 @@ impl Qrow {
             .max()
             .unwrap_or(0)
             + 1;
-        let profile = self.active_profile();
-        if profile.is_none() {
-            return;
-        }
         let tab = self.make_tab(SavedTab::new(number, profile), window, cx);
         self.tabs.push(tab);
         self.activate(self.tabs.len() - 1, window, cx);
