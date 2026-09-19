@@ -66,9 +66,9 @@ Each connection always has at least one tab. Closing or moving the last tab
 creates a blank replacement. See [Connections](connections.md#manage-tabs-under-a-connection)
 for copy and move actions.
 
-Right-click a tab and choose **Rename…**. The dialog contains the current name.
-Renaming preserves the SQL, connection, and downloaded results. Names must be
-unique within the selected connection.
+Right-click a tab and choose **Rename…**. Enter a unique name, or leave the
+field empty to keep the current name. Renaming preserves the SQL, connection,
+and downloaded results.
 
 A busy tab cannot close. Switching connections or tabs does not stop work in
 another tab. See [Connections](connections.md) for session behavior.

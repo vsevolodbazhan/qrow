@@ -46,14 +46,7 @@ impl Qrow {
             .when_some(form.error.clone(), |content, error| {
                 content.child(Alert::error("tab-name-error", error))
             })
-            .child(div().text_sm().child("Name"))
             .child(Input::new(&form.title).w_full().aria_label("Tab Name"))
-            .child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Names must be unique within this connection."),
-            )
             .into_any_element()
     }
 
