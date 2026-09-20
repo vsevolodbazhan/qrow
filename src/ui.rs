@@ -1954,7 +1954,7 @@ impl Qrow {
                 .collect();
             t.refresh(cx);
         });
-        tab.status = "Complete · demo data".into();
+        tab.status = "Complete · Demo data".into();
         tab.elapsed = Some(Duration::from_millis(842));
         tab.panel.success();
     }
