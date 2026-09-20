@@ -17,6 +17,9 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 6. Enter session parameters as a JSON object with string values.
 7. Click **Save**.
 
+Connection names must be unique. If the form contains an error, Qrow keeps the
+form open and shows the error above the form actions.
+
 For example, a session parameter can select an engine-sharing subdomain:
 
 ```json

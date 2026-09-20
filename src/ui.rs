@@ -1702,6 +1702,10 @@ impl Qrow {
                 &profile.lifecycle,
             )?;
             profile.validate()?;
+            anyhow::ensure!(
+                !connection_form::profile_name_is_taken(&self.profiles, &profile),
+                "A connection with this name already exists."
+            );
             Ok(())
         })();
         if let Err(e) = parse {

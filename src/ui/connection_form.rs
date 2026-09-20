@@ -1,4 +1,10 @@
-use qrow::model::ConnectionLifecycle;
+use qrow::model::{ConnectionLifecycle, Profile};
+
+pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
+    profiles
+        .iter()
+        .any(|profile| profile.id != candidate.id && profile.name == candidate.name)
+}
 
 pub(super) fn parse_lifecycle(
     values: &[String],
@@ -134,6 +140,25 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_names_are_unique_except_for_the_profile_being_edited() {
+        let existing = Profile {
+            name: "Analytics".into(),
+            ..Profile::default()
+        };
+        let unchanged = existing.clone();
+        let duplicate = Profile {
+            name: existing.name.clone(),
+            ..Profile::default()
+        };
+
+        assert!(!profile_name_is_taken(
+            std::slice::from_ref(&existing),
+            &unchanged
+        ));
+        assert!(profile_name_is_taken(&[existing], &duplicate));
+    }
 
     #[test]
     fn only_the_selected_modes_fields_are_validated() {

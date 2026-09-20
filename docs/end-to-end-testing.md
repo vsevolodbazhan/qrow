@@ -136,6 +136,10 @@ The native scenario starts with the application menu. It selects **About Qrow**,
 checks the version line and the copyright, closes the dialog with Escape, and
 opens the dialog again. This check does not use a server.
 
+The native scenario checks connection-form error alerts. It rejects a missing
+username, a new connection with a duplicate name, and a rename to a duplicate
+name. Each error keeps the form open for correction.
+
 The native scenario checks result retention across connection changes. It runs a
 query on one profile, downloads more than one page, switches to a second
 profile, and checks that the first tab keeps its rows and session. It checks
