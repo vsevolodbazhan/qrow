@@ -43,7 +43,7 @@ impl Qrow {
             let viewport = window.viewport_size();
             let height = (rem * 48.).min(viewport.height - rem * 4.);
             dialog
-                .title("Connection Settings")
+                .title("Connection settings")
                 .w(dialog_width(window))
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
