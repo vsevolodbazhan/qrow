@@ -15,7 +15,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogFooter,
     input::{EditorState, Input, InputEvent, InputState, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{PopupMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;

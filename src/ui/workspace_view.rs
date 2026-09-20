@@ -1,7 +1,8 @@
 use super::*;
 use gpui_kit::component::{
-    Selectable, TitleBar, h_flex,
+    TitleBar, h_flex,
     input::Editor,
+    sidebar::{Sidebar, SidebarHeader, SidebarMenu, SidebarMenuItem},
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
@@ -13,20 +14,11 @@ const TAB_BAR_HEIGHT: f32 = 36.;
 impl Qrow {
     fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_profile();
-        let action_size = self.ui_px(28.);
-        v_flex()
-            .size_full()
-            .bg(cx.theme().sidebar)
-            .child(
-                h_flex()
-                    .h(self.ui_px(TAB_BAR_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl_3()
-                    .pr_2()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
+        Sidebar::new("connections-sidebar")
+            .w(self.sidebar_width)
+            .collapsible(false)
+            .header(
+                SidebarHeader::new()
                     .child(
                         div()
                             .flex_1()
@@ -38,9 +30,6 @@ impl Qrow {
                         Button::new("add-connection")
                             .ghost()
                             .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
                             .icon(IconName::Plus)
                             .accessibility_label("New Connection")
                             .tooltip("New Connection…")
@@ -50,130 +39,86 @@ impl Qrow {
                     ),
             )
             .child(
-                v_flex()
-                    .id("connections-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pt_2()
-                    .gap_1()
-                    .children(self.profiles.iter().map(|profile| {
-                        let id = profile.id;
-                        let busy = self.profile_busy(id);
-                        let unread_error = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
-                        let accessibility_label = format!(
-                            "{}{}{}",
-                            profile.name,
-                            if busy { ", running" } else { "" },
-                            if unread_error { ", unread error" } else { "" }
-                        );
-                        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
-                        let edited = profile.clone();
-                        let duplicated = profile.clone();
-                        let edit = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.edit_profile(edited.clone(), false, window, cx)
+                SidebarMenu::new().children(self.profiles.iter().map(|profile| {
+                    let id = profile.id;
+                    let busy = self.profile_busy(id);
+                    let unread_error = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
+                    let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+                    let edited = profile.clone();
+                    let duplicated = profile.clone();
+                    let edit = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.edit_profile(edited.clone(), false, window, cx)
+                    }));
+                    let duplicate =
+                        Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            let mut profile = duplicated.clone();
+                            profile.id = Uuid::new_v4();
+                            profile.name = copied_profile_name(&profile.name, |name| {
+                                this.profiles.iter().any(|existing| existing.name == name)
+                            });
+                            this.edit_profile(profile, true, window, cx);
                         }));
-                        let duplicate =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                let mut profile = duplicated.clone();
-                                profile.id = Uuid::new_v4();
-                                profile.name = copied_profile_name(&profile.name, |name| {
-                                    this.profiles.iter().any(|existing| existing.name == name)
-                                });
-                                this.edit_profile(profile, true, window, cx);
-                            }));
-                        let delete =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.confirm_delete_profile(id, window, cx)
-                            }));
-                        let button = Button::new(SharedString::from(format!("profile-{id}")))
-                            .ghost()
-                            .small()
-                            .h_full()
-                            .flex_1()
-                            .min_w_0()
-                            .accessibility_label(accessibility_label)
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .min_w_0()
-                                    .text_base()
-                                    .gap_2()
-                                    .child(
-                                        gpui_kit::component::Icon::default()
-                                            .path(crate::assets::SPARK_ICON)
-                                            .size_4()
-                                            .flex_shrink_0(),
-                                    )
-                                    .child(
+                    let delete = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.confirm_delete_profile(id, window, cx)
+                    }));
+                    SidebarMenuItem::new(truncate_display_name(&profile.name))
+                        .icon(
+                            gpui_kit::component::Icon::default()
+                                .path(crate::assets::SPARK_ICON)
+                                .size_4(),
+                        )
+                        .active(active == Some(id))
+                        .suffix(move |_, cx| {
+                            h_flex()
+                                .gap_1()
+                                .when(busy, |el| {
+                                    el.child(
                                         div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .child(profile.name.clone()),
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Running"),
                                     )
-                                    .when(busy, |el| {
-                                        el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Running"),
-                                        )
-                                    })
-                                    .when(unread_error, |el| {
-                                        el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().danger)
-                                                .child("Error"),
-                                        )
-                                    }),
-                            )
-                            .selected(active == Some(id))
-                            .text_color(cx.theme().sidebar_foreground)
-                            .when(active == Some(id), |button| {
-                                button
-                                    .bg(cx.theme().sidebar_accent)
-                                    .text_color(cx.theme().sidebar_accent_foreground)
-                            })
-                            .tooltip(format!("{} · {}", profile.host, profile.database))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.switch_profile(id, window, cx)
-                            }));
-                        h_flex()
-                            .id(SharedString::from(format!("connection-{id}")))
-                            .h(self.ui_px(32.))
-                            .flex_shrink_0()
-                            .child(button)
-                            .context_menu(move |menu, _, _| {
-                                menu.action_context(restore.clone())
-                                    .item(
-                                        PopupMenuItem::new("Edit Connection…")
-                                            .on_click({
-                                                let edit = edit.clone();
-                                                move |event, window, cx| edit(event, window, cx)
-                                            })
-                                            .disabled(busy),
+                                })
+                                .when(unread_error, |el| {
+                                    el.child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().danger)
+                                            .child("Error"),
                                     )
-                                    .item(PopupMenuItem::new("Duplicate").on_click({
-                                        let duplicate = duplicate.clone();
-                                        move |event, window, cx| duplicate(event, window, cx)
-                                    }))
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("Delete")
-                                            .on_click({
-                                                let delete = delete.clone();
-                                                move |event, window, cx| delete(event, window, cx)
-                                            })
-                                            .disabled(busy),
-                                    )
-                            })
-                    })),
+                                })
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.switch_profile(id, window, cx)
+                        }))
+                        .context_menu(move |menu, _, _| {
+                            menu.action_context(restore.clone())
+                                .item(
+                                    PopupMenuItem::new("Edit Connection…")
+                                        .on_click({
+                                            let edit = edit.clone();
+                                            move |event, window, cx| edit(event, window, cx)
+                                        })
+                                        .disabled(busy),
+                                )
+                                .item(PopupMenuItem::new("Duplicate").on_click({
+                                    let duplicate = duplicate.clone();
+                                    move |event, window, cx| duplicate(event, window, cx)
+                                }))
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Delete")
+                                        .on_click({
+                                            let delete = delete.clone();
+                                            move |event, window, cx| delete(event, window, cx)
+                                        })
+                                        .disabled(busy),
+                                )
+                        })
+                })),
             )
     }
 
