@@ -18,7 +18,7 @@ const SIDEBAR_MIN_REMS: f32 = 8.;
 const SIDEBAR_MAX_REMS: f32 = 18.;
 /// Width of the control column while a page keeps label and control side by
 /// side. A stacked page gives the control the full width instead.
-const CONTROL_REMS: f32 = 12.;
+const CONTROL_REMS: f32 = 16.;
 
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System Font";
