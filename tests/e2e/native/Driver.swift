@@ -777,7 +777,11 @@ final class Driver {
         // error alert explains why, while the dialog stays open for correction.
         try rightClick(try waitExact("Query 1"))
         try click(try wait("Rename…"))
-        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        let tabName = try wait("Tab Name", role: kAXTextFieldRole)
+        try require(
+            attribute(tabName, kAXValueAttribute) as? String == "Query 1",
+            "Rename form did not prefill the current tab name"
+        )
         try fill("Tab Name", "Query 2")
         try press("Rename")
         _ = try wait("A tab with this name already exists on this connection.")

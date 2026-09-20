@@ -1533,10 +1533,15 @@ impl Qrow {
         if self.dialog_open() {
             return;
         }
-        if !self.tabs.iter().any(|current| current.saved.id == tab) {
+        let Some(current_title) = self
+            .tabs
+            .iter()
+            .find(|current| current.saved.id == tab)
+            .map(|current| current.saved.title.clone())
+        else {
             return;
-        }
-        let title = cx.new(|cx| InputState::new(window, cx).placeholder("Tab Name"));
+        };
+        let title = cx.new(|cx| InputState::new(window, cx).default_value(current_title));
         self.tab_form = Some(TabEditor {
             tab,
             title,

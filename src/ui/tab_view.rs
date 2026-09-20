@@ -1,6 +1,10 @@
 use super::setting_row::Rows;
 use super::*;
-use gpui_kit::component::{alert::Alert, h_flex, v_flex};
+use gpui_kit::component::{
+    alert::Alert,
+    form::{field, v_form},
+    h_flex, v_flex,
+};
 
 /// A name is a short value, so the dialog stays narrow and focused.
 const DIALOG_REMS: f32 = 30.;
@@ -14,7 +18,6 @@ impl Qrow {
             let content = weak.update(cx, |this, cx| this.tab_content(cx)).ok();
             let footer = weak.update(cx, |this, cx| this.tab_footer(cx)).ok();
             dialog
-                .title("Rename Tab")
                 .w(Rows::dialog_width(window, DIALOG_REMS))
                 .overlay_closable(false)
                 .on_ok(move |_, window, cx| {
@@ -42,11 +45,17 @@ impl Qrow {
             .key_context("RenameTab")
             .on_action(cx.listener(|this, _: &RenameTab, window, cx| this.rename_tab(window, cx)))
             .w_full()
-            .gap_3()
+            .gap_2()
+            .child(
+                v_form().w_full().child(
+                    field()
+                        .label("Tab Name")
+                        .child(Input::new(&form.title).w_full().aria_label("Tab Name")),
+                ),
+            )
             .when_some(form.error.clone(), |content, error| {
                 content.child(Alert::error("tab-name-error", error))
             })
-            .child(Input::new(&form.title).w_full().aria_label("Tab Name"))
             .into_any_element()
     }
 
