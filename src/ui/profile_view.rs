@@ -1,9 +1,26 @@
-use super::setting_row::Rows;
 use super::*;
-use gpui_kit::component::{h_flex, input::Textarea, v_flex};
+use gpui_kit::component::{
+    form::{Field, Form},
+    h_flex,
+    input::Textarea,
+    v_flex,
+};
 
-/// Wide enough that a label, its description, and the control sit on one line.
-const DIALOG_REMS: f32 = 56.;
+const DIALOG_REMS: f32 = 40.;
+
+fn dialog_width(window: &Window) -> Pixels {
+    let rem = window.rem_size();
+    (rem * DIALOG_REMS).min(window.viewport_size().width - rem * 4.)
+}
+
+fn field(label: &'static str, description: Option<&'static str>, control: AnyElement) -> Field {
+    Field::new()
+        .label(label)
+        .child(control)
+        .when_some(description, |field, description| {
+            field.description(description)
+        })
+}
 
 impl Qrow {
     pub(super) fn open_profile_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -26,8 +43,8 @@ impl Qrow {
             let viewport = window.viewport_size();
             let height = (rem * 48.).min(viewport.height - rem * 4.);
             dialog
-                .title("Connection Settings")
-                .w(Rows::dialog_width(window, DIALOG_REMS))
+                .title("Connection settings")
+                .w(dialog_width(window))
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
                 .overlay_closable(false)
@@ -50,14 +67,14 @@ impl Qrow {
         });
     }
 
-    fn profile_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn profile_content(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = &self.form else {
             return div().into_any_element();
         };
         let saving = form.saving.is_some();
-        let rows = Rows::filling(Rows::dialog_width(window, DIALOG_REMS), window.rem_size());
-        let field = |index: usize, label: &'static str| {
+        let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
+                .w_full()
                 .disabled(saving)
                 .aria_label(label)
                 .into_any_element()
@@ -68,62 +85,65 @@ impl Qrow {
             .w_full()
             .child(
                 div()
-                    .text_sm()
+                    .text_base()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(cx.theme().muted_foreground)
                     .child("Spark (HiveServer2)"),
             )
             .child(
                 v_flex()
-                    .id("connection-fields")
                     .pt_3()
-                    .child(rows.row(
-                        "Name",
-                        "Shown in the connections sidebar.",
-                        field(0, "Name"),
-                        cx,
-                    ))
-                    .child(rows.row(
-                        "Host",
-                        "Hostname of the Kyuubi or HiveServer2 endpoint.",
-                        field(1, "Host"),
-                        cx,
-                    ))
-                    .child(rows.row("Port", "Thrift port on that host.", field(2, "Port"), cx))
-                    .child(rows.row(
-                        "Username",
-                        "Used for LDAP authentication.",
-                        field(3, "Username"),
-                        cx,
-                    ))
-                    .child(rows.row(
-                        "Password",
-                        "Used for LDAP authentication.",
-                        field(4, "Password"),
-                        cx,
-                    ))
-                    .child(rows.row(
-                        "Initial Database",
-                        "Selected when the session opens.",
-                        field(5, "Initial Database"),
-                        cx,
-                    ))
+                    .w_full()
+                    .gap_2()
                     .child(
-                        rows.row(
-                            "Session Parameters",
-                            "JSON object with string values.",
-                            // A one-entry pretty-printed object uses four lines.
-                            // Keep the control to that height so it does not show
-                            // an empty fifth line below the closing brace.
-                            Textarea::new(&form.parameters)
-                                .h(rems(6.))
-                                .disabled(saving)
-                                .font_family("Menlo")
-                                .aria_label("Session Parameters")
-                                .into_any_element(),
-                            cx,
-                        ),
+                        Form::vertical()
+                            .w_full()
+                            .child(field(
+                                "Name",
+                                Some("Shown in the connections sidebar."),
+                                input(0, "Name"),
+                            ))
+                            .child(field(
+                                "Host",
+                                Some("Hostname of the Kyuubi or HiveServer2 endpoint."),
+                                input(1, "Host"),
+                            ))
+                            .child(field(
+                                "Port",
+                                Some("Thrift port on that host."),
+                                input(2, "Port"),
+                            ))
+                            .child(field(
+                                "Username",
+                                Some("Used for LDAP authentication."),
+                                input(3, "Username"),
+                            ))
+                            .child(field(
+                                "Password",
+                                Some("Used for LDAP authentication."),
+                                input(4, "Password"),
+                            ))
+                            .child(field(
+                                "Initial database",
+                                Some("Selected when the session opens."),
+                                input(5, "Initial database"),
+                            ))
+                            .child(field(
+                                "Session parameters",
+                                Some("JSON object with string values."),
+                                // A one-entry pretty-printed object uses four lines.
+                                // Keep the control to that height so it does not show
+                                // an empty fifth line below the closing brace.
+                                Textarea::new(&form.parameters)
+                                    .w_full()
+                                    .h(rems(6.))
+                                    .disabled(saving)
+                                    .font_family("Menlo")
+                                    .aria_label("Session parameters")
+                                    .into_any_element(),
+                            )),
                     )
-                    .child(connection_form::render_lifecycle(form, &rows, cx)),
+                    .child(connection_form::render_lifecycle(form, cx)),
             )
             .into_any_element()
     }
@@ -163,7 +183,7 @@ impl Qrow {
                         Button::new("save-profile")
                             .primary()
                             .label(if saving { "Saving" } else { "Save" })
-                            .tooltip("Save Connection · ⌘Enter")
+                            .tooltip("Save connection · ⌘Enter")
                             .disabled(saving)
                             .on_click(cx.listener(|this, _, _, cx| this.save_profile(cx))),
                     ),

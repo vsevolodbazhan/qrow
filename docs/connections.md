@@ -57,12 +57,12 @@ Tabs can execute SQL concurrently, including when they use the same profile.
 Separate sessions do not necessarily use separate Spark engines. Engine sharing
 depends on the Kyuubi configuration.
 
-The **When Idle** setting controls each session:
+Use the **When idle** picker to control each session:
 
 | Choice | Behavior |
 | --- | --- |
 | **Disconnect after** | Releases the session after the specified idle time. The default is 900 seconds. Reading results and editing SQL do not reset the timer. Running work is not interrupted. |
-| **Keep Connected** | Sends periodic keep-alive query while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
+| **Keep connected** | Sends periodic keep-alive query while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
 
 Use a lightweight, read-only statement for keep-alive query. Qrow checks that the
 text contains one statement, but does not enforce read-only behavior. keep-alives

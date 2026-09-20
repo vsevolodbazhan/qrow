@@ -26,68 +26,107 @@ pub(super) fn parse_lifecycle(
     Ok(policy)
 }
 
-use super::setting_row::Rows;
 use super::{ProfileEditor, Qrow};
-use gpui_kit::component::{input::Input, radio::Radio, v_flex};
-use gpui_kit::{AnyElement, Context, IntoElement, prelude::*};
+use gpui_kit::component::{
+    IndexPath,
+    form::{Field, Form},
+    input::Input,
+    select::{SearchableVec, Select, SelectEvent, SelectState},
+};
+use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*};
 
-pub(super) fn render_lifecycle(
-    form: &ProfileEditor,
-    rows: &Rows,
+const DISCONNECT_AFTER: &str = "Disconnect after";
+const KEEP_CONNECTED: &str = "Keep connected";
+
+pub(super) type IdleBehaviorSelect = Entity<SelectState<SearchableVec<String>>>;
+
+pub(super) fn idle_behavior_select(
+    keep_connected: bool,
+    window: &mut Window,
     cx: &mut Context<Qrow>,
-) -> impl IntoElement {
+) -> IdleBehaviorSelect {
+    cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(vec![DISCONNECT_AFTER.into(), KEEP_CONNECTED.into()]),
+            Some(IndexPath::default().row(usize::from(keep_connected))),
+            window,
+            cx,
+        )
+    })
+}
+
+pub(super) fn keep_connected_from_event(
+    event: &SelectEvent<SearchableVec<String>>,
+) -> Option<bool> {
+    let SelectEvent::Confirm(Some(choice)) = event else {
+        return None;
+    };
+    match choice.as_str() {
+        DISCONNECT_AFTER => Some(false),
+        KEEP_CONNECTED => Some(true),
+        _ => None,
+    }
+}
+
+pub(super) fn keeps_connected(select: &IdleBehaviorSelect, cx: &App) -> bool {
+    select
+        .read(cx)
+        .selected_value()
+        .is_some_and(|choice| choice == KEEP_CONNECTED)
+}
+
+fn field(label: &'static str, description: Option<&'static str>, control: AnyElement) -> Field {
+    Field::new()
+        .label(label)
+        .child(control)
+        .when_some(description, |field, description| {
+            field.description(description)
+        })
+}
+
+pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
     let saving = form.saving.is_some();
-    let keep = form.keep_connected;
-    let field = |index: usize, label: &'static str| {
+    let keep = keeps_connected(&form.idle_behavior, cx);
+    let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
+            .w_full()
             .disabled(saving)
             .aria_label(label)
             .into_any_element()
     };
-    let choice: AnyElement = v_flex()
-        .gap_2()
-        .children(
-            [(false, "Disconnect"), (true, "Keep Connected")].map(|(value, label)| {
-                Radio::new(label)
-                    .label(label)
-                    .checked(keep == value)
-                    .disabled(saving)
-                    .on_change(cx.listener(move |this, _, _, cx| {
-                        if let Some(form) = &mut this.form {
-                            form.keep_connected = value;
-                        }
-                        cx.notify();
-                    }))
-            }),
-        )
-        .into_any_element();
-    v_flex()
-        .child(rows.row(
-            "When Idle",
-            "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
-            choice,
-            cx,
+
+    Form::vertical()
+        .w_full()
+        .child(field(
+            "When idle",
+            Some(
+                "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
+            ),
+            Select::new(&form.idle_behavior)
+                .w_full()
+                .disabled(saving)
+                .accessibility_label("When idle")
+                .into_any_element(),
         ))
         .when(!keep, |el| {
-            el.child(rows.row(
-                "Idle Timeout",
-                "Seconds of inactivity before the session is released.",
-                field(7, "Idle Timeout in Seconds"),
-                cx,
+            el.child(field(
+                "Idle timeout",
+                Some("Seconds of inactivity before Qrow releases the session."),
+                input(7, "Idle timeout in seconds"),
             ))
         })
         .when(keep, |el| {
-            el.child(rows.row(
-                "Keep-alive Interval",
-                "Seconds between keep-alive queries.",
-                field(8, "Keep-alive Interval in Seconds"),
-                cx,
+            el.child(field(
+                "Keep-alive interval",
+                Some("Seconds between keep-alive queries."),
+                input(8, "Keep-alive interval in seconds"),
             ))
-            .child(rows.row(
-                "Keep-alive Query",
-                "Runs only while idle, and keeps the engine active. Use a lightweight, read-only query.",
-                field(9, "Keep-alive Query"),
-                cx,
+            .child(field(
+                "Keep-alive query",
+                Some(
+                    "Runs only while idle and keeps the engine active. Use a lightweight, read-only query.",
+                ),
+                input(9, "Keep-alive query"),
             ))
         })
 }
@@ -123,5 +162,18 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn dropdown_choices_map_to_lifecycle_modes() {
+        assert!(
+            !keep_connected_from_event(&SelectEvent::Confirm(Some(DISCONNECT_AFTER.into())))
+                .unwrap()
+        );
+        assert!(
+            keep_connected_from_event(&SelectEvent::Confirm(Some(KEEP_CONNECTED.into()))).unwrap()
+        );
+        assert!(keep_connected_from_event(&SelectEvent::Confirm(Some("Unknown".into()))).is_none());
+        assert!(keep_connected_from_event(&SelectEvent::Confirm(None)).is_none());
     }
 }
