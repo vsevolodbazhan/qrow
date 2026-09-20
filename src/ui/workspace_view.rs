@@ -421,7 +421,7 @@ impl Qrow {
                     .h_10()
                     .flex_shrink_0()
                     .px_3()
-                    .gap_3()
+                    .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(self.panel_switcher(cx))
