@@ -152,10 +152,11 @@ struct ProfileEditor {
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
+    idle_behavior: connection_form::IdleBehaviorSelect,
+    _idle_behavior_subscription: Subscription,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
-    keep_connected: bool,
 }
 struct ProfileSave {
     profile: Profile,
@@ -1638,9 +1639,18 @@ impl Qrow {
             TextareaState::new(window, cx)
                 .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
         });
+        let keep_connected = profile.lifecycle.keep_alive_seconds > 0;
+        let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
+        let idle_behavior_subscription =
+            cx.subscribe_in(&idle_behavior, window, |_this, _, event, _, cx| {
+                if connection_form::keep_connected_from_event(event).is_some() {
+                    cx.notify();
+                }
+            });
         self.form = Some(ProfileEditor {
             parameters,
-            keep_connected: profile.lifecycle.keep_alive_seconds > 0,
+            idle_behavior,
+            _idle_behavior_subscription: idle_behavior_subscription,
             profile,
             fields,
             is_new,
@@ -1688,7 +1698,7 @@ impl Qrow {
                 })?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..],
-                form.keep_connected,
+                connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
             profile.validate()?;
