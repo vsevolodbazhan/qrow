@@ -14,7 +14,6 @@ pub enum Severity {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivityKind {
-    ConnectionChanged,
     Connected,
     Submitted,
     ExecutionStarted,
@@ -32,7 +31,6 @@ pub enum ActivityKind {
 impl ActivityKind {
     pub fn label(self) -> &'static str {
         match self {
-            Self::ConnectionChanged => "Connection changed",
             Self::Connected => "Connected",
             Self::Submitted => "Submitted",
             Self::ExecutionStarted => "Execution started",
@@ -417,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn retention_applies_the_text_budget_and_bounds_connection_only_history() {
+    fn retention_applies_the_text_budget_and_bounds_non_execution_history() {
         let mut log = ActivityLog::default();
         let text = "x".repeat(MAX_TEXT_BYTES / 2 + 1);
         log.record(event(Some(1), ActivityKind::Submitted, &text));
@@ -428,7 +426,7 @@ mod tests {
 
         let mut connection_log = ActivityLog::default();
         for _ in 0..=MAX_EXECUTION_GROUPS {
-            connection_log.record(event(None, ActivityKind::ConnectionChanged, "changed"));
+            connection_log.record(event(None, ActivityKind::Connected, "connected"));
         }
         assert_eq!(connection_log.groups().len(), MAX_EXECUTION_GROUPS);
         assert!(

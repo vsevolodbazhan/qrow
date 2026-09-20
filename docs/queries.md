@@ -27,8 +27,9 @@ also clears the badge, even if you selected Logs after the failure. See
 ## Logs
 
 Select **Logs** beside **Results** to inspect Qrow activity. The history shows
-connection changes, the exact SQL submitted to the selected connection,
-execution completion, preview page fetches, cancellation, and errors. Each
+connection and session events, the exact SQL submitted to the tab's owning
+connection, execution completion, preview page fetches, cancellation, and
+errors. Selecting a connection or query tab does not add a log entry. Each
 entry starts with a wall-clock timestamp in brackets, followed by its message.
 Errors use the error color. Durations are client measurements.
 
