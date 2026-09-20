@@ -1,7 +1,6 @@
 use super::setting_row::Rows;
 use super::*;
 use gpui_kit::component::{
-    group_box::GroupBoxVariant,
     h_flex,
     input::{NumberInputEvent, StepAction},
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -378,15 +377,20 @@ impl Qrow {
             }
         }
         let rem = window.rem_size();
+        // Match the gap the dialog leaves above the footer, which the dialog
+        // adds to the smaller gap below the title.
         div()
             .size_full()
+            .mt_2()
             .overflow_hidden()
             .rounded(cx.theme().radius)
             .border_1()
             .border_color(cx.theme().border)
             .child(
                 SettingsPanel::new("settings")
-                    .with_group_variant(GroupBoxVariant::Fill)
+                    // Kit tints the sidebar. The dialog is one surface, so the
+                    // divider alone separates the section list from the page.
+                    .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
                     .sidebar_width(rem * SIDEBAR_REMS)
                     .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
                     .page(settings_page(form)),
@@ -398,7 +402,6 @@ impl Qrow {
         h_flex()
             .w_full()
             .gap_2()
-            .pt_3()
             .child(
                 Button::new("reset-settings")
                     .label("Restore defaults")
