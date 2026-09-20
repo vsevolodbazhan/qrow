@@ -2,6 +2,7 @@ use super::*;
 use gpui_kit::component::{
     Selectable, TitleBar, h_flex,
     input::Editor,
+    status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
@@ -9,6 +10,30 @@ use qrow::model::copied_profile_name;
 use std::rc::Rc;
 
 const TAB_BAR_HEIGHT: f32 = 36.;
+
+fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
+    id.and_then(|id| profiles.iter().find(|profile| profile.id == id))
+        .map_or("No connection", |profile| profile.name.as_str())
+}
+
+fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
+    elapsed.map_or_else(
+        || status.to_owned(),
+        |elapsed| format!("{status} · {:.2} s", elapsed.as_secs_f64()),
+    )
+}
+
+fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
+    if demo {
+        "Demo · nothing is saved"
+    } else if !saving_enabled {
+        "Workspace saving disabled"
+    } else if dirty {
+        "Saving"
+    } else {
+        "Workspace saved"
+    }
+}
 
 impl Qrow {
     fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -422,39 +447,42 @@ impl Qrow {
             .into_any_element()
     }
 
-    fn status_bar(&self, cx: &App) -> impl IntoElement {
+    fn status_bar(&self) -> impl IntoElement {
         let tab = &self.tabs[self.active];
-        h_flex()
-            .h_8()
-            .px_3()
-            .gap_3()
+        let connection_name = connection_name(&self.profiles, tab.saved.profile);
+        let status_label = query_status_label(&tab.status, tab.elapsed);
+        let workspace_status =
+            workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
+
+        StatusBar::new()
             .flex_shrink_0()
-            .text_xs()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .text_color(cx.theme().muted_foreground)
-            .child(
+            .left(
                 div()
                     .id("query-status")
                     .role(Role::Status)
                     .min_w_0()
                     .truncate()
-                    .aria_label(tab.status.clone())
-                    .child(tab.status.clone()),
+                    .aria_label(status_label.clone())
+                    .child(status_label),
             )
-            .child(div().flex_1())
-            .when_some(tab.elapsed, |el, elapsed| {
-                el.child(format!("{:.2} s", elapsed.as_secs_f64()))
-            })
-            .child(if self.demo {
-                "Demo · nothing is saved"
-            } else if self.saver.is_none() {
-                "Workspace saving disabled"
-            } else if self.dirty.is_some() {
-                "Saving"
-            } else {
-                "Workspace saved"
-            })
+            .child(
+                div()
+                    .id("current-connection")
+                    .role(Role::Label)
+                    .min_w_0()
+                    .truncate()
+                    .aria_label(format!("Current connection: {connection_name}"))
+                    .child(connection_name.to_owned()),
+            )
+            .right(
+                div()
+                    .id("workspace-status")
+                    .role(Role::Status)
+                    .min_w_0()
+                    .truncate()
+                    .aria_label(workspace_status)
+                    .child(workspace_status),
+            )
     }
 
     fn splitter(&self, horizontal: bool, cx: &mut Context<Self>) -> impl IntoElement {
@@ -640,7 +668,7 @@ impl Render for Qrow {
                         .child(message),
                 )
             })
-            .child(self.status_bar(cx))
+            .child(self.status_bar())
     }
 }
 
@@ -683,5 +711,42 @@ impl Render for WindowView {
             .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn status_bar_formats_labels() {
+        let profile = Profile {
+            name: "Analytics".into(),
+            ..Profile::default()
+        };
+
+        assert_eq!(
+            connection_name(std::slice::from_ref(&profile), Some(profile.id)),
+            "Analytics"
+        );
+        assert_eq!(
+            connection_name(&[profile], Some(Uuid::new_v4())),
+            "No connection"
+        );
+        assert_eq!(query_status_label("Executing…", None), "Executing…");
+        assert_eq!(
+            query_status_label("Complete", Some(Duration::from_millis(842))),
+            "Complete · 0.84 s"
+        );
+        assert_eq!(
+            workspace_status(true, true, false),
+            "Demo · nothing is saved"
+        );
+        assert_eq!(
+            workspace_status(false, false, false),
+            "Workspace saving disabled"
+        );
+        assert_eq!(workspace_status(false, true, true), "Saving");
+        assert_eq!(workspace_status(false, true, false), "Workspace saved");
     }
 }
