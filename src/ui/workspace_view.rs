@@ -1,7 +1,8 @@
 use super::*;
 use gpui_kit::component::{
-    Selectable, TitleBar, h_flex,
+    Icon, Selectable, TitleBar, h_flex,
     input::Editor,
+    spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
     v_flex,
@@ -164,18 +165,16 @@ impl Qrow {
                                     )
                                     .when(busy, |el| {
                                         el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child("Running"),
+                                            Spinner::new()
+                                                .xsmall()
+                                                .color(cx.theme().muted_foreground),
                                         )
                                     })
                                     .when(unread_error, |el| {
                                         el.child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().danger)
-                                                .child("Error"),
+                                            Icon::new(IconName::CircleX)
+                                                .xsmall()
+                                                .text_color(cx.theme().danger),
                                         )
                                     }),
                             )
@@ -289,16 +288,13 @@ impl Qrow {
                             .gap_1()
                             .pr_2()
                             .when(tab.busy, |el| {
-                                el.child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Running"),
-                                )
+                                el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
                             })
                             .when(tab.panel.unread_error, |el| {
                                 el.child(
-                                    div().text_xs().text_color(cx.theme().danger).child("Error"),
+                                    Icon::new(IconName::CircleX)
+                                        .xsmall()
+                                        .text_color(cx.theme().danger),
                                 )
                             })
                             .child(
