@@ -148,6 +148,7 @@ impl Qrow {
                                     .w_full()
                                     .min_w_0()
                                     .text_base()
+                                    .items_baseline()
                                     .gap_2()
                                     .child(
                                         gpui_kit::component::Icon::default()
