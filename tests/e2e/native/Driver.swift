@@ -24,6 +24,9 @@ func strings(_ element: AXUIElement) -> [String] {
     [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute, "AXHelp", "AXIdentifier"]
         .compactMap { attribute(element, $0) as? String }
 }
+func containsText(_ fragment: String, in root: AXUIElement) -> Bool {
+    descendants(root).contains { strings($0).contains { $0.contains(fragment) } }
+}
 func descendants(_ root: AXUIElement) -> [AXUIElement] {
     var queue = [root]
     var result: [AXUIElement] = []
@@ -587,6 +590,12 @@ final class Driver {
         try selectConnection("Qrow E2E")
         _ = try wait("SELECT 'qrow-ui-connected' AS result", timeout: 10, role: kAXTextAreaRole)
         _ = try wait("qrow-ui-connected", timeout: 10, role: kAXCellRole)
+        try press("Logs Panel")
+        try require(
+            !containsText("Selected connection", in: app),
+            "Connection selection added an obsolete activity entry",
+        )
+        try press("Results Panel")
         try rightClick(try waitExact("Query 1"))
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }

@@ -1051,23 +1051,9 @@ impl Qrow {
             return;
         }
         if let Some(index) = self.active_tab_for_profile(id) {
-            if self.tabs[self.active].saved.profile != Some(id) {
-                let connection_name = self
-                    .profiles
-                    .iter()
-                    .find(|profile| profile.id == id)
-                    .map(|profile| profile.name.clone())
-                    .unwrap_or_else(|| "Unknown connection".into());
-                Self::record_activity(
-                    &mut self.tabs[self.active],
-                    ActivityEvent::new(
-                        None,
-                        Severity::Info,
-                        ActivityKind::ConnectionChanged,
-                        format!("Selected connection: {connection_name}"),
-                    ),
-                );
-            }
+            // A connection selection changes the visible tab group. It does
+            // not change the owning connection of either tab, so it is not a
+            // query activity event.
             self.activate(index, window, cx);
         }
     }

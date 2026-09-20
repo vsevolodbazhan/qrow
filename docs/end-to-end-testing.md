@@ -149,11 +149,12 @@ The scenario also checks profile edits while another profile is selected.
 Lifecycle edits preserve the session and cursor. Password changes and deletion
 close the matching sessions. It checks that **Disconnect** acts on the active
 tab only. Returning to a connection makes its tabs visible again. It also
-checks Copy to Connection and Move to Connection from nested tab menus. The
-new tab has the source SQL, a unique tab name, and no result rows. After a
-copy, the source tab keeps its rows. After the scenario moves the last tab, the
-source connection has a new blank tab. See [Connections](connections.md) for
-tab copy and move behavior.
+checks that connection selection does not add an activity entry. It checks Copy
+to Connection and Move to Connection from nested tab menus. The new tab has the
+source SQL, a unique tab name, and no result rows. After a copy, the source tab
+keeps its rows. After the scenario moves the last tab, the source connection
+has a new blank tab. See [Connections](connections.md) for tab copy and move
+behavior.
 
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve
