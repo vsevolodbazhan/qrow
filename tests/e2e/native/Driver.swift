@@ -423,9 +423,45 @@ final class Driver {
         try waitGone(copyright)
         print("PASS: About dialog reports \(version)")
     }
+    // Read the value the Settings dialog displays, not the workspace file, so
+    // that the control and its binding are both checked.
+    func settingValue(_ label: String) -> String? {
+        let control = elements().first {
+            attribute($0, kAXRoleAttribute) as? String == kAXTextFieldRole && strings($0).contains(label)
+        }
+        return control.flatMap { attribute($0, kAXValueAttribute) as? String }
+    }
+    func waitSettingValue(_ label: String, _ expected: String) throws {
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var value: String?
+        repeat {
+            value = settingValue(label)
+            if value == expected { return }
+            try require(process.isRunning, "Qrow exited while waiting for \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("\(label) shows \(value ?? "nothing"), expected \(expected)")
+    }
+    func testSettings() throws {
+        try selectApplicationMenuItem("Settings…")
+        // Every setting stays on one page, so each control is reachable without
+        // the pointer-only section list.
+        try waitSettingValue("UI Scale", "100")
+        try waitSettingValue("Editor Font Size", "13")
+        try waitSettingValue("Logs Font Size", "13")
+        try press("Increase Editor Font Size")
+        try waitSettingValue("Editor Font Size", "14")
+        try snapshot("settings")
+        try press("Restore defaults")
+        try waitSettingValue("Editor Font Size", "13")
+        try press("Save")
+        try waitGone("UI Scale")
+        print("PASS: Settings shows every control, applies a change, and restores defaults")
+    }
     func test() throws {
         try start()
         try testAbout()
+        try testSettings()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
@@ -863,7 +899,7 @@ final class Driver {
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, connection menus, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, Settings dialog, connection menus, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 
@@ -876,10 +912,11 @@ do {
             if CommandLine.arguments.contains("--persistence-only") {
                 try driver.start()
                 try driver.testFailedSaveExit(closeWindow: false)
-            } else if CommandLine.arguments.contains("--about-only") {
-                // The About dialog needs no server, so it can run alone.
+            } else if CommandLine.arguments.contains("--dialogs-only") {
+                // The About and Settings dialogs need no server, so they can run alone.
                 try driver.start()
                 try driver.testAbout()
+                try driver.testSettings()
             } else {
                 try driver.test()
             }
