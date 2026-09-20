@@ -10,7 +10,8 @@ Open **Qrow → Settings…** to change the appearance. The dialog shows the
 section has **Scale** and **Font Family**. The Editor and Logs sections have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results. Editor settings apply only to SQL. Logs settings apply
-only to Logs. Line height is a multiplier.
+only to Logs. Line height is relative to the font size. Scale multiplies the
+Editor and Logs font sizes.
 
 Select a section in the list at the left to move to that section. Use the search
 box above the list to show only the settings that match a word in their name or

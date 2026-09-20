@@ -448,12 +448,12 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                 .title("Interface")
                 .item(
                     SettingItem::new("Scale", number_field(form, NumberSetting::Scale))
-                        .description("Text and controls size.")
+                        .description("Resizes the whole interface.")
                         .keywords(["zoom", "interface", "ui"]),
                 )
                 .item(
                     SettingItem::new("Font Family", font_field(form, FontSetting::Ui))
-                        .description("Font used for text and controls.")
+                        .description("Used everywhere except the Editor and Logs.")
                         .keywords(["interface", "ui", "typeface"]),
                 ),
         )
@@ -462,7 +462,7 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                 .title("Editor")
                 .item(
                     SettingItem::new("Font Family", font_field(form, FontSetting::Editor))
-                        .description("A monospace font is recommended.")
+                        .description("Font for the SQL text.")
                         .keywords(["editor", "sql", "typeface"]),
                 )
                 .item(
@@ -470,7 +470,7 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                         "Font Size",
                         number_field(form, NumberSetting::EditorFontSize),
                     )
-                    .description("Font size before scaling.")
+                    .description("Base size, before Scale.")
                     .keywords(["editor", "sql"]),
                 )
                 .item(
@@ -478,7 +478,7 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                         "Line Height",
                         number_field(form, NumberSetting::EditorLineHeight),
                     )
-                    .description("Multiplier for the vertical spacing between lines.")
+                    .description("Line spacing, relative to the font size.")
                     .keywords(["editor", "sql", "spacing"]),
                 ),
         )
@@ -487,12 +487,12 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                 .title("Logs")
                 .item(
                     SettingItem::new("Font Family", font_field(form, FontSetting::Logs))
-                        .description("A monospace font is recommended.")
+                        .description("Font for the log entries.")
                         .keywords(["logs", "typeface"]),
                 )
                 .item(
                     SettingItem::new("Font Size", number_field(form, NumberSetting::LogsFontSize))
-                        .description("Font size before scaling.")
+                        .description("Base size, before Scale.")
                         .keywords(["logs"]),
                 )
                 .item(
@@ -500,7 +500,7 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                         "Line Height",
                         number_field(form, NumberSetting::LogsLineHeight),
                     )
-                    .description("Multiplier for the vertical spacing between lines.")
+                    .description("Line spacing, relative to the font size.")
                     .keywords(["logs", "spacing"]),
                 ),
         )
