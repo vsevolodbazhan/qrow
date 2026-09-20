@@ -172,7 +172,7 @@ impl Qrow {
                                     })
                                     .when(unread_error, |el| {
                                         el.child(
-                                            Icon::new(IconName::CircleX)
+                                            Icon::new(IconName::TriangleAlert)
                                                 .xsmall()
                                                 .text_color(cx.theme().danger),
                                         )
@@ -292,7 +292,7 @@ impl Qrow {
                             })
                             .when(tab.panel.unread_error, |el| {
                                 el.child(
-                                    Icon::new(IconName::CircleX)
+                                    Icon::new(IconName::TriangleAlert)
                                         .xsmall()
                                         .text_color(cx.theme().danger),
                                 )
