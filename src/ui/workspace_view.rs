@@ -16,6 +16,10 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
+fn connection_tooltip(profile: &Profile) -> String {
+    format!("{} · {}", profile.host, profile.username)
+}
+
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
     let status = capitalize_status_details(status);
     match elapsed {
@@ -189,7 +193,7 @@ impl Qrow {
                                     .bg(cx.theme().sidebar_accent)
                                     .text_color(cx.theme().sidebar_accent_foreground)
                             })
-                            .tooltip(format!("{} · {}", profile.host, profile.database))
+                            .tooltip(connection_tooltip(profile))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.switch_profile(id, window, cx)
                             }));
@@ -756,6 +760,16 @@ mod tests {
         assert_eq!(
             connection_name(&[profile], Some(Uuid::new_v4())),
             "No connection"
+        );
+        let tooltip_profile = Profile {
+            host: "kyuubi.example.com".into(),
+            username: "aviaservice".into(),
+            database: "initial_database".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            connection_tooltip(&tooltip_profile),
+            "kyuubi.example.com · aviaservice"
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(
