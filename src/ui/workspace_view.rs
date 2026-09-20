@@ -17,15 +17,36 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
 }
 
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
-    elapsed.map_or_else(
-        || status.to_owned(),
-        |elapsed| format!("{status} · {:.2} s", elapsed.as_secs_f64()),
-    )
+    let status = capitalize_status_details(status);
+    match elapsed {
+        Some(elapsed) => format!("{status} · {:.2} s", elapsed.as_secs_f64()),
+        None => status,
+    }
+}
+
+fn capitalize_status_details(status: &str) -> String {
+    let mut capitalized = false;
+    let mut label = String::with_capacity(status.len());
+
+    for character in status.chars() {
+        if capitalized && !character.is_whitespace() {
+            label.extend(character.to_uppercase());
+            capitalized = false;
+        } else {
+            label.push(character);
+        }
+
+        if character == '·' {
+            capitalized = true;
+        }
+    }
+
+    label
 }
 
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
-        "Demo · nothing is saved"
+        "Demo · Nothing is saved"
     } else if !saving_enabled {
         "Workspace saving disabled"
     } else if dirty {
@@ -735,12 +756,16 @@ mod tests {
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(
-            query_status_label("Complete", Some(Duration::from_millis(842))),
-            "Complete · 0.84 s"
+            query_status_label("Complete · demo data", Some(Duration::from_millis(842))),
+            "Complete · Demo data · 0.84 s"
+        );
+        assert_eq!(
+            query_status_label("Error · connection lost · retry later", None),
+            "Error · Connection lost · Retry later"
         );
         assert_eq!(
             workspace_status(true, true, false),
-            "Demo · nothing is saved"
+            "Demo · Nothing is saved"
         );
         assert_eq!(
             workspace_status(false, false, false),
