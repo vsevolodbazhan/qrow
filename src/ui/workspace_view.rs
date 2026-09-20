@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
     Icon, Selectable, TitleBar, h_flex,
     input::Editor,
@@ -172,8 +173,8 @@ impl Qrow {
                                     })
                                     .when(unread_error, |el| {
                                         el.child(
-                                            Icon::new(IconName::TriangleAlert)
-                                                .xsmall()
+                                            Icon::new(AssetIconName::TriangleAlert)
+                                                .small()
                                                 .text_color(cx.theme().danger),
                                         )
                                     }),
@@ -292,8 +293,8 @@ impl Qrow {
                             })
                             .when(tab.panel.unread_error, |el| {
                                 el.child(
-                                    Icon::new(IconName::TriangleAlert)
-                                        .xsmall()
+                                    Icon::new(AssetIconName::TriangleAlert)
+                                        .small()
                                         .text_color(cx.theme().danger),
                                 )
                             })
