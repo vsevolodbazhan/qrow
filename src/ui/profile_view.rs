@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::component::{
+    alert::Alert,
     form::{Field, Form},
     h_flex,
     input::Textarea,
@@ -159,7 +160,13 @@ impl Qrow {
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
             .when_some(form.error.clone(), |el, error| {
-                el.child(div().text_color(cx.theme().danger).child(error))
+                el.child(
+                    div()
+                        .id("connection-form-error-accessibility")
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .child(Alert::error("connection-form-error", error)),
+                )
             })
             .child(
                 // Delete and Duplicate act on the connection as a list item, so

@@ -465,11 +465,34 @@ final class Driver {
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
-                               ("Password", "qrow-test-password"), ("Initial Database", "default")] {
+                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
             try fill(label, value)
         }
         try press("Save")
         _ = try wait("Qrow E2E")
+        try waitGone("Cancel")
+
+        // Connection validation uses one error alert and keeps the form open.
+        try press("New Connection")
+        try fill("Host", "127.0.0.1")
+        try press("Save")
+        _ = try wait("Enter a username.")
+        _ = try wait("Username", role: kAXTextFieldRole)
+        try press("Cancel")
+        try waitGone("Cancel")
+
+        // Creating another connection with the same name is rejected before
+        // the password reaches Keychain.
+        try press("New Connection")
+        for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
+                               ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
+                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
+            try fill(label, value)
+        }
+        try press("Save")
+        _ = try wait("A connection with this name already exists.")
+        _ = try wait("Name", role: kAXTextFieldRole)
+        try press("Cancel")
         try waitGone("Cancel")
 
         // Connection actions now live in the row context menu. Exercise each
@@ -494,6 +517,18 @@ final class Driver {
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy")
+
+        // Renaming a connection cannot take another connection's name.
+        try rightClick(try waitExact("Qrow E2E copy", role: kAXButtonRole))
+        try click(try wait("Edit Connection…"))
+        _ = try wait("Password", role: kAXTextFieldRole)
+        try fill("Name", "Qrow E2E")
+        try press("Save")
+        _ = try wait("A connection with this name already exists.")
+        _ = try wait("Name", role: kAXTextFieldRole)
+        try press("Cancel")
+        try waitGone("Cancel")
+
         try rightClick(try waitExact("Qrow E2E", role: kAXButtonRole))
         try click(try wait("Duplicate"))
         _ = try wait("Password", role: kAXTextFieldRole)
@@ -899,7 +934,7 @@ final class Driver {
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, Settings dialog, connection menus, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, Settings dialog, connection menus, connection validation, unique connection names, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
     }
 }
 
