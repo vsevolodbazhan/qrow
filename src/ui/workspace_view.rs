@@ -145,9 +145,12 @@ impl Qrow {
                             .accessibility_label(accessibility_label)
                             .child(
                                 h_flex()
+                                    .h_full()
                                     .w_full()
                                     .min_w_0()
                                     .text_base()
+                                    .line_height(relative(1.25))
+                                    .items_center()
                                     .gap_2()
                                     .child(
                                         gpui_kit::component::Icon::default()
