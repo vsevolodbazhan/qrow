@@ -44,8 +44,45 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 - **Apple Silicon macOS only.** That's the hardware I run every day; there's
   no Intel or other-OS build.
 - **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
+- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
 
-## Prerequisites
+## Installation
+
+### Homebrew
+
+Qrow is available from the custom [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+
+```sh
+brew tap vsevolodbazhan/qrow
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+To install the latest nightly build, use the separate cask:
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
+```
+
+### GitHub Releases
+
+Alternativly, head over to [GH releases page](https://github.com/vsevolodbazhan/qrow/releases), download the DMG and drag it over to Applications.
+
+## Gatekeeper
+
+<img src="assets/screenshots/gatekeeper/warning.png" alt="Gatekeeper Warning" width="384" height="384">
+
+The current release package uses ad hoc code signing. Homebrew can install the
+custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
+with Apple Developer ID. To bypass the Gatekeeper:
+
+1. Open the app. You'll see the warning.
+2. Head over to "Settings", open "Privacy & Security", click "Open Anyway".
+
+![Gatekeeper Settings](assets/screenshots/gatekeeper/settings.png)
+
+## Build
+
+### Prerequisites
 
 - A current stable Rust toolchain, including `cargo` and `rustc`.
 - Xcode command-line tools. Install them with `xcode-select --install` if needed.
@@ -64,23 +101,6 @@ uv --version
 
 Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. GPUI is built with runtime Metal
 shader compilation, so the separate Xcode Metal compiler is not required either.
-
-## Install with Homebrew
-
-Qrow is available from the custom [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
-
-```sh
-brew tap vsevolodbazhan/qrow
-brew install --cask vsevolodbazhan/qrow/qrow
-```
-
-To install the latest nightly build, use the separate cask:
-
-```sh
-brew install --cask vsevolodbazhan/qrow/qrow@nightly
-```
-
-## Build
 
 ### Debug
 
