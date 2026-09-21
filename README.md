@@ -4,7 +4,7 @@
 
 # Qrow
 
-A native (no JVM, no Electron) SQL workbench for macOS built with Rust and [GPUI](https://gpui.rs/) (and [GPUI Kit](https://github.com/longbridge/gpui-kit)).
+A native (no JVM, no Electron) SQL workbench for macOS. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
 ![Qrow Demo Build Mode Screenshot](assets/screenshots/demo.png)
 
