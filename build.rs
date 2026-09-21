@@ -5,6 +5,18 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-env-changed=QROW_COMMIT");
+    println!("cargo:rerun-if-env-changed=QROW_RELEASE_VERSION");
+
+    let release_version = std::env::var("QROW_RELEASE_VERSION")
+        .ok()
+        .filter(|version| !version.trim().is_empty())
+        .or_else(|| std::env::var("CARGO_PKG_VERSION").ok())
+        .unwrap_or_default();
+    println!(
+        "cargo:rustc-env=QROW_RELEASE_VERSION={}",
+        release_version.trim()
+    );
+
     // A packager without Git history supplies the commit through the
     // environment. A checkout resolves it here.
     let commit = std::env::var("QROW_COMMIT")

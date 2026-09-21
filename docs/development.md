@@ -139,11 +139,25 @@ reads the application version from `Cargo.toml`. The stable tag is
 `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
 
-The workflow runs `sh scripts/check.sh core/backend`. It does not run E2E tests.
-The macOS job builds the application bundle, creates a DMG, and publishes it as
-the GitHub Release asset. The workflow uses the latest non-draft release on the
-selected channel as the changelog start tag. If the channel has no previous
-release, it writes the target commit history as the changelog.
+The workflow runs `sh scripts/check.sh core/backend` and
+`sh scripts/check.sh core/macos`. It does not run E2E tests. The macOS job
+builds the application bundle, creates a DMG, and publishes it as the GitHub
+Release asset. The workflow uses the latest non-draft release on the selected
+channel as the changelog start tag. If the channel has no previous release, it
+writes the target commit history as the changelog.
+
+The jobs run in this order:
+
+```text
+resolve-target -> test-core-backend -> test-core-macos -> package -> publish
+```
+
+The publish job creates the release tag before it creates the GitHub Release.
+The first release on a channel can run without a previous release or tag.
+
+The packaged application shows the channel-specific release version in the
+About dialog. The macOS bundle metadata keeps the numeric version from
+`Cargo.toml`.
 
 See
 [End-to-end testing](end-to-end-testing.md#continuous-integration) for the
