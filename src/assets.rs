@@ -4,7 +4,7 @@ use gpui_kit::{AssetSource, SharedString};
 
 pub(crate) const SPARK_ICON: &str = "connection-type-icons/apache-spark.svg";
 pub(crate) const APP_ICON: &str = "app-icons/qrow-256.png";
-const CIRCLE_ALERT_ICON: &str = "icons/circle-alert.svg";
+const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 
 gpui_kit::assets::icon_assets!(QrowIconAssets, [TriangleAlert]);
 
@@ -22,7 +22,7 @@ impl AssetSource for Assets {
                 "../assets/app-icons/qrow-256.png"
             ))));
         }
-        if path == CIRCLE_ALERT_ICON {
+        if path == TRIANGLE_ALERT_ICON {
             return QrowIconAssets.load(path);
         }
         gpui_kit::assets::Assets.load(path)
@@ -30,7 +30,7 @@ impl AssetSource for Assets {
 
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
-        for asset in [SPARK_ICON, APP_ICON, CIRCLE_ALERT_ICON] {
+        for asset in [SPARK_ICON, APP_ICON, TRIANGLE_ALERT_ICON] {
             if asset.starts_with(path) {
                 paths.push(asset.into());
             }
@@ -45,14 +45,14 @@ mod tests {
     use gpui_kit::AssetSource;
 
     #[test]
-    fn circle_alert_asset_is_available() {
-        assert!(Assets.load(CIRCLE_ALERT_ICON).unwrap().is_some());
+    fn triangle_alert_asset_is_available() {
+        assert!(Assets.load(TRIANGLE_ALERT_ICON).unwrap().is_some());
         assert!(
             Assets
                 .list("icons/")
                 .unwrap()
                 .iter()
-                .any(|path| path == CIRCLE_ALERT_ICON)
+                .any(|path| path == TRIANGLE_ALERT_ICON)
         );
     }
 }
