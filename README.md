@@ -65,7 +65,7 @@ brew install --cask vsevolodbazhan/qrow/qrow@nightly
 
 ### GitHub Releases
 
-Alternativly, head over to [GH releases page](https://github.com/vsevolodbazhan/qrow/releases), download the DMG and drag it over to Applications.
+Alternatively, head over to the [GH releases page](https://github.com/vsevolodbazhan/qrow/releases), download the DMG, and drag it to Applications.
 
 ## Gatekeeper
 
