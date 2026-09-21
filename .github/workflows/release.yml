@@ -12,7 +12,7 @@ on:
           - stable
         default: nightly
       commit:
-        description: Commit SHA or ref. Leave blank for the latest commit on the selected branch.
+        description: Commit SHA, branch, or tag. Leave blank for the latest commit on the selected branch.
         required: false
         type: string
         default: ""
@@ -35,18 +35,24 @@ jobs:
     outputs:
       target_sha: ${{ steps.target.outputs.sha }}
     steps:
-      - name: checkout-target
+      - name: checkout-default
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ inputs.commit || github.sha }}
       - name: resolve-target
         id: target
         shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.commit || github.sha }}
         run: |
           set -euo pipefail
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if ! target_sha="$(git rev-parse --verify --end-of-options "${REQUESTED_REF}^{commit}")"; then
+            echo "Could not resolve commit, branch, or tag: ${REQUESTED_REF}" >&2
+            exit 1
+          fi
+          git checkout --detach "$target_sha"
+          echo "sha=$target_sha" >> "$GITHUB_OUTPUT"
 
   test-core-backend:
     name: test-core-backend
