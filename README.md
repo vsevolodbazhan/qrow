@@ -65,6 +65,21 @@ uv --version
 Java, ODBC drivers, and the Thrift compiler are not required to build or run Qrow. GPUI is built with runtime Metal
 shader compilation, so the separate Xcode Metal compiler is not required either.
 
+## Install with Homebrew
+
+Qrow is available from the custom [Homebrew tap](https://github.com/vsevolodbazhan/homebrew-qrow):
+
+```sh
+brew tap vsevolodbazhan/qrow
+brew install --cask vsevolodbazhan/qrow/qrow
+```
+
+To install the latest nightly build, use the separate cask:
+
+```sh
+brew install --cask vsevolodbazhan/qrow/qrow@nightly
+```
+
 ## Build
 
 ### Debug
