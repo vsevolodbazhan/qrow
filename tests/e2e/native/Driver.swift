@@ -93,6 +93,22 @@ func rightClick(_ element: AXUIElement) throws {
         event.post(tap: .cghidEventTap)
     }
 }
+func scrollDown(_ element: AXUIElement) throws {
+    // GPUI exposes the form fields through Accessibility, but the current
+    // scroll container does not expose AXScrollToVisible on macOS. Send the
+    // wheel event over a visible form control as a compatible fallback.
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    let (point, extent) = try elementBounds(element)
+    var scrollPoint = point
+    scrollPoint.x += extent.width / 2
+    scrollPoint.y += extent.height / 2
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: scrollPoint, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -1200, wheel2: 0, wheel3: 0)!
+    scroll.location = scrollPoint
+    scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -206,10 +222,27 @@ final class Driver {
             try click(element)
         }
     }
+    func pressMenuItem(_ label: String) throws {
+        // Menu items are transient. Use their accessibility action instead of
+        // a screen coordinate that can be stale on scaled or multi-display
+        // configurations.
+        try activate(try wait(label))
+    }
+    func scrollIntoView(_ element: AXUIElement) {
+        // Use the standard action when the target's scroll container publishes
+        // it. The connection form also has a wheel fallback at its lifecycle
+        // entry points because its current container does not publish it.
+        _ = AXUIElementPerformAction(element, "AXScrollToVisible" as CFString)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+    }
     func selectPopup(_ label: String, _ option: String) throws {
         let popup = try wait(label, role: kAXPopUpButtonRole)
         let current = strings(popup).first { $0 != label }
         try activate(popup)
+        // The accessibility click schedules the deferred popup and transfers
+        // focus to its list. Do not send navigation keys until that frame is
+        // published; the delay varies with display scaling.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         if current != option {
             try require(
                 ["Disconnect after", "Keep connected"].contains(option),
@@ -261,7 +294,11 @@ final class Driver {
     }
     func fill(_ label: String, _ value: String) throws {
         // GPUI exposes inputs as text fields or text areas depending on the control.
-        let element = try waitInput(label)
+        var element = try waitInput(label)
+        scrollIntoView(element)
+        // Re-read the node after scrolling because its bounds can change with
+        // the scroll offset.
+        element = try waitInput(label)
         try click(element)
         // The GPUI Kit input is exposed as a settable accessibility element.
         // Explicitly focus it as well as clicking its bounds so keyboard input
@@ -580,13 +617,13 @@ final class Driver {
         try waitGone("Edit Connection…")
 
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         _ = try wait("Password", role: kAXTextFieldRole)
         try press("Cancel")
         try waitGone("Cancel")
 
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Duplicate"))
+        try pressMenuItem("Duplicate")
         _ = try wait("Password", role: kAXTextFieldRole)
         try fill("Password", "qrow-test-password")
         try press("Save")
@@ -595,7 +632,7 @@ final class Driver {
 
         // Renaming a connection cannot take another connection's name.
         try contextMenu("Qrow E2E copy", exact: true, role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         _ = try wait("Password", role: kAXTextFieldRole)
         try fill("Name", "Qrow E2E")
         try press("Save")
@@ -605,18 +642,18 @@ final class Driver {
         try waitGone("Cancel")
 
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Duplicate"))
+        try pressMenuItem("Duplicate")
         _ = try wait("Password", role: kAXTextFieldRole)
         try fill("Password", "qrow-test-password")
         try press("Save")
         try waitGone("Cancel")
         _ = try wait("Qrow E2E copy 2")
         try contextMenu("Qrow E2E copy 2", exact: true, role: kAXButtonRole)
-        try click(try wait("Delete"))
+        try pressMenuItem("Delete")
         try press("Delete connection")
         try waitGone("Qrow E2E copy 2")
         try contextMenu("Qrow E2E copy", role: kAXButtonRole)
-        try click(try wait("Delete"))
+        try pressMenuItem("Delete")
         // Alert titles are not exposed by GPUI's macOS accessibility tree.
         // The confirmation button proves that the alert replaced the menu.
         try press("Delete connection")
@@ -629,7 +666,7 @@ final class Driver {
 
         // Create a second disposable profile for the connection-switch test.
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Duplicate"))
+        try pressMenuItem("Duplicate")
         _ = try wait("Password", role: kAXTextFieldRole)
         try fill("Password", "qrow-test-password")
         try press("Save")
@@ -696,8 +733,9 @@ final class Driver {
 
         let keepAliveToken = "keep-alive-" + UUID().uuidString.lowercased()
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         try selectPopup("When idle", "Keep connected")
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try fill("Keep-alive interval in seconds", "3")
         try fill("Keep-alive query", "SELECT qrow_keep_alive(id, '\(keepAliveToken)', CAST(30000 AS BIGINT)) FROM range(1)")
         try press("Save")
@@ -725,7 +763,7 @@ final class Driver {
         // indicator to verify that A's heartbeat is still running.
         _ = try wait("Qrow E2E, running", timeout: 5)
         try contextMenu("Qrow E2E, running", role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened during the original session's heartbeat")
         key(53)
@@ -766,7 +804,7 @@ final class Driver {
         // Editing A while B is selected must not close B's session. Restore A's
         // default idle policy, then fetch through B's cursor.
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         try selectPopup("When idle", "Disconnect after")
         try press("Save")
         try waitGone("Cancel")
@@ -777,8 +815,9 @@ final class Driver {
         // A lifecycle edit updates B's live session while A remains selected.
         try selectConnection("Qrow E2E")
         try contextMenu("Qrow E2E copy", role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         try selectPopup("When idle", "Keep connected")
+        try scrollDown(try wait("Name", role: kAXTextFieldRole))
         try fill("Keep-alive interval in seconds", "3")
         try fill("Keep-alive query", "SELECT 'updated-b'")
         try press("Save")
@@ -793,7 +832,7 @@ final class Driver {
         // B's default idle policy for the remaining disconnect scenarios.
         try selectConnection("Qrow E2E")
         try contextMenu("Qrow E2E copy", role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         try fill("Password", "qrow-test-password")
         try selectPopup("When idle", "Disconnect after")
         try press("Save")
@@ -813,7 +852,7 @@ final class Driver {
         _ = try wait("switch-b-after-disconnect")
         try selectConnection("Qrow E2E")
         try contextMenu("Qrow E2E copy", exact: true, role: kAXButtonRole)
-        try click(try wait("Delete"))
+        try pressMenuItem("Delete")
         try press("Delete connection")
         try waitGone("Qrow E2E copy")
         _ = try wait("Disconnected")
@@ -828,7 +867,7 @@ final class Driver {
         _ = try wait("Complete")
         try click(try waitExact("Query 1"))
         try contextMenu("Qrow E2E", exact: true, role: kAXButtonRole)
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         try fill("Name", "Qrow E2E live")
         try press("Save")
         try waitGone("Cancel")
@@ -845,11 +884,11 @@ final class Driver {
         // Duplicate keeps tab names unique within the connection and selects
         // the new tab. A second copy receives a numbered suffix.
         try contextMenu("Query 1", exact: true)
-        try click(try wait("Duplicate"))
+        try pressMenuItem("Duplicate")
         _ = try waitExact("Query 1 (Copy)")
         try click(try waitExact("Query 1"))
         try contextMenu("Query 1", exact: true)
-        try click(try wait("Duplicate"))
+        try pressMenuItem("Duplicate")
         _ = try waitExact("Query 1 (Copy 2)")
         try click(try waitExact("Query 1"))
 
@@ -857,7 +896,7 @@ final class Driver {
         // dialog stays open and the tab title stays unchanged. GPUI does not
         // publish the validation text in the macOS accessibility tree.
         try contextMenu("Query 1", exact: true)
-        try click(try wait("Rename…"))
+        try pressMenuItem("Rename…")
         let tabName = try wait("Tab Name", role: kAXTextFieldRole)
         try require(
             attribute(tabName, kAXValueAttribute) as? String == "Query 1",
@@ -872,7 +911,7 @@ final class Driver {
 
         // The tab menu renames the tab without changing its SQL or session.
         try contextMenu("Query 1", exact: true)
-        try click(try wait("Rename…"))
+        try pressMenuItem("Rename…")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", String(repeating: "x", count: 61))
         try press("Rename")
@@ -887,14 +926,14 @@ final class Driver {
         try press("Cancel")
         try waitGone("Tab Name")
         try contextMenu("Query 1", exact: true)
-        try click(try wait("Rename…"))
+        try pressMenuItem("Rename…")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try fill("Tab Name", "Renamed tab")
         try press("Rename")
         try waitGone("Tab Name")
         _ = try waitExact("Renamed tab")
         try contextMenu("Renamed tab", exact: true)
-        try click(try wait("Rename…"))
+        try pressMenuItem("Rename…")
         _ = try wait("Tab Name", role: kAXTextFieldRole)
         try press("Rename")
         try waitGone("Tab Name")
@@ -987,10 +1026,10 @@ final class Driver {
         try contextMenu("Qrow E2E live", role: kAXButtonRole)
         // GPUI exposes these as disabled menu items visually, but does not
         // publish AXEnabled on macOS. Verify their observable no-op behavior.
-        try click(try wait("Edit Connection…"))
+        try pressMenuItem("Edit Connection…")
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Password", role: kAXTextFieldRole) == nil, "Edit opened while the connection was busy")
-        try click(try wait("Delete"))
+        try pressMenuItem("Delete")
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         try require(find("Delete connection", role: kAXButtonRole) == nil, "Delete confirmation opened while the connection was busy")
         key(53)
