@@ -100,8 +100,8 @@ does not prove that the staged snapshot passes. Markdown changes outside the
 script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
 script checks, including changes to its README.
 
-The [test workflow](../.github/workflows/test.yml) is the only CI workflow. It
-runs for pushes to `main`, manual dispatches, and pull requests with the
+The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
+manual dispatches, and pull requests with the
 `opened`, `reopened`, `synchronize`, `ready_for_review`, and
 `converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
 draft pull request, including a `converted_to_draft` event, starts no jobs.
@@ -129,7 +129,37 @@ test / backend
 test / macos
 ```
 
-There is no aggregate CI gate. See
+There is no aggregate CI gate. The [release workflow](../.github/workflows/release.yml)
+is manual. Use it to publish a nightly or stable release after the core checks
+pass.
+
+The release workflow accepts an optional commit SHA or ref. Leave the field
+blank to use the latest commit on the branch selected for the workflow run. It
+reads the application version from `Cargo.toml`. The stable tag is
+`v<version>`. The nightly tag is
+`v<version>-nightly.<UTC date>.<workflow run number>`.
+
+The workflow runs `sh scripts/check.sh core/backend` and
+`sh scripts/check.sh core/macos`. It does not run E2E tests. The macOS job
+builds the application bundle, creates a DMG, and publishes it as the GitHub
+Release asset. The workflow uses the latest non-draft release on the selected
+channel as the changelog start tag. If the channel has no previous release, it
+writes the target commit history as the changelog.
+
+The jobs run in this order:
+
+```text
+resolve-target -> test-core-backend -> test-core-macos -> package -> publish
+```
+
+The publish job creates the release tag before it creates the GitHub Release.
+The first release on a channel can run without a previous release or tag.
+
+The packaged application shows the channel-specific release version in the
+About dialog. The macOS bundle metadata keeps the numeric version from
+`Cargo.toml`.
+
+See
 [End-to-end testing](end-to-end-testing.md#continuous-integration) for the
 real-server and native UI details. Local checks cannot verify GitHub event
 filters, run cancellation, artifact transfer, or branch protection settings.

@@ -1,0 +1,333 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel
+        required: true
+        type: choice
+        options:
+          - nightly
+          - stable
+        default: nightly
+      commit:
+        description: Commit SHA or ref. Leave blank for the latest commit on the selected branch.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.channel }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  resolve-target:
+    name: resolve-target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      target_sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ inputs.commit || github.sha }}
+      - name: resolve-target
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  test-core-backend:
+    name: test-core-backend
+    needs: resolve-target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: rustup-show
+        run: rustup show
+      - name: cache-rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release-core
+      - name: test-core-backend
+        run: sh scripts/check.sh core/backend
+
+  test-core-macos:
+    name: test-core-macos
+    needs:
+      - resolve-target
+      - test-core-backend
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: rustup-show
+        run: rustup show
+      - name: cache-rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release-native
+      - name: test-core-macos
+        run: sh scripts/check.sh core/macos
+
+  package:
+    name: package
+    needs:
+      - resolve-target
+      - test-core-macos
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      release_version: ${{ steps.metadata.outputs.release_version }}
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      release_title: ${{ steps.metadata.outputs.release_title }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: rustup-show
+        run: rustup show
+      - name: cache-rust
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: release-native
+      - name: setup-uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: resolve-release-metadata
+        id: metadata
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+
+          target_sha="$(git rev-parse HEAD)"
+          base_version="$(cargo metadata --locked --no-deps --format-version 1 |
+            uv run --locked python scripts/package/version.py)"
+
+          case "$CHANNEL" in
+            nightly)
+              release_version="${base_version}-nightly.$(date -u +%Y%m%d).${RUN_NUMBER}"
+              release_tag="v${release_version}"
+              release_title="Qrow Nightly ${release_version}"
+              prerelease=true
+              ;;
+            stable)
+              release_version="$base_version"
+              release_tag="v${release_version}"
+              release_title="Qrow ${release_version}"
+              prerelease=false
+              ;;
+            *)
+              echo "Unsupported release channel: $CHANNEL" >&2
+              exit 1
+              ;;
+          esac
+
+          {
+            echo "target_sha=$target_sha"
+            echo "base_version=$base_version"
+            echo "release_version=$release_version"
+            echo "release_tag=$release_tag"
+            echo "release_title=$release_title"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+      - name: build-application-bundle
+        env:
+          QROW_RELEASE_VERSION: ${{ steps.metadata.outputs.release_version }}
+        run: sh scripts/package/macos.sh
+      - name: create-dmg
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.metadata.outputs.release_version }}
+        run: |
+          set -euo pipefail
+          dmg_path="dist/Qrow-${RELEASE_VERSION}.dmg"
+          hdiutil create \
+            -volname "Qrow ${RELEASE_VERSION}" \
+            -srcfolder dist/Qrow.app \
+            -ov \
+            -format UDZO \
+            "$dmg_path"
+          hdiutil imageinfo "$dmg_path" >/dev/null
+      - name: upload-dmg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dmg
+          path: dist/Qrow-${{ steps.metadata.outputs.release_version }}.dmg
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs:
+      - resolve-target
+      - package
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
+      - name: download-dmg
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-dmg
+          path: dist
+      - name: resolve-previous-release
+        id: previous
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "A GitHub Release already exists for $RELEASE_TAG." >&2
+            exit 1
+          fi
+
+          case "$CHANNEL" in
+            nightly) channel_filter='.isPrerelease == true' ;;
+            stable) channel_filter='.isPrerelease == false' ;;
+            *)
+              echo "Unsupported release channel: $CHANNEL" >&2
+              exit 1
+              ;;
+          esac
+
+          previous_tag="$(gh release list \
+            --repo "$GITHUB_REPOSITORY" \
+            --limit 1000 \
+            --json tagName,isDraft,isPrerelease,publishedAt \
+            --jq "map(select(.isDraft == false and $channel_filter)) |
+              sort_by(.publishedAt) | reverse | .[0].tagName // empty")"
+
+          if [ -n "$previous_tag" ]; then
+            if ! previous_sha="$(git rev-parse --verify "${previous_tag}^{commit}")"; then
+              echo "The previous release tag is not present in the checkout: $previous_tag" >&2
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$previous_sha" "$TARGET_SHA"; then
+              echo "The target commit must include the previous $CHANNEL release: $previous_tag" >&2
+              exit 1
+            fi
+          fi
+
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
+      - name: create-release-tag
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+          RELEASE_TITLE: ${{ needs.package.outputs.release_title }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+
+          if git ls-remote --exit-code --refs origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            existing_sha="$(git rev-parse "${RELEASE_TAG}^{commit}")"
+            if [ "$existing_sha" != "$TARGET_SHA" ]; then
+              echo "The existing tag $RELEASE_TAG points to $existing_sha, not $TARGET_SHA." >&2
+              exit 1
+            fi
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate "$RELEASE_TAG" "$TARGET_SHA" --message "$RELEASE_TITLE"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+      - name: build-changelog
+        env:
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.previous_tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$PREVIOUS_TAG" ]; then
+            gh api \
+              --method POST \
+              "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$RELEASE_TAG" \
+              -f target_commitish="$TARGET_SHA" \
+              -f previous_tag_name="$PREVIOUS_TAG" \
+              --jq '.body' > release-notes.md
+          else
+            {
+              echo "## Changes"
+              echo
+              git log --no-merges \
+                --format="- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))" \
+                "$TARGET_SHA"
+            } > release-notes.md
+          fi
+
+          test -s release-notes.md
+      - name: publish-github-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.package.outputs.release_tag }}
+          RELEASE_TITLE: ${{ needs.package.outputs.release_title }}
+          TARGET_SHA: ${{ needs.resolve-target.outputs.target_sha }}
+          PRERELEASE: ${{ needs.package.outputs.prerelease }}
+          RELEASE_VERSION: ${{ needs.package.outputs.release_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_args=(
+            release create "$RELEASE_TAG"
+            "dist/Qrow-${RELEASE_VERSION}.dmg"
+            --repo "$GITHUB_REPOSITORY"
+            --target "$TARGET_SHA"
+            --title "$RELEASE_TITLE"
+            --notes-file release-notes.md
+            --verify-tag
+          )
+          if [ "$PRERELEASE" = true ]; then
+            release_args+=(--prerelease --latest=false)
+          else
+            release_args+=(--latest)
+          fi
+          gh "${release_args[@]}"
