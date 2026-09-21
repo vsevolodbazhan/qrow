@@ -173,9 +173,14 @@ impl Qrow {
                                     )
                                     .when(busy, |el| {
                                         el.child(
-                                            Spinner::new()
-                                                .xsmall()
-                                                .color(cx.theme().muted_foreground),
+                                            div()
+                                                // Keep the loading glyph on the header action's centerline.
+                                                .mr_0p5()
+                                                .child(
+                                                    Spinner::new()
+                                                        .xsmall()
+                                                        .color(cx.theme().muted_foreground),
+                                                ),
                                         )
                                     })
                                     .when(unread_error, |el| {
