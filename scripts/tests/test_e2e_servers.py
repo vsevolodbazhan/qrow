@@ -44,6 +44,7 @@ class NativeFixtureTests(unittest.TestCase):
                 self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
             command = popen.call_args.args[0]
             self.assertEqual(command[command.index("--continue-at") + 1], "-")
+            self.assertEqual(command[command.index("--max-time") + 1], str(native_fixture.DOWNLOAD_TIMEOUT_SECONDS))
             self.assertNotIn("--retry", command)
 
     def test_cached_download_is_verified_before_use(self):
