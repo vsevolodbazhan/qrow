@@ -20,20 +20,41 @@ The macOS **Workspaces** menu has separate commands:
 The workspace name in the window header opens a native selection menu.
 You can also select **Select Workspace** in Settings.
 Names must be unique and contain no more than 80 characters.
-Select and Rename are unavailable until a workspace exists.
+Select, Rename, and Delete are unavailable until a workspace exists.
 
 Qrow opens the last opened workspace at startup. There is no default-workspace
 setting. An existing workspace from an older version keeps the name **Default**
 until you rename it. Its files and connection passwords stay in their original
 locations. A new workspace starts with no connections and default settings.
 
-Wait for running queries to finish before you create, select, or rename a
+Wait for running queries to finish before you create, select, rename, or delete a
 workspace. Switching saves the current SQL, then closes that workspace's
 sessions and results. Returning restores saved tabs and settings, but not
 result rows or Logs history. If the save or destination load fails, the current
 workspace stays open. Escape closes the form, except while a workspace
 operation is in progress. Workspace commands are unavailable in demo mode.
-There is no command to delete a workspace.
+
+## Delete a workspace
+
+Select **Workspaces → Delete Workspace…** to delete the current workspace.
+The confirmation names the workspace. **Cancel** or **Escape** keeps it open.
+Select **Delete workspace** to permanently remove its saved queries,
+connections, settings, and saved passwords. There is no Trash, Undo, or Restore.
+Passwords that another workspace still uses are kept.
+
+Qrow saves the current state and checks the next workspace before deletion.
+If either step fails, the current workspace stays open and Qrow reports the
+error. After deletion, Qrow closes the deleted workspace's sessions and results
+and opens the most recently used remaining workspace. When none remain, Qrow
+shows the welcome screen. It does not create a replacement workspace.
+
+Qrow records the order in which you open workspaces. For older workspace lists,
+only the last selection is known. Qrow uses reverse creation order for the
+other workspaces until you open them again.
+
+If file or password removal fails after deletion starts, Qrow reports incomplete
+cleanup. It retries cleanup at the next startup. This retry does not restore the
+workspace.
 
 ## Appearance and layout
 
@@ -74,9 +95,11 @@ result rows or Logs history. Its default path is:
 ~/Library/Application Support/Qrow/workspace.json
 ```
 
-The workspace list and last selection are in `workspaces.json` in the same
+The workspace list, recent selections, and pending deletion cleanup are in
+`workspaces.json` in the same
 directory. New workspace files are in `workspaces/<UUID>/workspace.json`.
-Workspace names are labels, not directory paths.
+Workspace names are labels, not directory paths. Qrow updates the workspace-list
+format when it saves. Earlier app builds cannot read the updated list.
 
 Passwords remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords and result sets are not written to the workspace file. SQL text is

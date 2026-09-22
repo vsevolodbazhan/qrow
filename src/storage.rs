@@ -236,8 +236,14 @@ pub fn set_password(id: Uuid, password: &str) -> Result<()> {
 /// nothing refers to any more.
 #[cfg(target_os = "macos")]
 pub fn delete_password(id: Uuid) -> Result<()> {
-    security_framework::passwords::delete_generic_password("io.qrow.connection", &id.to_string())
-        .context("Could not delete the password from macOS Keychain")
+    match security_framework::passwords::delete_generic_password(
+        "io.qrow.connection",
+        &id.to_string(),
+    ) {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == -25300 => Ok(()), // errSecItemNotFound: cleanup can be retried.
+        Err(error) => Err(error).context("Could not delete the password from macOS Keychain"),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

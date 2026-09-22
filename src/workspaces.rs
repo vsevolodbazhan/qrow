@@ -19,38 +19,70 @@ pub struct Entry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Deletion {
+    id: Uuid,
+    profiles: Vec<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Catalog {
     version: u32,
     active: Option<Uuid>,
     entries: Vec<Entry>,
+    #[serde(default)]
+    pending_deletions: Vec<Deletion>,
+    #[serde(default)]
+    recent: Vec<Uuid>,
 }
 impl Default for Catalog {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             active: None,
             entries: vec![],
+            pending_deletions: vec![],
+            recent: vec![],
         }
     }
 }
 impl Catalog {
     pub fn load(root: &Path) -> Result<Self> {
-        let catalog: Self = match fs::read(root.join("workspaces.json")) {
+        let mut catalog: Self = match fs::read(root.join("workspaces.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes).context("Could not read workspace list")?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let mut catalog = Self::default();
                 if root.join("workspace.json").exists() {
-                    catalog.active = Some(Uuid::nil());
                     catalog.entries.push(Entry {
                         id: Uuid::nil(),
                         name: "Default".into(),
                     });
+                    catalog.opened(Uuid::nil());
                 }
                 catalog
             }
             Err(e) => return Err(e).context("Could not read workspace list"),
         };
-        ensure!(catalog.version == 1, "Unsupported workspace list version");
+        ensure!(
+            (1..=2).contains(&catalog.version),
+            "Unsupported workspace list version"
+        );
+        // Older catalogs know only the last selection. Use reverse creation order
+        // for their remaining entries until those workspaces have been opened.
+        if catalog.version == 1 {
+            catalog.recent = catalog
+                .active
+                .into_iter()
+                .chain(
+                    catalog
+                        .entries
+                        .iter()
+                        .rev()
+                        .map(|e| e.id)
+                        .filter(|id| Some(*id) != catalog.active),
+                )
+                .collect();
+        }
+        catalog.version = 2;
         ensure!(
             match catalog.active {
                 Some(id) => catalog.entries.iter().any(|e| e.id == id),
@@ -62,7 +94,31 @@ impl Catalog {
             validate_name(&entry.name)?;
             ensure!(!catalog.entries[..ix].iter().any(|e| e.id == entry.id || e.name.to_lowercase() == entry.name.to_lowercase()), "Duplicate workspace in list");
         }
+        for (ix, deletion) in catalog.pending_deletions.iter().enumerate() {
+            ensure!(
+                !catalog.entries.iter().any(|e| e.id == deletion.id)
+                    && !catalog.pending_deletions[..ix]
+                        .iter()
+                        .any(|e| e.id == deletion.id),
+                "Invalid pending workspace deletion"
+            );
+        }
+        ensure!(
+            catalog.recent.len() == catalog.entries.len()
+                && catalog.recent.first().copied() == catalog.active
+                && catalog.recent.iter().enumerate().all(|(ix, id)| catalog
+                    .entries
+                    .iter()
+                    .any(|e| e.id == *id)
+                    && !catalog.recent[..ix].contains(id)),
+            "Invalid workspace history"
+        );
         Ok(catalog)
+    }
+    fn opened(&mut self, id: Uuid) {
+        self.active = Some(id);
+        self.recent.retain(|previous| *previous != id);
+        self.recent.insert(0, id);
     }
     pub fn entries(&self) -> &[Entry] {
         &self.entries
@@ -75,13 +131,17 @@ impl Catalog {
             self.entries.iter().any(|e| e.id == id),
             "Workspace no longer exists"
         );
-        Ok(if id.is_nil() {
-            root.join("workspace.json")
-        } else {
-            root.join("workspaces")
-                .join(id.to_string())
-                .join("workspace.json")
-        })
+        Ok(workspace_file_path(root, id))
+    }
+}
+
+fn workspace_file_path(root: &Path, id: Uuid) -> PathBuf {
+    if id.is_nil() {
+        root.join("workspace.json")
+    } else {
+        root.join("workspaces")
+            .join(id.to_string())
+            .join("workspace.json")
     }
 }
 
@@ -145,7 +205,7 @@ pub fn open(
             .context("Workspace saver stopped")?
             .map_err(anyhow::Error::msg)?;
     }
-    catalog.active = Some(id);
+    catalog.opened(id);
     file.save_json(&catalog)?;
     Ok((catalog, workspace, saver))
 }
@@ -182,4 +242,114 @@ pub fn rename(root: &Path, id: Uuid, name: &str) -> Result<Catalog> {
     entry.name = name.into();
     file.save_json(&catalog)?;
     Ok(catalog)
+}
+
+/// Result of a committed deletion. Cleanup failures do not reopen the deleted workspace.
+#[non_exhaustive]
+pub struct DeletedWorkspace {
+    pub catalog: Catalog,
+    pub next: Option<(Workspace, Saver)>,
+    pub warning: Option<String>,
+}
+
+/// Permanently delete the current workspace after the caller has flushed its saver.
+/// Keep the source lock, issue no more saves, and stop its saver after success.
+/// A durable deletion record lets startup finish interrupted file/password removal.
+pub fn delete(
+    root: &Path,
+    id: Uuid,
+    mut delete_password: impl FnMut(Uuid) -> Result<()>,
+    wake: impl Fn() + Send + 'static,
+) -> Result<DeletedWorkspace> {
+    let file = WorkspaceFile::acquire(root.join("workspaces.json"))?;
+    let mut catalog = Catalog::load(root)?;
+    ensure!(
+        catalog.active == Some(id),
+        "The workspace selection changed. Reopen the workspace before deleting it."
+    );
+    let path = catalog.path(root, id)?;
+    ensure!(path.is_file(), "Workspace file is missing.");
+    let source = crate::storage::load(&path)?;
+    let mut profiles: Vec<_> = source.profiles.iter().map(|profile| profile.id).collect();
+    // Imported or manually copied files can refer to the same Keychain entry.
+    for entry in catalog.entries.iter().filter(|entry| entry.id != id) {
+        let path = catalog.path(root, entry.id)?;
+        ensure!(
+            path.is_file(),
+            "Another workspace file is missing. Recover it before deleting this workspace."
+        );
+        let workspace = crate::storage::load(&path)?;
+        profiles.retain(|id| !workspace.profiles.iter().any(|profile| profile.id == *id));
+    }
+    catalog.entries.retain(|entry| entry.id != id);
+    catalog.recent.retain(|entry| *entry != id);
+    catalog.active = catalog.recent.first().copied();
+    let next = if let Some(next) = catalog.active {
+        Some(
+            Saver::open(catalog.path(root, next)?, wake)
+                .context("Could not open the next workspace")?,
+        )
+    } else {
+        None
+    };
+    let deletion = Deletion { id, profiles };
+    catalog.pending_deletions.push(deletion.clone());
+    file.save_json(&catalog)?;
+    let warning = match remove_deleted(root, &deletion, &mut delete_password) {
+        Ok(()) => {
+            catalog
+                .pending_deletions
+                .retain(|deletion| deletion.id != id);
+            file.save_json(&catalog).err().map(|error| format!("Workspace deleted, but cleanup confirmation could not be saved: {error:#}. Qrow will retry at startup."))
+        }
+        Err(error) => Some(format!(
+            "Workspace deleted, but cleanup is incomplete: {error:#}. Qrow will retry at startup."
+        )),
+    };
+    Ok(DeletedWorkspace {
+        catalog,
+        next,
+        warning,
+    })
+}
+
+fn remove_deleted(
+    root: &Path,
+    deletion: &Deletion,
+    delete_password: &mut impl FnMut(Uuid) -> Result<()>,
+) -> Result<()> {
+    match fs::remove_file(workspace_file_path(root, deletion.id)) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("Could not remove the workspace file"),
+    }
+    fs::File::open(
+        workspace_file_path(root, deletion.id)
+            .parent()
+            .expect("workspace directory"),
+    )?
+    .sync_all()?;
+    for id in &deletion.profiles {
+        delete_password(*id).context("Could not remove a saved password")?;
+    }
+    Ok(())
+}
+
+/// Finish confirmed deletions after an interrupted run. Missing passwords are success.
+pub fn finish_deletions(
+    root: &Path,
+    mut delete_password: impl FnMut(Uuid) -> Result<()>,
+) -> Result<()> {
+    if Catalog::load(root)?.pending_deletions.is_empty() {
+        return Ok(());
+    }
+    let file = WorkspaceFile::acquire(root.join("workspaces.json"))?;
+    let mut catalog = Catalog::load(root)?;
+    while let Some(deletion) = catalog.pending_deletions.first() {
+        let _source = WorkspaceFile::acquire(workspace_file_path(root, deletion.id))?;
+        remove_deleted(root, deletion, &mut delete_password)?;
+        catalog.pending_deletions.remove(0);
+        file.save_json(&catalog)?;
+    }
+    Ok(())
 }

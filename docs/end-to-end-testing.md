@@ -149,6 +149,13 @@ workspace must start with a blank editor. The scenario blocks the source save
 and checks that a failed switch preserves the SQL. A restart must open the last
 selected workspace. Credential cleanup covers all workspaces in the test run.
 
+The deletion scenario checks the named confirmation, Cancel, and Return without
+confirmation. A failed source save must keep the workspace open. A confirmed
+deletion must remove the file and its synthetic Keychain password, then open
+the most recently used remaining workspace. Deleting the last workspace must
+show the welcome screen, including after restart. The native menu must disable
+workspace deletion while a query runs.
+
 The native scenario checks connection-form error alerts. It rejects a missing
 username, a new connection with a duplicate name, and a rename to a duplicate
 name. Each error keeps the form open for correction.

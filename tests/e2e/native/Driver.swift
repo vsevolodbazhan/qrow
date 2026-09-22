@@ -405,7 +405,7 @@ final class Driver {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
     }
-    func start() throws {
+    func start(expectWelcome: Bool = false) throws {
         let bundle = env["QROW_E2E_BUNDLE"]!
         let logURL = URL(fileURLWithPath: "\(artifacts)/\(name).log")
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
@@ -419,6 +419,11 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
+        if expectWelcome {
+            _ = try wait("Create workspace…", timeout: 20)
+            try require(find("SQL Editor") == nil && find("New Connection") == nil, "Deleted last workspace returned after restart")
+            return
+        }
         if !FileManager.default.fileExists(atPath: env["QROW_DATA_DIR"]! + "/workspaces.json") &&
            !FileManager.default.fileExists(atPath: env["QROW_DATA_DIR"]! + "/workspace.json") {
             _ = try wait("Create workspace…", timeout: 20)
@@ -635,6 +640,101 @@ final class Driver {
         key(36) // Return opens it.
         try waitForSQL(original)
         print("PASS: creation, rename, duplicate validation, native submenu and popup selection, checkmark, SQL isolation, failed-save retention")
+    }
+
+    func passwordExists(_ id: String) throws -> Bool {
+        let lookup = Process()
+        lookup.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        lookup.arguments = ["find-generic-password", "-s", "io.qrow.connection", "-a", id]
+        lookup.standardOutput = FileHandle.nullDevice
+        lookup.standardError = FileHandle.nullDevice
+        try lookup.run()
+        lookup.waitUntilExit()
+        return lookup.terminationStatus == 0
+    }
+    func confirmWorkspaceDeletion() throws {
+        try selectMenuItem("Delete Workspace…", menuName: "Workspaces")
+        _ = try wait("This cannot be undone.", timeout: 10)
+        try press("Delete workspace")
+    }
+    func testWorkspaceDeletion() throws {
+        let previous = try activeWorkspaceURL()
+        let originalSQL = attribute(try wait("SQL Editor"), kAXValueAttribute) as? String ?? ""
+        try selectMenuItem("New Workspace…", menuName: "Workspaces")
+        try fill("Workspace name", "Delete fixture")
+        try activate(try waitExact("Create workspace", role: kAXButtonRole))
+        try waitGone("Workspace name")
+        try waitForSQL("")
+        let source = try activeWorkspaceURL()
+        try selectMenuItem("Delete Workspace…", menuName: "Workspaces")
+        _ = try wait("Permanently delete \"Delete fixture\"")
+        try snapshot("delete-workspace-confirmation")
+        key(36) // Return alone must not confirm deletion.
+        _ = try wait("Delete workspace", timeout: 2)
+        try require(FileManager.default.fileExists(atPath: source.path), "Return deleted the workspace")
+        try press("Cancel")
+        try waitGone("Delete workspace")
+        try require(try activeWorkspaceURL().path == source.path, "Cancel changed the workspace")
+        try selectMenuItem("Delete Workspace…", menuName: "Workspaces")
+        _ = try wait("This cannot be undone.", timeout: 10)
+        key(53)
+        try waitGone("Delete workspace")
+        try selectMenuItem("Delete Workspace…", menuName: "Workspaces")
+        _ = try wait("This cannot be undone.", timeout: 10)
+        try press("Cancel")
+        try waitGone("Delete workspace")
+        try press("New Connection")
+        for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
+                               ("Port", env["QROW_E2E_PORT"] ?? "10009"), ("Username", "qrow"),
+                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
+            try fill(label, value)
+        }
+        try press("Save")
+        try waitGone("Cancel")
+        let sql = "SELECT 'permanent workspace deletion'"
+        try fill("SQL Editor", sql)
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while !savedSQL(sql, at: source) {
+            try require(clock.now < deadline, "Deletion fixture did not save")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: source)) as! [String: Any]
+        let profile = (saved["profiles"] as! [[String: Any]])[0]["id"] as! String
+        try require(try passwordExists(profile), "Synthetic password was not saved")
+        let backup = source.deletingLastPathComponent().appendingPathComponent("before-delete.json")
+        try FileManager.default.moveItem(at: source, to: backup)
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+        defer {
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try? FileManager.default.removeItem(at: source)
+                try? FileManager.default.moveItem(at: backup, to: source)
+            }
+        }
+        try confirmWorkspaceDeletion()
+        _ = try wait("Could not change workspace: Workspace save failed", timeout: 10)
+        try require(try activeWorkspaceURL().path == source.path, "Failed save changed the workspace")
+        try press("Cancel")
+        try waitGone("Delete workspace")
+        try waitForSQL(sql)
+        try FileManager.default.removeItem(at: source)
+        try FileManager.default.moveItem(at: backup, to: source)
+        try confirmWorkspaceDeletion()
+        try waitGone("Delete workspace")
+        try waitForSQL(originalSQL)
+        try require(try activeWorkspaceURL().path == previous.path, "Deletion did not select the most recent workspace")
+        try require(!FileManager.default.fileExists(atPath: source.path), "Deleted workspace file remains")
+        try require(try !passwordExists(profile), "Deleted workspace password remains")
+        // Delete the two remaining fixture workspaces, ending at the welcome screen.
+        for _ in 0..<2 {
+            let path = try activeWorkspaceURL()
+            try confirmWorkspaceDeletion()
+            try waitGone("Delete workspace")
+            try require(!FileManager.default.fileExists(atPath: path.path), "Workspace file remains after deletion")
+        }
+        _ = try wait("Create workspace…", timeout: 10)
+        try require(find("SQL Editor") == nil, "Last deletion left the editor visible")
+        try snapshot("last-workspace-deleted")
+        print("PASS: permanent deletion, confirmation, Cancel, Escape, safe Return, source-save failure, MRU fallback, password removal and last-workspace welcome")
     }
 
     func testAbout() throws {
@@ -1148,6 +1248,12 @@ final class Driver {
         // result status. Synchronize on the running tab before checking that
         // busy connection actions remain unavailable.
         _ = try waitExact("Renamed tab, running", timeout: 20)
+        guard let bar = attribute(app, kAXMenuBarAttribute) else { throw Failure("Missing native menu bar") }
+        let menu = descendants(unsafeBitCast(bar, to: AXUIElement.self)).first { strings($0).contains("Workspaces") }!
+        try activate(menu)
+        guard let deletion = descendants(menu).first(where: { strings($0).contains("Delete Workspace…") }) else { throw Failure("Missing Delete Workspace command") }
+        try require(attribute(deletion, kAXEnabledAttribute) as? Bool == false, "Workspace deletion is enabled during a running query")
+        key(53)
         try contextMenu("Qrow E2E live", role: kAXButtonRole)
         // GPUI exposes these as disabled menu items visually, but does not
         // publish AXEnabled on macOS. Verify their observable no-op behavior.
@@ -1237,6 +1343,29 @@ do {
             if windowDriver.app != nil { try? windowDriver.snapshot("failure-window-close") }
             windowDriver.stop()
             throw error
+        }
+        if !CommandLine.arguments.contains("--persistence-only") {
+            let deletionDriver = Driver(name: "qrow-deletion")
+            do {
+                try deletionDriver.start()
+                try deletionDriver.testWorkspaceDeletion()
+                deletionDriver.stop()
+            } catch {
+                if deletionDriver.app != nil { try? deletionDriver.snapshot("failure-deletion") }
+                deletionDriver.stop()
+                throw error
+            }
+            let emptyDriver = Driver(name: "qrow-empty-restart")
+            do {
+                try emptyDriver.start(expectWelcome: true)
+                try emptyDriver.snapshot("empty-restart")
+                emptyDriver.stop()
+                print("PASS: deleting the last workspace stays empty after restart")
+            } catch {
+                if emptyDriver.app != nil { try? emptyDriver.snapshot("failure-empty-restart") }
+                emptyDriver.stop()
+                throw error
+            }
         }
     }
 } catch {

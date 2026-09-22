@@ -51,6 +51,12 @@ fn workspace_menu(catalog: &Catalog, blocked: bool) -> Menu {
             RenameWorkspace,
             blocked || catalog.active().is_none(),
         ),
+        MenuItem::separator(),
+        workspace_command(
+            "Delete Workspace…",
+            DeleteWorkspace,
+            blocked || catalog.active().is_none(),
+        ),
     ])
 }
 
@@ -59,6 +65,7 @@ enum Operation {
     Create,
     Rename(Uuid),
     Select(Uuid),
+    Delete(Uuid),
 }
 
 pub(super) struct WorkspaceForm {
@@ -67,15 +74,23 @@ pub(super) struct WorkspaceForm {
     error: Option<String>,
 }
 pub(super) enum WorkspaceResult {
-    Opened(Catalog, Box<Workspace>, Saver),
+    Opened(Catalog, Box<Workspace>, Option<Saver>, Option<String>),
     Renamed(Catalog),
 }
 pub(super) type PendingWorkspace = mpsc::Receiver<Result<WorkspaceResult, String>>;
 
 impl Qrow {
+    pub(super) fn deleting_workspace(&self) -> bool {
+        self.pending_workspace.is_some()
+            && self
+                .workspace_form
+                .as_ref()
+                .is_some_and(|form| matches!(form.operation, Operation::Delete(_)))
+    }
+
     fn workspace_commands_blocked(&self) -> bool {
         self.demo
-            || self.saver.is_none() && self.message.is_some()
+            || self.workspace_load_failed
             || self.dialog_open()
             || self.pending_quit.is_some()
             || self.pending_workspace.is_some()
@@ -162,6 +177,110 @@ impl Qrow {
         }
     }
 
+    pub(super) fn delete_workspace(
+        &mut self,
+        _: &DeleteWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_commands_blocked() || window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(entry) = self.catalog.active() else {
+            return;
+        };
+        let id = entry.id;
+        let description = format!(
+            "Permanently delete \"{}\" and all its saved queries, connections, settings, and passwords? This cannot be undone.",
+            entry.name
+        );
+        self.workspace_form = Some(WorkspaceForm {
+            name: cx.new(|cx| InputState::new(window, cx)),
+            operation: Operation::Delete(id),
+            error: None,
+        });
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, window, cx| {
+            let submit = weak.clone();
+            let close = weak.clone();
+            let cancel = weak.clone();
+            let (busy, error) = weak
+                .read_with(cx, |this, _| {
+                    (
+                        this.pending_workspace.is_some(),
+                        this.workspace_form
+                            .as_ref()
+                            .and_then(|form| form.error.clone()),
+                    )
+                })
+                .unwrap_or_default();
+            alert
+                .title("Delete Workspace")
+                .description(
+                    div()
+                        .id("delete-workspace-description")
+                        .role(Role::Alert)
+                        .aria_label(description.clone())
+                        .child(description.clone()),
+                )
+                .width(super::setting_row::Rows::dialog_width(window, 32.))
+                .keyboard(!busy)
+                // Return alone must not confirm permanent deletion.
+                .on_ok(|_, _, _| false)
+                .when_some(error, |alert, error| {
+                    alert.child(
+                        div()
+                            .id("delete-workspace-error")
+                            .role(Role::Alert)
+                            .aria_label(error.clone())
+                            .child(Alert::error("delete-workspace-error-content", error)),
+                    )
+                })
+                .when(busy, |alert| {
+                    alert.child(
+                        div()
+                            .id("delete-workspace-status")
+                            .role(Role::Status)
+                            .aria_label("Deleting workspace…")
+                            .child("Deleting workspace…"),
+                    )
+                })
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("cancel-workspace-deletion")
+                                .label("Cancel")
+                                .disabled(busy)
+                                .on_click(move |_, window, cx| {
+                                    let _ = cancel.update(cx, |this, cx| {
+                                        this.workspace_form = None;
+                                        cx.notify();
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("confirm-workspace-deletion")
+                                .label("Delete workspace")
+                                .with_variant(ButtonVariant::Danger)
+                                .disabled(busy)
+                                .on_click(move |_, _, cx| {
+                                    let _ = submit.update(cx, |this, cx| this.submit_workspace(cx));
+                                }),
+                        ),
+                )
+                .on_cancel(move |_, _, cx| {
+                    let _ = close.update(cx, |this, cx| {
+                        this.workspace_form = None;
+                        cx.notify();
+                    });
+                    true
+                })
+        });
+        cx.notify();
+    }
+
     fn workspace_dialog(
         &mut self,
         operation: Operation,
@@ -194,6 +313,7 @@ impl Qrow {
                     Operation::Create => "New Workspace",
                     Operation::Rename(_) => "Rename Workspace",
                     Operation::Select(_) => "Select Workspace",
+                    Operation::Delete(_) => "Delete Workspace",
                 })
                 .w(super::setting_row::Rows::dialog_width(window, 28.))
                 .overlay_closable(false)
@@ -243,6 +363,7 @@ impl Qrow {
                             Operation::Create => "Create workspace",
                             Operation::Rename(_) => "Rename workspace",
                             Operation::Select(_) => "Retry",
+                            Operation::Delete(_) => "Delete workspace",
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.submit_workspace(cx))),
                 )
@@ -317,6 +438,23 @@ impl Qrow {
                 if let Operation::Rename(id) = operation {
                     return workspaces::rename(&root, id, &name).map(WorkspaceResult::Renamed);
                 }
+                if let Operation::Delete(id) = operation {
+                    let save_wake = wake.clone();
+                    let deleted =
+                        workspaces::delete(&root, id, storage::delete_password, move || {
+                            let _ = save_wake.try_send(());
+                        })?;
+                    let (workspace, saver) = deleted.next.map_or_else(
+                        || (Workspace::default(), None),
+                        |(workspace, saver)| (workspace, Some(saver)),
+                    );
+                    return Ok(WorkspaceResult::Opened(
+                        deleted.catalog,
+                        Box::new(workspace),
+                        saver,
+                        deleted.warning,
+                    ));
+                }
                 let save_wake = wake.clone();
                 let target = if let Operation::Select(id) = operation {
                     Some(id)
@@ -328,7 +466,7 @@ impl Qrow {
                     let _ = save_wake.try_send(());
                 })
                 .map(|(catalog, workspace, saver)| {
-                    WorkspaceResult::Opened(catalog, Box::new(workspace), saver)
+                    WorkspaceResult::Opened(catalog, Box::new(workspace), Some(saver), None)
                 })
             })()
             .map_err(|e| format!("Could not change workspace: {e:#}"));
@@ -365,9 +503,9 @@ impl Qrow {
                 self.workspace_form = None;
                 window.close_dialog(cx);
             }
-            Ok(WorkspaceResult::Opened(catalog, workspace, saver)) => {
+            Ok(WorkspaceResult::Opened(catalog, workspace, saver, warning)) => {
                 let mut workspace = *workspace;
-                let mut message = None;
+                let mut message = warning;
                 let unavailable_font = prepare_workspace(&mut workspace, &self.fonts, &mut message);
                 let old_scale = self.settings.ui_scale;
                 for tab in &self.tabs {
@@ -379,7 +517,7 @@ impl Qrow {
                     let _ = previous.stop();
                 }
                 self.catalog = catalog;
-                self.saver = Some(saver);
+                self.saver = saver;
                 self.settings = workspace.settings;
                 self.profiles = workspace.profiles;
                 self.active_tabs = workspace.active_tabs;
@@ -390,7 +528,7 @@ impl Qrow {
                     self.tabs.push(tab);
                 }
                 self.message = message;
-                self.dirty = unavailable_font.then(Instant::now);
+                self.dirty = (unavailable_font && self.saver.is_some()).then(Instant::now);
                 self.sidebar_width = self.sidebar_width / old_scale * self.settings.ui_scale;
                 self.editor_height = self.editor_height / old_scale * self.settings.ui_scale;
                 self.resize = None;
@@ -398,9 +536,13 @@ impl Qrow {
                 self.workspace_form = None;
                 apply_ui_theme(&self.settings, window, cx);
                 window.close_dialog(cx);
-                self.tabs[self.active]
-                    .input
-                    .update(cx, |input, cx| input.focus(window, cx));
+                if self.saver.is_some() {
+                    self.tabs[self.active]
+                        .input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                } else {
+                    window.focus(&self.focus, cx);
+                }
             }
         }
         true
@@ -441,6 +583,14 @@ mod tests {
         assert!(*checked && *disabled);
         assert!(action.partial_eq(&UnavailableWorkspace));
         let blocked = workspace_menu(&catalog, true);
-        assert!(blocked.items.iter().all(MenuItem::is_disabled));
+        assert!(
+            blocked
+                .items
+                .iter()
+                .filter(|item| !matches!(item, MenuItem::Separator))
+                .all(MenuItem::is_disabled)
+        );
+        assert!(empty.items[4].is_disabled());
+        assert!(!menu.items[4].is_disabled());
     }
 }

@@ -594,7 +594,7 @@ impl Render for Qrow {
                         .justify_center()
                         .gap_4()
                         .child(div().text_xl().font_weight(FontWeight::MEDIUM).child(
-                            if self.message.is_some() {
+                            if self.workspace_load_failed {
                                 "Cannot open workspace"
                             } else {
                                 "Welcome to Qrow"
@@ -609,7 +609,7 @@ impl Render for Qrow {
                             Button::new("create-first-workspace")
                                 .primary()
                                 .label("Create workspace…")
-                                .disabled(self.message.is_some())
+                                .disabled(self.workspace_load_failed)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.new_workspace(&NewWorkspace, window, cx)
                                 })),
@@ -650,6 +650,7 @@ impl Render for Qrow {
             .on_action(cx.listener(Self::select_workspace))
             .on_action(cx.listener(Self::new_workspace))
             .on_action(cx.listener(Self::rename_workspace))
+            .on_action(cx.listener(Self::delete_workspace))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {

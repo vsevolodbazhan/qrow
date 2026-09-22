@@ -55,6 +55,7 @@ actions!(
         OpenWorkspaces,
         NewWorkspace,
         RenameWorkspace,
+        DeleteWorkspace,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
@@ -321,6 +322,7 @@ pub struct Qrow {
     tab_form: Option<TabEditor>,
     menu: Option<ContextMenu>,
     saver: Option<Saver>,
+    workspace_load_failed: bool,
     dirty: Option<Instant>,
     message: Option<String>,
     demo: bool,
@@ -343,6 +345,12 @@ impl Qrow {
         let (wake, notifications) = async_channel::bounded(1);
         let save_wake = wake.clone();
         let path = storage::workspace_path();
+        let cleanup_warning = if demo {
+            None
+        } else {
+            qrow::workspaces::finish_deletions(path.parent().expect("workspace directory"), storage::delete_password)
+                .err().map(|error| format!("Deleted workspace cleanup is incomplete: {error:#}. Qrow will retry at startup."))
+        };
         let (catalog, mut workspace, mut message, saver) = if demo {
             (
                 qrow::workspaces::Catalog::default(),
@@ -374,6 +382,10 @@ impl Qrow {
                 ),
             }
         };
+        let workspace_load_failed = !demo && saver.is_none() && message.is_some();
+        if message.is_none() {
+            message = cleanup_warning;
+        }
         let fonts = installed_fonts(cx);
         let unavailable_font = prepare_workspace(&mut workspace, &fonts, &mut message);
         let scale = workspace.settings.ui_scale;
@@ -400,6 +412,7 @@ impl Qrow {
             tab_form: None,
             menu: None,
             saver,
+            workspace_load_failed,
             dirty: (!demo && unavailable_font).then(Instant::now),
             message,
             demo,
@@ -537,7 +550,7 @@ impl Qrow {
         }
         self.finished = true;
         if let Some(mut saver) = self.saver.take() {
-            let result = if self.quit_confirmed {
+            let result = if self.quit_confirmed || self.deleting_workspace() {
                 saver.stop()
             } else {
                 saver.finish(self.snapshot(cx))
