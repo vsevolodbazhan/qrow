@@ -7,6 +7,7 @@ mod results;
 mod setting_row;
 mod settings_view;
 mod tab_view;
+mod workspace_picker;
 mod workspace_view;
 pub(crate) use workspace_view::WindowView;
 
@@ -51,6 +52,8 @@ actions!(
         ToggleSidebar,
         OpenAbout,
         OpenSettings,
+        OpenWorkspaces,
+        NewWorkspace,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
@@ -79,6 +82,8 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("About Qrow", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action("Workspaces…", OpenWorkspaces),
+                MenuItem::action("New Workspace…", NewWorkspace),
                 MenuItem::separator(),
                 MenuItem::action("Quit Qrow", Quit),
             ],
@@ -227,6 +232,52 @@ fn installed_fonts(cx: &App) -> Vec<String> {
     fonts
 }
 
+fn prepare_workspace(
+    workspace: &mut Workspace,
+    fonts: &[String],
+    message: &mut Option<String>,
+) -> bool {
+    workspace.normalize();
+    workspace.settings.sanitize();
+    let mut unavailable_font = !fonts
+        .iter()
+        .any(|font| font == &workspace.settings.editor_font_family);
+    if unavailable_font {
+        workspace.settings.editor_font_family = Settings::default().editor_font_family;
+        message.get_or_insert_with(|| {
+            "The saved editor font is unavailable, so Qrow is using Menlo.".into()
+        });
+    }
+    if !fonts
+        .iter()
+        .any(|font| font == &workspace.settings.logs_font_family)
+    {
+        workspace.settings.logs_font_family = Settings::default().logs_font_family;
+        unavailable_font = true;
+        let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
+        if let Some(message) = message {
+            message.push(' ');
+            message.push_str(warning);
+        } else {
+            *message = Some(warning.into());
+        }
+    }
+    if workspace.settings.ui_font_family != Settings::default().ui_font_family
+        && !fonts.contains(&workspace.settings.ui_font_family)
+    {
+        workspace.settings.ui_font_family = Settings::default().ui_font_family;
+        unavailable_font = true;
+        let warning = "The saved interface font is unavailable, so Qrow is using the system font.";
+        if let Some(message) = message {
+            message.push(' ');
+            message.push_str(warning);
+        } else {
+            *message = Some(warning.into());
+        }
+    }
+    unavailable_font
+}
+
 fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     let theme = gpui_kit::component::Theme::global_mut(cx);
     theme.font_family = settings.ui_font_family.clone().into();
@@ -249,6 +300,9 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 }
 
 pub struct Qrow {
+    catalog: qrow::workspaces::Catalog,
+    workspace_form: Option<workspace_picker::WorkspaceForm>,
+    pending_workspace: Option<workspace_picker::PendingWorkspace>,
     settings: Settings,
     fonts: Vec<String>,
     settings_open: bool,
@@ -284,14 +338,25 @@ impl Qrow {
         let (wake, notifications) = async_channel::bounded(1);
         let save_wake = wake.clone();
         let path = storage::workspace_path();
-        let (mut workspace, mut message, saver) = if demo {
-            (demo_workspace(), None, None)
+        let (catalog, mut workspace, mut message, saver) = if demo {
+            (
+                qrow::workspaces::Catalog::default(),
+                demo_workspace(),
+                None,
+                None,
+            )
         } else {
-            match Saver::open(path, move || {
-                let _ = save_wake.try_send(());
-            }) {
-                Ok((workspace, saver)) => (workspace, None, Some(saver)),
+            match qrow::workspaces::open(
+                path.parent().expect("workspace directory"),
+                None,
+                None,
+                move || {
+                    let _ = save_wake.try_send(());
+                },
+            ) {
+                Ok((catalog, workspace, saver)) => (catalog, workspace, None, Some(saver)),
                 Err(e) => (
+                    qrow::workspaces::Catalog::default(),
                     Workspace::default(),
                     Some(format!(
                         "Cannot open workspace: {e}. Saving disabled to protect the existing file."
@@ -301,45 +366,7 @@ impl Qrow {
             }
         };
         let fonts = installed_fonts(cx);
-        workspace.normalize();
-        workspace.settings.sanitize();
-        let mut unavailable_font = !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.editor_font_family);
-        if unavailable_font {
-            workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            message.get_or_insert_with(|| {
-                "The saved editor font is unavailable, so Qrow is using Menlo.".into()
-            });
-        }
-        if !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.logs_font_family)
-        {
-            workspace.settings.logs_font_family = Settings::default().logs_font_family;
-            unavailable_font = true;
-            let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
-            if let Some(message) = &mut message {
-                message.push(' ');
-                message.push_str(warning);
-            } else {
-                message = Some(warning.into());
-            }
-        }
-        if workspace.settings.ui_font_family != Settings::default().ui_font_family
-            && !fonts.contains(&workspace.settings.ui_font_family)
-        {
-            workspace.settings.ui_font_family = Settings::default().ui_font_family;
-            unavailable_font = true;
-            let warning =
-                "The saved interface font is unavailable, so Qrow is using the system font.";
-            if let Some(message) = &mut message {
-                message.push(' ');
-                message.push_str(warning);
-            } else {
-                message = Some(warning.into());
-            }
-        }
+        let unavailable_font = prepare_workspace(&mut workspace, &fonts, &mut message);
         let scale = workspace.settings.ui_scale;
         apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
@@ -347,6 +374,9 @@ impl Qrow {
             async {}
         });
         let mut this = Self {
+            catalog,
+            workspace_form: None,
+            pending_workspace: None,
             settings: workspace.settings,
             fonts,
             settings_open: false,
@@ -512,7 +542,7 @@ impl Qrow {
         }
     }
     pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_quit.is_some() || self.quit_confirmed {
+        if self.pending_quit.is_some() || self.quit_confirmed || self.pending_workspace.is_some() {
             return;
         }
         if self.demo {
@@ -645,7 +675,7 @@ impl Qrow {
         }
     }
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let mut changed = false;
+        let mut changed = self.poll_workspace(window, cx);
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let activities: Vec<_> = tab
                 .worker
@@ -798,6 +828,7 @@ impl Qrow {
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
         {
             if self.pending_quit.is_none()
+                && self.pending_workspace.is_none()
                 && let Some(saver) = &self.saver
                 && let Err(error) = saver.save(self.snapshot(cx))
             {
@@ -927,6 +958,7 @@ impl Qrow {
         }
         self.dirty.is_some()
             || self.pending_quit.is_some()
+            || self.pending_workspace.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -967,7 +999,11 @@ impl Qrow {
     }
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
-        self.form.is_some() || self.settings_open || self.about_open || self.tab_form.is_some()
+        self.form.is_some()
+            || self.settings_open
+            || self.about_open
+            || self.tab_form.is_some()
+            || self.workspace_form.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1058,7 +1094,7 @@ impl Qrow {
         }
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
+        if self.dialog_open() || self.tabs[self.active].busy {
             return;
         }
         if self.demo {
@@ -1197,8 +1233,11 @@ impl Qrow {
         cx.notify();
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
         let tab = &mut self.tabs[self.active];
-        if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
+        if !tab.can_disconnect() {
             return;
         }
         if tab.worker.is_some() {
@@ -1253,6 +1292,9 @@ impl Qrow {
         self.changed(cx);
     }
     fn adjust_ui_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_workspace.is_some() {
+            return;
+        }
         self.apply_ui_scale(self.settings.ui_scale + change, window, cx);
     }
     fn increase_ui_scale(

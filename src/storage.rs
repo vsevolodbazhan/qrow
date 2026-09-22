@@ -82,6 +82,10 @@ impl WorkspaceFile {
     }
 
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
+        self.save_json(workspace)
+    }
+
+    pub(crate) fn save_json(&self, value: &impl serde::Serialize) -> Result<()> {
         let parent = self.path.parent().context("Invalid workspace path")?;
         let temporary =
             TemporaryWorkspace(self.path.with_extension(format!("{}.tmp", Uuid::new_v4())));
@@ -93,7 +97,7 @@ impl WorkspaceFile {
             options.mode(0o600);
         }
         let mut file = options.open(&temporary.0)?;
-        serde_json::to_writer_pretty(&mut file, workspace)?;
+        serde_json::to_writer_pretty(&mut file, value)?;
         file.flush()?;
         file.sync_all()?;
         fs::rename(&temporary.0, &self.path)?;

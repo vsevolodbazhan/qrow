@@ -1,7 +1,28 @@
 # Workspace
 
-Qrow saves your tabs and settings automatically. Restored tabs do not connect
-to a database until you run SQL.
+Qrow saves the connections, tabs, and settings of each workspace separately.
+Restored tabs do not connect to a database until you run SQL.
+
+## Choose or create a workspace
+
+Select the workspace name in the window header, or open **Qrow → Workspaces…**.
+You can also select **Workspaces…** in Settings.
+Select a workspace from the list to open it. **Current** identifies the active workspace.
+To create a workspace, enter a name and select **Create workspace**.
+**Qrow → New Workspace…** opens the same dialog with the name field focused.
+Names must be unique and contain no more than 80 characters.
+
+The existing workspace is named **Default**. Its files and connection passwords
+stay in their original locations. A new workspace starts with no connections
+and default settings. Qrow opens the last selected workspace at startup.
+
+Wait for running queries to finish before you change workspaces. Switching
+saves the current SQL, then closes that workspace's sessions and results.
+Returning restores saved tabs and settings, but not result rows or Logs history.
+If the save or destination load fails, the current workspace stays open.
+Escape closes the dialog, except while a switch is in progress.
+Workspace creation and switching are unavailable in demo mode.
+There are no commands to rename or delete a workspace.
 
 ## Appearance and layout
 
@@ -42,6 +63,10 @@ result rows or Logs history. Its default path is:
 ~/Library/Application Support/Qrow/workspace.json
 ```
 
+The workspace list and last selection are in `workspaces.json` in the same
+directory. New workspace files are in `workspaces/<UUID>/workspace.json`.
+Workspace names are labels, not directory paths.
+
 Passwords remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords and result sets are not written to the workspace file. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.
@@ -58,7 +83,7 @@ reports the failure. It leaves the file untouched and disables saving for that
 run. New edits from that run will not be saved. Preserve the original file before
 attempting recovery. Qrow does not provide an automatic repair tool.
 
-Only one Qrow process can write to a workspace directory. If another process
+Only one Qrow process can write to each workspace file. If another process
 has the workspace open, the new process reports the conflict and disables
 saving. Use the original process. The operating system releases the lock when
 that process exits or crashes. Do not delete `workspace.lock` to remove a lock.
@@ -76,7 +101,8 @@ save confirmation. A force quit or system crash can lose edits that are not yet
 saved.
 
 For isolated development, see [Development](development.md#check-the-native-ui).
-`QROW_DATA_DIR` changes the workspace directory, but does not isolate Keychain.
+`QROW_DATA_DIR` changes the directory for the workspace list and all workspace
+files, but does not isolate Keychain.
 The [demo](../README.md#preview) uses an in-memory workspace and does not access
 databases or Keychain.
 

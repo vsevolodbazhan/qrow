@@ -599,6 +599,8 @@ impl Render for Qrow {
             }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_workspaces))
+            .on_action(cx.listener(Self::new_workspace))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
@@ -631,7 +633,26 @@ impl Render for Qrow {
                         .pr(self.ui_px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
+                        .child(
+                            Button::new("workspaces")
+                                .ghost()
+                                .small()
+                                .label(if self.demo {
+                                    "Qrow · Demo".to_owned()
+                                } else {
+                                    format!(
+                                        "Qrow · {}",
+                                        truncate_display_name(&self.catalog.active().name)
+                                    )
+                                })
+                                .icon(IconName::ChevronDown)
+                                .accessibility_label("Workspaces")
+                                .tooltip("Workspaces…")
+                                .disabled(self.demo)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_workspaces(&OpenWorkspaces, window, cx)
+                                })),
+                        ),
                 ),
             )
             .child(

@@ -407,6 +407,17 @@ impl Qrow {
                     .label("Restore defaults")
                     .on_click(cx.listener(|this, _, window, cx| this.reset_settings(window, cx))),
             )
+            .child(
+                Button::new("settings-workspaces")
+                    .label("Workspaces…")
+                    .disabled(self.demo)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.settings_open = false;
+                        this.settings_form = None;
+                        window.close_dialog(cx);
+                        this.open_workspaces(&OpenWorkspaces, window, cx);
+                    })),
+            )
             .child(div().flex_1())
             .child(
                 Button::new("save-settings")

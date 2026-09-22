@@ -138,6 +138,11 @@ The native scenario starts with the application menu. It selects **About Qrow**,
 checks the version line and the copyright, closes the dialog with Escape, and
 opens the dialog again. This check does not use a server.
 
+The native scenario creates a workspace through the application menu. It rejects
+a duplicate name and switches through the window header. It checks that each
+workspace retains its own SQL and that a new workspace starts with a blank editor.
+It also blocks the source save and checks that a failed switch preserves the SQL.
+
 The native scenario checks connection-form error alerts. It rejects a missing
 username, a new connection with a duplicate name, and a rename to a duplicate
 name. Each error keeps the form open for correction.

@@ -6,3 +6,4 @@ pub mod pagination;
 pub mod sql;
 pub mod storage;
 pub mod worker;
+pub mod workspaces;

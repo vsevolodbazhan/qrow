@@ -291,8 +291,8 @@ binding edits that cannot be reproduced by generation.
 
 ## Probe an existing connection
 
-The probe uses a saved profile and its real Keychain password. Run it only when
-you intend to access that deployment:
+The probe uses a saved profile from the last selected workspace and its real
+Keychain password. Run it only when you intend to access that deployment:
 
 ```sh
 cargo run --locked --bin qrow-probe -- "your profile name"

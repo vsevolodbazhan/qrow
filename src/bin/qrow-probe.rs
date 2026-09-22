@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use qrow::{
     connector::{Connector, QueryState, hive::HiveConnector},
     storage,
+    workspaces::Catalog,
 };
 use std::{
     thread,
@@ -13,7 +14,12 @@ fn main() -> Result<()> {
     let name = std::env::args()
         .nth(1)
         .context("Usage: qrow-probe <saved-profile-name>")?;
-    let workspace = storage::load(&storage::workspace_path())?;
+    let default_path = storage::workspace_path();
+    let root = default_path
+        .parent()
+        .context("Invalid workspace directory")?;
+    let catalog = Catalog::load(root)?;
+    let workspace = storage::load(&catalog.path(root, catalog.active().id)?)?;
     let profiles: Vec<_> = workspace
         .profiles
         .iter()

@@ -513,6 +513,61 @@ final class Driver {
         guard let item else { throw Failure("The application menu has no item: \(label)") }
         try require(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success, "Cannot select \(label)")
     }
+    func testWorkspaces() throws {
+        let original = "SELECT 'workspace default 日本語😀'"
+        try fill("SQL Editor", original)
+        try selectApplicationMenuItem("New Workspace…")
+        _ = try wait("Workspace name")
+        try fill("Workspace name", "default")
+        try press("Create workspace")
+        _ = try wait("Could not change workspace: A workspace with this name already exists.")
+        try fill("Workspace name", "E2E workspace")
+        try press("Create workspace")
+        try waitGone("Create workspace")
+        guard let blank = find("SQL Editor") else { throw Failure("New workspace has no editor") }
+        try require(attribute(blank, kAXValueAttribute) as? String == "", "New workspace copied source SQL")
+        let second = "SELECT 'second workspace'"
+        try fill("SQL Editor", second)
+        try press("Workspaces")
+        try press("Open workspace Default")
+        try waitGone("Create workspace")
+        guard let editor = find("SQL Editor") else { throw Failure("Restored workspace has no SQL editor") }
+        try require(attribute(editor, kAXValueAttribute) as? String == original, "Workspace switch lost original SQL")
+        // A failed source save must not replace the editor or active workspace.
+        let path = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let backup = path.deletingLastPathComponent().appendingPathComponent("workspace-switch-backup.json")
+        try FileManager.default.moveItem(at: path, to: backup)
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
+        defer {
+            if FileManager.default.fileExists(atPath: backup.path) {
+                try? FileManager.default.removeItem(at: path)
+                try? FileManager.default.moveItem(at: backup, to: path)
+            }
+        }
+        try selectApplicationMenuItem("Workspaces…")
+        try press("Open workspace E2E workspace")
+        let failureDeadline = clock.now.advanced(by: .seconds(10))
+        while !elements().flatMap(strings).contains(where: { $0.contains("Could not change workspace: Workspace save failed") }) {
+            try require(clock.now < failureDeadline, "Failed workspace save was not reported")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        key(53)
+        try waitGone("Create workspace")
+        guard let retained = find("SQL Editor") else { throw Failure("Failed switch closed the editor") }
+        try require(attribute(retained, kAXValueAttribute) as? String == original, "Failed switch lost SQL")
+        try FileManager.default.removeItem(at: path)
+        try FileManager.default.moveItem(at: backup, to: path)
+        try selectApplicationMenuItem("Workspaces…")
+        try press("Open workspace E2E workspace")
+        try waitGone("Create workspace")
+        guard let restored = find("SQL Editor") else { throw Failure("Second workspace has no SQL editor") }
+        try require(attribute(restored, kAXValueAttribute) as? String == second, "Workspace switch lost second SQL")
+        try snapshot("workspaces")
+        try press("Workspaces")
+        try press("Open workspace Default")
+        try waitGone("Create workspace")
+        print("PASS: workspace creation, duplicate validation, native menu, header picker and SQL isolation")
+    }
     func testAbout() throws {
         try selectApplicationMenuItem("About Qrow")
         let copyright = "Copyright © 2026 Vsevolod Bazhan"
@@ -573,6 +628,7 @@ final class Driver {
     func test() throws {
         try start()
         try testAbout()
+        try testWorkspaces()
         try testSettings()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
@@ -1078,6 +1134,7 @@ do {
                 // The About and Settings dialogs need no server, so they can run alone.
                 try driver.start()
                 try driver.testAbout()
+                try driver.testWorkspaces()
                 try driver.testSettings()
             } else {
                 try driver.test()
