@@ -539,7 +539,10 @@ final class Driver {
     // that the control and its binding are both checked.
     func settingValue(_ label: String) -> String? {
         let control = elements().first {
-            attribute($0, kAXRoleAttribute) as? String == kAXTextFieldRole && strings($0).contains(label)
+            [kAXTextFieldRole, kAXComboBoxRole, kAXPopUpButtonRole].contains(
+                attribute($0, kAXRoleAttribute) as? String ?? ""
+            )
+                && strings($0).contains(label)
         }
         return control.flatMap { attribute($0, kAXValueAttribute) as? String }
     }
@@ -558,6 +561,7 @@ final class Driver {
         try selectApplicationMenuItem("Settings…")
         // Every setting stays on one page, so each control is reachable without
         // the pointer-only section list.
+        try waitSettingValue("Theme", "System")
         try waitSettingValue("UI Scale", "100")
         try waitSettingValue("Editor Font Size", "13")
         try waitSettingValue("Logs Font Size", "13")

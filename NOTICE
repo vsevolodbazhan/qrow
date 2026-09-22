@@ -10,6 +10,11 @@ Copyright The Apache Software Foundation. Licensed under the Apache License 2.0.
 src/connector/t_c_l_i_service.rs is generated from that interface using Apache
 Thrift 0.24.0, with reproducible generator corrections in scripts/generate/thrift.sh.
 
+The theme definitions in themes/ are bundled from the GPUI Kit themes directory:
+https://github.com/longbridge/gpui-kit/tree/main/themes
+GPUI Kit is licensed under Apache-2.0. Each theme file retains its author and
+source URL metadata.
+
 The connection protocol follows the publicly documented HiveServer2 protocol and
 the behavior of Apache Kyuubi's PyHive client. Qrow does not bundle Python or Java.
 

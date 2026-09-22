@@ -1,5 +1,6 @@
 use super::setting_row::Rows;
 use super::*;
+use crate::themes;
 use gpui_kit::component::{
     h_flex,
     input::{NumberInputEvent, StepAction},
@@ -147,6 +148,7 @@ impl FontSetting {
 }
 
 pub(super) struct SettingsForm {
+    theme: SettingSelect,
     /// Each stepper with the value it last displayed, so that a change made
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
@@ -177,6 +179,19 @@ impl SettingsForm {
 impl Qrow {
     pub(super) fn init_settings_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut subscriptions = Vec::new();
+        let theme = cx.new(|cx| {
+            SelectState::new(SearchableVec::new(themes::options(cx)), None, window, cx)
+                .searchable(true)
+        });
+        subscriptions.push(cx.subscribe_in(
+            &theme,
+            window,
+            move |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    this.set_theme(value.clone(), window, cx);
+                }
+            },
+        ));
         let mut numbers = Vec::new();
         for setting in NumberSetting::ALL {
             let value = setting.value(&self.settings);
@@ -234,6 +249,7 @@ impl Qrow {
             fonts.push((setting, select));
         }
         self.settings_form = Some(SettingsForm {
+            theme,
             numbers,
             fonts,
             _subscriptions: subscriptions,
@@ -368,6 +384,11 @@ impl Qrow {
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
         }
+        let theme = self.settings.theme.clone();
+        if form.theme.read(cx).selected_value() != Some(&theme) {
+            form.theme
+                .update(cx, |state, cx| state.set_selected_value(&theme, window, cx));
+        }
         for (setting, select) in &form.fonts {
             let selected = setting.selected(&self.settings);
             if select.read(cx).selected_value() != Some(&selected) {
@@ -446,6 +467,11 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
         .group(
             SettingGroup::new()
                 .title("Interface")
+                .item(
+                    SettingItem::new("Theme", theme_field(form))
+                        .description("Choose the application colors, or follow the system.")
+                        .keywords(["appearance", "colors", "system"]),
+                )
                 .item(
                     SettingItem::new("Scale", number_field(form, NumberSetting::Scale))
                         .description("Resizes the whole interface.")
@@ -540,6 +566,19 @@ fn font_field(form: &SettingsForm, setting: FontSetting) -> SettingField<SharedS
                 Select::new(&select)
                     .w_full()
                     .accessibility_label(setting.label()),
+            )
+        },
+    )
+}
+
+fn theme_field(form: &SettingsForm) -> SettingField<SharedString> {
+    let select = form.theme.clone();
+    SettingField::render(
+        move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+            control(
+                options,
+                window.rem_size(),
+                Select::new(&select).w_full().accessibility_label("Theme"),
             )
         },
     )
