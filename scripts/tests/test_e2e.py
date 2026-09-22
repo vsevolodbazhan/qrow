@@ -82,8 +82,8 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual(len(failures), 1)
             self.assertIn("assertion failed", failures[0].read_text())
 
-    def workflow_job(self, name):
-        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+    def workflow_job(self, name, workflow_path=".github/workflows/test.yml"):
+        workflow = (ROOT / workflow_path).read_text()
         match = re.search(rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)", workflow, re.MULTILINE | re.DOTALL)
         self.assertIsNotNone(match, f"Missing workflow job: {name}")
         return match.group("body")
@@ -91,10 +91,12 @@ class AcceptanceTests(unittest.TestCase):
     def test_unified_workflow_has_one_serial_chain(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
         chain = [
-            ("dependencies", None),
-            ("scripts", "dependencies"),
-            ("backend", "scripts"),
-            ("macos", "backend"),
+            ("core-dependencies", None),
+            ("core-scripts", "core-dependencies"),
+            ("core-backend", "core-scripts"),
+            ("core-macos", "core-backend"),
+            ("e2e-backend", "core-macos"),
+            ("e2e-macos", "e2e-backend"),
         ]
         for job, dependency in chain:
             with self.subTest(job=job):
@@ -105,21 +107,43 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertNotIn("needs:", body)
                 self.assertIn("ref: ${{ github.sha }}", body)
         self.assertNotIn("statuses:", workflow)
-        self.assertNotIn("e2e-backend:", workflow)
-        self.assertNotIn("e2e-macos:", workflow)
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        for job in ["dependencies", "scripts", "backend", "macos"]:
+        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
             with self.subTest(job=job):
                 self.assertIn("!github.event.pull_request.draft", self.workflow_job(job))
                 self.assertNotIn("head.repo.full_name", self.workflow_job(job))
+        for job in ["e2e-backend", "e2e-macos"]:
+            with self.subTest(job=job):
+                body = self.workflow_job(job)
+                self.assertIn("!github.event.pull_request.draft", body)
+                self.assertIn("head.repo.full_name == github.repository", body)
         self.assertIn("converted_to_draft", workflow)
 
     def test_workflow_artifacts_expire_after_one_day(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        self.assertEqual(workflow.count("retention-days: 1"), 2)
+        self.assertEqual(workflow.count("retention-days: 1"), 4)
         self.assertNotIn("retention-days: 14", workflow)
+
+    def test_native_e2e_cache_is_keyed_by_manifest(self):
+        workflow = (ROOT / ".github/workflows/test.yml").read_text()
+        self.assertIn("actions/cache/restore@", workflow)
+        self.assertIn("actions/cache/save@", workflow)
+        self.assertIn("runner.arch", workflow)
+        self.assertIn("hashFiles('tests/e2e/native-downloads.json')", workflow)
+
+    def test_release_workflow_runs_e2e_before_packaging(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        backend = self.workflow_job("test-e2e-backend", ".github/workflows/release.yml")
+        native = self.workflow_job("test-e2e-macos", ".github/workflows/release.yml")
+        package = self.workflow_job("package", ".github/workflows/release.yml")
+        self.assertIn("test-core-macos", backend)
+        self.assertIn("sh scripts/check.sh e2e/backend", backend)
+        self.assertIn("test-e2e-backend", native)
+        self.assertIn("sh scripts/check.sh e2e/macos", native)
+        self.assertIn("test-e2e-macos", package)
+        self.assertIn("actions/cache/restore@", workflow)
 
     def test_native_e2e_package_mode_validates_bundle(self):
         driver = (ROOT / "scripts/e2e/driver.sh").read_text()
