@@ -600,6 +600,7 @@ impl Render for Qrow {
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::open_workspaces))
+            .on_action(cx.listener(Self::select_workspace))
             .on_action(cx.listener(Self::new_workspace))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))

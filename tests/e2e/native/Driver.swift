@@ -499,24 +499,42 @@ final class Driver {
     /// Select an item of the application menu, which accessibility exposes
     /// after the Apple menu.
     func selectApplicationMenuItem(_ label: String) throws {
+        try selectMenuItem(label)
+    }
+    func selectMenuItem(_ label: String, menuName: String? = nil, currentWorkspace: String? = nil) throws {
         guard let bar = attribute(app, kAXMenuBarAttribute) else { throw Failure("Qrow has no menu bar") }
         let menus = (attribute(unsafeBitCast(bar, to: AXUIElement.self), kAXChildrenAttribute) as? [AXUIElement]) ?? []
         try require(menus.count > 1, "Qrow has no application menu")
-        try require(AXUIElementPerformAction(menus[1], kAXPressAction as CFString) == .success, "Cannot open the application menu")
+        let menu: AXUIElement
+        if let menuName {
+            guard let named = menus.first(where: { strings($0).contains(menuName) }) else {
+                throw Failure("Missing native menu: \(menuName)")
+            }
+            menu = named
+        } else { menu = menus[1] }
+        try require(AXUIElementPerformAction(menu, kAXPressAction as CFString) == .success, "Cannot open the native menu")
         let deadline = clock.now.advanced(by: .seconds(10))
         var item: AXUIElement?
         repeat {
-            item = descendants(menus[1]).first { strings($0).contains(label) }
+            item = descendants(menu).first { strings($0).contains(label) }
             if item != nil { break }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         } while clock.now < deadline
         guard let item else { throw Failure("The application menu has no item: \(label)") }
+        if let currentWorkspace {
+            guard let current = descendants(menu).first(where: { strings($0).contains(currentWorkspace) }) else {
+                throw Failure("Current workspace is missing from the native menu")
+            }
+            let mark = attribute(current, "AXMenuItemMarkChar") as? String ?? ""
+            try require(!mark.isEmpty, "The native menu does not mark the current workspace")
+            try require(attribute(current, kAXEnabledAttribute) as? Bool == false, "Current workspace must not switch to itself")
+        }
         try require(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success, "Cannot select \(label)")
     }
     func testWorkspaces() throws {
         let original = "SELECT 'workspace default 日本語😀'"
         try fill("SQL Editor", original)
-        try selectApplicationMenuItem("New Workspace…")
+        try selectMenuItem("New Workspace…", menuName: "Workspaces", currentWorkspace: "Default")
         _ = try wait("Workspace name")
         try fill("Workspace name", "default")
         try press("Create workspace")
@@ -528,9 +546,13 @@ final class Driver {
         try require(attribute(blank, kAXValueAttribute) as? String == "", "New workspace copied source SQL")
         let second = "SELECT 'second workspace'"
         try fill("SQL Editor", second)
-        try press("Workspaces")
-        try press("Open workspace Default")
-        try waitGone("Create workspace")
+        try selectMenuItem("Default", menuName: "Workspaces", currentWorkspace: "E2E workspace")
+        // Wait for the destination SQL, since a direct switch can finish between snapshots.
+        let switchDeadline = clock.now.advanced(by: .seconds(10))
+        while find("SQL Editor").flatMap({ attribute($0, kAXValueAttribute) as? String }) != original {
+            try require(clock.now < switchDeadline, "Native workspace selection did not restore SQL")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
         guard let editor = find("SQL Editor") else { throw Failure("Restored workspace has no SQL editor") }
         try require(attribute(editor, kAXValueAttribute) as? String == original, "Workspace switch lost original SQL")
         // A failed source save must not replace the editor or active workspace.
@@ -544,8 +566,7 @@ final class Driver {
                 try? FileManager.default.moveItem(at: backup, to: path)
             }
         }
-        try selectApplicationMenuItem("Workspaces…")
-        try press("Open workspace E2E workspace")
+        try selectMenuItem("E2E workspace", menuName: "Workspaces", currentWorkspace: "Default")
         let failureDeadline = clock.now.advanced(by: .seconds(10))
         while !elements().flatMap(strings).contains(where: { $0.contains("Could not change workspace: Workspace save failed") }) {
             try require(clock.now < failureDeadline, "Failed workspace save was not reported")
@@ -566,7 +587,7 @@ final class Driver {
         try press("Workspaces")
         try press("Open workspace Default")
         try waitGone("Create workspace")
-        print("PASS: workspace creation, duplicate validation, native menu, header picker and SQL isolation")
+        print("PASS: workspace creation, duplicate validation, native menu selection and checkmark, header picker and SQL isolation")
     }
     func testAbout() throws {
         try selectApplicationMenuItem("About Qrow")

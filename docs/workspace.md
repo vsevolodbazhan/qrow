@@ -5,7 +5,12 @@ Restored tabs do not connect to a database until you run SQL.
 
 ## Choose or create a workspace
 
-Select the workspace name in the window header, or open **Qrow → Workspaces…**.
+Open **Workspaces** in the macOS menu bar and select a workspace by name.
+A checkmark identifies the current workspace. Selection starts the switch directly.
+Select **Workspaces → New Workspace…** to create a workspace.
+
+For the workspace dialog, select the workspace name in the window header,
+or open **Qrow → Workspaces…**.
 You can also select **Workspaces…** in Settings.
 Select a workspace from the list to open it. **Current** identifies the active workspace.
 To create a workspace, enter a name and select **Create workspace**.

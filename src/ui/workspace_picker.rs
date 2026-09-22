@@ -6,6 +6,49 @@ use gpui_kit::component::{
 };
 use qrow::workspaces::{self, Catalog};
 
+#[derive(Clone, PartialEq, Eq, Action, serde::Deserialize)]
+#[action(namespace = qrow, no_json)]
+pub(super) struct SelectWorkspace(pub Uuid);
+
+#[derive(Clone, PartialEq, Eq, Action, serde::Deserialize)]
+#[action(namespace = qrow, no_json)]
+struct UnavailableWorkspace;
+
+fn workspace_command(
+    name: impl Into<SharedString>,
+    action: impl Action,
+    unavailable: bool,
+) -> MenuItem {
+    // macOS validates actions again when opening a menu, overriding `disabled`.
+    // An unhandled action keeps unavailable commands disabled during validation.
+    if unavailable {
+        MenuItem::action(name, UnavailableWorkspace).disabled(true)
+    } else {
+        MenuItem::action(name, action)
+    }
+}
+
+fn workspace_menu(catalog: &Catalog, blocked: bool) -> Menu {
+    Menu::new("Workspaces").items(
+        catalog
+            .entries()
+            .iter()
+            .map(|entry| {
+                let current = entry.id == catalog.active().id;
+                workspace_command(
+                    entry.name.clone(),
+                    SelectWorkspace(entry.id),
+                    blocked || current,
+                )
+                .checked(current)
+            })
+            .chain([
+                MenuItem::separator(),
+                workspace_command("New Workspace…", NewWorkspace, blocked),
+            ]),
+    )
+}
+
 pub(super) struct WorkspaceForm {
     name: Entity<InputState>,
     error: Option<String>,
@@ -13,6 +56,48 @@ pub(super) struct WorkspaceForm {
 pub(super) type PendingWorkspace = mpsc::Receiver<Result<(Catalog, Workspace, Saver), String>>;
 
 impl Qrow {
+    pub(super) fn refresh_workspace_menu(&mut self, cx: &App) {
+        let blocked = self.demo
+            || self.saver.is_none()
+            || self.dialog_open()
+            || self.pending_quit.is_some()
+            || self.pending_workspace.is_some()
+            || self.tabs.iter().any(|tab| tab.busy);
+        // Rebuild native menus only when their selection, entries, or availability changes.
+        let state = (
+            self.catalog.active().id,
+            self.catalog.entries().len(),
+            blocked,
+        );
+        if self.workspace_menu_state != Some(state) {
+            self.workspace_menu_state = Some(state);
+            set_app_menus(cx, workspace_menu(&self.catalog, blocked));
+        }
+    }
+
+    pub(super) fn select_workspace(
+        &mut self,
+        action: &SelectWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if action.0 == self.catalog.active().id
+            || self.demo
+            || self.saver.is_none()
+            || self.dialog_open()
+            || window.has_active_dialog(cx)
+            || self.pending_quit.is_some()
+            || self.pending_workspace.is_some()
+            || self.tabs.iter().any(|tab| tab.busy)
+        {
+            return;
+        }
+        // The same modal guard protects edits while the background save completes.
+        // Selection is already known, so the user does not need another confirmation.
+        self.open_workspaces(&OpenWorkspaces, window, cx);
+        self.switch_workspace(Some(action.0), cx);
+    }
+
     pub(super) fn open_workspaces(
         &mut self,
         _: &OpenWorkspaces,
@@ -207,5 +292,34 @@ impl Qrow {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Catalog, MenuItem, UnavailableWorkspace, workspace_menu};
+
+    #[test]
+    fn native_menu_marks_current_workspace_and_disables_unavailable_commands() {
+        let catalog = Catalog::default();
+        let menu = workspace_menu(&catalog, false);
+        assert_eq!(menu.name.as_ref(), "Workspaces");
+        let MenuItem::Action {
+            name,
+            action,
+            checked,
+            disabled,
+            ..
+        } = &menu.items[0]
+        else {
+            panic!("workspace action expected")
+        };
+        assert_eq!(name.as_ref(), "Default");
+        assert!(*checked && *disabled);
+        assert!(action.partial_eq(&UnavailableWorkspace));
+        assert!(!menu.items[2].is_disabled());
+        let blocked = workspace_menu(&catalog, true);
+        assert!(blocked.items[0].is_disabled());
+        assert!(blocked.items[2].is_disabled());
     }
 }

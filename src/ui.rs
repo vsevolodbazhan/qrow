@@ -74,6 +74,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
     ]);
+    set_app_menus(cx, Menu::new("Workspaces").disabled(true));
+}
+
+fn set_app_menus(cx: &App, workspaces: Menu) {
     cx.set_menus(vec![
         Menu {
             disabled: false,
@@ -96,6 +100,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Close Tab", CloseTab),
             ],
         },
+        workspaces,
         Menu {
             disabled: false,
             name: "Edit".into(),
@@ -301,6 +306,7 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 
 pub struct Qrow {
     catalog: qrow::workspaces::Catalog,
+    workspace_menu_state: Option<(Uuid, usize, bool)>,
     workspace_form: Option<workspace_picker::WorkspaceForm>,
     pending_workspace: Option<workspace_picker::PendingWorkspace>,
     settings: Settings,
@@ -375,6 +381,7 @@ impl Qrow {
         });
         let mut this = Self {
             catalog,
+            workspace_menu_state: None,
             workspace_form: None,
             pending_workspace: None,
             settings: workspace.settings,
@@ -454,6 +461,9 @@ impl Qrow {
             started.elapsed().as_secs_f64() * 1000.,
             if demo { " (demo)" } else { "" }
         );
+        this.refresh_workspace_menu(cx);
+        cx.observe_self(|this, cx| this.refresh_workspace_menu(cx))
+            .detach();
         this
     }
     fn make_tab(&self, saved: SavedTab, window: &mut Window, cx: &mut Context<Self>) -> Tab {
