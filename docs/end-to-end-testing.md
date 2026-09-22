@@ -129,7 +129,8 @@ and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
-ends when the New Connection control becomes accessible. This does not measure
+ends when the New Connection control becomes accessible. On a fresh run, this
+includes creation of the first workspace. This does not measure
 cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.
@@ -138,11 +139,15 @@ The native scenario starts with the application menu. It selects **About Qrow**,
 checks the version line and the copyright, closes the dialog with Escape, and
 opens the dialog again. This check does not use a server.
 
-The native scenario creates a workspace through the macOS Workspaces menu. It
-checks the current-workspace checkmark and selects a workspace directly from
-that menu. It rejects a duplicate name and also switches through the window header. It checks that each
-workspace retains its own SQL and that a new workspace starts with a blank editor.
-It also blocks the source save and checks that a failed switch preserves the SQL.
+The native scenario checks the welcome screen, cancellation of creation, and
+creation of the first workspace. It creates another workspace through the
+macOS Workspaces menu. It checks the current-workspace checkmark and selects a
+workspace from the native submenu and the window header's native popup. It
+rejects duplicate names during creation and rename. Rename must keep the
+workspace file and SQL. Each workspace must retain its own SQL, and a new
+workspace must start with a blank editor. The scenario blocks the source save
+and checks that a failed switch preserves the SQL. A restart must open the last
+selected workspace. Credential cleanup covers all workspaces in the test run.
 
 The native scenario checks connection-form error alerts. It rejects a missing
 username, a new connection with a duplicate name, and a rename to a duplicate

@@ -409,7 +409,7 @@ impl Qrow {
             )
             .child(
                 Button::new("settings-workspaces")
-                    .label("Workspaces…")
+                    .label("Select Workspace")
                     .disabled(self.demo)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.settings_open = false;

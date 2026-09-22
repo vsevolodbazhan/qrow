@@ -30,18 +30,22 @@ def main():
     root = Path(__file__).resolve().parents[2] / "target/e2e"
     if artifacts.parent != root or not artifacts.name.startswith("qrow-e2e-"):
         raise ValueError("Refusing to clean credentials outside an isolated E2E run")
-    workspace = artifacts / "workspace/workspace.json"
-    if workspace.exists():
-        profiles = json.loads(workspace.read_text())["profiles"]
-        # Validate every profile before deleting any credential.
-        for identifier in fixture_profile_ids(profiles):
-            result = subprocess.run(
-                ["security", "delete-generic-password", "-s", "io.qrow.connection", "-a", identifier],
-                check=False,
-                capture_output=True,
-            )
-            if result.returncode not in (0, 44):
-                raise RuntimeError(result.stderr.decode())
+    data = artifacts / "workspace"
+    workspaces = [data / "workspace.json", *sorted((data / "workspaces").glob("*/workspace.json"))]
+    profiles = []
+    for workspace in workspaces:
+        if workspace.exists():
+            profiles.extend(json.loads(workspace.read_text())["profiles"])
+    # Validate every profile in every workspace before deleting any credential.
+    for identifier in fixture_profile_ids(profiles):
+        result = subprocess.run(
+            ["security", "delete-generic-password", "-s", "io.qrow.connection", "-a", identifier],
+            check=False,
+            capture_output=True,
+        )
+        if result.returncode not in (0, 44):
+            raise RuntimeError(result.stderr.decode())
+
 
 
 if __name__ == "__main__":

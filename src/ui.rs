@@ -54,6 +54,7 @@ actions!(
         OpenSettings,
         OpenWorkspaces,
         NewWorkspace,
+        RenameWorkspace,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
@@ -86,8 +87,6 @@ fn set_app_menus(cx: &App, workspaces: Menu) {
                 MenuItem::action("About Qrow", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
-                MenuItem::action("Workspaces…", OpenWorkspaces),
-                MenuItem::action("New Workspace…", NewWorkspace),
                 MenuItem::separator(),
                 MenuItem::action("Quit Qrow", Quit),
             ],
@@ -306,7 +305,7 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 
 pub struct Qrow {
     catalog: qrow::workspaces::Catalog,
-    workspace_menu_state: Option<(Uuid, usize, bool)>,
+    workspace_menu_state: Option<(Option<Uuid>, Vec<qrow::workspaces::Entry>, bool)>,
     workspace_form: Option<workspace_picker::WorkspaceForm>,
     pending_workspace: Option<workspace_picker::PendingWorkspace>,
     settings: Settings,
@@ -352,15 +351,19 @@ impl Qrow {
                 None,
             )
         } else {
-            match qrow::workspaces::open(
+            match qrow::workspaces::restore(
                 path.parent().expect("workspace directory"),
-                None,
-                None,
                 move || {
                     let _ = save_wake.try_send(());
                 },
             ) {
-                Ok((catalog, workspace, saver)) => (catalog, workspace, None, Some(saver)),
+                Ok(Some((catalog, workspace, saver))) => (catalog, workspace, None, Some(saver)),
+                Ok(None) => (
+                    qrow::workspaces::Catalog::default(),
+                    Workspace::default(),
+                    None,
+                    None,
+                ),
                 Err(e) => (
                     qrow::workspaces::Catalog::default(),
                     Workspace::default(),
@@ -427,9 +430,13 @@ impl Qrow {
         if demo {
             this.seed_demo(cx);
         }
-        this.tabs[this.active]
-            .input
-            .update(cx, |s, cx| s.focus(window, cx));
+        if this.saver.is_some() || demo {
+            this.tabs[this.active]
+                .input
+                .update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            window.focus(&this.focus, cx);
+        }
         cx.spawn_in(window, async move |weak, cx| {
             let mut pending = false;
             loop {
@@ -555,7 +562,7 @@ impl Qrow {
         if self.pending_quit.is_some() || self.quit_confirmed || self.pending_workspace.is_some() {
             return;
         }
-        if self.demo {
+        if self.demo || self.saver.is_none() && self.catalog.active().is_none() {
             self.quit_confirmed = true;
             cx.quit();
             return;

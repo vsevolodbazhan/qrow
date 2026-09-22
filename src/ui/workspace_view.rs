@@ -573,6 +573,53 @@ impl Qrow {
 
 impl Render for Qrow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.demo && self.saver.is_none() {
+            return v_flex()
+                .size_full()
+                .key_context("Qrow")
+                .track_focus(&self.focus)
+                .bg(cx.theme().background)
+                .text_color(cx.theme().foreground)
+                .on_action(cx.listener(Self::open_about))
+                .on_action(cx.listener(Self::new_workspace))
+                .child(
+                    TitleBar::new()
+                        .bg(cx.theme().title_bar)
+                        .child(div().flex_1().text_center().child("Qrow")),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .items_center()
+                        .justify_center()
+                        .gap_4()
+                        .child(div().text_xl().font_weight(FontWeight::MEDIUM).child(
+                            if self.message.is_some() {
+                                "Cannot open workspace"
+                            } else {
+                                "Welcome to Qrow"
+                            },
+                        ))
+                        .child(
+                            div().text_color(cx.theme().muted_foreground).child(
+                                "Create a workspace to organize your connections and queries.",
+                            ),
+                        )
+                        .child(
+                            Button::new("create-first-workspace")
+                                .primary()
+                                .label("Create workspace…")
+                                .disabled(self.message.is_some())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.new_workspace(&NewWorkspace, window, cx)
+                                })),
+                        ),
+                )
+                .when_some(self.message.clone(), |el, message| {
+                    el.child(div().p_4().text_color(cx.theme().warning).child(message))
+                })
+                .into_any_element();
+        }
         // Split positions are measured window geometry. Clamp without mutating retained state during render.
         let editor_height = self
             .editor_height
@@ -602,6 +649,7 @@ impl Render for Qrow {
             .on_action(cx.listener(Self::open_workspaces))
             .on_action(cx.listener(Self::select_workspace))
             .on_action(cx.listener(Self::new_workspace))
+            .on_action(cx.listener(Self::rename_workspace))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
@@ -643,12 +691,14 @@ impl Render for Qrow {
                                 } else {
                                     format!(
                                         "Qrow · {}",
-                                        truncate_display_name(&self.catalog.active().name)
+                                        truncate_display_name(
+                                            self.catalog.active().map_or("", |entry| &entry.name)
+                                        )
                                     )
                                 })
                                 .icon(IconName::ChevronDown)
-                                .accessibility_label("Workspaces")
-                                .tooltip("Workspaces…")
+                                .accessibility_label("Select Workspace")
+                                .tooltip("Select Workspace")
                                 .disabled(self.demo)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.open_workspaces(&OpenWorkspaces, window, cx)
@@ -721,6 +771,7 @@ impl Render for Qrow {
                 )
             })
             .child(self.status_bar())
+            .into_any_element()
     }
 }
 

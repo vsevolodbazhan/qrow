@@ -19,7 +19,15 @@ fn main() -> Result<()> {
         .parent()
         .context("Invalid workspace directory")?;
     let catalog = Catalog::load(root)?;
-    let workspace = storage::load(&catalog.path(root, catalog.active().id)?)?;
+    let workspace = storage::load(
+        &catalog.path(
+            root,
+            catalog
+                .active()
+                .ok_or_else(|| anyhow::anyhow!("No workspace has been created"))?
+                .id,
+        )?,
+    )?;
     let profiles: Vec<_> = workspace
         .profiles
         .iter()

@@ -3,31 +3,37 @@
 Qrow saves the connections, tabs, and settings of each workspace separately.
 Restored tabs do not connect to a database until you run SQL.
 
-## Choose or create a workspace
+## Create, select, or rename a workspace
 
-Open **Workspaces** in the macOS menu bar and select a workspace by name.
-A checkmark identifies the current workspace. Selection starts the switch directly.
-Select **Workspaces → New Workspace…** to create a workspace.
+On the first launch, Qrow shows a welcome screen. Select **Create workspace…**,
+enter a name, then select **Create workspace**. If you cancel, the welcome
+screen stays open. Qrow does not create a workspace until you submit a name.
 
-For the workspace dialog, select the workspace name in the window header,
-or open **Qrow → Workspaces…**.
-You can also select **Workspaces…** in Settings.
-Select a workspace from the list to open it. **Current** identifies the active workspace.
-To create a workspace, enter a name and select **Create workspace**.
-**Qrow → New Workspace…** opens the same dialog with the name field focused.
+The macOS **Workspaces** menu has separate commands:
+
+- **New Workspace…** creates and opens a workspace.
+- **Select Workspace** opens a native submenu of workspace names.
+  A checkmark identifies the current workspace. Select a name to open it.
+- **Rename Workspace…** changes the current workspace name. It keeps the same
+  files, connections, tabs, sessions, and results.
+
+The workspace name in the window header opens a native selection menu.
+You can also select **Select Workspace** in Settings.
 Names must be unique and contain no more than 80 characters.
+Select and Rename are unavailable until a workspace exists.
 
-The existing workspace is named **Default**. Its files and connection passwords
-stay in their original locations. A new workspace starts with no connections
-and default settings. Qrow opens the last selected workspace at startup.
+Qrow opens the last opened workspace at startup. There is no default-workspace
+setting. An existing workspace from an older version keeps the name **Default**
+until you rename it. Its files and connection passwords stay in their original
+locations. A new workspace starts with no connections and default settings.
 
-Wait for running queries to finish before you change workspaces. Switching
-saves the current SQL, then closes that workspace's sessions and results.
-Returning restores saved tabs and settings, but not result rows or Logs history.
-If the save or destination load fails, the current workspace stays open.
-Escape closes the dialog, except while a switch is in progress.
-Workspace creation and switching are unavailable in demo mode.
-There are no commands to rename or delete a workspace.
+Wait for running queries to finish before you create, select, or rename a
+workspace. Switching saves the current SQL, then closes that workspace's
+sessions and results. Returning restores saved tabs and settings, but not
+result rows or Logs history. If the save or destination load fails, the current
+workspace stays open. Escape closes the form, except while a workspace
+operation is in progress. Workspace commands are unavailable in demo mode.
+There is no command to delete a workspace.
 
 ## Appearance and layout
 
@@ -85,7 +91,7 @@ before it exits.
 
 If the workspace is corrupt, unreadable, or uses an unsupported version, Qrow
 reports the failure. It leaves the file untouched and disables saving for that
-run. New edits from that run will not be saved. Preserve the original file before
+run. The editor stays hidden until the workspace can load. Preserve the original file before
 attempting recovery. Qrow does not provide an automatic repair tool.
 
 Only one Qrow process can write to each workspace file. If another process

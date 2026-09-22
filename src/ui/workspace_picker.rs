@@ -28,48 +28,68 @@ fn workspace_command(
     }
 }
 
+fn selection_menu(catalog: &Catalog, blocked: bool) -> Menu {
+    Menu::new("Select Workspace")
+        .disabled(blocked || catalog.entries().is_empty())
+        .items(catalog.entries().iter().map(|entry| {
+            let current = catalog.active().is_some_and(|active| entry.id == active.id);
+            workspace_command(
+                entry.name.clone(),
+                SelectWorkspace(entry.id),
+                blocked || current,
+            )
+            .checked(current)
+        }))
+}
+
 fn workspace_menu(catalog: &Catalog, blocked: bool) -> Menu {
-    Menu::new("Workspaces").items(
-        catalog
-            .entries()
-            .iter()
-            .map(|entry| {
-                let current = entry.id == catalog.active().id;
-                workspace_command(
-                    entry.name.clone(),
-                    SelectWorkspace(entry.id),
-                    blocked || current,
-                )
-                .checked(current)
-            })
-            .chain([
-                MenuItem::separator(),
-                workspace_command("New Workspace…", NewWorkspace, blocked),
-            ]),
-    )
+    Menu::new("Workspaces").items([
+        workspace_command("New Workspace…", NewWorkspace, blocked),
+        MenuItem::submenu(selection_menu(catalog, blocked)),
+        workspace_command(
+            "Rename Workspace…",
+            RenameWorkspace,
+            blocked || catalog.active().is_none(),
+        ),
+    ])
+}
+
+#[derive(Clone, Copy)]
+enum Operation {
+    Create,
+    Rename(Uuid),
+    Select(Uuid),
 }
 
 pub(super) struct WorkspaceForm {
     name: Entity<InputState>,
+    operation: Operation,
     error: Option<String>,
 }
-pub(super) type PendingWorkspace = mpsc::Receiver<Result<(Catalog, Workspace, Saver), String>>;
+pub(super) enum WorkspaceResult {
+    Opened(Catalog, Box<Workspace>, Saver),
+    Renamed(Catalog),
+}
+pub(super) type PendingWorkspace = mpsc::Receiver<Result<WorkspaceResult, String>>;
 
 impl Qrow {
-    pub(super) fn refresh_workspace_menu(&mut self, cx: &App) {
-        let blocked = self.demo
-            || self.saver.is_none()
+    fn workspace_commands_blocked(&self) -> bool {
+        self.demo
+            || self.saver.is_none() && self.message.is_some()
             || self.dialog_open()
             || self.pending_quit.is_some()
             || self.pending_workspace.is_some()
-            || self.tabs.iter().any(|tab| tab.busy);
-        // Rebuild native menus only when their selection, entries, or availability changes.
+            || self.tabs.iter().any(|tab| tab.busy)
+    }
+
+    pub(super) fn refresh_workspace_menu(&mut self, cx: &App) {
+        let blocked = self.workspace_commands_blocked();
         let state = (
-            self.catalog.active().id,
-            self.catalog.entries().len(),
+            self.catalog.active().map(|e| e.id),
+            self.catalog.entries().to_vec(),
             blocked,
         );
-        if self.workspace_menu_state != Some(state) {
+        if self.workspace_menu_state.as_ref() != Some(&state) {
             self.workspace_menu_state = Some(state);
             set_app_menus(cx, workspace_menu(&self.catalog, blocked));
         }
@@ -81,21 +101,17 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if action.0 == self.catalog.active().id
-            || self.demo
-            || self.saver.is_none()
-            || self.dialog_open()
+        if self.workspace_commands_blocked()
             || window.has_active_dialog(cx)
-            || self.pending_quit.is_some()
-            || self.pending_workspace.is_some()
-            || self.tabs.iter().any(|tab| tab.busy)
+            || self
+                .catalog
+                .active()
+                .is_some_and(|entry| entry.id == action.0)
         {
             return;
         }
-        // The same modal guard protects edits while the background save completes.
-        // Selection is already known, so the user does not need another confirmation.
-        self.open_workspaces(&OpenWorkspaces, window, cx);
-        self.switch_workspace(Some(action.0), cx);
+        self.workspace_dialog(Operation::Select(action.0), window, cx);
+        self.submit_workspace(cx);
     }
 
     pub(super) fn open_workspaces(
@@ -104,29 +120,87 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.demo || self.dialog_open() || self.pending_quit.is_some() {
+        if self.workspace_commands_blocked() {
             return;
         }
+        let mut menu = gpui_kit::component::native_menu::NativeMenu::new();
+        for entry in self.catalog.entries() {
+            menu = menu.menu_with_check(
+                entry.name.clone(),
+                self.catalog
+                    .active()
+                    .is_some_and(|active| active.id == entry.id),
+                Box::new(SelectWorkspace(entry.id)),
+            );
+        }
+        menu.show(window.mouse_position(), window, cx);
+    }
+
+    pub(super) fn new_workspace(
+        &mut self,
+        _: &NewWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_commands_blocked() || window.has_active_dialog(cx) {
+            return;
+        }
+        self.workspace_dialog(Operation::Create, window, cx);
+    }
+
+    pub(super) fn rename_workspace(
+        &mut self,
+        _: &RenameWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.workspace_commands_blocked() || window.has_active_dialog(cx) {
+            return;
+        }
+        if let Some(entry) = self.catalog.active() {
+            self.workspace_dialog(Operation::Rename(entry.id), window, cx);
+        }
+    }
+
+    fn workspace_dialog(
+        &mut self,
+        operation: Operation,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name"));
+        if matches!(operation, Operation::Rename(_))
+            && let Some(entry) = self.catalog.active()
+        {
+            name.update(cx, |input, cx| {
+                input.set_value(entry.name.clone(), window, cx)
+            });
+        }
         self.workspace_form = Some(WorkspaceForm {
-            name: cx.new(|cx| InputState::new(window, cx).placeholder("Workspace name")),
+            name: name.clone(),
+            operation,
             error: None,
         });
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
             let close = weak.clone();
-            let create = weak.clone();
+            let submit = weak.clone();
             let content = weak.update(cx, |this, cx| this.workspace_content(cx)).ok();
             let busy = weak
                 .read_with(cx, |this, _| this.pending_workspace.is_some())
                 .unwrap_or(false);
             dialog
-                .title("Workspaces")
-                .w(super::setting_row::Rows::dialog_width(window, 32.))
+                .title(match operation {
+                    Operation::Create => "New Workspace",
+                    Operation::Rename(_) => "Rename Workspace",
+                    Operation::Select(_) => "Select Workspace",
+                })
+                .w(super::setting_row::Rows::dialog_width(window, 28.))
                 .overlay_closable(false)
                 .keyboard(!busy)
                 .close_button(!busy)
                 .on_ok(move |_, _, cx| {
-                    let _ = create.update(cx, |this, cx| this.switch_workspace(None, cx));
+                    let _ = submit.update(cx, |this, cx| this.submit_workspace(cx));
                     false
                 })
                 .children(content)
@@ -137,19 +211,10 @@ impl Qrow {
                     });
                 })
         });
-        cx.notify();
-    }
-
-    pub(super) fn new_workspace(
-        &mut self,
-        _: &NewWorkspace,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_workspaces(&OpenWorkspaces, window, cx);
-        if let Some(form) = &self.workspace_form {
-            form.name.update(cx, |input, cx| input.focus(window, cx));
+        if !matches!(operation, Operation::Select(_)) {
+            name.update(cx, |input, cx| input.focus(window, cx));
         }
+        cx.notify();
     }
 
     fn workspace_content(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -157,33 +222,53 @@ impl Qrow {
             return div().into_any_element();
         };
         let busy = self.pending_workspace.is_some();
-        let blocked = busy || self.saver.is_none() || self.tabs.iter().any(|t| t.busy);
-        v_flex().gap_4()
-            .child(div().text_color(cx.theme().muted_foreground)
-                .child("Switching saves your SQL and closes the current workspace's sessions and results."))
-            .child(v_flex().id("workspace-list").max_h_48().overflow_y_scroll().gap_1()
-                .children(self.catalog.entries().iter().map(|entry| {
-                    let id = entry.id;
-                    let active = id == self.catalog.active().id;
-                    Button::new(SharedString::from(format!("workspace-{id}")))
-                        .label(if active { format!("{} · Current", entry.name) } else { entry.name.clone() })
-                        .accessibility_label(format!("{} workspace {}", if active { "Current" } else { "Open" }, entry.name))
-                        .disabled(blocked || active)
-                        .on_click(cx.listener(move |this, _, _, cx| this.switch_workspace(Some(id), cx)))
-                })))
-            .child(v_form().child(field().label("New workspace")
-                .child(Input::new(&form.name).aria_label("Workspace name").disabled(busy))))
-            .child(Button::new("create-workspace").primary().label("Create workspace")
-                .disabled(blocked)
-                .on_click(cx.listener(|this, _, _, cx| this.switch_workspace(None, cx))))
-            .when(busy, |el| el.child(div().id("workspace-switch-status").role(Role::Status).aria_label("Saving and opening workspace…").child("Saving and opening workspace…")))
-            .when(!busy && self.tabs.iter().any(|t| t.busy), |el| el.child("Wait for running queries to finish before switching workspaces."))
-            .when(self.saver.is_none(), |el| el.child("Workspace saving is disabled. Resolve the load error and restart Qrow before switching."))
-            .when_some(form.error.clone(), |el, error| el.child(div().id("workspace-switch-error").role(Role::Alert).aria_label(error.clone()).child(Alert::error("workspace-error", error))))
+        v_flex()
+            .gap_4()
+            .when(!matches!(form.operation, Operation::Select(_)), |el| {
+                el.child(
+                    v_form().child(
+                        field().label("Workspace name").child(
+                            Input::new(&form.name)
+                                .aria_label("Workspace name")
+                                .disabled(busy),
+                        ),
+                    ),
+                )
+            })
+            .when(!busy, |el| {
+                el.child(
+                    Button::new("submit-workspace")
+                        .primary()
+                        .label(match form.operation {
+                            Operation::Create => "Create workspace",
+                            Operation::Rename(_) => "Rename workspace",
+                            Operation::Select(_) => "Retry",
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.submit_workspace(cx))),
+                )
+            })
+            .when(busy, |el| {
+                el.child(
+                    div()
+                        .id("workspace-operation-status")
+                        .role(Role::Status)
+                        .aria_label("Saving workspace…")
+                        .child("Saving workspace…"),
+                )
+            })
+            .when_some(form.error.clone(), |el, error| {
+                el.child(
+                    div()
+                        .id("workspace-switch-error")
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .child(Alert::error("workspace-error", error)),
+                )
+            })
             .into_any_element()
     }
 
-    fn switch_workspace(&mut self, target: Option<Uuid>, cx: &mut Context<Self>) {
+    fn submit_workspace(&mut self, cx: &mut Context<Self>) {
         if self.pending_workspace.is_some()
             || self.pending_quit.is_some()
             || self.tabs.iter().any(|t| t.busy)
@@ -193,19 +278,24 @@ impl Qrow {
         let Some(form) = &mut self.workspace_form else {
             return;
         };
-        let name = target
-            .is_none()
-            .then(|| form.name.read(cx).value().to_string());
+        let operation = form.operation;
+        let name = form.name.read(cx).value().to_string();
         form.error = None;
-        let Some(saver) = &self.saver else {
-            return;
-        };
-        let receipt = match saver.flush(self.snapshot(cx)) {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                self.workspace_form.as_mut().unwrap().error = Some(error.to_string());
-                cx.notify();
-                return;
+        let receipt = if matches!(operation, Operation::Rename(_)) {
+            None
+        } else {
+            match self
+                .saver
+                .as_ref()
+                .map(|saver| saver.flush(self.snapshot(cx)))
+                .transpose()
+            {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    self.workspace_form.as_mut().unwrap().error = Some(error.to_string());
+                    cx.notify();
+                    return;
+                }
             }
         };
         let path = storage::workspace_path();
@@ -213,16 +303,32 @@ impl Qrow {
         let wake = self.wake.clone();
         let (tx, rx) = mpsc::channel();
         self.pending_workspace = Some(rx);
-        self.dirty = None;
+        if !matches!(operation, Operation::Rename(_)) {
+            self.dirty = None;
+        }
         std::thread::spawn(move || {
             let result = (|| -> anyhow::Result<_> {
-                receipt
-                    .recv()
-                    .map_err(|_| anyhow::anyhow!("Workspace saver stopped"))?
-                    .map_err(anyhow::Error::msg)?;
+                if let Some(receipt) = receipt {
+                    receipt
+                        .recv()
+                        .map_err(|_| anyhow::anyhow!("Workspace saver stopped"))?
+                        .map_err(anyhow::Error::msg)?;
+                }
+                if let Operation::Rename(id) = operation {
+                    return workspaces::rename(&root, id, &name).map(WorkspaceResult::Renamed);
+                }
                 let save_wake = wake.clone();
-                workspaces::open(&root, target, name.as_deref(), move || {
+                let target = if let Operation::Select(id) = operation {
+                    Some(id)
+                } else {
+                    None
+                };
+                let name = matches!(operation, Operation::Create).then_some(name.as_str());
+                workspaces::open(&root, target, name, move || {
                     let _ = save_wake.try_send(());
+                })
+                .map(|(catalog, workspace, saver)| {
+                    WorkspaceResult::Opened(catalog, Box::new(workspace), saver)
                 })
             })()
             .map_err(|e| format!("Could not change workspace: {e:#}"));
@@ -254,7 +360,13 @@ impl Qrow {
                     form.error = Some(error);
                 }
             }
-            Ok((catalog, mut workspace, saver)) => {
+            Ok(WorkspaceResult::Renamed(catalog)) => {
+                self.catalog = catalog;
+                self.workspace_form = None;
+                window.close_dialog(cx);
+            }
+            Ok(WorkspaceResult::Opened(catalog, workspace, saver)) => {
+                let mut workspace = *workspace;
                 let mut message = None;
                 let unavailable_font = prepare_workspace(&mut workspace, &self.fonts, &mut message);
                 let old_scale = self.settings.ui_scale;
@@ -297,29 +409,38 @@ impl Qrow {
 
 #[cfg(test)]
 mod tests {
-    use super::{Catalog, MenuItem, UnavailableWorkspace, workspace_menu};
+    use super::{Catalog, MenuItem, UnavailableWorkspace, Uuid, workspace_menu};
 
     #[test]
-    fn native_menu_marks_current_workspace_and_disables_unavailable_commands() {
-        let catalog = Catalog::default();
+    fn native_menu_separates_creation_selection_and_rename() {
+        let empty = workspace_menu(&Catalog::default(), false);
+        assert!(!empty.items[0].is_disabled());
+        assert!(empty.items[1].is_disabled());
+        assert!(empty.items[2].is_disabled());
+        let id = Uuid::new_v4();
+        let catalog: Catalog = serde_json::from_value(serde_json::json!({
+            "version": 1, "active": id, "entries": [{"id": id, "name": "Analytics"}]
+        }))
+        .unwrap();
         let menu = workspace_menu(&catalog, false);
-        assert_eq!(menu.name.as_ref(), "Workspaces");
+        assert!(!menu.items[0].is_disabled());
+        assert!(!menu.items[2].is_disabled());
+        let MenuItem::Submenu(selection) = &menu.items[1] else {
+            panic!("native submenu expected")
+        };
+        assert_eq!(selection.name.as_ref(), "Select Workspace");
         let MenuItem::Action {
-            name,
-            action,
             checked,
             disabled,
+            action,
             ..
-        } = &menu.items[0]
+        } = &selection.items[0]
         else {
             panic!("workspace action expected")
         };
-        assert_eq!(name.as_ref(), "Default");
         assert!(*checked && *disabled);
         assert!(action.partial_eq(&UnavailableWorkspace));
-        assert!(!menu.items[2].is_disabled());
         let blocked = workspace_menu(&catalog, true);
-        assert!(blocked.items[0].is_disabled());
-        assert!(blocked.items[2].is_disabled());
+        assert!(blocked.items.iter().all(MenuItem::is_disabled));
     }
 }

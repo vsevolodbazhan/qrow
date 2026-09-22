@@ -11,28 +11,25 @@ use std::{
 };
 use uuid::Uuid;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Entry {
     pub id: Uuid,
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Catalog {
     version: u32,
-    active: Uuid,
+    active: Option<Uuid>,
     entries: Vec<Entry>,
 }
 impl Default for Catalog {
     fn default() -> Self {
         Self {
             version: 1,
-            active: Uuid::nil(),
-            entries: vec![Entry {
-                id: Uuid::nil(),
-                name: "Default".into(),
-            }],
+            active: None,
+            entries: vec![],
         }
     }
 }
@@ -40,17 +37,26 @@ impl Catalog {
     pub fn load(root: &Path) -> Result<Self> {
         let catalog: Self = match fs::read(root.join("workspaces.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes).context("Could not read workspace list")?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let mut catalog = Self::default();
+                if root.join("workspace.json").exists() {
+                    catalog.active = Some(Uuid::nil());
+                    catalog.entries.push(Entry {
+                        id: Uuid::nil(),
+                        name: "Default".into(),
+                    });
+                }
+                catalog
+            }
             Err(e) => return Err(e).context("Could not read workspace list"),
         };
         ensure!(catalog.version == 1, "Unsupported workspace list version");
         ensure!(
-            catalog.entries.iter().any(|e| e.id == Uuid::nil()),
-            "Default workspace is missing"
-        );
-        ensure!(
-            catalog.entries.iter().any(|e| e.id == catalog.active),
-            "Selected workspace is missing"
+            match catalog.active {
+                Some(id) => catalog.entries.iter().any(|e| e.id == id),
+                None => catalog.entries.is_empty(),
+            },
+            "Last opened workspace is missing"
         );
         for (ix, entry) in catalog.entries.iter().enumerate() {
             validate_name(&entry.name)?;
@@ -61,11 +67,8 @@ impl Catalog {
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
-    pub fn active(&self) -> &Entry {
-        self.entries
-            .iter()
-            .find(|e| e.id == self.active)
-            .expect("validated active workspace")
+    pub fn active(&self) -> Option<&Entry> {
+        self.entries.iter().find(|e| Some(e.id) == self.active)
     }
     pub fn path(&self, root: &Path, id: Uuid) -> Result<PathBuf> {
         ensure!(
@@ -122,11 +125,13 @@ pub fn open(
         });
         id
     } else {
-        target.unwrap_or(catalog.active)
+        target
+            .or(catalog.active)
+            .context("Create a workspace to begin.")?
     };
     let path = catalog.path(root, id)?;
     // A listed workspace must never silently become a blank workspace after deletion.
-    if !id.is_nil() && name.is_none() {
+    if name.is_none() {
         ensure!(
             path.is_file(),
             "Workspace file is missing. Restore it before opening this workspace."
@@ -140,7 +145,41 @@ pub fn open(
             .context("Workspace saver stopped")?
             .map_err(anyhow::Error::msg)?;
     }
-    catalog.active = id;
+    catalog.active = Some(id);
     file.save_json(&catalog)?;
     Ok((catalog, workspace, saver))
+}
+
+/// Restore the last opened workspace, or return no workspace on a fresh install.
+pub fn restore(
+    root: &Path,
+    wake: impl Fn() + Send + 'static,
+) -> Result<Option<(Catalog, Workspace, Saver)>> {
+    if Catalog::load(root)?.active().is_none() {
+        return Ok(None);
+    }
+    open(root, None, None, wake).map(Some)
+}
+
+/// Change a display name without changing workspace files or the last selection.
+pub fn rename(root: &Path, id: Uuid, name: &str) -> Result<Catalog> {
+    let file = WorkspaceFile::acquire(root.join("workspaces.json"))?;
+    let mut catalog = Catalog::load(root)?;
+    let name = name.trim();
+    validate_name(name)?;
+    ensure!(
+        !catalog
+            .entries
+            .iter()
+            .any(|e| e.id != id && e.name.to_lowercase() == name.to_lowercase()),
+        "A workspace with this name already exists."
+    );
+    let entry = catalog
+        .entries
+        .iter_mut()
+        .find(|e| e.id == id)
+        .context("Workspace no longer exists")?;
+    entry.name = name.into();
+    file.save_json(&catalog)?;
+    Ok(catalog)
 }

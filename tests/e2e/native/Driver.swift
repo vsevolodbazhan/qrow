@@ -364,7 +364,7 @@ final class Driver {
         try press(name)
         // Button styling does not expose selection through accessibility.
         // Check the isolated workspace to catch a click that was ignored.
-        let workspaceURL = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let workspaceURL = try activeWorkspaceURL()
         let deadline = clock.now.advanced(by: .seconds(5))
         repeat {
             if let data = try? Data(contentsOf: workspaceURL),
@@ -391,6 +391,20 @@ final class Driver {
         }), let number = window[kCGWindowNumber as String] as? UInt32 else { throw Failure("No Qrow window to capture") }
         _ = try command(["screencapture", "-x", "-l", "\(number)", "\(artifacts)/\(name).png"])
     }
+    func activeWorkspaceURL() throws -> URL {
+        let root = URL(fileURLWithPath: env["QROW_DATA_DIR"]!)
+        let data = try Data(contentsOf: root.appendingPathComponent("workspaces.json"))
+        let catalog = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let id = catalog["active"] as! String
+        return root.appendingPathComponent(id == "00000000-0000-0000-0000-000000000000" ? "workspace.json" : "workspaces/\(id)/workspace.json")
+    }
+    func waitForSQL(_ sql: String) throws {
+        let deadline = clock.now.advanced(by: .seconds(10))
+        while find("SQL Editor").flatMap({ attribute($0, kAXValueAttribute) as? String }) != sql {
+            try require(clock.now < deadline, "Workspace did not restore expected SQL")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+    }
     func start() throws {
         let bundle = env["QROW_E2E_BUNDLE"]!
         let logURL = URL(fileURLWithPath: "\(artifacts)/\(name).log")
@@ -405,6 +419,22 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
+        if !FileManager.default.fileExists(atPath: env["QROW_DATA_DIR"]! + "/workspaces.json") &&
+           !FileManager.default.fileExists(atPath: env["QROW_DATA_DIR"]! + "/workspace.json") {
+            _ = try wait("Create workspace…", timeout: 20)
+            try require(find("SQL Editor") == nil && find("New Connection") == nil, "Fresh install exposes workspace controls")
+            try snapshot("welcome")
+            try press("Create workspace…")
+            _ = try wait("Workspace name")
+            key(53)
+            try waitGone("Workspace name")
+            try require(!FileManager.default.fileExists(atPath: env["QROW_DATA_DIR"]! + "/workspaces.json"), "Cancelled creation saved a workspace")
+            try selectMenuItem("New Workspace…", menuName: "Workspaces")
+            try fill("Workspace name", "Default")
+            try activate(try waitExact("Create workspace", role: kAXButtonRole))
+            try waitForSQL("")
+            print("PASS: empty first launch, cancelled creation, and first workspace creation")
+        }
         _ = try wait("New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -432,7 +462,7 @@ final class Driver {
         return tabs.contains { $0["sql"] as? String == sql }
     }
     func testFailedSaveExit(closeWindow: Bool) throws {
-        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let workspace = try activeWorkspaceURL()
         let backup = workspace.deletingLastPathComponent().appendingPathComponent("workspace-before-quit.json")
         let baseline = "SELECT 'saved-before-quit' -- " + UUID().uuidString
         try fill("SQL Editor", baseline)
@@ -513,6 +543,12 @@ final class Driver {
             menu = named
         } else { menu = menus[1] }
         try require(AXUIElementPerformAction(menu, kAXPressAction as CFString) == .success, "Cannot open the native menu")
+        if currentWorkspace != nil {
+            guard let select = descendants(menu).first(where: { strings($0).contains("Select Workspace") }) else {
+                throw Failure("Missing native Select Workspace submenu")
+            }
+            try require(AXUIElementPerformAction(select, kAXPressAction as CFString) == .success, "Cannot open workspace submenu")
+        }
         let deadline = clock.now.advanced(by: .seconds(10))
         var item: AXUIElement?
         repeat {
@@ -534,19 +570,31 @@ final class Driver {
     func testWorkspaces() throws {
         let original = "SELECT 'workspace default 日本語😀'"
         try fill("SQL Editor", original)
-        try selectMenuItem("New Workspace…", menuName: "Workspaces", currentWorkspace: "Default")
+        try selectMenuItem("New Workspace…", menuName: "Workspaces")
         _ = try wait("Workspace name")
         try fill("Workspace name", "default")
-        try press("Create workspace")
+        try activate(try waitExact("Create workspace", role: kAXButtonRole))
         _ = try wait("Could not change workspace: A workspace with this name already exists.")
         try fill("Workspace name", "E2E workspace")
-        try press("Create workspace")
-        try waitGone("Create workspace")
+        try activate(try waitExact("Create workspace", role: kAXButtonRole))
+        try waitGone("Workspace name")
+        try waitForSQL("")
         guard let blank = find("SQL Editor") else { throw Failure("New workspace has no editor") }
         try require(attribute(blank, kAXValueAttribute) as? String == "", "New workspace copied source SQL")
         let second = "SELECT 'second workspace'"
         try fill("SQL Editor", second)
-        try selectMenuItem("Default", menuName: "Workspaces", currentWorkspace: "E2E workspace")
+        let originalPath = try activeWorkspaceURL()
+        try selectMenuItem("Rename Workspace…", menuName: "Workspaces")
+        _ = try wait("Workspace name")
+        try fill("Workspace name", "Default")
+        try press("Rename workspace")
+        _ = try wait("Could not change workspace: A workspace with this name already exists.")
+        try fill("Workspace name", "Renamed workspace")
+        try press("Rename workspace")
+        try waitGone("Workspace name")
+        try waitForSQL(second)
+        try require(try activeWorkspaceURL() == originalPath, "Rename changed workspace identity")
+        try selectMenuItem("Default", menuName: "Workspaces", currentWorkspace: "Renamed workspace")
         // Wait for the destination SQL, since a direct switch can finish between snapshots.
         let switchDeadline = clock.now.advanced(by: .seconds(10))
         while find("SQL Editor").flatMap({ attribute($0, kAXValueAttribute) as? String }) != original {
@@ -556,7 +604,7 @@ final class Driver {
         guard let editor = find("SQL Editor") else { throw Failure("Restored workspace has no SQL editor") }
         try require(attribute(editor, kAXValueAttribute) as? String == original, "Workspace switch lost original SQL")
         // A failed source save must not replace the editor or active workspace.
-        let path = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let path = try activeWorkspaceURL()
         let backup = path.deletingLastPathComponent().appendingPathComponent("workspace-switch-backup.json")
         try FileManager.default.moveItem(at: path, to: backup)
         try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
@@ -566,29 +614,29 @@ final class Driver {
                 try? FileManager.default.moveItem(at: backup, to: path)
             }
         }
-        try selectMenuItem("E2E workspace", menuName: "Workspaces", currentWorkspace: "Default")
+        try selectMenuItem("Renamed workspace", menuName: "Workspaces", currentWorkspace: "Default")
         let failureDeadline = clock.now.advanced(by: .seconds(10))
         while !elements().flatMap(strings).contains(where: { $0.contains("Could not change workspace: Workspace save failed") }) {
             try require(clock.now < failureDeadline, "Failed workspace save was not reported")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
         key(53)
-        try waitGone("Create workspace")
+        try waitGone("Retry")
         guard let retained = find("SQL Editor") else { throw Failure("Failed switch closed the editor") }
         try require(attribute(retained, kAXValueAttribute) as? String == original, "Failed switch lost SQL")
         try FileManager.default.removeItem(at: path)
         try FileManager.default.moveItem(at: backup, to: path)
-        try selectApplicationMenuItem("Workspaces…")
-        try press("Open workspace E2E workspace")
-        try waitGone("Create workspace")
-        guard let restored = find("SQL Editor") else { throw Failure("Second workspace has no SQL editor") }
-        try require(attribute(restored, kAXValueAttribute) as? String == second, "Workspace switch lost second SQL")
+        try selectMenuItem("Renamed workspace", menuName: "Workspaces", currentWorkspace: "Default")
+        try waitForSQL(second)
         try snapshot("workspaces")
-        try press("Workspaces")
-        try press("Open workspace Default")
-        try waitGone("Create workspace")
-        print("PASS: workspace creation, duplicate validation, native menu selection and checkmark, header picker and SQL isolation")
+        try press("Select Workspace")
+        // The title-bar selector uses an OS-native popup too.
+        key(125) // Down selects the first workspace in the native popup.
+        key(36) // Return opens it.
+        try waitForSQL(original)
+        print("PASS: creation, rename, duplicate validation, native submenu and popup selection, checkmark, SQL isolation, failed-save retention")
     }
+
     func testAbout() throws {
         try selectApplicationMenuItem("About Qrow")
         let copyright = "Copyright © 2026 Vsevolod Bazhan"
@@ -1163,9 +1211,26 @@ do {
             driver.stop()
         }
         catch { if driver.app != nil { try? driver.snapshot("failure") }; driver.stop(); throw error }
+        if !CommandLine.arguments.contains("--persistence-only") {
+        let selectionDriver = Driver(name: "qrow-last-selection")
+        do {
+            try selectionDriver.start()
+            try selectionDriver.selectMenuItem("Renamed workspace", menuName: "Workspaces", currentWorkspace: "Default")
+            try selectionDriver.waitForSQL("SELECT 'second workspace'")
+            selectionDriver.stop()
+        } catch {
+            if selectionDriver.app != nil { try? selectionDriver.snapshot("failure-selection") }
+            selectionDriver.stop()
+            throw error
+        }
+        }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()
+            if !CommandLine.arguments.contains("--persistence-only") {
+                try windowDriver.waitForSQL("SELECT 'second workspace'")
+                print("PASS: restart opens the last selected workspace")
+            }
             try windowDriver.testFailedSaveExit(closeWindow: true)
             windowDriver.stop()
         } catch {
