@@ -326,9 +326,13 @@ impl Qrow {
             .any(|font| font == &workspace.settings.editor_font_family);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            message.get_or_insert_with(|| {
-                "The saved editor font is unavailable, so Qrow is using Menlo.".into()
-            });
+            let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
         }
         if !fonts
             .iter()

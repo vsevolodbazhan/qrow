@@ -37,6 +37,18 @@ const ONE_DARK_THEME_SET: &str = concat!(
     r#"]}"#,
 );
 
+fn reset_configurable_defaults(cx: &mut App) {
+    let defaults = Theme::default();
+    let theme = Theme::global_mut(cx);
+    theme.font_family = defaults.font_family;
+    theme.font_size = defaults.font_size;
+    theme.mono_font_family = defaults.mono_font_family;
+    theme.mono_font_size = defaults.mono_font_size;
+    theme.radius = defaults.radius;
+    theme.radius_lg = defaults.radius_lg;
+    theme.shadow = defaults.shadow;
+}
+
 pub(crate) fn init(cx: &mut App) {
     let registry = ThemeRegistry::global_mut(cx);
     for source in THEME_SET_SOURCES
@@ -75,6 +87,7 @@ pub(crate) fn is_available(name: &str, cx: &App) -> bool {
 
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
     if name == SYSTEM_THEME {
+        reset_configurable_defaults(cx);
         let (light_theme, dark_theme) = {
             let registry = ThemeRegistry::global(cx);
             (
@@ -97,6 +110,7 @@ pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bo
     else {
         return false;
     };
+    reset_configurable_defaults(cx);
     Theme::global_mut(cx).apply_config(&config);
     Theme::change(config.mode, window, cx);
     true
