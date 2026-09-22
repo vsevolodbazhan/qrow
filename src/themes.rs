@@ -1,7 +1,10 @@
-use gpui_kit::component::{Theme, ThemeRegistry, ThemeSet};
+#[cfg(test)]
+use gpui_kit::component::ThemeSet;
+use gpui_kit::component::{Theme, ThemeRegistry};
 use gpui_kit::{App, Window};
+use qrow::model::SYSTEM_THEME;
 
-pub(crate) const SYSTEM_THEME: &str = "System";
+#[cfg(test)]
 pub(crate) const ONE_DARK_THEME: &str = "One Dark";
 
 const THEME_SET_SOURCES: &[&str] = &[
@@ -49,9 +52,9 @@ pub(crate) fn init(cx: &mut App) {
 
 pub(crate) fn options(cx: &App) -> Vec<String> {
     let mut names: Vec<_> = ThemeRegistry::global(cx)
-        .sorted_themes()
-        .into_iter()
-        .filter(|theme| !matches!(theme.name.as_ref(), "Default Light" | "Default Dark"))
+        .themes()
+        .values()
+        .filter(|theme| !theme.is_default)
         .map(|theme| theme.name.to_string())
         .collect();
     names.sort_unstable_by_key(|name| name.to_lowercase());
@@ -63,7 +66,11 @@ pub(crate) fn options(cx: &App) -> Vec<String> {
 }
 
 pub(crate) fn is_available(name: &str, cx: &App) -> bool {
-    name == SYSTEM_THEME || ThemeRegistry::global(cx).themes().contains_key(name)
+    name == SYSTEM_THEME
+        || ThemeRegistry::global(cx)
+            .themes()
+            .get(name)
+            .is_some_and(|theme| !theme.is_default)
 }
 
 pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
@@ -82,7 +89,12 @@ pub(crate) fn apply(name: &str, window: Option<&mut Window>, cx: &mut App) -> bo
         return true;
     }
 
-    let Some(config) = ThemeRegistry::global(cx).themes().get(name).cloned() else {
+    let Some(config) = ThemeRegistry::global(cx)
+        .themes()
+        .get(name)
+        .filter(|theme| !theme.is_default)
+        .cloned()
+    else {
         return false;
     };
     Theme::global_mut(cx).apply_config(&config);

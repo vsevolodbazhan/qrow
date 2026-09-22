@@ -16,7 +16,6 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             themes::init(cx);
-            themes::apply(themes::ONE_DARK_THEME, None, cx);
             // Wide result sets need a persistent, discoverable horizontal scrollbar.
             Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
 
