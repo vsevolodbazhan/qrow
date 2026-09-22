@@ -121,7 +121,9 @@ sizes, and SHA-512 checksums. Verified native downloads are cached under
 `target/e2e-downloads` between local runs. The first run after a dependency
 change still downloads from the public archive service, which can be slow. CI
 uses a checksum-keyed Actions cache for this directory and also preserves
-incomplete download progress for a later run.
+incomplete download progress for a later run. Each native archive transfer has
+a 90-minute limit. The macOS CI job allows 150 minutes so a slow first download
+still leaves time to start the fixture and run the native checks.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
