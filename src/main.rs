@@ -1,8 +1,9 @@
 mod assets;
+mod themes;
 mod ui;
 
 use gpui_kit::component::{
-    Root, Theme, ThemeConfig, ThemeMode, TitleBar,
+    Root, Theme, TitleBar,
     highlighter::{LanguageConfig, LanguageRegistry},
 };
 use gpui_kit::*;
@@ -14,10 +15,8 @@ fn main() {
         .with_assets(assets::Assets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            let theme: ThemeConfig = serde_json::from_str(include_str!("one-dark.json"))
-                .expect("valid bundled One Dark theme");
-            Theme::global_mut(cx).dark_theme = std::rc::Rc::new(theme);
-            Theme::change(ThemeMode::Dark, None, cx);
+            themes::init(cx);
+            themes::apply(themes::ONE_DARK_THEME, None, cx);
             // Wide result sets need a persistent, discoverable horizontal scrollbar.
             Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
 
