@@ -539,7 +539,9 @@ final class Driver {
     // that the control and its binding are both checked.
     func settingValue(_ label: String) -> String? {
         let control = elements().first {
-            [kAXTextFieldRole, kAXComboBoxRole].contains(attribute($0, kAXRoleAttribute) as? String ?? "")
+            [kAXTextFieldRole, kAXComboBoxRole, kAXPopUpButtonRole].contains(
+                attribute($0, kAXRoleAttribute) as? String ?? ""
+            )
                 && strings($0).contains(label)
         }
         return control.flatMap { attribute($0, kAXValueAttribute) as? String }
