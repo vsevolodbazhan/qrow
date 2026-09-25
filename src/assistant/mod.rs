@@ -2,6 +2,8 @@
 
 pub mod broker;
 mod codex;
+pub mod service;
+pub mod tools;
 
 pub use codex::CodexHarness;
 

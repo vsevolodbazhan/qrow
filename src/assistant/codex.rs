@@ -48,6 +48,14 @@ pub struct CodexHarness {
 
 impl CodexHarness {
     pub fn launch(executable: impl AsRef<OsStr>, cwd: &Path) -> Result<Self> {
+        Self::launch_with_pid(executable, cwd, |_| {})
+    }
+
+    pub(crate) fn launch_with_pid(
+        executable: impl AsRef<OsStr>,
+        cwd: &Path,
+        on_spawn: impl FnOnce(u32),
+    ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Codex working directory does not exist");
         let mut command = Command::new(executable);
         command
@@ -93,6 +101,7 @@ impl CodexHarness {
             .spawn()
             .context("Could not start Codex app-server")?;
         let mut child = LaunchChild::new(child);
+        on_spawn(child.child_mut().id());
         let stdin = child
             .child_mut()
             .stdin
@@ -573,23 +582,53 @@ fn read_stderr_tail(mut stderr: impl Read, tail: &Mutex<VecDeque<u8>>) {
 
 #[cfg(unix)]
 fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
-    let group = format!("-{}", child.id());
-    let status = Command::new("/bin/kill")
-        .args(["-KILL", "--", &group])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    if status.is_ok_and(|status| status.success()) || child.try_wait()?.is_some() {
+    if terminate_process_group(child.id()).is_ok() || child.try_wait()?.is_some() {
         Ok(())
     } else {
         child.kill()
     }
 }
 
+#[cfg(unix)]
+pub(crate) fn terminate_process_group(pid: u32) -> std::io::Result<()> {
+    if pid <= 1 {
+        return Err(std::io::Error::other("invalid Codex process identifier"));
+    }
+    let group = format!("-{pid}");
+    let status = Command::new("/bin/kill")
+        .args(["-KILL", "--", &group])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("could not stop Codex process group"))
+    }
+}
+
 #[cfg(not(unix))]
 fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
     child.kill()
+}
+
+#[cfg(windows)]
+pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
+    if pid == 0 {
+        return Err(std::io::Error::other("invalid Codex process identifier"));
+    }
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("could not stop Codex process tree"))
+    }
 }
 
 impl AssistantHarness for CodexHarness {
