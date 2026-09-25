@@ -428,6 +428,8 @@ final class Driver {
         try press("Run")
     }
     func testActivityRetention() throws {
+        try press("Logs Panel")
+        try press("Clear Logs History")
         for index in 0...100 {
             let value = "retention-\(index)"
             try query("SELECT '\(value)' AS value")
@@ -460,6 +462,10 @@ final class Driver {
         try require(
             copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
             "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
+        )
+        try require(
+            !copied.contains("reconnect-works"),
+            "Logs retained activity from before the retention scenario"
         )
         // Copy All focuses its toolbar button; reset the viewport after that
         // interaction so the screenshot shows the start of retained history.
