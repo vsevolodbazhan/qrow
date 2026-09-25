@@ -639,7 +639,7 @@ final class Driver {
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
         try activate(try waitExact("Close", role: kAXButtonRole))
-        try waitGone("Assistant model")
+        try waitGone("Assistant conversation")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
     func test() throws {
