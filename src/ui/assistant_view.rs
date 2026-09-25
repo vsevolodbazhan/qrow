@@ -2,14 +2,14 @@ use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
-    Icon, Selectable,
+    Selectable,
     bubble::{Bubble, BubbleVariant},
     button::DropdownButton,
     h_flex,
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
     message::{Message, MessageAlignment, MessageContent},
-    select::{SearchableVec, Select, SelectEvent, SelectState},
+    select::{SearchableVec, SelectEvent, SelectState},
     text::{TextView, TextViewStyle},
     v_flex,
 };
@@ -83,7 +83,7 @@ fn reasoning_effort_label(id: &str) -> String {
 }
 
 fn assistant_select_width(label: &str) -> f32 {
-    36. + label.chars().count() as f32 * 8.
+    56. + label.chars().count() as f32 * 8.
 }
 
 fn assistant_selector_labels(available: f32, widths: [f32; 3]) -> [bool; 3] {
@@ -1682,24 +1682,83 @@ impl Qrow {
                 .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
                 .or_else(|| snapshot.models().first())
         });
-        let model_width = self
+        let model_label = self
             .assistant_panel
             .model_select
             .read(cx)
             .selected_value()
-            .map_or(36., |label| assistant_select_width(label));
-        let reasoning_width = self
+            .cloned()
+            .unwrap_or_default();
+        let reasoning_label = self
             .assistant_panel
             .reasoning_select
             .read(cx)
             .selected_value()
-            .map_or(36., |label| assistant_select_width(label));
-        let tier_width = self
+            .cloned()
+            .unwrap_or_default();
+        let tier_label = self
             .assistant_panel
             .tier_select
             .read(cx)
             .selected_value()
-            .map_or(36., |label| assistant_select_width(label));
+            .cloned()
+            .unwrap_or_default();
+        let model_width = assistant_select_width(&model_label);
+        let reasoning_width = assistant_select_width(&reasoning_label);
+        let tier_width = assistant_select_width(&tier_label);
+        let model_options = self
+            .assistant_panel
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                let default_model = snapshot
+                    .models()
+                    .iter()
+                    .find(|candidate| candidate.is_default())
+                    .or_else(|| snapshot.models().first());
+                let mut options = vec![(
+                    default_model.map_or_else(
+                        || "Default".to_owned(),
+                        |candidate| format!("Default · {}", candidate.display_name()),
+                    ),
+                    self.settings.assistant.model.is_none(),
+                )];
+                options.extend(snapshot.models().iter().map(|candidate| {
+                    (
+                        candidate.display_name().to_owned(),
+                        self.settings.assistant.model.as_deref() == Some(candidate.id()),
+                    )
+                }));
+                options
+            })
+            .unwrap_or_default();
+        let reasoning_options = model
+            .map(|model| {
+                model
+                    .reasoning_efforts()
+                    .iter()
+                    .map(|effort| {
+                        let label = reasoning_effort_label(effort.id());
+                        let selected = label == reasoning_label;
+                        (label, selected)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let tier_options = model
+            .map(|model| {
+                model
+                    .service_tiers()
+                    .iter()
+                    .map(|tier| {
+                        let label = tier.name().to_owned();
+                        let selected = label == tier_label;
+                        (label, selected)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let assistant_entity = cx.entity();
         let conversation_width = width.as_f32() / self.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
         let [show_model_label, show_reasoning_label, show_tier_label] =
@@ -2079,35 +2138,68 @@ impl Qrow {
                                     .min_w_0()
                                     .gap_1()
                                     .when(model.is_some(), |row| row.child(
-                                        div().w(self.ui_px(if show_model_label { model_width } else { 36. }))
-                                            .h(action_size).min_w_0().flex().items_center()
-                                            .child(div().w_full().h(self.ui_px(24.)).child(
-                                                Select::new(&self.assistant_panel.model_select)
-                                                    .small().appearance(false)
-                                                    .icon(Icon::new(AssetIconName::Cpu))
-                                                    .menu_width(self.ui_px(model_width.max(180.)))
-                                                    .w_full().min_w_0()
-                                                    .accessibility_label("Assistant model")))))
+                                        Button::new("assistant-model")
+                                            .ghost().small().compact()
+                                            .icon(AssetIconName::Cpu)
+                                            .accessibility_label(format!("Assistant model: {model_label}"))
+                                            .tooltip(format!("Model: {model_label}"))
+                                            .when(show_model_label, |button| button.label(model_label.clone()).dropdown_caret(true))
+                                            .dropdown_menu({
+                                                let assistant_entity = assistant_entity.clone();
+                                                move |menu, _, _| model_options.iter().fold(menu, |menu, (label, selected)| {
+                                                    let label = label.clone();
+                                                    let assistant_entity = assistant_entity.clone();
+                                                    menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
+                                                        move |_, window, cx| {
+                                                            assistant_entity.update(cx, |this, cx| {
+                                                                this.select_assistant_model(&label, window, cx);
+                                                            });
+                                                        },
+                                                    ))
+                                                })
+                                            })))
                                     .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                        div().w(self.ui_px(if show_reasoning_label { reasoning_width } else { 36. }))
-                                            .h(action_size).min_w_0().flex().items_center()
-                                            .child(div().w_full().h(self.ui_px(24.)).child(
-                                                Select::new(&self.assistant_panel.reasoning_select)
-                                                    .small().appearance(false)
-                                                    .icon(Icon::new(AssetIconName::Brain))
-                                                    .menu_width(self.ui_px(reasoning_width.max(120.)))
-                                                    .w_full().min_w_0()
-                                                    .accessibility_label("Assistant reasoning")))))
+                                        Button::new("assistant-reasoning")
+                                            .ghost().small().compact()
+                                            .icon(AssetIconName::Brain)
+                                            .accessibility_label(format!("Assistant reasoning: {reasoning_label}"))
+                                            .tooltip(format!("Reasoning: {reasoning_label}"))
+                                            .when(show_reasoning_label, |button| button.label(reasoning_label.clone()).dropdown_caret(true))
+                                            .dropdown_menu({
+                                                let assistant_entity = assistant_entity.clone();
+                                                move |menu, _, _| reasoning_options.iter().fold(menu, |menu, (label, selected)| {
+                                                    let label = label.clone();
+                                                    let assistant_entity = assistant_entity.clone();
+                                                    menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
+                                                        move |_, _, cx| {
+                                                            assistant_entity.update(cx, |this, cx| {
+                                                                this.select_assistant_reasoning(&label, cx);
+                                                            });
+                                                        },
+                                                    ))
+                                                })
+                                            })))
                                     .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                        div().w(self.ui_px(if show_tier_label { tier_width } else { 36. }))
-                                            .h(action_size).min_w_0().flex().items_center()
-                                            .child(div().w_full().h(self.ui_px(24.)).child(
-                                                Select::new(&self.assistant_panel.tier_select)
-                                                    .small().appearance(false)
-                                                    .icon(Icon::new(AssetIconName::Gauge))
-                                                    .menu_width(self.ui_px(tier_width.max(120.)))
-                                                    .w_full().min_w_0()
-                                                    .accessibility_label("Assistant service tier"))))),
+                                        Button::new("assistant-tier")
+                                            .ghost().small().compact()
+                                            .icon(AssetIconName::Gauge)
+                                            .accessibility_label(format!("Assistant service tier: {tier_label}"))
+                                            .tooltip(format!("Service tier: {tier_label}"))
+                                            .when(show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
+                                            .dropdown_menu({
+                                                let assistant_entity = assistant_entity.clone();
+                                                move |menu, _, _| tier_options.iter().fold(menu, |menu, (label, selected)| {
+                                                    let label = label.clone();
+                                                    let assistant_entity = assistant_entity.clone();
+                                                    menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
+                                                        move |_, _, cx| {
+                                                            assistant_entity.update(cx, |this, cx| {
+                                                                this.select_assistant_tier(&label, cx);
+                                                            });
+                                                        },
+                                                    ))
+                                                })
+                                            }))),
                             )
                             .child(div().flex_1())
                             .child(
