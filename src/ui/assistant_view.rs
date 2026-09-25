@@ -364,18 +364,18 @@ impl AssistantPanelState {
             cx.subscribe_in(
                 &reasoning_select,
                 window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                     if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_reasoning(label, cx);
+                        this.select_assistant_reasoning(label, window, cx);
                     }
                 },
             ),
             cx.subscribe_in(
                 &tier_select,
                 window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                     if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_tier(label, cx);
+                        this.select_assistant_tier(label, window, cx);
                     }
                 },
             ),
@@ -706,7 +706,8 @@ impl Qrow {
                 Some("Saved service tier is unavailable. Codex default is in use.".into());
             self.changed(cx);
         }
-        let tier_labels: Vec<_> = tiers.iter().map(|tier| tier.name().to_owned()).collect();
+        let mut tier_labels = vec!["Default".to_owned()];
+        tier_labels.extend(tiers.iter().map(|tier| tier.name().to_owned()));
         let selected_tier = self
             .settings
             .assistant
@@ -714,17 +715,10 @@ impl Qrow {
             .as_ref()
             .and_then(|id| tiers.iter().find(|tier| tier.id() == id))
             .map(|tier| tier.name().to_owned())
-            .or_else(|| {
-                model
-                    .and_then(|model| model.default_service_tier())
-                    .and_then(|id| tiers.iter().find(|tier| tier.id() == id))
-                    .map(|tier| tier.name().to_owned())
-            });
+            .unwrap_or_else(|| "Default".to_owned());
         self.assistant_panel.tier_select.update(cx, |state, cx| {
             state.set_items(SearchableVec::new(tier_labels), window, cx);
-            if let Some(selected) = selected_tier {
-                state.set_selected_value(&selected, window, cx);
-            }
+            state.set_selected_value(&selected_tier, window, cx);
         });
     }
 
@@ -762,7 +756,12 @@ impl Qrow {
         self.changed(cx);
     }
 
-    fn select_assistant_reasoning(&mut self, label: &str, cx: &mut Context<Self>) {
+    fn select_assistant_reasoning(
+        &mut self,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.settings.assistant.reasoning_effort = self
             .assistant_panel
             .snapshot
@@ -783,29 +782,41 @@ impl Qrow {
                     .find(|effort| reasoning_effort_label(effort.id()) == label)
             })
             .map(|effort| effort.id().to_owned());
+        self.sync_assistant_selectors(window, cx);
         self.changed(cx);
     }
 
-    fn select_assistant_tier(&mut self, label: &str, cx: &mut Context<Self>) {
-        let tier = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
-            let model = self
-                .settings
-                .assistant
-                .model
-                .as_deref()
-                .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
-                .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
-                .or_else(|| snapshot.models().first())?;
-            model
-                .service_tiers()
-                .iter()
-                .find(|tier| tier.name() == label)
-                .map(|tier| tier.id().to_owned())
-        });
-        if tier.is_some() {
-            self.settings.assistant.service_tier = tier;
-            self.changed(cx);
-        }
+    fn select_assistant_tier(
+        &mut self,
+        label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tier = if label == "Default" {
+            None
+        } else {
+            let Some(tier) = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
+                let model = self
+                    .settings
+                    .assistant
+                    .model
+                    .as_deref()
+                    .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
+                    .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
+                    .or_else(|| snapshot.models().first())?;
+                model
+                    .service_tiers()
+                    .iter()
+                    .find(|tier| tier.name() == label)
+                    .map(|tier| tier.id().to_owned())
+            }) else {
+                return;
+            };
+            Some(tier)
+        };
+        self.settings.assistant.service_tier = tier;
+        self.sync_assistant_selectors(window, cx);
+        self.changed(cx);
     }
     pub(super) fn toggle_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.settings.assistant.enabled {
@@ -1747,15 +1758,17 @@ impl Qrow {
             .unwrap_or_default();
         let tier_options = model
             .map(|model| {
-                model
-                    .service_tiers()
-                    .iter()
-                    .map(|tier| {
-                        let label = tier.name().to_owned();
-                        let selected = label == tier_label;
-                        (label, selected)
-                    })
-                    .collect::<Vec<_>>()
+                let mut options = vec![(
+                    "Default".to_owned(),
+                    self.settings.assistant.service_tier.is_none(),
+                )];
+                options.extend(model.service_tiers().iter().map(|tier| {
+                    (
+                        tier.name().to_owned(),
+                        self.settings.assistant.service_tier.as_deref() == Some(tier.id()),
+                    )
+                }));
+                options
             })
             .unwrap_or_default();
         let assistant_entity = cx.entity();
@@ -2171,9 +2184,9 @@ impl Qrow {
                                                     let label = label.clone();
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
-                                                        move |_, _, cx| {
+                                                        move |_, window, cx| {
                                                             assistant_entity.update(cx, |this, cx| {
-                                                                this.select_assistant_reasoning(&label, cx);
+                                                                this.select_assistant_reasoning(&label, window, cx);
                                                             });
                                                         },
                                                     ))
@@ -2192,9 +2205,9 @@ impl Qrow {
                                                     let label = label.clone();
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
-                                                        move |_, _, cx| {
+                                                        move |_, window, cx| {
                                                             assistant_entity.update(cx, |this, cx| {
-                                                                this.select_assistant_tier(&label, cx);
+                                                                this.select_assistant_tier(&label, window, cx);
                                                             });
                                                         },
                                                     ))

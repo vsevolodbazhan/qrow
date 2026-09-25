@@ -62,9 +62,10 @@ before running** or **Run automatically** from its menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
 and service tier below the message field. Codex supplies
 the available choices. Qrow shows the model's default reasoning level as the
-selected level. The controls show icons when the pane is narrow. Your change
-applies to the next message. If a saved choice is no longer available, Qrow
-uses a Codex default and shows a notice.
+selected level. Select **Default** for service tier to use the tier that Codex
+chooses. The controls show icons when the pane is narrow. Your change applies
+to the next message. If a saved choice is no longer available, Qrow uses a
+Codex default and shows a notice.
 
 ## Pane and connection state
 
