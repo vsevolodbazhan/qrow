@@ -34,6 +34,7 @@ security-framework = "3"
 proptest = "=1.11.0"
 
 [profile.release]
+opt-level = "s"
 lto = "thin"
 strip = true
 

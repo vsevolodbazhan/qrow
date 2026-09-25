@@ -25,6 +25,7 @@ const MAX_PROTOCOL_LINE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_MESSAGES: usize = 1_024;
 const MAX_MODEL_PAGES: usize = 100;
 const HISTORY_PAGE_SIZE: usize = 100;
+const MAX_HISTORY_PAGES_PER_READ: usize = 10;
 const MAX_HISTORY_CURSOR_BYTES: usize = 4096;
 const MAX_STDERR_BYTES: usize = 16 * 1024;
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(200);
@@ -62,27 +63,39 @@ impl CodexHarness {
                 "Invalid conversation cursor"
             );
         }
-        let response: ItemsPageResponse = self.request(
-            "thread/items/list",
-            json!({
-                "threadId": thread_id, "cursor": cursor, "limit": HISTORY_PAGE_SIZE,
-                "sortDirection": "desc"
-            }),
-        )?;
-        anyhow::ensure!(
-            response
-                .next_cursor
-                .as_ref()
-                .is_none_or(|next| !next.is_empty()
-                    && next.len() <= MAX_HISTORY_CURSOR_BYTES
-                    && Some(next.as_str()) != cursor),
-            "Codex returned an invalid conversation cursor"
-        );
-        let mut turns: Vec<HistoryTurn> = Vec::new();
-        for entry in response.data.into_iter().rev() {
-            if history_item_text(&entry.item).is_none() {
-                continue;
+        let mut cursor = cursor.map(str::to_owned);
+        let mut seen = BTreeSet::new();
+        let mut descending = Vec::new();
+        for _ in 0..MAX_HISTORY_PAGES_PER_READ {
+            let response: ItemsPageResponse = self.request(
+                "thread/items/list",
+                json!({
+                    "threadId": thread_id, "cursor": cursor, "limit": HISTORY_PAGE_SIZE,
+                    "sortDirection": "desc"
+                }),
+            )?;
+            anyhow::ensure!(
+                response
+                    .next_cursor
+                    .as_ref()
+                    .is_none_or(|next| !next.is_empty()
+                        && next.len() <= MAX_HISTORY_CURSOR_BYTES
+                        && Some(next) != cursor.as_ref()
+                        && seen.insert(next.clone())),
+                "Codex returned an invalid conversation cursor"
+            );
+            let visible = response
+                .data
+                .iter()
+                .any(|entry| history_item_text(&entry.item).is_some());
+            descending.extend(response.data);
+            cursor = response.next_cursor;
+            if visible || cursor.is_none() {
+                break;
             }
+        }
+        let mut turns: Vec<HistoryTurn> = Vec::new();
+        for entry in descending.into_iter().rev() {
             if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id) {
                 turn.items.push(entry.item);
             } else {
@@ -96,7 +109,7 @@ impl CodexHarness {
         Ok(ConversationPage {
             thread_id: thread_id.to_owned(),
             turns,
-            older_cursor: response.next_cursor,
+            older_cursor: cursor,
         })
     }
     pub fn launch(executable: impl AsRef<OsStr>, cwd: &Path) -> Result<Self> {
@@ -770,7 +783,7 @@ impl AssistantHarness for CodexHarness {
             .turns
             .iter()
             .any(|turn| turn.items_view != "full");
-        let turns = response
+        let mut turns: Vec<HistoryTurn> = response
             .thread
             .turns
             .iter()
@@ -781,13 +794,27 @@ impl AssistantHarness for CodexHarness {
             })
             .collect();
         let page = if paginated {
-            Some(self.read_items_page(thread_id, None)?)
+            let page = self.read_items_page(thread_id, None)?;
+            for page_turn in &page.turns {
+                if let Some((index, turn)) = turns
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(_, turn)| turn.id == page_turn.id)
+                {
+                    if response.thread.turns[index].items_view != "full" {
+                        turn.items = page_turn.items.clone();
+                    }
+                } else {
+                    turns.push(page_turn.clone());
+                }
+            }
+            Some(page)
         } else {
             None
         };
         Ok(ConversationHistory {
             conversation: response.thread.into(),
-            turns: page.as_ref().map_or(turns, |page| page.turns.clone()),
+            turns,
             older_cursor: page.and_then(|page| page.older_cursor),
         })
     }
@@ -1739,5 +1766,44 @@ done
             history_item_text(&older.turns[0].items[0]),
             Some(("user", "Older".into()))
         );
+        assert!(harness.read_older_conversation("thread-1", "").is_err());
+        assert!(
+            harness
+                .read_older_conversation("thread-1", &"x".repeat(MAX_HISTORY_CURSOR_BYTES + 1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paginated_history_keeps_full_turns_and_skips_tool_only_page() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"thread/read"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-1","name":"Query","updatedAt":1,"turns":[{"id":"turn-full","status":"completed","items":[{"type":"userMessage","content":[{"type":"text","text":"full"}]}]},{"id":"turn-partial","status":"completed","items":[],"itemsView":"notLoaded"}]}}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*'"cursor":"middle"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-partial","item":{"type":"agentMessage","text":"visible"}}],"nextCursor":"older"}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-partial","item":{"type":"reasoning","summary":[]}}],"nextCursor":"middle"}}\n' "$id" ;;
+  esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+        let history = harness.read_conversation("thread-1").unwrap();
+        assert_eq!(history.turns.len(), 2);
+        assert_eq!(history.turns[0].status, "completed");
+        assert_eq!(
+            history_item_text(&history.turns[0].items[0]).unwrap().1,
+            "full"
+        );
+        assert_eq!(
+            history_item_text(&history.turns[1].items[0]).unwrap().1,
+            "visible"
+        );
+        assert_eq!(history.older_cursor.as_deref(), Some("older"));
     }
 }

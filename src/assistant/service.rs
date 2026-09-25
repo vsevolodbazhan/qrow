@@ -426,6 +426,7 @@ while IFS= read -r line; do
     *'"method":"account/read"'*) printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$id" ;;
     *'"method":"model/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$id" ;;
     *'"method":"thread/start"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-1","name":null,"updatedAt":1,"turns":[]}}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-older","item":{"type":"userMessage","content":[{"type":"text","text":"Older"}]}}],"nextCursor":null}}\n' "$id" ;;
     *'"method":"thread/delete"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
   esac
 done
@@ -445,6 +446,15 @@ done
             matches!(service.events.recv_timeout(Duration::from_secs(5)).unwrap(), Event::Created(Conversation { id, .. }) if id == "thread-1")
         );
         service
+            .send(Command::ReadOlder {
+                thread_id: "thread-1".into(),
+                cursor: "older".into(),
+            })
+            .unwrap();
+        assert!(
+            matches!(service.events.recv_timeout(Duration::from_secs(5)).unwrap(), Event::HistoryPage(ConversationPage { thread_id, turns, older_cursor: None }) if thread_id == "thread-1" && turns.len() == 1)
+        );
+        service
             .shutdown_and_delete(vec!["thread-1".into()], Duration::from_secs(3))
             .unwrap();
         let requests = fs::read_to_string(executable.with_extension("log")).unwrap();
@@ -454,6 +464,35 @@ done
                 .shutdown_and_delete(vec!["thread-2".into()], Duration::from_millis(1))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn demo_cleanup_reports_codex_delete_error() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        fs::write(&executable, r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"account/read"'*) printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$id" ;;
+    *'"method":"model/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$id" ;;
+    *'"method":"thread/delete"'*) printf '{"id":%s,"error":{"code":-1,"message":"synthetic refusal"}}\n' "$id" ;;
+  esac
+done
+"#).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
+        assert!(matches!(
+            service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Ready(_)
+        ));
+        let error = service
+            .shutdown_and_delete(vec!["thread-1".into()], Duration::from_secs(3))
+            .unwrap_err();
+        assert!(error.to_string().contains("synthetic refusal"));
     }
 
     #[test]
