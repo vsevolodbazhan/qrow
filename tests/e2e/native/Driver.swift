@@ -672,6 +672,7 @@ final class Driver {
         _ = try wait("Jump to latest", timeout: 5)
         try fill("Assistant message", "Return to the latest message")
         try press("Send")
+        _ = try wait("Assistant is working", timeout: 5)
         try waitGone("Jump to latest", timeout: 5)
         try press("Toggle Assistant")
         try waitGone("Toggle conversation list")

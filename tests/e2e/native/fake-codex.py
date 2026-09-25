@@ -3,6 +3,7 @@
 
 import json
 import sys
+import time
 
 THREAD = "synthetic-thread-1"
 turn_number = 0
@@ -97,6 +98,8 @@ for line in sys.stdin:
                 },
             }
         )
+        if message.startswith("Return to the latest message"):
+            time.sleep(1)
         if message.startswith("Write SELECT 1"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]

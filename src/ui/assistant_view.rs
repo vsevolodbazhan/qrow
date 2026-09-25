@@ -510,6 +510,15 @@ impl Qrow {
         let scroll = &self.assistant_panel.scroll;
         scroll.offset().y + scroll.max_offset().y <= self.ui_px(32.)
     }
+
+    fn scroll_assistant_to_bottom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.assistant_panel.scroll.scroll_to_bottom();
+        cx.on_next_frame(window, |this, _, cx| {
+            this.assistant_panel.scroll.scroll_to_bottom();
+            cx.notify();
+        });
+    }
+
     fn begin_assistant_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(conversation) = self.assistant.conversations.iter().find(|conversation| {
             Some(&conversation.thread_id) == self.assistant.selected_thread.as_ref()
@@ -731,7 +740,7 @@ impl Qrow {
         if self.assistant_panel.thread_list_override == Some(true) {
             self.assistant_panel.thread_list_override = Some(false);
         }
-        self.assistant_panel.scroll.scroll_to_bottom();
+        self.scroll_assistant_to_bottom(window, cx);
         self.changed(cx);
     }
 
@@ -1046,7 +1055,7 @@ impl Qrow {
         self.assistant_panel
             .composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.assistant_panel.scroll.scroll_to_bottom();
+        self.scroll_assistant_to_bottom(window, cx);
         cx.notify();
     }
 
@@ -1239,7 +1248,7 @@ impl Qrow {
                 let previous_count = entries.len();
                 merge_history(entries, history.turns);
                 if selected && entries.len() > previous_count {
-                    self.assistant_panel.scroll.scroll_to_bottom();
+                    self.scroll_assistant_to_bottom(window, cx);
                 }
             }
             AssistantServiceEvent::HistoryPage(page) => {
@@ -1293,6 +1302,7 @@ impl Qrow {
                     if let Some(target) = &mut self.assistant_panel.target {
                         target.turn_id = turn.id;
                     }
+                    self.scroll_assistant_to_bottom(window, cx);
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::MessageDelta {
@@ -1321,7 +1331,11 @@ impl Qrow {
                     true
                 };
                 if selected && (new_message || self.assistant_transcript_near_bottom()) {
-                    self.assistant_panel.scroll.scroll_to_bottom();
+                    if new_message {
+                        self.scroll_assistant_to_bottom(window, cx);
+                    } else {
+                        self.assistant_panel.scroll.scroll_to_bottom();
+                    }
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TurnCompleted {
