@@ -647,7 +647,7 @@ impl Qrow {
             .as_deref()
             .and_then(|id| models.iter().find(|model| model.id() == id))
             .or(default_model);
-        let model_labels = models
+        let model_labels: Vec<_> = models
             .iter()
             .map(|model| model.display_name().to_owned())
             .collect();
