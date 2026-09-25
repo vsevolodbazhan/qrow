@@ -122,13 +122,15 @@ sizes, and SHA-512 checksums. Verified native downloads are cached under
 change still downloads from the public archive service, which can be slow. CI
 uses a checksum-keyed Actions cache for this directory and also preserves
 incomplete download progress for a later run. Each native archive transfer has
-a 90-minute limit. The macOS CI job allows 150 minutes so a slow first download
+a 2-hour limit. The macOS CI job allows 150 minutes so a slow first download
 still leaves time to start the fixture and run the native checks.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
 and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
+The driver resizes and centers the Qrow window on the main display if the window
+does not fit. The display must support the app's minimum window size.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
 ends when the New Connection control becomes accessible. This does not measure
