@@ -1969,13 +1969,14 @@ impl Qrow {
                                 .w_full()
                                 .aria_label("Assistant message")),
                     )
-                    .when(model.is_some(), |composer| composer.child(
+                    .child(
                         h_flex().min_w_0().gap_1()
-                            .child(div().id("assistant-model-tooltip").flex_1().min_w_0()
-                                .tooltip(|window, cx| Tooltip::new("Model").build(window, cx))
-                                .child(Select::new(&self.assistant_panel.model_select)
-                                    .small().appearance(false).w_full().min_w_0()
-                                    .accessibility_label("Assistant model")))
+                            .when(model.is_some(), |row| row.child(
+                                div().id("assistant-model-tooltip").flex_1().min_w_0()
+                                    .tooltip(|window, cx| Tooltip::new("Model").build(window, cx))
+                                    .child(Select::new(&self.assistant_panel.model_select)
+                                        .small().appearance(false).w_full().min_w_0()
+                                        .accessibility_label("Assistant model"))))
                             .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
                                 div().id("assistant-reasoning-tooltip").flex_1().min_w_0()
                                     .tooltip(|window, cx| Tooltip::new("Reasoning").build(window, cx))
@@ -1988,11 +1989,7 @@ impl Qrow {
                                     .child(Select::new(&self.assistant_panel.tier_select)
                                         .small().appearance(false).w_full().min_w_0()
                                         .accessibility_label("Assistant service tier"))))
-                    ))
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_1()
+                            .when(model.is_none(), |row| row.child(div().flex_1()))
                             .child(
                                 Select::new(&self.assistant_panel.mode_select)
                                     .small()
@@ -2002,7 +1999,6 @@ impl Qrow {
                                     .disabled(self.assistant.selected_thread.is_none())
                                     .accessibility_label("Assistant query approval mode"),
                             )
-                            .child(div().flex_1())
                             .child(
                                 Button::new("assistant-send")
                                     .small()
