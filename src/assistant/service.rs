@@ -10,7 +10,7 @@ use super::{
 use std::{
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
         mpsc,
     },
@@ -100,6 +100,7 @@ impl Command {
 #[derive(Debug)]
 pub enum Event {
     Ready(HarnessSnapshot),
+    Snapshot(HarnessSnapshot),
     LoginUrl(String),
     Created(Conversation),
     Resumed(Conversation),
@@ -129,6 +130,7 @@ pub struct Service {
     pid: Arc<AtomicU32>,
     done: mpsc::Receiver<()>,
     stopped: bool,
+    cleanup_ids: Arc<Mutex<Vec<String>>>,
 }
 
 struct DoneSignal(mpsc::Sender<()>);
@@ -145,8 +147,10 @@ impl Service {
         let (done_tx, done) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
         let pid = Arc::new(AtomicU32::new(0));
+        let cleanup_ids = Arc::new(Mutex::new(Vec::<String>::new()));
         let thread_stopping = Arc::clone(&stopping);
         let thread_pid = Arc::clone(&pid);
+        let thread_cleanup_ids = Arc::clone(&cleanup_ids);
         thread::Builder::new()
             .name("qrow-assistant".into())
             .spawn(move || {
@@ -236,6 +240,11 @@ impl Service {
                         }
                     }
                 }
+                if let Ok(mut ids) = thread_cleanup_ids.lock() {
+                    for id in ids.drain(..) {
+                        let _ = harness.delete_conversation(&id);
+                    }
+                }
                 if let Err(error) = harness.shutdown() {
                     let _ = emit(Event::Disconnected(format!(
                         "Could not stop Codex: {error}"
@@ -249,6 +258,7 @@ impl Service {
             pid,
             done,
             stopped: false,
+            cleanup_ids,
         })
     }
 
@@ -268,7 +278,7 @@ impl Service {
         self.stopped = true;
         self.stopping.store(true, Ordering::Release);
         let _ = self.commands.try_send(Command::Shutdown);
-        if self.done.recv_timeout(timeout / 4).is_ok() {
+        if self.done.recv_timeout(timeout - timeout / 4).is_ok() {
             return Ok(());
         }
         #[cfg(unix)]
@@ -286,8 +296,19 @@ impl Service {
             }
         }
         self.done
-            .recv_timeout(timeout - timeout / 4)
+            .recv_timeout(timeout / 4)
             .map_err(|_| std::io::Error::other("Codex assistant did not stop"))
+    }
+
+    pub fn shutdown_and_delete(
+        &mut self,
+        ids: Vec<String>,
+        timeout: Duration,
+    ) -> std::io::Result<()> {
+        if let Ok(mut cleanup) = self.cleanup_ids.lock() {
+            *cleanup = ids;
+        }
+        self.shutdown_and_wait(timeout)
     }
 }
 
@@ -302,7 +323,7 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
     let id = command.identifier();
     let result = match command {
         Command::Login => harness.begin_login().map(Event::LoginUrl),
-        Command::Refresh => harness.snapshot().map(Event::Ready),
+        Command::Refresh => harness.snapshot().map(Event::Snapshot),
         Command::Create(tools) => harness.create_conversation(&tools).map(Event::Created),
         Command::Resume(id) => harness.resume_conversation(&id).map(Event::Resumed),
         Command::Read(id) => harness.read_conversation(&id).map(Event::History),
@@ -354,19 +375,21 @@ mod tests {
         let executable = directory.path().join("fake-codex");
         fs::write(&executable, r#"#!/bin/sh
 while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$0.log"
   id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
   case "$line" in
     *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
     *'"method":"account/read"'*) printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$id" ;;
     *'"method":"model/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$id" ;;
     *'"method":"thread/start"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-1","name":null,"updatedAt":1,"turns":[]}}}\n' "$id" ;;
+    *'"method":"thread/delete"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
   esac
 done
 "#).unwrap();
         let mut permissions = fs::metadata(&executable).unwrap().permissions();
         permissions.set_mode(0o700);
         fs::set_permissions(&executable, permissions).unwrap();
-        let service = Service::launch(executable, Arc::new(|| {})).unwrap();
+        let mut service = Service::launch(executable.clone(), Arc::new(|| {})).unwrap();
         assert!(matches!(
             service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
             Event::Ready(_)
@@ -377,6 +400,10 @@ done
         assert!(
             matches!(service.events.recv_timeout(Duration::from_secs(5)).unwrap(), Event::Created(Conversation { id, .. }) if id == "thread-1")
         );
-        service.send(Command::Shutdown).unwrap();
+        service
+            .shutdown_and_delete(vec!["thread-1".into()], Duration::from_secs(3))
+            .unwrap();
+        let requests = fs::read_to_string(executable.with_extension("log")).unwrap();
+        assert!(requests.contains("\"method\":\"thread/delete\""));
     }
 }

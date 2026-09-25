@@ -179,6 +179,28 @@ pub struct HistoryTurn {
     pub items: Vec<Value>,
 }
 
+/// Text shown for a Codex history item. Non-text attachments stay outside Qrow's transcript.
+pub fn history_item_text(item: &Value) -> Option<(&'static str, String)> {
+    match item.get("type")?.as_str()? {
+        "userMessage" => {
+            let text = item
+                .get("content")?
+                .as_array()?
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(("user", text))
+        }
+        "agentMessage" => item
+            .get("text")?
+            .as_str()
+            .map(|text| ("assistant", text.to_owned())),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TurnRequest {
     pub thread_id: String,
@@ -236,4 +258,30 @@ pub enum AssistantEvent {
         method: String,
         params: Value,
     },
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn reads_text_from_codex_history_shapes() {
+        assert_eq!(
+            history_item_text(
+                &json!({"type":"userMessage","content":[{"type":"text","text":"SELECT 1"}]})
+            ),
+            Some(("user", "SELECT 1".into()))
+        );
+        assert_eq!(
+            history_item_text(&json!({"type":"agentMessage","text":"Done"})),
+            Some(("assistant", "Done".into()))
+        );
+        assert_eq!(
+            history_item_text(
+                &json!({"type":"userMessage","content":[{"type":"image","url":"test"}]})
+            ),
+            None
+        );
+    }
 }

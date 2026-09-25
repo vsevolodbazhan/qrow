@@ -864,8 +864,8 @@ impl AssistantHarness for CodexHarness {
         let checks = SHUTDOWN_GRACE_PERIOD.as_millis() / 10;
         for _ in 0..checks {
             if self.child.try_wait()?.is_some() {
-                (self.pid_update)(0);
                 self.join_readers();
+                (self.pid_update)(0);
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(10));
@@ -874,8 +874,8 @@ impl AssistantHarness for CodexHarness {
         self.child
             .wait()
             .context("Could not wait for Codex app-server")?;
-        (self.pid_update)(0);
         self.join_readers();
+        (self.pid_update)(0);
         Ok(())
     }
 }
