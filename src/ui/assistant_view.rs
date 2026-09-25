@@ -1978,23 +1978,24 @@ impl Qrow {
                         h_flex().min_w_0().gap_1()
                             .child(
                                 h_flex()
-                                    .w(self.ui_px(390.))
-                                    .max_w_full()
                                     .h(action_size)
                                     .min_w_0()
                                     .gap_1()
                                     .when(model.is_some(), |row| row.child(
-                                        Select::new(&self.assistant_panel.model_select)
-                                            .small().appearance(false).flex_1().min_w_0()
-                                            .accessibility_label("Assistant model")))
+                                        div().w(self.ui_px(150.)).h(action_size).min_w_0()
+                                            .child(Select::new(&self.assistant_panel.model_select)
+                                                .small().appearance(false).w_full().min_w_0()
+                                                .accessibility_label("Assistant model"))))
                                     .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                        Select::new(&self.assistant_panel.reasoning_select)
-                                            .small().appearance(false).w(self.ui_px(96.)).min_w_0()
-                                            .accessibility_label("Assistant reasoning")))
+                                        div().w(self.ui_px(96.)).h(action_size).min_w_0()
+                                            .child(Select::new(&self.assistant_panel.reasoning_select)
+                                                .small().appearance(false).w_full().min_w_0()
+                                                .accessibility_label("Assistant reasoning"))))
                                     .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                        Select::new(&self.assistant_panel.tier_select)
-                                            .small().appearance(false).w(self.ui_px(72.)).min_w_0()
-                                            .accessibility_label("Assistant service tier"))),
+                                        div().w(self.ui_px(72.)).h(action_size).min_w_0()
+                                            .child(Select::new(&self.assistant_panel.tier_select)
+                                                .small().appearance(false).w_full().min_w_0()
+                                                .accessibility_label("Assistant service tier")))),
                             )
                             .child(div().flex_1())
                             .child(
