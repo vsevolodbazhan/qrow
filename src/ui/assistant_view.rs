@@ -2,7 +2,7 @@ use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
-    Selectable,
+    Icon, Selectable,
     bubble::{Bubble, BubbleVariant},
     button::DropdownButton,
     h_flex,
@@ -64,6 +64,36 @@ fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
     override_visibility.unwrap_or(!narrow)
 }
 
+fn reasoning_effort_label(id: &str) -> String {
+    match id {
+        "xhigh" => "Extra High".into(),
+        _ => id
+            .split(['_', '-', ' '])
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut chars = part.chars();
+                chars
+                    .next()
+                    .map(|first| format!("{}{}", first.to_uppercase(), chars.as_str()))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    }
+}
+
+fn assistant_select_width(label: &str) -> f32 {
+    36. + label.chars().count() as f32 * 8.
+}
+
+fn assistant_selector_labels(available: f32, widths: [f32; 3]) -> [bool; 3] {
+    let icons = 36. * 3. + 8.;
+    let model = available >= icons + widths[0] - 36.;
+    let reasoning = model && available >= icons + widths[0] + widths[1] - 72.;
+    let tier = reasoning && available >= widths.iter().sum::<f32>() + 8.;
+    [model, reasoning, tier]
+}
+
 #[derive(Clone, Debug)]
 pub(super) enum Status {
     Idle,
@@ -115,6 +145,24 @@ mod tests {
         assert!(show_thread_list(false, None));
         assert!(show_thread_list(true, Some(true)));
         assert!(!show_thread_list(false, Some(false)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn reasoning_labels_keep_codex_ids_separate_from_display_text() {
+        assert_eq!(reasoning_effort_label("low"), "Low");
+        assert_eq!(reasoning_effort_label("medium"), "Medium");
+        assert_eq!(reasoning_effort_label("high"), "High");
+        assert_eq!(reasoning_effort_label("xhigh"), "Extra High");
+        assert_eq!(reasoning_effort_label("max"), "Max");
+    }
+
+    #[::core::prelude::v1::test]
+    fn selector_labels_expand_in_priority_order() {
+        let widths = [148., 100., 68.];
+        assert_eq!(assistant_selector_labels(116., widths), [false; 3]);
+        assert_eq!(assistant_selector_labels(228., widths), [true, false, false]);
+        assert_eq!(assistant_selector_labels(292., widths), [true, true, false]);
+        assert_eq!(assistant_selector_labels(324., widths), [true; 3]);
     }
 }
 
@@ -318,10 +366,7 @@ impl AssistantPanelState {
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
                     if let SelectEvent::Confirm(Some(label)) = event {
-                        this.settings.assistant.reasoning_effort =
-                            (!label.starts_with("Default · ") && label != "Default")
-                                .then_some(label.clone());
-                        this.changed(cx);
+                        this.select_assistant_reasoning(label, cx);
                     }
                 },
             ),
@@ -627,23 +672,26 @@ impl Qrow {
                 Some("Saved reasoning level is unavailable. Codex default is in use.".into());
             self.changed(cx);
         }
-        let default_effort_label = model.map_or_else(
-            || "Default".to_owned(),
-            |model| format!("Default · {}", model.default_reasoning_effort()),
-        );
-        let mut effort_labels = vec![default_effort_label.clone()];
-        effort_labels.extend(efforts.iter().map(|effort| effort.id().to_owned()));
+        let effort_labels: Vec<_> = efforts
+            .iter()
+            .map(|effort| reasoning_effort_label(effort.id()))
+            .collect();
         let selected_effort = self
             .settings
             .assistant
             .reasoning_effort
-            .clone()
-            .unwrap_or(default_effort_label);
+            .as_deref()
+            .or_else(|| model.map(|model| model.default_reasoning_effort()))
+            .and_then(|id| efforts.iter().find(|effort| effort.id() == id))
+            .or_else(|| efforts.first())
+            .map(|effort| reasoning_effort_label(effort.id()));
         self.assistant_panel
             .reasoning_select
             .update(cx, |state, cx| {
                 state.set_items(SearchableVec::new(effort_labels), window, cx);
-                state.set_selected_value(&selected_effort, window, cx);
+                if let Some(selected) = selected_effort {
+                    state.set_selected_value(&selected, window, cx);
+                }
             });
         let tiers = model.map(|model| model.service_tiers()).unwrap_or(&[]);
         if self
@@ -711,6 +759,30 @@ impl Qrow {
         self.settings.assistant.reasoning_effort = None;
         self.settings.assistant.service_tier = None;
         self.sync_assistant_selectors(window, cx);
+        self.changed(cx);
+    }
+
+    fn select_assistant_reasoning(&mut self, label: &str, cx: &mut Context<Self>) {
+        self.settings.assistant.reasoning_effort = self
+            .assistant_panel
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| {
+                self.settings
+                    .assistant
+                    .model
+                    .as_deref()
+                    .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
+                    .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
+                    .or_else(|| snapshot.models().first())
+            })
+            .and_then(|model| {
+                model
+                    .reasoning_efforts()
+                    .iter()
+                    .find(|effort| reasoning_effort_label(effort.id()) == label)
+            })
+            .map(|effort| effort.id().to_owned());
         self.changed(cx);
     }
 
@@ -1610,6 +1682,31 @@ impl Qrow {
                 .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
                 .or_else(|| snapshot.models().first())
         });
+        let model_width = self
+            .assistant_panel
+            .model_select
+            .read(cx)
+            .selected_value()
+            .map_or(36., |label| assistant_select_width(label));
+        let reasoning_width = self
+            .assistant_panel
+            .reasoning_select
+            .read(cx)
+            .selected_value()
+            .map_or(36., |label| assistant_select_width(label));
+        let tier_width = self
+            .assistant_panel
+            .tier_select
+            .read(cx)
+            .selected_value()
+            .map_or(36., |label| assistant_select_width(label));
+        let conversation_width = width.as_f32() / self.settings.ui_scale
+            - if show_threads && !narrow { 230. } else { 0. };
+        let [show_model_label, show_reasoning_label, show_tier_label] =
+            assistant_selector_labels(
+                (conversation_width - 196.).max(0.),
+                [model_width, reasoning_width, tier_width],
+            );
         h_flex()
             .size_full()
             .min_w_0()
@@ -1982,20 +2079,35 @@ impl Qrow {
                                     .min_w_0()
                                     .gap_1()
                                     .when(model.is_some(), |row| row.child(
-                                        div().w(self.ui_px(112.)).h(action_size).min_w_0()
-                                            .child(Select::new(&self.assistant_panel.model_select)
-                                                .small().appearance(false).w_full().min_w_0()
-                                                .accessibility_label("Assistant model"))))
+                                        div().w(self.ui_px(if show_model_label { model_width } else { 36. }))
+                                            .h(action_size).min_w_0().flex().items_center()
+                                            .child(div().w_full().h(self.ui_px(24.)).child(
+                                                Select::new(&self.assistant_panel.model_select)
+                                                    .small().appearance(false)
+                                                    .icon(Icon::new(AssetIconName::Cpu))
+                                                    .menu_width(self.ui_px(model_width.max(180.)))
+                                                    .w_full().min_w_0()
+                                                    .accessibility_label("Assistant model")))))
                                     .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                        div().w(self.ui_px(96.)).h(action_size).min_w_0()
-                                            .child(Select::new(&self.assistant_panel.reasoning_select)
-                                                .small().appearance(false).w_full().min_w_0()
-                                                .accessibility_label("Assistant reasoning"))))
+                                        div().w(self.ui_px(if show_reasoning_label { reasoning_width } else { 36. }))
+                                            .h(action_size).min_w_0().flex().items_center()
+                                            .child(div().w_full().h(self.ui_px(24.)).child(
+                                                Select::new(&self.assistant_panel.reasoning_select)
+                                                    .small().appearance(false)
+                                                    .icon(Icon::new(AssetIconName::Brain))
+                                                    .menu_width(self.ui_px(reasoning_width.max(120.)))
+                                                    .w_full().min_w_0()
+                                                    .accessibility_label("Assistant reasoning")))))
                                     .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                        div().w(self.ui_px(72.)).h(action_size).min_w_0()
-                                            .child(Select::new(&self.assistant_panel.tier_select)
-                                                .small().appearance(false).w_full().min_w_0()
-                                                .accessibility_label("Assistant service tier")))),
+                                        div().w(self.ui_px(if show_tier_label { tier_width } else { 36. }))
+                                            .h(action_size).min_w_0().flex().items_center()
+                                            .child(div().w_full().h(self.ui_px(24.)).child(
+                                                Select::new(&self.assistant_panel.tier_select)
+                                                    .small().appearance(false)
+                                                    .icon(Icon::new(AssetIconName::Gauge))
+                                                    .menu_width(self.ui_px(tier_width.max(120.)))
+                                                    .w_full().min_w_0()
+                                                    .accessibility_label("Assistant service tier"))))),
                             )
                             .child(div().flex_1())
                             .child(
