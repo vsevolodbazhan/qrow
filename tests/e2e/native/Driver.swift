@@ -160,6 +160,19 @@ func scrollDown(_ element: AXUIElement) throws {
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+func scrollLogsToTop(_ app: AXUIElement) throws {
+    guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first else {
+        throw Failure("Qrow window is unavailable while scrolling Logs")
+    }
+    let (origin, size) = try elementBounds(window)
+    let point = CGPoint(x: origin.x + size.width * 0.75, y: origin.y + size.height * 0.82)
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
+    scroll.location = point
+    scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -418,6 +431,7 @@ final class Driver {
             _ = try wait(value, timeout: 30, role: kAXCellRole)
         }
         try press("Logs Panel")
+        try scrollLogsToTop(app)
         let clipboard = NSPasteboard.general
         let saved = (clipboard.pasteboardItems ?? []).map { item in
             item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
@@ -434,10 +448,16 @@ final class Driver {
             clipboard.writeObjects(restored)
         }
         try press("Copy All Logs")
-        let copied = clipboard.string(forType: .string) ?? ""
+        let deadline = clock.now.advanced(by: .seconds(5))
+        var copied = clipboard.string(forType: .string) ?? ""
+        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-100"))
+            && clock.now < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            copied = clipboard.string(forType: .string) ?? ""
+        }
         try require(
-            copied.hasPrefix("Older activity was removed\n"),
-            "Copy All did not put the retention boundary before the retained entries"
+            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
+            "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
         )
         try snapshot("activity-retention")
         print("PASS: Logs records when older activity is removed")

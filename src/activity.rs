@@ -437,7 +437,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Older activity was removed"]
         );
-        assert!(log.copy_all().contains("Older activity was removed"));
+        assert!(log.copy_all().starts_with("Older activity was removed\n"));
     }
 
     #[test]
