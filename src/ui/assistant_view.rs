@@ -1982,7 +1982,7 @@ impl Qrow {
                                     .min_w_0()
                                     .gap_1()
                                     .when(model.is_some(), |row| row.child(
-                                        div().w(self.ui_px(150.)).h(action_size).min_w_0()
+                                        div().w(self.ui_px(112.)).h(action_size).min_w_0()
                                             .child(Select::new(&self.assistant_panel.model_select)
                                                 .small().appearance(false).w_full().min_w_0()
                                                 .accessibility_label("Assistant model"))))
