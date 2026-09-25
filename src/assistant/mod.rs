@@ -142,6 +142,13 @@ pub trait AssistantHarness: Send {
     fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation>;
     fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation>;
     fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory>;
+    fn read_older_conversation(
+        &mut self,
+        _thread_id: &str,
+        _cursor: &str,
+    ) -> Result<ConversationPage> {
+        anyhow::bail!("Conversation paging is not supported by this harness")
+    }
     fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()>;
     fn delete_conversation(&mut self, thread_id: &str) -> Result<()>;
     fn start_turn(&mut self, request: TurnRequest) -> Result<Turn>;
@@ -170,6 +177,14 @@ pub struct Conversation {
 pub struct ConversationHistory {
     pub conversation: Conversation,
     pub turns: Vec<HistoryTurn>,
+    pub older_cursor: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationPage {
+    pub thread_id: String,
+    pub turns: Vec<HistoryTurn>,
+    pub older_cursor: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

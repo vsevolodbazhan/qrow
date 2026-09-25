@@ -5,7 +5,7 @@
 
 use super::{
     AssistantEvent, AssistantHarness, CodexHarness, Conversation, ConversationHistory,
-    HarnessSnapshot, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
+    ConversationPage, HarnessSnapshot, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
 };
 use std::{
     path::PathBuf,
@@ -29,6 +29,10 @@ pub enum Command {
     Create(Vec<ToolDefinition>),
     Resume(String),
     Read(String),
+    ReadOlder {
+        thread_id: String,
+        cursor: String,
+    },
     Rename {
         thread_id: String,
         title: String,
@@ -58,6 +62,7 @@ pub enum Operation {
     Create,
     Resume,
     Read,
+    ReadOlder,
     Rename,
     Delete,
     Start,
@@ -74,6 +79,7 @@ impl Command {
             Self::Create(_) => Operation::Create,
             Self::Resume(_) => Operation::Resume,
             Self::Read(_) => Operation::Read,
+            Self::ReadOlder { .. } => Operation::ReadOlder,
             Self::Rename { .. } => Operation::Rename,
             Self::Delete(_) => Operation::Delete,
             Self::Start(_) => Operation::Start,
@@ -87,7 +93,8 @@ impl Command {
     fn identifier(&self) -> Option<String> {
         match self {
             Self::Resume(id) | Self::Read(id) | Self::Delete(id) => Some(id.clone()),
-            Self::Rename { thread_id, .. }
+            Self::ReadOlder { thread_id, .. }
+            | Self::Rename { thread_id, .. }
             | Self::Steer { thread_id, .. }
             | Self::Interrupt { thread_id, .. } => Some(thread_id.clone()),
             Self::Start(request) => Some(request.thread_id.clone()),
@@ -105,6 +112,7 @@ pub enum Event {
     Created(Conversation),
     Resumed(Conversation),
     History(ConversationHistory),
+    HistoryPage(ConversationPage),
     Renamed(String),
     Deleted(String),
     TurnStarted {
@@ -131,6 +139,7 @@ pub struct Service {
     done: mpsc::Receiver<()>,
     stopped: bool,
     cleanup_ids: Arc<Mutex<Vec<String>>>,
+    cleanup_result: Arc<Mutex<Option<Result<(), String>>>>,
 }
 
 struct DoneSignal(mpsc::Sender<()>);
@@ -148,9 +157,11 @@ impl Service {
         let stopping = Arc::new(AtomicBool::new(false));
         let pid = Arc::new(AtomicU32::new(0));
         let cleanup_ids = Arc::new(Mutex::new(Vec::<String>::new()));
+        let cleanup_result = Arc::new(Mutex::new(None));
         let thread_stopping = Arc::clone(&stopping);
         let thread_pid = Arc::clone(&pid);
         let thread_cleanup_ids = Arc::clone(&cleanup_ids);
+        let thread_cleanup_result = Arc::clone(&cleanup_result);
         thread::Builder::new()
             .name("qrow-assistant".into())
             .spawn(move || {
@@ -240,9 +251,21 @@ impl Service {
                         }
                     }
                 }
-                if let Ok(mut ids) = thread_cleanup_ids.lock() {
-                    for id in ids.drain(..) {
-                        let _ = harness.delete_conversation(&id);
+                if let Ok(mut ids) = thread_cleanup_ids.lock()
+                    && !ids.is_empty()
+                {
+                    let results: Vec<_> = ids
+                        .drain(..)
+                        .map(|id| harness.delete_conversation(&id))
+                        .collect();
+                    if let Ok(mut outcome) = thread_cleanup_result.lock() {
+                        *outcome = Some(
+                            results
+                                .into_iter()
+                                .collect::<anyhow::Result<Vec<_>>>()
+                                .map(|_| ())
+                                .map_err(|error| error.to_string()),
+                        );
                     }
                 }
                 if let Err(error) = harness.shutdown() {
@@ -259,6 +282,7 @@ impl Service {
             done,
             stopped: false,
             cleanup_ids,
+            cleanup_result,
         })
     }
 
@@ -305,10 +329,27 @@ impl Service {
         ids: Vec<String>,
         timeout: Duration,
     ) -> std::io::Result<()> {
+        if ids.is_empty() {
+            return self.shutdown_and_wait(timeout);
+        }
         if let Ok(mut cleanup) = self.cleanup_ids.lock() {
             *cleanup = ids;
         }
-        self.shutdown_and_wait(timeout)
+        self.shutdown_and_wait(timeout)?;
+        match self
+            .cleanup_result
+            .lock()
+            .ok()
+            .and_then(|mut result| result.take())
+        {
+            Some(Ok(())) => Ok(()),
+            Some(Err(error)) => Err(std::io::Error::other(format!(
+                "Codex could not delete demo conversations: {error}"
+            ))),
+            None => Err(std::io::Error::other(
+                "Codex did not confirm demo conversation deletion",
+            )),
+        }
     }
 }
 
@@ -327,6 +368,9 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
         Command::Create(tools) => harness.create_conversation(&tools).map(Event::Created),
         Command::Resume(id) => harness.resume_conversation(&id).map(Event::Resumed),
         Command::Read(id) => harness.read_conversation(&id).map(Event::History),
+        Command::ReadOlder { thread_id, cursor } => harness
+            .read_older_conversation(&thread_id, &cursor)
+            .map(Event::HistoryPage),
         Command::Rename { thread_id, title } => harness
             .rename_conversation(&thread_id, &title)
             .map(|()| Event::Renamed(thread_id)),
@@ -405,5 +449,37 @@ done
             .unwrap();
         let requests = fs::read_to_string(executable.with_extension("log")).unwrap();
         assert!(requests.contains("\"method\":\"thread/delete\""));
+        assert!(
+            service
+                .shutdown_and_delete(vec!["thread-2".into()], Duration::from_millis(1))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn shutdown_reaps_pipe_holding_descendants_after_leader_exits() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        fs::write(&executable, r#"#!/bin/sh
+sleep 30 &
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"account/read"'*) printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$id" ;;
+    *'"method":"model/list"'*) printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$id" ;;
+  esac
+done
+exit 0
+"#).unwrap();
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
+        assert!(matches!(
+            service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Event::Ready(_)
+        ));
+        service.shutdown_and_wait(Duration::from_secs(3)).unwrap();
     }
 }

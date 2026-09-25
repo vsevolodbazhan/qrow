@@ -1,7 +1,7 @@
 use super::{
     AccountKind, AccountStatus, AssistantEvent, AssistantHarness, Conversation,
-    ConversationHistory, HarnessSnapshot, HistoryTurn, Model, ReasoningEffort, ServiceTier,
-    ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
+    ConversationHistory, ConversationPage, HarnessSnapshot, HistoryTurn, Model, ReasoningEffort,
+    ServiceTier, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest, history_item_text,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,8 @@ use std::{
 const MAX_PROTOCOL_LINE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_MESSAGES: usize = 1_024;
 const MAX_MODEL_PAGES: usize = 100;
+const HISTORY_PAGE_SIZE: usize = 100;
+const MAX_HISTORY_CURSOR_BYTES: usize = 4096;
 const MAX_STDERR_BYTES: usize = 16 * 1024;
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(200);
 #[cfg(not(test))]
@@ -48,6 +50,55 @@ pub struct CodexHarness {
 }
 
 impl CodexHarness {
+    fn read_items_page(
+        &mut self,
+        thread_id: &str,
+        cursor: Option<&str>,
+    ) -> Result<ConversationPage> {
+        Self::ensure_identifier(thread_id)?;
+        if let Some(cursor) = cursor {
+            anyhow::ensure!(
+                !cursor.is_empty() && cursor.len() <= MAX_HISTORY_CURSOR_BYTES,
+                "Invalid conversation cursor"
+            );
+        }
+        let response: ItemsPageResponse = self.request(
+            "thread/items/list",
+            json!({
+                "threadId": thread_id, "cursor": cursor, "limit": HISTORY_PAGE_SIZE,
+                "sortDirection": "desc"
+            }),
+        )?;
+        anyhow::ensure!(
+            response
+                .next_cursor
+                .as_ref()
+                .is_none_or(|next| !next.is_empty()
+                    && next.len() <= MAX_HISTORY_CURSOR_BYTES
+                    && Some(next.as_str()) != cursor),
+            "Codex returned an invalid conversation cursor"
+        );
+        let mut turns: Vec<HistoryTurn> = Vec::new();
+        for entry in response.data.into_iter().rev() {
+            if history_item_text(&entry.item).is_none() {
+                continue;
+            }
+            if let Some(turn) = turns.iter_mut().find(|turn| turn.id == entry.turn_id) {
+                turn.items.push(entry.item);
+            } else {
+                turns.push(HistoryTurn {
+                    id: entry.turn_id,
+                    status: String::new(),
+                    items: vec![entry.item],
+                });
+            }
+        }
+        Ok(ConversationPage {
+            thread_id: thread_id.to_owned(),
+            turns,
+            older_cursor: response.next_cursor,
+        })
+    }
     pub fn launch(executable: impl AsRef<OsStr>, cwd: &Path) -> Result<Self> {
         Self::launch_with_pid(executable, cwd, |_| {})
     }
@@ -714,6 +765,11 @@ impl AssistantHarness for CodexHarness {
             response.thread.id == thread_id,
             "Codex read the wrong thread"
         );
+        let paginated = response
+            .thread
+            .turns
+            .iter()
+            .any(|turn| turn.items_view != "full");
         let turns = response
             .thread
             .turns
@@ -724,10 +780,24 @@ impl AssistantHarness for CodexHarness {
                 items: turn.items.clone(),
             })
             .collect();
+        let page = if paginated {
+            Some(self.read_items_page(thread_id, None)?)
+        } else {
+            None
+        };
         Ok(ConversationHistory {
             conversation: response.thread.into(),
-            turns,
+            turns: page.as_ref().map_or(turns, |page| page.turns.clone()),
+            older_cursor: page.and_then(|page| page.older_cursor),
         })
+    }
+
+    fn read_older_conversation(
+        &mut self,
+        thread_id: &str,
+        cursor: &str,
+    ) -> Result<ConversationPage> {
+        self.read_items_page(thread_id, Some(cursor))
     }
 
     fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()> {
@@ -953,8 +1023,28 @@ struct CodexTurn {
     status: String,
     #[serde(default)]
     items: Vec<Value>,
+    #[serde(rename = "itemsView", default = "full_items_view")]
+    items_view: String,
     #[serde(default)]
     error: Option<Value>,
+}
+
+fn full_items_view() -> String {
+    "full".into()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemsPageResponse {
+    data: Vec<ItemEntry>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemEntry {
+    turn_id: String,
+    item: Value,
 }
 
 impl From<CodexTurn> for Turn {
@@ -1615,6 +1705,39 @@ done
         assert_eq!(
             tool_response["result"]["contentItems"][0]["type"],
             "inputText"
+        );
+    }
+
+    #[test]
+    fn paginated_history_loads_recent_items_and_older_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"thread/read"'*) printf '{"id":%s,"result":{"thread":{"id":"thread-1","name":"Query","updatedAt":1,"turns":[{"id":"turn-1","status":"completed","items":[],"itemsView":"notLoaded"}]}}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*'"cursor":"old"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-0","item":{"type":"userMessage","content":[{"type":"text","text":"Older"}]}}],"nextCursor":null}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-1","item":{"type":"agentMessage","text":"Answer"}},{"turnId":"turn-1","item":{"type":"userMessage","content":[{"type":"text","text":"Question"}]}}],"nextCursor":"old"}}\n' "$id" ;;
+  esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+        let recent = harness.read_conversation("thread-1").unwrap();
+        assert_eq!(recent.older_cursor.as_deref(), Some("old"));
+        assert_eq!(
+            history_item_text(&recent.turns[0].items[0]),
+            Some(("user", "Question".into()))
+        );
+        let older = harness.read_older_conversation("thread-1", "old").unwrap();
+        assert_eq!(older.older_cursor, None);
+        assert_eq!(
+            history_item_text(&older.turns[0].items[0]),
+            Some(("user", "Older".into()))
         );
     }
 }
