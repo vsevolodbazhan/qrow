@@ -44,6 +44,7 @@ pub struct CodexHarness {
     request_timeout: Duration,
     next_id: u64,
     pending_messages: VecDeque<Value>,
+    pid_update: Box<dyn Fn(u32) + Send>,
 }
 
 impl CodexHarness {
@@ -54,7 +55,7 @@ impl CodexHarness {
     pub(crate) fn launch_with_pid(
         executable: impl AsRef<OsStr>,
         cwd: &Path,
-        on_spawn: impl FnOnce(u32),
+        on_spawn: impl Fn(u32) + Send + 'static,
     ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Codex working directory does not exist");
         let mut command = Command::new(executable);
@@ -152,6 +153,7 @@ impl CodexHarness {
             request_timeout: REQUEST_TIMEOUT,
             next_id: 1,
             pending_messages: VecDeque::new(),
+            pid_update: Box::new(on_spawn),
         };
         if let Err(error) = harness.initialize() {
             let _ = harness.shutdown();
@@ -555,6 +557,11 @@ fn send_protocol_message(
 ) -> bool {
     match messages.try_send(message) {
         Ok(()) => true,
+        Err(TrySendError::Full(Ok(value)))
+            if value.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta") =>
+        {
+            true
+        }
         Err(TrySendError::Full(_)) => {
             overflowed.store(true, Ordering::Release);
             false
@@ -637,6 +644,19 @@ impl AssistantHarness for CodexHarness {
             account: self.account()?,
             models: self.models()?,
         })
+    }
+
+    fn begin_login(&mut self) -> Result<String> {
+        let response: Value = self.request("account/login/start", json!({"type":"chatgpt"}))?;
+        let url = response
+            .get("authUrl")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Codex did not return a sign-in URL"))?;
+        anyhow::ensure!(
+            url.starts_with("https://") || url.starts_with("http://127.0.0.1:"),
+            "Codex returned an unsafe sign-in URL"
+        );
+        Ok(url.to_owned())
     }
 
     fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation> {
@@ -844,6 +864,7 @@ impl AssistantHarness for CodexHarness {
         let checks = SHUTDOWN_GRACE_PERIOD.as_millis() / 10;
         for _ in 0..checks {
             if self.child.try_wait()?.is_some() {
+                (self.pid_update)(0);
                 self.join_readers();
                 return Ok(());
             }
@@ -853,6 +874,7 @@ impl AssistantHarness for CodexHarness {
         self.child
             .wait()
             .context("Could not wait for Codex app-server")?;
+        (self.pid_update)(0);
         self.join_readers();
         Ok(())
     }
@@ -1450,6 +1472,28 @@ while :; do sleep 1; done
         read_protocol_stream(Cursor::new(input), &tx, &overflowed);
 
         assert!(overflowed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn streaming_delta_overflow_keeps_protocol_reader_alive() {
+        let input = b"{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"turn/completed\"}\n";
+        let (tx, rx) = mpsc::sync_channel(1);
+        let overflowed = AtomicBool::new(false);
+        read_protocol_stream(Cursor::new(input), &tx, &overflowed);
+        // The final event is not safe to discard. The queue is bounded, so
+        // overload is still reported, but a delta alone does not cause it.
+        assert!(overflowed.load(Ordering::Acquire));
+        assert_eq!(
+            rx.try_recv().unwrap().unwrap()["method"],
+            "item/agentMessage/delta"
+        );
+
+        let (tx, _rx) = mpsc::sync_channel(1);
+        let overflowed = AtomicBool::new(false);
+        let deltas =
+            b"{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"item/agentMessage/delta\"}\n";
+        read_protocol_stream(Cursor::new(deltas), &tx, &overflowed);
+        assert!(!overflowed.load(Ordering::Acquire));
     }
 
     #[test]

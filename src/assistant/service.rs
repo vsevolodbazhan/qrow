@@ -24,6 +24,8 @@ const EVENT_POLL: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
 pub enum Command {
+    Login,
+    Refresh,
     Create(Vec<ToolDefinition>),
     Resume(String),
     Read(String),
@@ -51,6 +53,8 @@ pub enum Command {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Operation {
+    Login,
+    Refresh,
     Create,
     Resume,
     Read,
@@ -65,6 +69,8 @@ pub enum Operation {
 impl Command {
     fn operation(&self) -> Operation {
         match self {
+            Self::Login => Operation::Login,
+            Self::Refresh => Operation::Refresh,
             Self::Create(_) => Operation::Create,
             Self::Resume(_) => Operation::Resume,
             Self::Read(_) => Operation::Read,
@@ -77,22 +83,42 @@ impl Command {
             Self::Shutdown => unreachable!(),
         }
     }
+
+    fn identifier(&self) -> Option<String> {
+        match self {
+            Self::Resume(id) | Self::Read(id) | Self::Delete(id) => Some(id.clone()),
+            Self::Rename { thread_id, .. }
+            | Self::Steer { thread_id, .. }
+            | Self::Interrupt { thread_id, .. } => Some(thread_id.clone()),
+            Self::Start(request) => Some(request.thread_id.clone()),
+            Self::Answer { call, .. } => Some(call.call_id.clone()),
+            Self::Login | Self::Refresh | Self::Create(_) | Self::Shutdown => None,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum Event {
     Ready(HarnessSnapshot),
+    LoginUrl(String),
     Created(Conversation),
     Resumed(Conversation),
     History(ConversationHistory),
     Renamed(String),
     Deleted(String),
-    TurnStarted { thread_id: String, turn: Turn },
+    TurnStarted {
+        thread_id: String,
+        turn: Turn,
+    },
     Steered(String),
     Interrupted(String),
     ToolAnswered(String),
     Harness(AssistantEvent),
-    Failed { operation: Operation, error: String },
+    Failed {
+        operation: Operation,
+        id: Option<String>,
+        error: String,
+    },
     Disconnected(String),
 }
 
@@ -137,6 +163,15 @@ impl Service {
                                 return true;
                             }
                             Err(mpsc::TrySendError::Full(pending)) => {
+                                // A completed turn reloads its durable history. Discarding
+                                // streamed fragments under UI backpressure keeps the protocol
+                                // reader alive without losing the final message.
+                                if matches!(
+                                    &pending,
+                                    Event::Harness(AssistantEvent::MessageDelta { .. })
+                                ) {
+                                    return true;
+                                }
                                 event = pending;
                                 thread::sleep(Duration::from_millis(10));
                             }
@@ -154,7 +189,7 @@ impl Service {
                     }
                 };
                 let mut harness =
-                    match CodexHarness::launch_with_pid(&executable, directory.path(), |id| {
+                    match CodexHarness::launch_with_pid(&executable, directory.path(), move |id| {
                         thread_pid.store(id, Ordering::Release);
                     }) {
                         Ok(harness) => harness,
@@ -233,7 +268,7 @@ impl Service {
         self.stopped = true;
         self.stopping.store(true, Ordering::Release);
         let _ = self.commands.try_send(Command::Shutdown);
-        if self.done.recv_timeout(timeout).is_ok() {
+        if self.done.recv_timeout(timeout / 4).is_ok() {
             return Ok(());
         }
         #[cfg(unix)]
@@ -251,7 +286,7 @@ impl Service {
             }
         }
         self.done
-            .recv_timeout(timeout)
+            .recv_timeout(timeout - timeout / 4)
             .map_err(|_| std::io::Error::other("Codex assistant did not stop"))
     }
 }
@@ -264,7 +299,10 @@ impl Drop for Service {
 
 fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
     let operation = command.operation();
+    let id = command.identifier();
     let result = match command {
+        Command::Login => harness.begin_login().map(Event::LoginUrl),
+        Command::Refresh => harness.snapshot().map(Event::Ready),
         Command::Create(tools) => harness.create_conversation(&tools).map(Event::Created),
         Command::Resume(id) => harness.resume_conversation(&id).map(Event::Resumed),
         Command::Read(id) => harness.read_conversation(&id).map(Event::History),
@@ -300,6 +338,7 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
     };
     result.unwrap_or_else(|error| Event::Failed {
         operation,
+        id,
         error: error.to_string(),
     })
 }

@@ -136,6 +136,9 @@ impl HarnessSnapshot {
 
 pub trait AssistantHarness: Send {
     fn snapshot(&mut self) -> Result<HarnessSnapshot>;
+    fn begin_login(&mut self) -> Result<String> {
+        anyhow::bail!("ChatGPT sign-in is not supported by this harness")
+    }
     fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation>;
     fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation>;
     fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory>;
