@@ -34,6 +34,7 @@ security-framework = "3"
 proptest = "=1.11.0"
 
 [profile.release]
+# Keep the optional GPUI assistant inside the macOS package size budget.
 opt-level = "s"
 lto = "thin"
 strip = true

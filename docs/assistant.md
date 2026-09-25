@@ -9,7 +9,7 @@ Install the Codex command-line program separately. Sign in to Codex with
 ChatGPT to use your subscription. Qrow does not include Codex or store its
 credentials.
 
-Open **Qrow → Settings… → Assistant**. Enable the assistant and read the data
+Open **Qrow → Settings… → AI Assistant**. Enable the assistant and read the data
 sharing notice. If Qrow cannot find `codex` on your `PATH`, enter the full path
 to the Codex executable. The assistant is off by default. Qrow does not start
 Codex until you open the assistant pane.
@@ -29,9 +29,10 @@ database query that already started.
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It
 can edit the selected query tab and run its one SQL statement through Qrow's
-query worker. It cannot read connection passwords. Qrow does not send workspace
-context when you open the pane. It sends context when you send a message or
-when Codex calls a Qrow tool.
+query worker. It can edit a tab before you select a connection. Select a
+connection before it runs SQL. It cannot read connection passwords. Qrow does
+not send workspace context when you open the pane. It sends context when you
+send a message or when Codex calls a Qrow tool.
 
 In **Ask before running**, Qrow shows the exact SQL, tab, and connection before
 an assistant query starts. Select **Run** or **Cancel**. An SQL edit does not
@@ -44,6 +45,7 @@ conversation. **Rename** changes its title. **Delete** asks Codex to delete the
 selected conversation. Deleting a conversation does not change query tabs,
 SQL, sessions, Logs, or results. Qrow saves thread IDs and titles in the
 workspace. Codex stores conversation text in its own data directory.
+Select **Load older messages** to read earlier conversation text.
 
 Select a model, reasoning level, and service tier in the pane. Codex supplies
 the available choices. Your change applies to the next message. If a saved

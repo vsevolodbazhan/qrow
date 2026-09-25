@@ -659,6 +659,9 @@ impl Render for Qrow {
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &SendAssistantMessage, window, cx| {
+                this.send_assistant(window, cx)
+            }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::increase_ui_scale))

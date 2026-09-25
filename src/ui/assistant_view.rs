@@ -1,5 +1,7 @@
 use super::*;
+use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
+    bubble::{Bubble, BubbleVariant},
     h_flex,
     input::{Textarea, TextareaState},
     message::{Message, MessageAlignment, MessageContent},
@@ -8,7 +10,7 @@ use gpui_kit::component::{
 };
 use qrow::{
     assistant::{
-        AccountKind, AssistantEvent, HarnessSnapshot, ToolCall, TurnRequest,
+        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, ToolCall, TurnRequest,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
             SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
@@ -22,7 +24,10 @@ use qrow::{
     model::{AssistantConversation, AssistantTitleSource},
 };
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Clone, Debug)]
 pub(super) enum Status {
@@ -31,6 +36,35 @@ pub(super) enum Status {
     SignInRequired,
     Ready,
     Disconnected(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn history_keeps_distinct_messages_from_one_turn() {
+        let mut entries = vec![
+            TranscriptEntry::new(Speaker::User, "draft".into(), Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::Assistant, "streamed".into(), Some("turn-1".into())),
+        ];
+        merge_history(
+            &mut entries,
+            vec![HistoryTurn {
+                id: "turn-1".into(),
+                status: "completed".into(),
+                items: vec![
+                    json!({"type":"userMessage","content":[{"type":"text","text":"question"}]}),
+                    json!({"type":"agentMessage","text":"first"}),
+                    json!({"type":"agentMessage","text":"second"}),
+                ],
+            }],
+        );
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].text, "question");
+        assert_eq!(entries[1].text, "first");
+        assert_eq!(entries[2].text, "second");
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -46,6 +80,57 @@ pub(super) struct TranscriptEntry {
     pub speaker: Speaker,
     pub text: String,
     pub turn_id: Option<String>,
+    pub detail: Option<String>,
+    pub expanded: bool,
+}
+
+impl TranscriptEntry {
+    pub fn new(speaker: Speaker, text: String, turn_id: Option<String>) -> Self {
+        Self {
+            speaker,
+            text,
+            turn_id,
+            detail: None,
+            expanded: false,
+        }
+    }
+
+    pub fn with_detail(mut self, detail: String) -> Self {
+        self.detail = Some(detail);
+        self
+    }
+}
+
+fn merge_history(entries: &mut Vec<TranscriptEntry>, turns: Vec<HistoryTurn>) {
+    let mut matched = BTreeSet::new();
+    for turn in turns {
+        for item in turn.items {
+            let Some((speaker, text)) = history_item_text(&item) else {
+                continue;
+            };
+            let speaker = if speaker == "user" {
+                Speaker::User
+            } else {
+                Speaker::Assistant
+            };
+            if let Some(index) = entries
+                .iter()
+                .enumerate()
+                .find(|(index, entry)| {
+                    !matched.contains(index)
+                        && entry.speaker == speaker
+                        && entry.turn_id.as_deref() == Some(&turn.id)
+                })
+                .map(|(index, _)| index)
+            {
+                entries[index].text = text;
+                matched.insert(index);
+            } else {
+                entries.push(TranscriptEntry::new(speaker, text, Some(turn.id.clone())));
+                matched.insert(entries.len() - 1);
+            }
+        }
+    }
 }
 
 pub(super) struct PendingQuery {
@@ -56,6 +141,8 @@ pub(super) struct PendingQuery {
     pub approved: bool,
     pub started: bool,
     pub kind: PendingQueryKind,
+    pub activity_index: Option<usize>,
+    pub detached: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,11 +159,15 @@ pub(super) struct AssistantPanelState {
     pub composer: Entity<TextareaState>,
     _composer_subscription: Subscription,
     conversation_select: Entity<SelectState<SearchableVec<String>>>,
+    mode_select: Entity<SelectState<SearchableVec<String>>>,
     model_select: Entity<SelectState<SearchableVec<String>>>,
     reasoning_select: Entity<SelectState<SearchableVec<String>>>,
     tier_select: Entity<SelectState<SearchableVec<String>>>,
     _select_subscriptions: Vec<Subscription>,
     pub transcripts: BTreeMap<String, Vec<TranscriptEntry>>,
+    pub older_cursors: BTreeMap<String, String>,
+    pub loaded_cursors: BTreeMap<String, BTreeSet<String>>,
+    pub loading_older: bool,
     pub active_turn: Option<String>,
     pub target: Option<ActionTarget>,
     pub pending_query: Option<PendingQuery>,
@@ -116,7 +207,44 @@ impl AssistantPanelState {
         let model_select = make_select(cx);
         let reasoning_select = make_select(cx);
         let tier_select = make_select(cx);
+        let mode_select = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    "Ask before running".to_owned(),
+                    "Run automatically".to_owned(),
+                ]),
+                Some(gpui_kit::component::IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+        });
         let select_subscriptions = vec![
+            cx.subscribe_in(
+                &mode_select,
+                window,
+                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                    if let SelectEvent::Confirm(Some(label)) = event {
+                        let automatic = this
+                            .assistant
+                            .selected_thread
+                            .as_ref()
+                            .and_then(|id| {
+                                this.assistant
+                                    .conversations
+                                    .iter()
+                                    .find(|conversation| &conversation.thread_id == id)
+                            })
+                            .is_some_and(|conversation| {
+                                conversation.execution_mode
+                                    == qrow::model::AssistantExecutionMode::RunAutomatically
+                            });
+                        if (label == "Run automatically") != automatic {
+                            this.toggle_assistant_mode(window, cx);
+                            this.sync_assistant_selectors(window, cx);
+                        }
+                    }
+                },
+            ),
             cx.subscribe_in(
                 &conversation_select,
                 window,
@@ -164,11 +292,15 @@ impl AssistantPanelState {
             composer,
             _composer_subscription: subscription,
             conversation_select,
+            mode_select,
             model_select,
             reasoning_select,
             tier_select,
             _select_subscriptions: select_subscriptions,
             transcripts: BTreeMap::new(),
+            older_cursors: BTreeMap::new(),
+            loaded_cursors: BTreeMap::new(),
+            loading_older: false,
             active_turn: None,
             target: None,
             pending_query: None,
@@ -191,8 +323,10 @@ impl AssistantPanelState {
     }
 
     pub fn shutdown_demo(&mut self, ids: Vec<String>) {
-        if let Some(mut service) = self.service.take() {
-            let _ = service.shutdown_and_delete(ids, Duration::from_secs(2));
+        if let Some(mut service) = self.service.take()
+            && let Err(error) = service.shutdown_and_delete(ids, Duration::from_secs(2))
+        {
+            eprintln!("Could not clean up demo assistant conversations: {error}");
         }
     }
 }
@@ -225,6 +359,48 @@ fn discover_codex(configured: Option<&str>) -> Result<PathBuf, String> {
 }
 
 impl Qrow {
+    fn load_older_assistant_messages(&mut self, cx: &mut Context<Self>) {
+        let Some(thread_id) = self.assistant.selected_thread.clone() else {
+            return;
+        };
+        let Some(cursor) = self.assistant_panel.older_cursors.get(&thread_id).cloned() else {
+            return;
+        };
+        if self
+            .assistant_panel
+            .loaded_cursors
+            .entry(thread_id.clone())
+            .or_default()
+            .contains(&cursor)
+        {
+            self.assistant_panel.older_cursors.remove(&thread_id);
+            self.assistant_panel.notice =
+                Some("Codex repeated a conversation page. Older messages cannot be loaded.".into());
+            cx.notify();
+            return;
+        }
+        if self.assistant_panel.loading_older
+            || self.assistant_panel.active_turn.is_some()
+            || self.assistant_panel.pending_query.is_some()
+        {
+            return;
+        }
+        if self.assistant_command(
+            AssistantCommand::ReadOlder {
+                thread_id: thread_id.clone(),
+                cursor: cursor.clone(),
+            },
+            cx,
+        ) {
+            self.assistant_panel
+                .loaded_cursors
+                .entry(thread_id)
+                .or_default()
+                .insert(cursor);
+            self.assistant_panel.loading_older = true;
+            cx.notify();
+        }
+    }
     fn create_assistant_conversation(&mut self, cx: &mut Context<Self>) {
         if !self.assistant_panel.creating_conversation
             && self.assistant_command(AssistantCommand::Create(tools::definitions()), cx)
@@ -294,12 +470,23 @@ impl Qrow {
         });
     }
 
-    fn conversation_label(conversation: &AssistantConversation) -> String {
-        format!(
-            "{} · {}",
-            conversation.title,
-            conversation.thread_id.chars().take(8).collect::<String>()
-        )
+    fn conversation_label(&self, conversation: &AssistantConversation) -> String {
+        if self
+            .assistant
+            .conversations
+            .iter()
+            .filter(|other| other.title == conversation.title)
+            .count()
+            == 1
+        {
+            conversation.title.clone()
+        } else {
+            format!(
+                "{} · {}",
+                conversation.title,
+                conversation.thread_id.chars().take(8).collect::<String>()
+            )
+        }
     }
 
     fn sync_assistant_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -307,7 +494,7 @@ impl Qrow {
             .assistant
             .conversations
             .iter()
-            .map(Self::conversation_label)
+            .map(|conversation| self.conversation_label(conversation))
             .collect();
         let selected = self
             .assistant
@@ -319,7 +506,31 @@ impl Qrow {
                     .iter()
                     .find(|conversation| &conversation.thread_id == id)
             })
-            .map(Self::conversation_label);
+            .map(|conversation| self.conversation_label(conversation));
+        let mode_index = self
+            .assistant
+            .selected_thread
+            .as_ref()
+            .and_then(|id| {
+                self.assistant
+                    .conversations
+                    .iter()
+                    .find(|conversation| &conversation.thread_id == id)
+            })
+            .is_some_and(|conversation| {
+                conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
+            });
+        self.assistant_panel.mode_select.update(cx, |state, cx| {
+            state.set_selected_value(
+                &if mode_index {
+                    "Run automatically".to_owned()
+                } else {
+                    "Ask before running".to_owned()
+                },
+                window,
+                cx,
+            );
+        });
         self.assistant_panel
             .conversation_select
             .update(cx, |state, cx| {
@@ -444,7 +655,7 @@ impl Qrow {
             .assistant
             .conversations
             .iter()
-            .find(|conversation| Self::conversation_label(conversation) == label)
+            .find(|conversation| self.conversation_label(conversation) == label)
             .map(|conversation| conversation.thread_id.clone());
         if let Some(id) = id {
             self.assistant.selected_thread = Some(id.clone());
@@ -518,10 +729,10 @@ impl Qrow {
             self.sidebar = true;
             self.assistant_panel.auto_hidden_sidebar = false;
         }
-        if !self.assistant_panel.open {
-            if let Some(focus) = self.assistant_panel.previous_focus.take() {
-                focus.focus(window, cx);
-            }
+        if !self.assistant_panel.open
+            && let Some(focus) = self.assistant_panel.previous_focus.take()
+        {
+            focus.focus(window, cx);
         }
         cx.notify();
     }
@@ -615,6 +826,7 @@ impl Qrow {
                                 if let Some(conversation) = this.assistant.conversations.iter_mut().find(|conversation| conversation.thread_id == thread_id) {
                                     conversation.execution_mode = qrow::model::AssistantExecutionMode::RunAutomatically;
                                     this.changed(cx);
+                                    this.sync_assistant_selectors(window, cx);
                                 }
                             });
                             window.close_dialog(cx);
@@ -688,20 +900,28 @@ impl Qrow {
             .pending_query
             .as_ref()
             .is_some_and(|pending| !pending.started)
+            && let Some(pending) = self.assistant_panel.pending_query.take()
         {
-            if let Some(pending) = self.assistant_panel.pending_query.take() {
-                self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
-            }
+            self.assistant_panel
+                .transcripts
+                .entry(pending.call.thread_id.clone())
+                .or_default()
+                .push(TranscriptEntry::new(
+                    Speaker::Activity,
+                    "Query approval replaced by a new instruction".into(),
+                    Some(pending.call.turn_id.clone()),
+                ));
+            self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
         self.assistant_panel
             .transcripts
             .entry(thread_id)
             .or_default()
-            .push(TranscriptEntry {
-                speaker: Speaker::User,
+            .push(TranscriptEntry::new(
+                Speaker::User,
                 text,
-                turn_id: self.assistant_panel.active_turn.clone(),
-            });
+                self.assistant_panel.active_turn.clone(),
+            ));
         self.assistant_panel
             .composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
@@ -711,7 +931,7 @@ impl Qrow {
 
     fn assistant_target(&self, thread_id: &str, cx: &App) -> Option<ActionTarget> {
         let tab = self.tabs.get(self.active)?;
-        let connection_id = tab.saved.profile?;
+        let connection_id = tab.saved.profile;
         let selected = tab.input.read(cx).selected_range();
         Some(ActionTarget {
             conversation_id: thread_id.into(),
@@ -815,6 +1035,7 @@ impl Qrow {
         for event in events {
             self.handle_assistant_event(event, window, cx);
         }
+        self.update_assistant_query_progress(cx);
         self.complete_assistant_query(cx);
         if changed {
             cx.notify();
@@ -882,30 +1103,50 @@ impl Qrow {
             }
             AssistantServiceEvent::History(history) => {
                 let thread = history.conversation.id;
-                let entries = self.assistant_panel.transcripts.entry(thread).or_default();
-                for turn in history.turns {
-                    for item in turn.items {
-                        let Some((speaker, text)) = history_item_text(&item) else {
-                            continue;
-                        };
-                        let speaker = if speaker == "user" {
-                            Speaker::User
-                        } else {
-                            Speaker::Assistant
-                        };
-                        if let Some(existing) = entries.iter_mut().find(|entry| {
-                            entry.speaker == speaker && entry.turn_id.as_deref() == Some(&turn.id)
-                        }) {
-                            existing.text = text;
-                        } else {
-                            entries.push(TranscriptEntry {
-                                speaker,
-                                text,
-                                turn_id: Some(turn.id.clone()),
-                            });
-                        }
+                if let Some(cursor) = history.older_cursor {
+                    if !self.assistant_panel.loaded_cursors.contains_key(&thread) {
+                        self.assistant_panel
+                            .older_cursors
+                            .insert(thread.clone(), cursor);
                     }
+                } else {
+                    self.assistant_panel.older_cursors.remove(&thread);
                 }
+                let entries = self.assistant_panel.transcripts.entry(thread).or_default();
+                merge_history(entries, history.turns);
+            }
+            AssistantServiceEvent::HistoryPage(page) => {
+                self.assistant_panel.loading_older = false;
+                if let Some(cursor) = page.older_cursor {
+                    self.assistant_panel
+                        .older_cursors
+                        .insert(page.thread_id.clone(), cursor);
+                } else {
+                    self.assistant_panel.older_cursors.remove(&page.thread_id);
+                }
+                let older: Vec<_> = page
+                    .turns
+                    .into_iter()
+                    .flat_map(|turn| {
+                        turn.items.into_iter().filter_map(move |item| {
+                            let (speaker, text) = history_item_text(&item)?;
+                            Some(TranscriptEntry::new(
+                                if speaker == "user" {
+                                    Speaker::User
+                                } else {
+                                    Speaker::Assistant
+                                },
+                                text,
+                                Some(turn.id.clone()),
+                            ))
+                        })
+                    })
+                    .collect();
+                self.assistant_panel
+                    .transcripts
+                    .entry(page.thread_id)
+                    .or_default()
+                    .splice(0..0, older);
             }
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
                 if let Some(entry) =
@@ -943,11 +1184,11 @@ impl Qrow {
                 }) {
                     last.text.push_str(&text);
                 } else {
-                    entries.push(TranscriptEntry {
-                        speaker: Speaker::Assistant,
+                    entries.push(TranscriptEntry::new(
+                        Speaker::Assistant,
                         text,
-                        turn_id: Some(turn_id),
-                    });
+                        Some(turn_id),
+                    ));
                 }
                 if self.assistant_transcript_near_bottom() {
                     self.assistant_panel.scroll.scroll_to_bottom();
@@ -958,6 +1199,38 @@ impl Qrow {
                 turn,
                 error,
             }) => {
+                if self
+                    .assistant_panel
+                    .pending_query
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.call.thread_id == thread_id && pending.call.turn_id == turn.id
+                    })
+                {
+                    if self
+                        .assistant_panel
+                        .pending_query
+                        .as_ref()
+                        .is_some_and(|pending| pending.started)
+                    {
+                        if let Some(pending) = &mut self.assistant_panel.pending_query {
+                            pending.detached = true;
+                        }
+                    } else if let Some(pending) = self.assistant_panel.pending_query.take() {
+                        self.assistant_panel
+                            .transcripts
+                            .entry(thread_id.clone())
+                            .or_default()
+                            .push(
+                                TranscriptEntry::new(
+                                    Speaker::Activity,
+                                    "Query approval cancelled because the turn ended".into(),
+                                    Some(turn.id.clone()),
+                                )
+                                .with_detail(bound_text(&pending.sql).0),
+                            );
+                    }
+                }
                 self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
                 if !self.assistant_panel.open {
                     self.assistant_panel.unread = true;
@@ -982,11 +1255,7 @@ impl Qrow {
                         .transcripts
                         .entry(thread_id)
                         .or_default()
-                        .push(TranscriptEntry {
-                            speaker: Speaker::Error,
-                            text: error,
-                            turn_id: Some(turn.id),
-                        });
+                        .push(TranscriptEntry::new(Speaker::Error, error, Some(turn.id)));
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
@@ -995,12 +1264,11 @@ impl Qrow {
                     .conversations
                     .iter_mut()
                     .find(|conversation| conversation.thread_id == thread_id)
+                    && conversation.title_source != AssistantTitleSource::User
                 {
-                    if conversation.title_source != AssistantTitleSource::User {
-                        conversation.title = title;
-                        conversation.title_source = AssistantTitleSource::Codex;
-                        self.changed(cx);
-                    }
+                    conversation.title = title;
+                    conversation.title_source = AssistantTitleSource::Codex;
+                    self.changed(cx);
                 }
                 self.sync_assistant_selectors(window, cx);
             }
@@ -1030,23 +1298,23 @@ impl Qrow {
                     Some("Complete sign-in in your browser, then return to Qrow.".into());
             }
             AssistantServiceEvent::Renamed(id) => {
-                if let Some((pending_id, title)) = self.assistant_panel.pending_rename.take() {
-                    if pending_id == id {
-                        if let Some(conversation) = self
-                            .assistant
-                            .conversations
-                            .iter_mut()
-                            .find(|conversation| conversation.thread_id == id)
-                        {
-                            conversation.title = title;
-                            conversation.title_source = AssistantTitleSource::User;
-                            self.sync_assistant_selectors(window, cx);
-                            self.changed(cx);
-                        }
-                    }
+                if let Some((pending_id, title)) = self.assistant_panel.pending_rename.take()
+                    && pending_id == id
+                    && let Some(conversation) = self
+                        .assistant
+                        .conversations
+                        .iter_mut()
+                        .find(|conversation| conversation.thread_id == id)
+                {
+                    conversation.title = title;
+                    conversation.title_source = AssistantTitleSource::User;
+                    self.sync_assistant_selectors(window, cx);
+                    self.changed(cx);
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
+                self.assistant_panel.older_cursors.remove(&id);
+                self.assistant_panel.loaded_cursors.remove(&id);
                 self.assistant
                     .conversations
                     .retain(|conversation| conversation.thread_id != id);
@@ -1085,6 +1353,18 @@ impl Qrow {
                 if operation == Operation::Create {
                     self.assistant_panel.creating_conversation = false;
                 }
+                if operation == Operation::ReadOlder {
+                    self.assistant_panel.loading_older = false;
+                    if let Some(thread) = id.as_ref()
+                        && let Some(cursor) = self.assistant_panel.older_cursors.get(thread)
+                        && let Some(loaded) = self.assistant_panel.loaded_cursors.get_mut(thread)
+                    {
+                        loaded.remove(cursor);
+                        if loaded.is_empty() {
+                            self.assistant_panel.loaded_cursors.remove(thread);
+                        }
+                    }
+                }
                 if matches!(operation, Operation::Start | Operation::Steer)
                     && id.as_deref() == self.assistant.selected_thread.as_deref()
                 {
@@ -1105,6 +1385,7 @@ impl Qrow {
                                 | Operation::Steer
                                 | Operation::Resume
                                 | Operation::Read
+                                | Operation::ReadOlder
                                 | Operation::Delete
                                 | Operation::Rename
                         )
@@ -1115,11 +1396,7 @@ impl Qrow {
                         .transcripts
                         .entry(thread)
                         .or_default()
-                        .push(TranscriptEntry {
-                            speaker: Speaker::Error,
-                            text: error,
-                            turn_id: None,
-                        });
+                        .push(TranscriptEntry::new(Speaker::Error, error, None));
                 } else {
                     self.assistant_panel.status = Status::Disconnected(error);
                 }
@@ -1162,18 +1439,6 @@ impl Qrow {
         };
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
         let entries = self.assistant_panel.transcripts.get(selected);
-        let mode = self
-            .assistant
-            .conversations
-            .iter()
-            .find(|conversation| conversation.thread_id == selected)
-            .map(|conversation| conversation.execution_mode)
-            .unwrap_or_default();
-        let mode_label = if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
-            "Run automatically"
-        } else {
-            "Ask before running"
-        };
         v_flex()
             .size_full()
             .min_w_0()
@@ -1260,14 +1525,11 @@ impl Qrow {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Button::new("assistant-mode")
-                            .ghost()
+                        Select::new(&self.assistant_panel.mode_select)
                             .small()
-                            .label(mode_label)
+                            .min_w_0()
                             .disabled(self.assistant.selected_thread.is_none())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_assistant_mode(window, cx)
-                            })),
+                            .accessibility_label("Assistant query approval mode"),
                     )
                     .child(
                         Button::new("assistant-rename")
@@ -1392,6 +1654,10 @@ impl Qrow {
                     .px_3()
                     .py_3()
                     .gap_3()
+                    .when(self.assistant_panel.older_cursors.contains_key(selected), |transcript| transcript.child(
+                        Button::new("assistant-load-older").ghost().small().label("Load older messages")
+                            .disabled(self.assistant_panel.loading_older || self.assistant_panel.active_turn.is_some() || self.assistant_panel.pending_query.is_some())
+                            .on_click(cx.listener(|this, _, _, cx| this.load_older_assistant_messages(cx)))))
                     .children(
                         entries
                             .into_iter()
@@ -1403,8 +1669,15 @@ impl Qrow {
                                 } else {
                                     MessageAlignment::Start
                                 };
+                                let variant = match entry.speaker {
+                                    Speaker::User => BubbleVariant::Filled,
+                                    Speaker::Assistant => BubbleVariant::Secondary,
+                                    Speaker::Activity => BubbleVariant::Muted,
+                                    Speaker::Error => BubbleVariant::Destructive,
+                                };
                                 Message::new().alignment(alignment).content(
-                                    MessageContent::new().child(
+                                    MessageContent::new().bubble(
+                                        Bubble::new().with_variant(variant).child(
                                         div()
                                             .id(format!("assistant-entry-{index}"))
                                             .role(Role::Paragraph)
@@ -1418,20 +1691,27 @@ impl Qrow {
                                                 },
                                                 entry.text
                                             ))
-                                            .p_2()
-                                            .rounded(cx.theme().radius)
-                                            .bg(if entry.speaker == Speaker::User {
-                                                cx.theme().muted
-                                            } else {
-                                                cx.theme().background
-                                            })
-                                            .text_color(if entry.speaker == Speaker::Error {
-                                                cx.theme().danger
-                                            } else {
-                                                cx.theme().foreground
-                                            })
                                             .whitespace_normal()
-                                            .child(entry.text.clone()),
+                                            .child(SelectableText::new("message", entry.text.clone()).document_order(index as u64 * 2))
+                                            .when_some(entry.detail.as_ref(), |bubble, detail| {
+                                                let thread = selected.to_owned();
+                                                bubble.child(Button::new(format!("assistant-detail-{index}"))
+                                                    .ghost().small().label(if entry.expanded { "Hide details" } else { "Details" })
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        if let Some(entry) = this.assistant_panel.transcripts.get_mut(&thread)
+                                                            .and_then(|entries| entries.get_mut(index)) {
+                                                            entry.expanded = !entry.expanded;
+                                                            cx.notify();
+                                                        }
+                                                    })))
+                                                    .when(entry.expanded, |bubble| bubble.child(
+                                                        div().id(format!("assistant-detail-content-{index}"))
+                                                            .max_h_40().max_w_full().overflow_y_scroll().overflow_x_scroll()
+                                                            .font_family(self.settings.editor_font_family.clone())
+                                                            .text_xs()
+                                                            .child(SelectableText::new("detail", detail.clone()).document_order(index as u64 * 2 + 1))
+                                                    ))
+                                            })),
                                     ),
                                 )
                             }),
@@ -1548,10 +1828,11 @@ impl Qrow {
                             .child(status),
                     )
                     .child(
-                        Textarea::new(&self.assistant_panel.composer)
-                            .h_20()
-                            .w_full()
-                            .aria_label("Assistant message"),
+                        div().key_context("AssistantComposer").child(
+                            Textarea::new(&self.assistant_panel.composer)
+                                .h_20()
+                                .w_full()
+                                .aria_label("Assistant message")),
                     )
                     .child(
                         h_flex()

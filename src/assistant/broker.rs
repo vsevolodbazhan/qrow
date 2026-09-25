@@ -96,7 +96,7 @@ pub struct ActionTarget {
     pub conversation_id: String,
     pub turn_id: String,
     pub tab_id: Uuid,
-    pub connection_id: Uuid,
+    pub connection_id: Option<Uuid>,
     pub selected_range: Option<Range<usize>>,
 }
 
@@ -129,7 +129,7 @@ pub struct TextEdit {
 pub struct EditRequest {
     pub version: u32,
     pub tab_id: Uuid,
-    pub connection_id: Uuid,
+    pub connection_id: Option<Uuid>,
     pub editor_revision: u64,
     pub edits: Vec<TextEdit>,
 }
@@ -276,7 +276,7 @@ impl ToolBroker {
             request.version,
             call,
             request.tab_id,
-            request.connection_id,
+            Some(request.connection_id),
             request.editor_revision,
             document,
         )?;
@@ -331,7 +331,7 @@ impl ToolBroker {
         version: u32,
         call: CallIdentity<'_>,
         tab_id: Uuid,
-        connection_id: Uuid,
+        connection_id: Option<Uuid>,
         editor_revision: u64,
         document: &EditorDocument<'_>,
     ) -> Result<(), ToolError> {
@@ -360,7 +360,7 @@ impl ToolBroker {
             || tab_id != target.tab_id
             || connection_id != target.connection_id
             || document.tab_id != target.tab_id
-            || document.connection_id != Some(target.connection_id)
+            || document.connection_id != target.connection_id
         {
             return Err(ToolError::new(
                 ToolErrorCode::StaleTarget,
@@ -472,7 +472,7 @@ mod tests {
             conversation_id: "conversation".into(),
             turn_id: "turn".into(),
             tab_id: tab,
-            connection_id: connection,
+            connection_id: Some(connection),
             selected_range: None,
         }
     }
@@ -499,10 +499,61 @@ mod tests {
         EditRequest {
             version: TOOL_SCHEMA_VERSION,
             tab_id: tab,
-            connection_id: connection,
+            connection_id: Some(connection),
             editor_revision: 7,
             edits,
         }
+    }
+
+    #[test]
+    fn selected_tab_can_be_edited_without_a_connection_but_not_run() {
+        let tab = Uuid::new_v4();
+        let broker = ToolBroker::new(Some(ActionTarget {
+            conversation_id: "conversation".into(),
+            turn_id: "turn".into(),
+            tab_id: tab,
+            connection_id: None,
+            selected_range: None,
+        }));
+        let document = EditorDocument {
+            tab_id: tab,
+            connection_id: None,
+            revision: 7,
+            sql: "",
+            selected_range: None,
+            busy: false,
+        };
+        let edit = EditRequest {
+            version: TOOL_SCHEMA_VERSION,
+            tab_id: tab,
+            connection_id: None,
+            editor_revision: 7,
+            edits: vec![TextEdit {
+                start: 0,
+                end: 0,
+                replacement: "SELECT 1".into(),
+            }],
+        };
+        assert_eq!(
+            broker.plan_edit(call(), &edit, &document).unwrap().sql,
+            "SELECT 1"
+        );
+        assert_eq!(
+            broker
+                .plan_run(
+                    call(),
+                    &RunRequest {
+                        version: TOOL_SCHEMA_VERSION,
+                        tab_id: tab,
+                        connection_id: Uuid::new_v4(),
+                        editor_revision: 7,
+                    },
+                    &document
+                )
+                .unwrap_err()
+                .code,
+            ToolErrorCode::StaleTarget
+        );
     }
 
     #[test]

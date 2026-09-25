@@ -20,9 +20,7 @@ fn remap_selection(
     for edit in edits {
         if edit.end <= selection.start {
             shift += edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
-        } else if edit.start < selection.end
-            || (selection.is_empty() && edit.start < selection.start)
-        {
+        } else if edit.start < selection.end {
             return None;
         }
     }
@@ -149,24 +147,54 @@ impl Qrow {
         let name = call.name.clone();
         let result = self.dispatch_assistant_tool(&call, window, cx);
         if let Some(result) = result {
-            let label = if result.success {
-                format!("Used {name}")
-            } else {
-                format!("{name} failed")
+            let action = match name.as_str() {
+                "get_workspace_context" => "Read workspace context",
+                "read_tab_sql" => "Read SQL",
+                "edit_selected_tab_sql" => "Edited SQL",
+                "cancel_selected_tab_query" => "Requested query cancellation",
+                "get_query_status" => "Checked query status",
+                "read_results" => "Read result rows",
+                "fetch_more_results" => "Fetched more result rows",
+                "read_query_logs" => "Read query Logs",
+                _ => "Used assistant tool",
             };
+            let target = call
+                .arguments
+                .get("tab_id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .and_then(|id| self.tabs.iter().find(|tab| tab.saved.id == id))
+                .map(|tab| tab.saved.title.as_str());
+            let label = format!(
+                "{action}{}{}",
+                target.map_or("", |_| " · "),
+                target.unwrap_or("")
+            );
+            let label = if result.success {
+                label
+            } else {
+                format!("{label} failed")
+            };
+            let (detail, _) = bound_text(&format!(
+                "Arguments:\n{}\nResult:\n{}",
+                call.arguments, result.content
+            ));
             self.assistant_panel
                 .transcripts
                 .entry(call.thread_id.clone())
                 .or_default()
-                .push(TranscriptEntry {
-                    speaker: if result.success {
-                        Speaker::Activity
-                    } else {
-                        Speaker::Error
-                    },
-                    text: label,
-                    turn_id: Some(call.turn_id.clone()),
-                });
+                .push(
+                    TranscriptEntry::new(
+                        if result.success {
+                            Speaker::Activity
+                        } else {
+                            Speaker::Error
+                        },
+                        label,
+                        Some(call.turn_id.clone()),
+                    )
+                    .with_detail(detail),
+                );
             self.answer_assistant_call(call, result.success, result.content, cx);
         }
         cx.notify();
@@ -252,7 +280,9 @@ impl Qrow {
                 content: json!({"version": 1, "error": error}),
             })?;
         let editor = tab.input.clone();
-        let mapped = remap_selection(selected.clone(), &args.edits);
+        let mapped = remap_selection(selected, &args.edits);
+        self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
+        self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
         editor.update(cx, |editor, cx| {
             let scroll = editor.scroll_offset();
             editor.replace_all(plan.sql.clone(), window, cx);
@@ -322,6 +352,8 @@ impl Qrow {
                 approved: mode == qrow::model::AssistantExecutionMode::RunAutomatically,
                 started: false,
                 kind: PendingQueryKind::Run,
+                activity_index: None,
+                detached: false,
             });
             if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
                 self.begin_assistant_query(window, cx);
@@ -340,6 +372,18 @@ impl Qrow {
 
     pub(super) fn cancel_assistant_approval(&mut self, cx: &mut Context<Self>) {
         if let Some(pending) = self.assistant_panel.pending_query.take() {
+            self.assistant_panel
+                .transcripts
+                .entry(pending.call.thread_id.clone())
+                .or_default()
+                .push(
+                    TranscriptEntry::new(
+                        Speaker::Activity,
+                        "Query request cancelled".into(),
+                        Some(pending.call.turn_id.clone()),
+                    )
+                    .with_detail(bound_text(&format!("SQL:\n{}", pending.sql)).0),
+                );
             self.answer_assistant_call(
                 pending.call,
                 false,
@@ -392,11 +436,79 @@ impl Qrow {
         if let Some(pending) = &mut self.assistant_panel.pending_query {
             pending.started = true;
         }
-        match kind {
+        let started = match kind {
             PendingQueryKind::Run => self.run_selected_query(window, cx),
-            PendingQueryKind::Fetch => self.next_page(cx),
+            PendingQueryKind::Fetch => {
+                self.next_page(cx);
+                self.tabs[self.active].busy
+            }
+        };
+        if !started {
+            let pending = self.assistant_panel.pending_query.take().unwrap();
+            self.answer_assistant_call(
+                pending.call,
+                false,
+                failure(
+                    "query_not_started",
+                    "Qrow could not start this query. Check the selected tab and connection.",
+                )
+                .content,
+                cx,
+            );
+            return;
         }
+        self.record_assistant_query_started(cx);
         self.complete_assistant_query(cx);
+    }
+
+    fn record_assistant_query_started(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.assistant_panel.pending_query.as_ref() else {
+            return;
+        };
+        let thread = pending.call.thread_id.clone();
+        let turn = pending.call.turn_id.clone();
+        let tab = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id);
+        let title = tab.map_or("Query tab", |tab| tab.saved.title.as_str());
+        let label = match pending.kind {
+            PendingQueryKind::Run => format!("Running in {title} · Preparing"),
+            PendingQueryKind::Fetch => format!("Fetching more rows in {title}"),
+        };
+        let detail = bound_text(&format!("SQL:\n{}", pending.sql)).0;
+        let entries = self.assistant_panel.transcripts.entry(thread).or_default();
+        let index = entries.len();
+        entries
+            .push(TranscriptEntry::new(Speaker::Activity, label, Some(turn)).with_detail(detail));
+        if let Some(pending) = &mut self.assistant_panel.pending_query {
+            pending.activity_index = Some(index);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn update_assistant_query_progress(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.assistant_panel.pending_query.as_ref() else {
+            return;
+        };
+        let Some(index) = pending.activity_index else {
+            return;
+        };
+        let Some(tab) = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id) else {
+            return;
+        };
+        let verb = match pending.kind {
+            PendingQueryKind::Run => "Running",
+            PendingQueryKind::Fetch => "Fetching rows",
+        };
+        let label = format!("{verb} in {} · {}", tab.saved.title, tab.status);
+        if let Some(entry) = self
+            .assistant_panel
+            .transcripts
+            .get_mut(&pending.call.thread_id)
+            .and_then(|entries| entries.get_mut(index))
+            && entry.text != label
+        {
+            entry.text = label;
+            cx.notify();
+        }
     }
 
     pub(super) fn complete_assistant_query(&mut self, cx: &mut Context<Self>) {
@@ -422,24 +534,36 @@ impl Qrow {
             "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
             "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
         let pending = self.assistant_panel.pending_query.take().unwrap();
-        self.assistant_panel
+        let entry = TranscriptEntry::new(
+            if ok {
+                Speaker::Activity
+            } else {
+                Speaker::Error
+            },
+            if ok {
+                format!("Query finished in {}", tab.saved.title)
+            } else {
+                tab.status.clone()
+            },
+            Some(pending.call.turn_id.clone()),
+        )
+        .with_detail(bound_text(&format!("SQL:\n{}\nResult:\n{}", pending.sql, content)).0);
+        let entries = self
+            .assistant_panel
             .transcripts
             .entry(pending.call.thread_id.clone())
-            .or_default()
-            .push(TranscriptEntry {
-                speaker: if ok {
-                    Speaker::Activity
-                } else {
-                    Speaker::Error
-                },
-                text: if ok {
-                    format!("Query finished in {}", tab.saved.title)
-                } else {
-                    tab.status.clone()
-                },
-                turn_id: Some(pending.call.turn_id.clone()),
-            });
-        self.answer_assistant_call(pending.call, ok, content, cx);
+            .or_default();
+        if let Some(existing) = pending
+            .activity_index
+            .and_then(|index| entries.get_mut(index))
+        {
+            *existing = entry;
+        } else {
+            entries.push(entry);
+        }
+        if !pending.detached {
+            self.answer_assistant_call(pending.call, ok, content, cx);
+        }
     }
 
     fn tool_cancel(
@@ -456,7 +580,7 @@ impl Qrow {
         if target.conversation_id != call.thread_id
             || target.turn_id != call.turn_id
             || target.tab_id != args.tab_id
-            || target.connection_id != args.connection_id
+            || target.connection_id != Some(args.connection_id)
             || self.tabs[self.active].saved.id != args.tab_id
         {
             return Err(failure(
@@ -531,7 +655,7 @@ impl Qrow {
             if target.conversation_id != call.thread_id
                 || target.turn_id != call.turn_id
                 || target.tab_id != args.tab_id
-                || target.connection_id != args.connection_id
+                || target.connection_id != Some(args.connection_id)
                 || tab.saved.id != args.tab_id
             {
                 return Err(failure(
@@ -551,6 +675,23 @@ impl Qrow {
                     "Another assistant query request is pending.",
                 ));
             }
+            let worker = tab.worker.as_ref().ok_or_else(|| {
+                failure(
+                    "result_unavailable",
+                    "The query worker is no longer available.",
+                )
+            })?;
+            let next_page = {
+                let data = tab.table.read(cx);
+                data.delegate().pagination.pages(data.delegate().rows.len())
+            };
+            worker.more();
+            let tab = &mut self.tabs[self.active];
+            tab.pending_page = Some(next_page);
+            tab.busy = true;
+            tab.cancelling = false;
+            tab.started = Some(Instant::now());
+            tab.status = "Fetching next batch…".into();
             self.assistant_panel.pending_query = Some(PendingQuery {
                 call: call.clone(),
                 tab_id: tab.saved.id,
@@ -559,8 +700,10 @@ impl Qrow {
                 approved: true,
                 started: true,
                 kind: PendingQueryKind::Fetch,
+                activity_index: None,
+                detached: false,
             });
-            self.next_page(cx);
+            self.record_assistant_query_started(cx);
             Ok(())
         })();
         result.err()

@@ -48,6 +48,7 @@ actions!(
     qrow,
     [
         RunQuery,
+        SendAssistantMessage,
         NewTab,
         CloseTab,
         ToggleSidebar,
@@ -64,6 +65,11 @@ actions!(
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
+        KeyBinding::new(
+            "cmd-enter",
+            SendAssistantMessage,
+            Some("AssistantComposer > Input"),
+        ),
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
@@ -79,7 +85,7 @@ pub fn init(cx: &mut App) {
 }
 
 fn set_menus(cx: &mut App, assistant_enabled: bool) {
-    cx.set_menus(vec![
+    let mut menus = vec![
         Menu {
             disabled: false,
             name: "Qrow".into(),
@@ -124,20 +130,20 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },
-        Menu {
+    ];
+    if assistant_enabled {
+        menus.push(Menu {
             disabled: false,
             name: "View".into(),
-            items: if assistant_enabled {
-                vec![MenuItem::action("AI Assistant", ToggleAssistant)]
-            } else {
-                vec![]
-            },
-        },
-    ]);
+            items: vec![MenuItem::action("AI Assistant", ToggleAssistant)],
+        });
+    }
+    cx.set_menus(menus);
 }
 struct Tab {
     saved: SavedTab,
     revision: u64,
+    pending_assistant_edit: Option<String>,
     input: Entity<EditorState>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
@@ -461,7 +467,10 @@ impl Qrow {
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
-                    tab.revision = tab.revision.saturating_add(1);
+                    let current = tab.input.read(cx).value().to_string();
+                    if tab.pending_assistant_edit.take().as_deref() != Some(current.as_str()) {
+                        tab.revision = tab.revision.saturating_add(1);
+                    }
                 }
                 this.changed(cx);
             }
@@ -475,6 +484,7 @@ impl Qrow {
         Tab {
             saved,
             revision: 0,
+            pending_assistant_edit: None,
             input,
             table,
             _subscription: subscription,
@@ -1100,26 +1110,16 @@ impl Qrow {
         }
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .assistant_panel
-            .composer
-            .read(cx)
-            .focus_handle(cx)
-            .is_focused(window)
-        {
-            self.send_assistant(window, cx);
-            return;
-        }
         self.run_selected_query(window, cx);
     }
-    fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
-            return;
+            return false;
         }
         if self.demo {
             self.seed_demo(cx);
             cx.notify();
-            return;
+            return true;
         }
         let tab = &mut self.tabs[self.active];
         let query = tab.input.update(cx, |s, cx| {
@@ -1139,7 +1139,7 @@ impl Qrow {
             Self::record_failure(tab, true);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         }
         let Some(profile) = self
             .profiles
@@ -1155,7 +1155,7 @@ impl Qrow {
             Self::record_failure(tab, true);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         };
         if let Err(error) = profile.validate() {
             let message = error.to_string();
@@ -1166,7 +1166,7 @@ impl Qrow {
             Self::record_failure(tab, true);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
@@ -1207,6 +1207,7 @@ impl Qrow {
         .with_sql(query);
         Self::record_activity(tab, submission);
         cx.notify();
+        true
     }
     fn next_page(&mut self, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[self.active];

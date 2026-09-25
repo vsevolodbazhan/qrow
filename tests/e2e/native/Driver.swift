@@ -79,6 +79,12 @@ func click(_ element: AXUIElement) throws {
         event.post(tap: .cghidEventTap)
     }
 }
+func clickPoint(_ point: CGPoint) {
+    for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .left)!
+        event.post(tap: .cghidEventTap)
+    }
+}
 func rightClick(_ element: AXUIElement) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
@@ -291,6 +297,16 @@ final class Driver {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         } while clock.now < deadline
         throw Failure("Missing accessible input: \(label)")
+    }
+    func waitInputValue(_ label: String, _ expected: String, timeout: Double = 10) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        repeat {
+            if let input = accessibleInput(label),
+               attribute(input, kAXValueAttribute) as? String == expected { return }
+            try require(process.isRunning, "Qrow exited while waiting for \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < deadline
+        throw Failure("\(label) did not become \(expected)")
     }
     func fill(_ label: String, _ value: String) throws {
         // GPUI exposes inputs as text fields or text areas depending on the control.
@@ -570,10 +586,65 @@ final class Driver {
         try waitGone("UI Scale")
         print("PASS: Settings shows every control, applies a change, and restores defaults")
     }
+    func testAssistant() throws {
+        try selectApplicationMenuItem("Settings…")
+        // GPUI Kit does not publish the settings sidebar labels through AX.
+        // Anchor the pointer to the visible search field in the same pane.
+        for _ in 0..<3 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            let (search, _) = try elementBounds(waitInput("Search..."))
+            clickPoint(CGPoint(x: search.x + 42, y: search.y + 164))
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            if find("Codex executable") != nil { break }
+        }
+        _ = try wait("Codex executable", timeout: 5)
+        try fill("Codex executable", FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh")
+        try press("Enable AI assistant")
+        try press("Enable assistant")
+        for _ in 0..<3 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            try press("Save")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            if find("Codex executable") == nil { break }
+        }
+        try waitGone("Codex executable", timeout: 5)
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model", timeout: 20)
+        _ = try wait("Ask before running")
+        try fill("Assistant message", "Keep this draft")
+        try press("Run")
+        let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
+        try require(draft == "Keep this draft", "Toolbar Run sent the assistant draft")
+        try fill("Assistant message", "Help me with this query")
+        key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
+        _ = try wait("I can help with this query", timeout: 20)
+        _ = try waitExact("Ready", timeout: 20)
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        _ = try wait("I updated the SQL.", timeout: 20)
+        try waitInputValue("SQL Editor", "SELECT 1")
+        try snapshot("assistant")
+        let editor = try waitInput("SQL Editor")
+        let (editorPosition, _) = try elementBounds(editor)
+        clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
+        try require(
+            AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+            "Could not focus SQL Editor for Undo",
+        )
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        key(0) // A normal user edit must not merge with the assistant edit.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        key(6, flags: .maskCommand)
+        try waitInputValue("SQL Editor", "SELECT 1")
+        key(6, flags: .maskCommand) // The assistant edit is one Undo step.
+        try waitInputValue("SQL Editor", "")
+        print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
+    }
     func test() throws {
         try start()
         try testAbout()
         try testSettings()
+        try testAssistant()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
@@ -1079,6 +1150,9 @@ do {
                 try driver.start()
                 try driver.testAbout()
                 try driver.testSettings()
+            } else if CommandLine.arguments.contains("--assistant-only") {
+                try driver.start()
+                try driver.testAssistant()
             } else {
                 try driver.test()
             }

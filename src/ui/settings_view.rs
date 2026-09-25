@@ -385,6 +385,22 @@ impl Qrow {
             self.settings.assistant.enabled = false;
             set_menus(cx, false);
             self.assistant_panel.open = false;
+            if self.assistant_panel.auto_hidden_sidebar {
+                self.sidebar = true;
+                self.assistant_panel.auto_hidden_sidebar = false;
+            }
+            self.assistant_panel.unread = false;
+            self.assistant_panel.active_turn = None;
+            self.assistant_panel.target = None;
+            self.assistant_panel.pending_query = None;
+            self.assistant_panel.snapshot = None;
+            self.assistant_panel.transcripts.clear();
+            self.assistant_panel.older_cursors.clear();
+            self.assistant_panel.loaded_cursors.clear();
+            self.assistant_panel.loading_older = false;
+            self.assistant_panel.creating_conversation = false;
+            self.assistant_panel.notice = None;
+            self.assistant_panel.status = super::assistant_view::Status::Idle;
             self.assistant_panel.shutdown();
             self.changed(cx);
             return;
@@ -681,7 +697,6 @@ fn assistant_settings_page(
         .resettable(false)
         .group(SettingGroup::new().title("Codex")
             .item(SettingItem::new("Enable assistant", SettingField::render({
-                let owner = owner.clone();
                 move |options: &RenderOptions, window: &mut Window, _: &mut App| {
                     let owner = owner.clone();
                     control(options, window.rem_size(), Switch::new("enable-assistant")

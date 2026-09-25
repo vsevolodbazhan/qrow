@@ -16,7 +16,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
         ("edit_selected_tab_sql", "Apply atomic SQL text edits to the selected query tab at the specified revision.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
-                "connection_id": {"type": "string", "format": "uuid"},
+                "connection_id": {"type": ["string", "null"], "format": "uuid"},
                 "editor_revision": {"type": "integer", "minimum": 0},
                 "edits": {"type": "array", "minItems": 1, "maxItems": 64,
                     "items": {"type": "object", "properties": {

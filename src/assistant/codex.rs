@@ -25,7 +25,7 @@ const MAX_PROTOCOL_LINE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PENDING_MESSAGES: usize = 1_024;
 const MAX_MODEL_PAGES: usize = 100;
 const HISTORY_PAGE_SIZE: usize = 100;
-const MAX_HISTORY_PAGES_PER_READ: usize = 10;
+const MAX_HISTORY_PAGES_PER_READ: usize = 3;
 const MAX_HISTORY_CURSOR_BYTES: usize = 4096;
 const MAX_STDERR_BYTES: usize = 16 * 1024;
 const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(200);
@@ -65,6 +65,9 @@ impl CodexHarness {
         }
         let mut cursor = cursor.map(str::to_owned);
         let mut seen = BTreeSet::new();
+        if let Some(initial) = cursor.as_ref() {
+            seen.insert(initial.clone());
+        }
         let mut descending = Vec::new();
         for _ in 0..MAX_HISTORY_PAGES_PER_READ {
             let response: ItemsPageResponse = self.request(
@@ -1805,5 +1808,32 @@ done
             "visible"
         );
         assert_eq!(history.older_cursor.as_deref(), Some("older"));
+    }
+
+    #[test]
+    fn paginated_history_rejects_a_cursor_cycle() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*'"cursor":"A"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-1","item":{"type":"reasoning"}}],"nextCursor":"B"}}\n' "$id" ;;
+    *'"method":"thread/items/list"'*'"cursor":"B"'*) printf '{"id":%s,"result":{"data":[{"turnId":"turn-1","item":{"type":"reasoning"}}],"nextCursor":"A"}}\n' "$id" ;;
+  esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+        assert!(
+            harness
+                .read_older_conversation("thread-1", "A")
+                .unwrap_err()
+                .to_string()
+                .contains("cursor")
+        );
     }
 }
