@@ -115,6 +115,16 @@ func scrollDown(_ element: AXUIElement) throws {
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+func scrollUpAbove(_ element: AXUIElement) throws {
+    let (point, extent) = try elementBounds(element)
+    let location = CGPoint(x: point.x + extent.width / 2, y: point.y - 120)
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: location, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
+    scroll.location = location
+    scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -650,6 +660,14 @@ final class Driver {
         try waitInputValue("SQL Editor", "SELECT 1")
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
+        try fill("Assistant message", "Show many lines")
+        try press("Send")
+        _ = try wait("Line 40", timeout: 20)
+        try scrollUpAbove(waitInput("Assistant message"))
+        _ = try wait("Jump to latest", timeout: 5)
+        try snapshot("assistant-scrolled")
+        try press("Jump to latest")
+        try waitGone("Jump to latest", timeout: 5)
         try press("Toggle Assistant")
         try waitGone("Toggle conversation list")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")

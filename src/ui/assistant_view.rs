@@ -31,7 +31,37 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
 };
+
+fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn conversation_age(last_activity: u64, now: u64) -> String {
+    if last_activity == 0 {
+        return "Earlier".into();
+    }
+    let elapsed = now.saturating_sub(last_activity);
+    if elapsed < 60 {
+        "Now".into()
+    } else if elapsed < 3_600 {
+        format!("{}m", elapsed / 60)
+    } else if elapsed < 86_400 {
+        format!("{}h", elapsed / 3_600)
+    } else if elapsed < 604_800 {
+        format!("{}d", elapsed / 86_400)
+    } else {
+        format!("{}w", elapsed / 604_800)
+    }
+}
+
+fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
+    override_visibility.unwrap_or(!narrow)
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum Status {
@@ -68,6 +98,22 @@ mod tests {
         assert_eq!(entries[0].text, "question");
         assert_eq!(entries[1].text, "first");
         assert_eq!(entries[2].text, "second");
+    }
+
+    #[::core::prelude::v1::test]
+    fn conversation_age_handles_unknown_and_recent_activity() {
+        assert_eq!(conversation_age(0, 1_000), "Earlier");
+        assert_eq!(conversation_age(990, 1_000), "Now");
+        assert_eq!(conversation_age(880, 1_000), "2m");
+        assert_eq!(conversation_age(1_000, 999), "Now");
+    }
+
+    #[::core::prelude::v1::test]
+    fn narrow_panes_collapse_threads_until_requested() {
+        assert!(!show_thread_list(true, None));
+        assert!(show_thread_list(false, None));
+        assert!(show_thread_list(true, Some(true)));
+        assert!(!show_thread_list(false, Some(false)));
     }
 }
 
@@ -272,7 +318,8 @@ impl AssistantPanelState {
                 |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
                     if let SelectEvent::Confirm(Some(label)) = event {
                         this.settings.assistant.reasoning_effort =
-                            (label != "Default").then_some(label.clone());
+                            (!label.starts_with("Default · ") && label != "Default")
+                                .then_some(label.clone());
                         this.changed(cx);
                     }
                 },
@@ -545,7 +592,15 @@ impl Qrow {
             .and_then(|id| models.iter().find(|model| model.id() == id))
             .or_else(|| models.iter().find(|model| model.is_default()))
             .or_else(|| models.first());
-        let mut model_labels = vec!["Default".to_owned()];
+        let default_model_label = models
+            .iter()
+            .find(|model| model.is_default())
+            .or_else(|| models.first())
+            .map_or_else(
+                || "Default".to_owned(),
+                |model| format!("Default · {}", model.display_name()),
+            );
+        let mut model_labels = vec![default_model_label.clone()];
         model_labels.extend(models.iter().map(|model| model.display_name().to_owned()));
         let selected_model_label = self
             .settings
@@ -553,9 +608,7 @@ impl Qrow {
             .model
             .as_ref()
             .and_then(|id| models.iter().find(|model| model.id() == id))
-            .map_or("Default".to_owned(), |model| {
-                model.display_name().to_owned()
-            });
+            .map_or(default_model_label, |model| model.display_name().to_owned());
         self.assistant_panel.model_select.update(cx, |state, cx| {
             state.set_items(SearchableVec::new(model_labels), window, cx);
             state.set_selected_value(&selected_model_label, window, cx);
@@ -573,14 +626,18 @@ impl Qrow {
                 Some("Saved reasoning level is unavailable. Codex default is in use.".into());
             self.changed(cx);
         }
-        let mut effort_labels = vec!["Default".to_owned()];
+        let default_effort_label = model.map_or_else(
+            || "Default".to_owned(),
+            |model| format!("Default · {}", model.default_reasoning_effort()),
+        );
+        let mut effort_labels = vec![default_effort_label.clone()];
         effort_labels.extend(efforts.iter().map(|effort| effort.id().to_owned()));
         let selected_effort = self
             .settings
             .assistant
             .reasoning_effort
             .clone()
-            .unwrap_or("Default".into());
+            .unwrap_or(default_effort_label);
         self.assistant_panel
             .reasoning_select
             .update(cx, |state, cx| {
@@ -636,7 +693,7 @@ impl Qrow {
     }
 
     fn select_assistant_model(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.assistant.model = if label == "Default" {
+        self.settings.assistant.model = if label == "Default" || label.starts_with("Default · ") {
             None
         } else {
             self.assistant_panel
@@ -883,6 +940,15 @@ impl Qrow {
                 ));
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
+        if let Some(conversation) = self
+            .assistant
+            .conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == thread_id)
+        {
+            conversation.last_activity = unix_now_seconds();
+            self.changed(cx);
+        }
         self.assistant_panel
             .transcripts
             .entry(thread_id)
@@ -1059,10 +1125,11 @@ impl Qrow {
             }
             AssistantServiceEvent::Created(conversation) => {
                 self.assistant_panel.creating_conversation = false;
-                let entry = AssistantConversation::new(
+                let mut entry = AssistantConversation::new(
                     conversation.id.clone(),
                     self.settings.assistant.default_execution_mode,
                 );
+                entry.last_activity = unix_now_seconds();
                 self.assistant.conversations.push(entry);
                 self.assistant.selected_thread = Some(conversation.id);
                 self.sync_assistant_selectors(window, cx);
@@ -1215,7 +1282,8 @@ impl Qrow {
                     .iter()
                     .position(|conversation| conversation.thread_id == thread_id)
                 {
-                    let conversation = self.assistant.conversations.remove(position);
+                    let mut conversation = self.assistant.conversations.remove(position);
+                    conversation.last_activity = unix_now_seconds();
                     self.assistant.conversations.insert(0, conversation);
                     self.sync_assistant_selectors(window, cx);
                     self.changed(cx);
@@ -1404,6 +1472,8 @@ impl Qrow {
                     .items_center()
                     .gap_1()
                     .px_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .when(narrow, |row| {
                         row.child(
                             Button::new("assistant-back-to-thread")
@@ -1446,19 +1516,29 @@ impl Qrow {
                                 let id = conversation.thread_id.clone();
                                 let selected =
                                     self.assistant.selected_thread.as_deref() == Some(&id);
+                                let label = self.conversation_label(conversation);
                                 Button::new(format!("assistant-thread-{id}"))
                                     .ghost()
                                     .small()
                                     .w_full()
-                                    .h(self.ui_px(32.))
+                                    .h(self.ui_px(48.))
                                     .justify_start()
+                                    .accessibility_label(format!("Open conversation: {label}"))
                                     .child(
-                                        h_flex().w_full().min_w_0().child(
-                                            div()
-                                                .min_w_0()
-                                                .truncate()
-                                                .child(self.conversation_label(conversation)),
-                                        ),
+                                        v_flex()
+                                            .w_full()
+                                            .min_w_0()
+                                            .gap_0p5()
+                                            .child(div().min_w_0().truncate().child(label))
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(conversation_age(
+                                                        conversation.last_activity,
+                                                        unix_now_seconds(),
+                                                    )),
+                                            ),
                                     )
                                     .selected(selected)
                                     .when(selected, |button| {
@@ -1480,7 +1560,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let narrow = width < self.ui_px(600.);
-        let show_threads = self.assistant_panel.thread_list_override.unwrap_or(!narrow);
+        let show_threads = show_thread_list(narrow, self.assistant_panel.thread_list_override);
         let action_size = self.ui_px(28.);
         let status = match &self.assistant_panel.status {
             Status::Idle => "Open the assistant to start Codex".to_owned(),
@@ -1721,9 +1801,9 @@ impl Qrow {
                                     MessageAlignment::Start
                                 };
                                 let variant = match entry.speaker {
-                                    Speaker::User => BubbleVariant::Filled,
-                                    Speaker::Assistant => BubbleVariant::Secondary,
-                                    Speaker::Activity => BubbleVariant::Muted,
+                                    Speaker::User => BubbleVariant::Tinted,
+                                    Speaker::Assistant => BubbleVariant::Ghost,
+                                    Speaker::Activity => BubbleVariant::Outline,
                                     Speaker::Error => BubbleVariant::Destructive,
                                 };
                                 Message::new().alignment(alignment).content(
@@ -1743,6 +1823,7 @@ impl Qrow {
                                                 entry.text
                                             ))
                                             .whitespace_normal()
+                                            .when(entry.speaker == Speaker::Activity, |bubble| bubble.font_weight(FontWeight::MEDIUM))
                                             .child(content)
                                             .when_some(entry.detail.as_ref(), |bubble, detail| {
                                                 let thread = selected.to_owned();
@@ -1889,20 +1970,25 @@ impl Qrow {
                                 .aria_label("Assistant message")),
                     )
                     .when(model.is_some(), |composer| composer.child(
-                        h_flex()
-                            .min_w_0()
-                            .gap_1()
-                            .child(Select::new(&self.assistant_panel.model_select)
-                                .small().appearance(false).flex_1().min_w_0()
-                                .accessibility_label("Assistant model"))
-                            .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                Select::new(&self.assistant_panel.reasoning_select)
+                        v_flex().min_w_0().gap_0p5()
+                            .child(h_flex().min_w_0().gap_1()
+                                .child(div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Model"))
+                                .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                    div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Reasoning")))
+                                .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                    div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Tier"))))
+                            .child(h_flex().min_w_0().gap_1()
+                                .child(Select::new(&self.assistant_panel.model_select)
                                     .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant reasoning")))
-                            .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                Select::new(&self.assistant_panel.tier_select)
-                                    .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant service tier")))
+                                    .accessibility_label("Assistant model"))
+                                .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                    Select::new(&self.assistant_panel.reasoning_select)
+                                        .small().appearance(false).flex_1().min_w_0()
+                                        .accessibility_label("Assistant reasoning")))
+                                .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                    Select::new(&self.assistant_panel.tier_select)
+                                        .small().appearance(false).flex_1().min_w_0()
+                                        .accessibility_label("Assistant service tier"))))
                     ))
                     .child(
                         h_flex()
@@ -1912,6 +1998,8 @@ impl Qrow {
                                 Select::new(&self.assistant_panel.mode_select)
                                     .small()
                                     .appearance(false)
+                                    .w(self.ui_px(62.))
+                                    .min_w_0()
                                     .disabled(self.assistant.selected_thread.is_none())
                                     .accessibility_label("Assistant query approval mode"),
                             )

@@ -44,8 +44,10 @@ card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
 read-only. Select **Run automatically** only if you accept this risk.
 
 Use the thread list to change conversations. The list is beside the current
-conversation when the pane is wide. On a narrow pane, select **Toggle
-conversation list** to open the list. Search the list by title. Select **New
+conversation when the pane is wide. Qrow lists recent conversations first.
+Older saved conversations without an activity time show **Earlier**. On a
+narrow pane, select **Toggle conversation list** to open the list. Search the
+list by title. Select **New
 Conversation** in the pane header to start a separate conversation. Open
 **Conversation actions** to rename or delete the current conversation. When you
 delete a conversation, Qrow asks Codex to remove it. This action does not

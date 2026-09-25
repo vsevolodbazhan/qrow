@@ -149,17 +149,22 @@ for line in sys.stdin:
                 }
             )
         else:
+            answer = (
+                "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
+                if message.startswith("Show many lines")
+                else (
+                    "**I can help with this query.**\n\n"
+                    "Use `SELECT 1` to check the selected tab.\n\n"
+                    "| Column | Value |\n| --- | --- |\n| Result | 1 |"
+                )
+            )
             send(
                 {
                     "method": "item/agentMessage/delta",
                     "params": {
                         "threadId": THREAD,
                         "turnId": turn_id,
-                        "delta": (
-                            "**I can help with this query.**\n\n"
-                            "Use `SELECT 1` to check the selected tab.\n\n"
-                            "| Column | Value |\n| --- | --- |\n| Result | 1 |"
-                        ),
+                        "delta": answer,
                     },
                 }
             )
