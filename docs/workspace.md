@@ -5,17 +5,17 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the appearance. The dialog shows the
-**Interface**, **Editor**, and **Logs** sections on one page. The Interface
+Open **Qrow → Settings…** to change the appearance. The Appearance page shows
+the **Interface**, **Editor**, and **Logs** sections. The Interface
 section has **Scale** and **Font Family**. The Editor and Logs sections have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results. Editor settings apply only to SQL. Logs settings apply
 only to Logs. Line height is relative to the font size. Scale multiplies the
 Editor and Logs font sizes.
 
-Select a section in the list at the left to move to that section. Use the search
+Select a page or section in the list at the left. Use the search
 box above the list to show only the settings that match a word in their name or
-description. The section list needs the pointer. All controls stay on the page,
+description. The section list needs the pointer. Appearance controls stay on one page,
 so the keyboard reaches each of them without the list.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
@@ -29,7 +29,8 @@ There is no light-theme setting.
 Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
-These layout positions are not saved in the workspace.
+These two divider positions are not saved in the workspace. Qrow saves the
+optional [assistant pane](assistant.md) width.
 
 ## Saved state
 

@@ -1,4 +1,6 @@
 mod about_view;
+mod assistant_tools;
+mod assistant_view;
 mod button_pair;
 mod connection_form;
 mod output;
@@ -49,6 +51,7 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        ToggleAssistant,
         OpenAbout,
         OpenSettings,
         IncreaseUiScale,
@@ -64,6 +67,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-=", IncreaseUiScale, None),
         KeyBinding::new("cmd-+", IncreaseUiScale, None),
         KeyBinding::new("cmd--", DecreaseUiScale, None),
@@ -71,6 +75,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
     ]);
+    set_menus(cx, false);
+}
+
+fn set_menus(cx: &mut App, assistant_enabled: bool) {
     cx.set_menus(vec![
         Menu {
             disabled: false,
@@ -116,10 +124,20 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },
+        Menu {
+            disabled: false,
+            name: "View".into(),
+            items: if assistant_enabled {
+                vec![MenuItem::action("AI Assistant", ToggleAssistant)]
+            } else {
+                vec![]
+            },
+        },
     ]);
 }
 struct Tab {
     saved: SavedTab,
+    revision: u64,
     input: Entity<EditorState>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
@@ -251,6 +269,7 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 pub struct Qrow {
     settings: Settings,
     assistant: AssistantWorkspace,
+    assistant_panel: assistant_view::AssistantPanelState,
     fonts: Vec<String>,
     settings_open: bool,
     about_open: bool,
@@ -342,14 +361,17 @@ impl Qrow {
             }
         }
         let scale = workspace.settings.ui_scale;
+        set_menus(cx, workspace.settings.assistant.enabled);
         apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
             this.finish(cx);
             async {}
         });
+        let assistant_panel = assistant_view::AssistantPanelState::new(window, cx);
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
+            assistant_panel,
             fonts,
             settings_open: false,
             about_open: false,
@@ -429,14 +451,18 @@ impl Qrow {
         this
     }
     fn make_tab(&self, saved: SavedTab, window: &mut Window, cx: &mut Context<Self>) -> Tab {
+        let tab_id = saved.id;
         let input = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("sql")
                 .soft_wrap(false)
                 .default_value(saved.sql.clone())
         });
-        let subscription = cx.subscribe(&input, |this, _, event, cx| {
+        let subscription = cx.subscribe(&input, move |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
+                    tab.revision = tab.revision.saturating_add(1);
+                }
                 this.changed(cx);
             }
         });
@@ -448,6 +474,7 @@ impl Qrow {
         });
         Tab {
             saved,
+            revision: 0,
             input,
             table,
             _subscription: subscription,
@@ -492,6 +519,17 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        if self.demo {
+            self.assistant_panel.shutdown_demo(
+                self.assistant
+                    .conversations
+                    .iter()
+                    .map(|conversation| conversation.thread_id.clone())
+                    .collect(),
+            );
+        } else {
+            self.assistant_panel.shutdown();
+        }
         if let Some(mut saver) = self.saver.take() {
             let result = if self.quit_confirmed {
                 saver.stop()
@@ -796,6 +834,7 @@ impl Qrow {
                 }
             }
         }
+        changed |= self.tick_assistant(window, cx);
         if self
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
@@ -1061,6 +1100,19 @@ impl Qrow {
         }
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .assistant_panel
+            .composer
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+        {
+            self.send_assistant(window, cx);
+            return;
+        }
+        self.run_selected_query(window, cx);
+    }
+    fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
             return;
         }

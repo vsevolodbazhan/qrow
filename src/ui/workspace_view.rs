@@ -397,6 +397,20 @@ impl Qrow {
                     .disabled(!tab.can_disconnect())
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
+            .child(div().flex_1())
+            .when(self.settings.assistant.enabled, |toolbar| {
+                toolbar.child(
+                    Button::new("toggle-assistant")
+                        .ghost()
+                        .small()
+                        .label(if self.assistant_panel.unread && !self.assistant_panel.open {
+                            "Assistant · Done"
+                        } else { "Assistant" })
+                        .selected(self.assistant_panel.open)
+                        .tooltip("AI Assistant · ⌘J")
+                        .on_click(cx.listener(|this, _, window, cx| this.toggle_assistant(window, cx))),
+                )
+            })
     }
 
     fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -569,6 +583,39 @@ impl Qrow {
                 }),
             )
     }
+
+    fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("assistant-splitter")
+            .relative()
+            .flex_shrink_0()
+            .w(self.ui_px(5.))
+            .mx(self.ui_px(-2.))
+            .h_full()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(1.))
+                    .h_full()
+                    .bg(if self.assistant_panel.resizing.is_some() {
+                        cx.theme().primary
+                    } else {
+                        cx.theme().border
+                    }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.assistant_panel.resizing = Some((
+                        event.position,
+                        this.ui_px(this.settings.assistant.panel_width),
+                    ));
+                    cx.stop_propagation();
+                }),
+            )
+    }
 }
 
 impl Render for Qrow {
@@ -578,6 +625,17 @@ impl Render for Qrow {
             .editor_height
             .min(window.viewport_size().height - self.ui_px(294.))
             .max(self.ui_px(100.));
+        let available = window.viewport_size().width
+            - self.ui_px(420.)
+            - if self.sidebar {
+                self.sidebar_width
+            } else {
+                px(0.)
+            };
+        let assistant_width = self
+            .ui_px(self.settings.assistant.panel_width)
+            .min(available)
+            .max(self.ui_px(360.));
         v_flex()
             .relative()
             .size_full()
@@ -595,13 +653,37 @@ impl Render for Qrow {
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.sidebar = !this.sidebar;
+                this.assistant_panel.auto_hidden_sidebar = false;
                 cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
+                this.toggle_assistant(window, cx)
             }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                if let Some((start, initial)) = this.assistant_panel.resizing {
+                    if e.pressed_button != Some(MouseButton::Left) {
+                        this.assistant_panel.resizing = None;
+                        return;
+                    }
+                    let available = window.viewport_size().width
+                        - this.ui_px(420.)
+                        - if this.sidebar {
+                            this.sidebar_width
+                        } else {
+                            px(0.)
+                        };
+                    let width = (initial + start.x - e.position.x).clamp(
+                        this.ui_px(360.),
+                        this.ui_px(640.).min(available).max(this.ui_px(360.)),
+                    );
+                    this.settings.assistant.panel_width = f32::from(width) / this.settings.ui_scale;
+                    this.changed(cx);
+                    return;
+                }
                 let Some((horizontal, start, initial)) = this.resize else {
                     return;
                 };
@@ -622,7 +704,10 @@ impl Render for Qrow {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.resize = None),
+                cx.listener(|this, _, _, _| {
+                    this.resize = None;
+                    this.assistant_panel.resizing = None;
+                }),
             )
             .child(
                 TitleBar::new().bg(cx.theme().title_bar).child(
@@ -673,6 +758,18 @@ impl Render for Qrow {
                             )
                             .child(self.splitter(false, cx))
                             .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+                    )
+                    .when(
+                        self.settings.assistant.enabled && self.assistant_panel.open,
+                        |el| {
+                            el.child(self.assistant_splitter(cx)).child(
+                                div()
+                                    .w(assistant_width)
+                                    .flex_shrink_0()
+                                    .min_h_0()
+                                    .child(self.assistant_panel(cx)),
+                            )
+                        },
                     ),
             )
             .when_some(self.menu.as_ref(), |el, menu| {

@@ -1,14 +1,16 @@
 use super::setting_row::Rows;
 use super::*;
 use gpui_kit::component::{
-    h_flex,
+    IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     setting::{
         RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
         Settings as SettingsPanel,
     },
+    switch::Switch,
 };
+use qrow::model::{ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode};
 use std::cell::Cell;
 
 const DIALOG_REMS: f32 = 56.;
@@ -151,6 +153,8 @@ pub(super) struct SettingsForm {
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
     fonts: Vec<(FontSetting, SettingSelect)>,
+    assistant_mode: SettingSelect,
+    assistant_executable: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -233,9 +237,59 @@ impl Qrow {
             ));
             fonts.push((setting, select));
         }
+        let mode = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(vec![
+                    "Ask before running".into(),
+                    "Run automatically".into(),
+                ]),
+                Some(IndexPath::default().row(usize::from(
+                    self.settings.assistant.default_execution_mode
+                        == AssistantExecutionMode::RunAutomatically,
+                ))),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &mode,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    this.set_default_assistant_mode(value == "Run automatically", window, cx);
+                }
+            },
+        ));
+        let executable = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Automatic")
+                .default_value(
+                    self.settings
+                        .assistant
+                        .codex_executable
+                        .clone()
+                        .unwrap_or_default(),
+                )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &executable,
+            window,
+            |this, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    let value = input.read(cx).value().trim().to_owned();
+                    let value = (!value.is_empty()).then_some(value);
+                    if this.settings.assistant.codex_executable != value {
+                        this.settings.assistant.codex_executable = value;
+                        this.changed(cx);
+                    }
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             numbers,
             fonts,
+            assistant_mode: mode,
+            assistant_executable: executable,
             _subscriptions: subscriptions,
         });
     }
@@ -321,6 +375,85 @@ impl Qrow {
         }
     }
 
+    fn set_assistant_enabled(
+        &mut self,
+        enabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !enabled {
+            self.settings.assistant.enabled = false;
+            set_menus(cx, false);
+            self.assistant_panel.open = false;
+            self.assistant_panel.shutdown();
+            self.changed(cx);
+            return;
+        }
+        if self.settings.assistant.data_sharing_notice_version
+            == ASSISTANT_DATA_SHARING_NOTICE_VERSION
+        {
+            self.settings.assistant.enabled = true;
+            set_menus(cx, true);
+            self.changed(cx);
+            return;
+        }
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert.title("Enable AI assistant?")
+                .description("Qrow sends selected SQL and allowed connection and tab details to Codex only when you send a message. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
+                .footer(DialogFooter::new().justify_end()
+                    .child(Button::new("cancel-enable-assistant").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("confirm-enable-assistant").primary().label("Enable assistant")
+                        .on_click(move |_, window, cx| {
+                            let _ = confirm.update(cx, |this, cx| {
+                                this.settings.assistant.data_sharing_notice_version = ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+                                this.settings.assistant.enabled = true;
+                                set_menus(cx, true);
+                                this.changed(cx);
+                            });
+                            window.close_dialog(cx);
+                        })))
+        });
+        cx.notify();
+    }
+
+    fn set_default_assistant_mode(
+        &mut self,
+        automatic: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !automatic {
+            self.settings.assistant.default_execution_mode =
+                AssistantExecutionMode::AskBeforeRunning;
+            self.changed(cx);
+            return;
+        }
+        if self.settings.assistant.default_execution_mode
+            == AssistantExecutionMode::RunAutomatically
+        {
+            return;
+        }
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert.title("Run assistant queries automatically?")
+                .description("The assistant can run SQL that changes or deletes data and schema. Qrow cannot confirm that a statement is read-only.")
+                .footer(DialogFooter::new().justify_end()
+                    .child(Button::new("cancel-default-auto-run").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
+                    .child(Button::new("confirm-default-auto-run").with_variant(ButtonVariant::Danger).label("Run automatically")
+                        .on_click(move |_, window, cx| {
+                            let _ = confirm.update(cx, |this, cx| {
+                                this.settings.assistant.default_execution_mode = AssistantExecutionMode::RunAutomatically;
+                                this.changed(cx);
+                            });
+                            window.close_dialog(cx);
+                        })))
+        });
+        cx.notify();
+    }
+
     pub(super) fn open_settings_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.weak_entity();
         window.open_dialog(cx, move |dialog, window, cx| {
@@ -376,6 +509,24 @@ impl Qrow {
                 });
             }
         }
+        let selected_mode = if self.settings.assistant.default_execution_mode
+            == AssistantExecutionMode::RunAutomatically
+        {
+            "Run automatically"
+        } else {
+            "Ask before running"
+        };
+        if form
+            .assistant_mode
+            .read(cx)
+            .selected_value()
+            .map(String::as_str)
+            != Some(selected_mode)
+        {
+            form.assistant_mode.update(cx, |state, cx| {
+                state.set_selected_value(&selected_mode.to_owned(), window, cx)
+            });
+        }
         let rem = window.rem_size();
         // Match the gap the dialog leaves above the footer, which the dialog
         // adds to the smaller gap below the title.
@@ -393,7 +544,12 @@ impl Qrow {
                     .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
                     .sidebar_width(rem * SIDEBAR_REMS)
                     .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
-                    .page(settings_page(form)),
+                    .page(settings_page(form))
+                    .page(assistant_settings_page(
+                        form,
+                        cx.weak_entity(),
+                        self.settings.assistant.enabled,
+                    )),
             )
             .into_any_element()
     }
@@ -422,6 +578,14 @@ impl Qrow {
                             .collect();
                         for (setting, input) in pending {
                             this.commit_number_setting(&input, setting, 0., window, cx);
+                        }
+                        if let Some(form) = &this.settings_form {
+                            let path = form.assistant_executable.read(cx).value().trim().to_owned();
+                            let path = (!path.is_empty()).then_some(path);
+                            if this.settings.assistant.codex_executable != path {
+                                this.settings.assistant.codex_executable = path;
+                                this.changed(cx);
+                            }
                         }
                         // Programmatic close_dialog does not invoke Dialog::on_close.
                         this.settings_open = false;
@@ -504,6 +668,36 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                     .keywords(["logs", "spacing"]),
                 ),
         )
+}
+
+fn assistant_settings_page(
+    form: &SettingsForm,
+    owner: WeakEntity<Qrow>,
+    enabled: bool,
+) -> SettingPage {
+    let mode = form.assistant_mode.clone();
+    let executable = form.assistant_executable.clone();
+    SettingPage::new("AI Assistant")
+        .resettable(false)
+        .group(SettingGroup::new().title("Codex")
+            .item(SettingItem::new("Enable assistant", SettingField::render({
+                let owner = owner.clone();
+                move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+                    let owner = owner.clone();
+                    control(options, window.rem_size(), Switch::new("enable-assistant")
+                        .checked(enabled).accessibility_label("Enable AI assistant")
+                        .on_click(move |next, window, cx| {
+                            let _ = owner.update(cx, |this, cx| this.set_assistant_enabled(*next, window, cx));
+                        }))
+                }
+            })).description("Optional. Qrow starts Codex only when you open the assistant pane."))
+            .item(SettingItem::new("Codex executable", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+                control(options, window.rem_size(), Input::new(&executable).w_full().aria_label("Codex executable"))
+            })).description("Leave blank for automatic discovery. Install Codex separately.")))
+        .group(SettingGroup::new().title("Query execution")
+            .item(SettingItem::new("Default mode", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+                control(options, window.rem_size(), Select::new(&mode).w_full().accessibility_label("Default assistant query execution mode"))
+            })).description("New conversations copy this mode. Run automatically can change or delete data and schema.")))
 }
 
 /// Size the control column. A page that keeps the label beside the control

@@ -1,0 +1,612 @@
+use super::assistant_view::{PendingQuery, PendingQueryKind, Speaker, TranscriptEntry};
+use super::*;
+use qrow::assistant::{
+    ToolCall, ToolResult,
+    broker::{
+        CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES, MAX_TOOL_OUTPUT_BYTES,
+        RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows, bound_text,
+    },
+    service::Command as AssistantCommand,
+};
+use serde::Deserialize;
+use serde_json::{Value, json};
+use std::ops::Range;
+
+fn remap_selection(
+    selection: Range<usize>,
+    edits: &[qrow::assistant::broker::TextEdit],
+) -> Option<Range<usize>> {
+    let mut shift = 0_i64;
+    for edit in edits {
+        if edit.end <= selection.start {
+            shift += edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
+        } else if edit.start < selection.end
+            || (selection.is_empty() && edit.start < selection.start)
+        {
+            return None;
+        }
+    }
+    let start = (selection.start as i64).checked_add(shift)?;
+    let end = (selection.end as i64).checked_add(shift)?;
+    Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionInput {
+    version: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TabInput {
+    version: u32,
+    tab_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetInput {
+    version: u32,
+    tab_id: Uuid,
+    connection_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RowsInput {
+    version: u32,
+    tab_id: Uuid,
+    offset: usize,
+    count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LogsInput {
+    version: u32,
+    tab_id: Uuid,
+    scope: String,
+}
+
+fn failure(code: &str, message: impl Into<String>) -> ToolResult {
+    ToolResult {
+        success: false,
+        content: json!({"version": TOOL_SCHEMA_VERSION,
+        "error": {"code": code, "message": message.into()}}),
+    }
+}
+
+fn success(value: Value) -> ToolResult {
+    if serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= MAX_TOOL_OUTPUT_BYTES) {
+        ToolResult {
+            success: true,
+            content: value,
+        }
+    } else {
+        failure("limit_reached", "The assistant tool output is too large.")
+    }
+}
+
+fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ToolResult> {
+    serde_json::from_value(value).map_err(|_| {
+        failure(
+            "invalid_arguments",
+            "The assistant tool arguments are invalid.",
+        )
+    })
+}
+
+fn version(version: u32) -> Result<(), ToolResult> {
+    if version == TOOL_SCHEMA_VERSION {
+        Ok(())
+    } else {
+        Err(failure(
+            "capability_missing",
+            "The assistant tool version is not supported.",
+        ))
+    }
+}
+
+impl Qrow {
+    pub(super) fn answer_assistant_call(
+        &mut self,
+        call: ToolCall,
+        ok: bool,
+        content: Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.assistant_command(
+            AssistantCommand::Answer {
+                call,
+                result: ToolResult {
+                    success: ok,
+                    content,
+                },
+            },
+            cx,
+        );
+    }
+
+    pub(super) fn handle_assistant_tool(
+        &mut self,
+        call: ToolCall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self.assistant.selected_thread.as_deref();
+        if selected != Some(call.thread_id.as_str())
+            || self.assistant_panel.active_turn.as_deref() != Some(call.turn_id.as_str())
+        {
+            self.answer_assistant_call(
+                call,
+                false,
+                failure("stale_target", "The conversation or turn changed.").content,
+                cx,
+            );
+            return;
+        }
+        let name = call.name.clone();
+        let result = self.dispatch_assistant_tool(&call, window, cx);
+        if let Some(result) = result {
+            let label = if result.success {
+                format!("Used {name}")
+            } else {
+                format!("{name} failed")
+            };
+            self.assistant_panel
+                .transcripts
+                .entry(call.thread_id.clone())
+                .or_default()
+                .push(TranscriptEntry {
+                    speaker: if result.success {
+                        Speaker::Activity
+                    } else {
+                        Speaker::Error
+                    },
+                    text: label,
+                    turn_id: Some(call.turn_id.clone()),
+                });
+            self.answer_assistant_call(call, result.success, result.content, cx);
+        }
+        cx.notify();
+    }
+
+    fn dispatch_assistant_tool(
+        &mut self,
+        call: &ToolCall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ToolResult> {
+        let result = match call.name.as_str() {
+            "get_workspace_context" => self.tool_workspace(call, cx),
+            "read_tab_sql" => self.tool_read_sql(call, cx),
+            "edit_selected_tab_sql" => self.tool_edit(call, window, cx),
+            "run_selected_tab_query" => return self.tool_run(call, window, cx),
+            "cancel_selected_tab_query" => self.tool_cancel(call, cx),
+            "get_query_status" => self.tool_status(call, cx),
+            "read_results" => self.tool_results(call, cx),
+            "fetch_more_results" => return self.tool_fetch(call, cx),
+            "read_query_logs" => self.tool_logs(call),
+            _ => Err(failure(
+                "capability_missing",
+                "This assistant tool is not available.",
+            )),
+        };
+        Some(result.unwrap_or_else(|error| error))
+    }
+
+    fn tool_workspace(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
+        let args: VersionInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        Ok(success(self.assistant_context(cx)))
+    }
+
+    fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
+        let args: TabInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.saved.id == args.tab_id)
+            .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
+        let sql = tab.input.read(cx).value().to_string();
+        if sql.len() > MAX_SQL_BYTES {
+            return Err(failure("limit_reached", "The SQL text is too large."));
+        }
+        Ok(success(
+            json!({"version": 1, "tab_id": args.tab_id, "connection_id": tab.saved.profile,
+            "editor_revision": tab.revision, "sql": sql}),
+        ))
+    }
+
+    fn tool_edit(
+        &mut self,
+        call: &ToolCall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<ToolResult, ToolResult> {
+        let args: EditRequest = parse(call.arguments.clone())?;
+        let tab = &self.tabs[self.active];
+        let sql = tab.input.read(cx).value().to_string();
+        let selected = tab.input.read(cx).selected_range();
+        let document = EditorDocument {
+            tab_id: tab.saved.id,
+            connection_id: tab.saved.profile,
+            revision: tab.revision,
+            sql: &sql,
+            selected_range: (!selected.is_empty()).then_some(selected.clone()),
+            busy: tab.busy,
+        };
+        let plan = ToolBroker::new(self.assistant_panel.target.clone())
+            .plan_edit(
+                CallIdentity {
+                    conversation_id: &call.thread_id,
+                    turn_id: &call.turn_id,
+                },
+                &args,
+                &document,
+            )
+            .map_err(|error| ToolResult {
+                success: false,
+                content: json!({"version": 1, "error": error}),
+            })?;
+        let editor = tab.input.clone();
+        let mapped = remap_selection(selected.clone(), &args.edits);
+        editor.update(cx, |editor, cx| {
+            let scroll = editor.scroll_offset();
+            editor.replace_all(plan.sql.clone(), window, cx);
+            if let Some(range) = mapped {
+                editor.set_selected_range(range, cx);
+            }
+            editor.set_scroll_offset(scroll, cx);
+        });
+        let revision = self.tabs[self.active].revision;
+        self.changed(cx);
+        Ok(success(
+            json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
+                "sql_bytes": plan.sql.len()}),
+        ))
+    }
+
+    fn tool_run(
+        &mut self,
+        call: &ToolCall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ToolResult> {
+        let result = (|| {
+            let args: RunRequest = parse(call.arguments.clone())?;
+            let tab = &self.tabs[self.active];
+            let sql = tab.input.read(cx).value().to_string();
+            let selected = tab.input.read(cx).selected_range();
+            let document = EditorDocument {
+                tab_id: tab.saved.id,
+                connection_id: tab.saved.profile,
+                revision: tab.revision,
+                sql: &sql,
+                selected_range: (!selected.is_empty()).then_some(selected),
+                busy: tab.busy,
+            };
+            let plan = ToolBroker::new(self.assistant_panel.target.clone())
+                .plan_run(
+                    CallIdentity {
+                        conversation_id: &call.thread_id,
+                        turn_id: &call.turn_id,
+                    },
+                    &args,
+                    &document,
+                )
+                .map_err(|error| ToolResult {
+                    success: false,
+                    content: json!({"version": 1, "error": error}),
+                })?;
+            if self.assistant_panel.pending_query.is_some() {
+                return Err(failure(
+                    "tab_busy",
+                    "Another assistant query request is pending.",
+                ));
+            }
+            let mode = self
+                .assistant
+                .conversations
+                .iter()
+                .find(|conversation| conversation.thread_id == call.thread_id)
+                .map(|conversation| conversation.execution_mode)
+                .unwrap_or_default();
+            self.assistant_panel.pending_query = Some(PendingQuery {
+                call: call.clone(),
+                tab_id: plan.tab_id,
+                revision: plan.expected_revision,
+                sql: plan.sql,
+                approved: mode == qrow::model::AssistantExecutionMode::RunAutomatically,
+                started: false,
+                kind: PendingQueryKind::Run,
+            });
+            if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
+                self.begin_assistant_query(window, cx);
+            }
+            Ok(())
+        })();
+        result.err()
+    }
+
+    pub(super) fn approve_assistant_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pending) = &mut self.assistant_panel.pending_query {
+            pending.approved = true;
+        }
+        self.begin_assistant_query(window, cx);
+    }
+
+    pub(super) fn cancel_assistant_approval(&mut self, cx: &mut Context<Self>) {
+        if let Some(pending) = self.assistant_panel.pending_query.take() {
+            self.answer_assistant_call(
+                pending.call,
+                false,
+                failure(
+                    "approval_cancelled",
+                    "The user cancelled this query request.",
+                )
+                .content,
+                cx,
+            );
+        }
+        cx.notify();
+    }
+
+    fn begin_assistant_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = &self.assistant_panel.pending_query else {
+            return;
+        };
+        if !pending.approved || pending.started {
+            return;
+        }
+        let valid = self.tabs.get(self.active).is_some_and(|tab| {
+            if tab.saved.id != pending.tab_id || tab.revision != pending.revision || tab.busy {
+                return false;
+            }
+            let sql = tab.input.read(cx).value();
+            let selected = tab.input.read(cx).selected_range();
+            let text = if selected.is_empty() {
+                sql.as_ref()
+            } else {
+                sql.get(selected).unwrap_or("")
+            };
+            text == pending.sql
+        });
+        if !valid {
+            let pending = self.assistant_panel.pending_query.take().unwrap();
+            self.answer_assistant_call(
+                pending.call,
+                false,
+                failure(
+                    "stale_revision",
+                    "The query target changed. Send a new instruction before running.",
+                )
+                .content,
+                cx,
+            );
+            return;
+        }
+        let kind = pending.kind;
+        if let Some(pending) = &mut self.assistant_panel.pending_query {
+            pending.started = true;
+        }
+        match kind {
+            PendingQueryKind::Run => self.run_selected_query(window, cx),
+            PendingQueryKind::Fetch => self.next_page(cx),
+        }
+        self.complete_assistant_query(cx);
+    }
+
+    pub(super) fn complete_assistant_query(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = &self.assistant_panel.pending_query else {
+            return;
+        };
+        if !pending.started {
+            return;
+        }
+        let Some(tab) = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id) else {
+            return;
+        };
+        if tab.busy {
+            return;
+        }
+        let results = tab.table.read(cx);
+        let results = results.delegate();
+        let ok = !tab.status.starts_with("Error")
+            && !tab.status.starts_with("Rejected")
+            && !tab.status.starts_with("Cancelled");
+        let content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status,
+            "columns": results.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
+            "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
+            "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
+        let pending = self.assistant_panel.pending_query.take().unwrap();
+        self.assistant_panel
+            .transcripts
+            .entry(pending.call.thread_id.clone())
+            .or_default()
+            .push(TranscriptEntry {
+                speaker: if ok {
+                    Speaker::Activity
+                } else {
+                    Speaker::Error
+                },
+                text: if ok {
+                    format!("Query finished in {}", tab.saved.title)
+                } else {
+                    tab.status.clone()
+                },
+                turn_id: Some(pending.call.turn_id.clone()),
+            });
+        self.answer_assistant_call(pending.call, ok, content, cx);
+    }
+
+    fn tool_cancel(
+        &mut self,
+        call: &ToolCall,
+        cx: &mut Context<Self>,
+    ) -> Result<ToolResult, ToolResult> {
+        let args: TargetInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        let target =
+            self.assistant_panel.target.as_ref().ok_or_else(|| {
+                failure("no_action_target", "Select a tab and send a new message.")
+            })?;
+        if target.conversation_id != call.thread_id
+            || target.turn_id != call.turn_id
+            || target.tab_id != args.tab_id
+            || target.connection_id != args.connection_id
+            || self.tabs[self.active].saved.id != args.tab_id
+        {
+            return Err(failure(
+                "stale_target",
+                "The selected tab or connection changed.",
+            ));
+        }
+        let was_running = self.tabs[self.active].busy;
+        if was_running {
+            self.cancel(cx);
+        }
+        Ok(success(
+            json!({"version": 1, "cancellation_requested": was_running}),
+        ))
+    }
+
+    fn tool_status(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
+        let args: TabInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.saved.id == args.tab_id)
+            .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
+        let data = tab.table.read(cx);
+        let data = data.delegate();
+        Ok(success(
+            json!({"version": 1, "tab_id": args.tab_id, "status": tab.status,
+            "running": tab.busy, "cancelling": tab.cancelling,
+            "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
+            "downloaded_rows": data.rows.len(), "more_rows_available": tab.more,
+            "latest_error": tab.output.latest_error().map(|entry| bound_text(&entry.text).0)}),
+        ))
+    }
+
+    fn tool_results(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
+        let args: RowsInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        if self.assistant_panel.target.is_none() {
+            return Err(failure(
+                "no_action_target",
+                "Select a tab and send a new message.",
+            ));
+        }
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.saved.id == args.tab_id)
+            .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
+        let data = tab.table.read(cx);
+        let data = data.delegate();
+        let bounded =
+            bound_rows(&data.rows, args.offset, args.count).map_err(|error| ToolResult {
+                success: false,
+                content: json!({"version": 1, "error": error}),
+            })?;
+        Ok(success(
+            json!({"version": 1, "tab_id": args.tab_id, "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
+            "downloaded_rows": data.rows.len(), "rows": bounded.rows, "next_offset": bounded.next_offset,
+            "truncated": bounded.truncated, "omitted_row_offsets": bounded.omitted_row_offsets}),
+        ))
+    }
+
+    fn tool_fetch(&mut self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
+        let result = (|| {
+            let args: TargetInput = parse(call.arguments.clone())?;
+            version(args.version)?;
+            let target = self.assistant_panel.target.as_ref().ok_or_else(|| {
+                failure("no_action_target", "Select a tab and send a new message.")
+            })?;
+            let tab = &self.tabs[self.active];
+            if target.conversation_id != call.thread_id
+                || target.turn_id != call.turn_id
+                || target.tab_id != args.tab_id
+                || target.connection_id != args.connection_id
+                || tab.saved.id != args.tab_id
+            {
+                return Err(failure(
+                    "stale_target",
+                    "The selected tab or connection changed.",
+                ));
+            }
+            if tab.busy || !tab.more {
+                return Err(failure(
+                    "result_unavailable",
+                    "No more downloaded result batch is available.",
+                ));
+            }
+            if self.assistant_panel.pending_query.is_some() {
+                return Err(failure(
+                    "tab_busy",
+                    "Another assistant query request is pending.",
+                ));
+            }
+            self.assistant_panel.pending_query = Some(PendingQuery {
+                call: call.clone(),
+                tab_id: tab.saved.id,
+                revision: tab.revision,
+                sql: tab.input.read(cx).value().to_string(),
+                approved: true,
+                started: true,
+                kind: PendingQueryKind::Fetch,
+            });
+            self.next_page(cx);
+            Ok(())
+        })();
+        result.err()
+    }
+
+    fn tool_logs(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
+        let args: LogsInput = parse(call.arguments.clone())?;
+        version(args.version)?;
+        if self.assistant_panel.target.is_none() {
+            return Err(failure(
+                "no_action_target",
+                "Select a tab and send a new message.",
+            ));
+        }
+        let tab = self
+            .tabs
+            .iter()
+            .find(|tab| tab.saved.id == args.tab_id)
+            .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
+        let text = match args.scope.as_str() {
+            "latest_error" => tab.output.copy_error().unwrap_or_default(),
+            "latest_execution" => tab
+                .output
+                .groups()
+                .iter()
+                .rev()
+                .find(|group| group.execution_id.is_some())
+                .map(|group| {
+                    group
+                        .entries
+                        .iter()
+                        .map(|entry| entry.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .unwrap_or_default(),
+            _ => {
+                return Err(failure(
+                    "invalid_arguments",
+                    "Choose latest_execution or latest_error.",
+                ));
+            }
+        };
+        let (text, truncated) = bound_text(&text);
+        Ok(success(
+            json!({"version": 1, "tab_id": args.tab_id, "scope": args.scope, "text": text, "truncated": truncated}),
+        ))
+    }
+}
