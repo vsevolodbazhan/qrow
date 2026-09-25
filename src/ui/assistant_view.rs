@@ -1,10 +1,12 @@
-use super::workspace_view::TAB_BAR_HEIGHT;
 use super::*;
+use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
+    Selectable,
     bubble::{Bubble, BubbleVariant},
     h_flex,
     input::{Textarea, TextareaState},
+    menu::DropdownMenu,
     message::{Message, MessageAlignment, MessageContent},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     text::{TextView, TextViewStyle},
@@ -162,7 +164,9 @@ pub(super) struct AssistantPanelState {
     pub snapshot: Option<HarnessSnapshot>,
     pub composer: Entity<TextareaState>,
     _composer_subscription: Subscription,
-    conversation_select: Entity<SelectState<SearchableVec<String>>>,
+    thread_search: Entity<InputState>,
+    _thread_search_subscription: Subscription,
+    thread_list_override: Option<bool>,
     mode_select: Entity<SelectState<SearchableVec<String>>>,
     model_select: Entity<SelectState<SearchableVec<String>>>,
     reasoning_select: Entity<SelectState<SearchableVec<String>>>,
@@ -204,19 +208,23 @@ impl AssistantPanelState {
                 }
             },
         );
+        let thread_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+        let thread_search_subscription =
+            cx.subscribe_in(&thread_search, window, |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
         let mut make_select = |cx: &mut Context<Qrow>| {
             cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx))
         };
-        let conversation_select = make_select(cx);
         let model_select = make_select(cx);
         let reasoning_select = make_select(cx);
         let tier_select = make_select(cx);
         let mode_select = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(vec![
-                    "Ask before running".to_owned(),
-                    "Run automatically".to_owned(),
-                ]),
+                SearchableVec::new(vec!["Ask".to_owned(), "Run".to_owned()]),
                 Some(gpui_kit::component::IndexPath::default().row(0)),
                 window,
                 cx,
@@ -242,19 +250,10 @@ impl AssistantPanelState {
                                 conversation.execution_mode
                                     == qrow::model::AssistantExecutionMode::RunAutomatically
                             });
-                        if (label == "Run automatically") != automatic {
+                        if (label == "Run") != automatic {
                             this.toggle_assistant_mode(window, cx);
                             this.sync_assistant_selectors(window, cx);
                         }
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &conversation_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_conversation(label, window, cx);
                     }
                 },
             ),
@@ -295,7 +294,9 @@ impl AssistantPanelState {
             snapshot: None,
             composer,
             _composer_subscription: subscription,
-            conversation_select,
+            thread_search,
+            _thread_search_subscription: thread_search_subscription,
+            thread_list_override: None,
             mode_select,
             model_select,
             reasoning_select,
@@ -494,23 +495,6 @@ impl Qrow {
     }
 
     fn sync_assistant_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let conversations: Vec<_> = self
-            .assistant
-            .conversations
-            .iter()
-            .map(|conversation| self.conversation_label(conversation))
-            .collect();
-        let selected = self
-            .assistant
-            .selected_thread
-            .as_ref()
-            .and_then(|id| {
-                self.assistant
-                    .conversations
-                    .iter()
-                    .find(|conversation| &conversation.thread_id == id)
-            })
-            .map(|conversation| self.conversation_label(conversation));
         let mode_index = self
             .assistant
             .selected_thread
@@ -527,22 +511,14 @@ impl Qrow {
         self.assistant_panel.mode_select.update(cx, |state, cx| {
             state.set_selected_value(
                 &if mode_index {
-                    "Run automatically".to_owned()
+                    "Run".to_owned()
                 } else {
-                    "Ask before running".to_owned()
+                    "Ask".to_owned()
                 },
                 window,
                 cx,
             );
         });
-        self.assistant_panel
-            .conversation_select
-            .update(cx, |state, cx| {
-                state.set_items(SearchableVec::new(conversations), window, cx);
-                if let Some(selected) = selected {
-                    state.set_selected_value(&selected, window, cx);
-                }
-            });
         let Some(snapshot) = self.assistant_panel.snapshot.clone() else {
             return;
         };
@@ -646,27 +622,17 @@ impl Qrow {
         });
     }
 
-    fn select_assistant_conversation(
-        &mut self,
-        label: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_assistant_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if self.assistant_panel.active_turn.is_some() {
             return;
         }
-        let id = self
-            .assistant
-            .conversations
-            .iter()
-            .find(|conversation| self.conversation_label(conversation) == label)
-            .map(|conversation| conversation.thread_id.clone());
-        if let Some(id) = id {
-            self.assistant.selected_thread = Some(id.clone());
-            self.assistant_command(AssistantCommand::Resume(id), cx);
-            self.sync_assistant_selectors(window, cx);
-            self.changed(cx);
+        self.assistant.selected_thread = Some(id.to_owned());
+        self.assistant_command(AssistantCommand::Resume(id.to_owned()), cx);
+        self.sync_assistant_selectors(window, cx);
+        if self.assistant_panel.thread_list_override == Some(true) {
+            self.assistant_panel.thread_list_override = Some(false);
         }
+        self.changed(cx);
     }
 
     fn select_assistant_model(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -1409,7 +1375,112 @@ impl Qrow {
         }
     }
 
-    pub(super) fn assistant_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn assistant_thread_list(
+        &self,
+        narrow: bool,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut conversations: Vec<_> = self.assistant.conversations.iter().collect();
+        conversations.sort_by_key(|conversation| std::cmp::Reverse(conversation.last_activity));
+        let search = self
+            .assistant_panel
+            .thread_search
+            .read(cx)
+            .value()
+            .to_lowercase();
+        v_flex()
+            .w(if narrow { width } else { self.ui_px(230.) })
+            .max_w_full()
+            .h_full()
+            .flex_shrink_0()
+            .bg(cx.theme().sidebar)
+            .border_r_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .h(self.ui_px(36.))
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .px_2()
+                    .when(narrow, |row| {
+                        row.child(
+                            Button::new("assistant-back-to-thread")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ArrowLeft)
+                                .accessibility_label("Back to conversation")
+                                .tooltip("Back to conversation")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.assistant_panel.thread_list_override = Some(false);
+                                    cx.notify();
+                                })),
+                        )
+                    })
+                    .child(
+                        Input::new(&self.assistant_panel.thread_search)
+                            .flex_1()
+                            .min_w_0()
+                            .aria_label("Search conversations"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .id("assistant-thread-list")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .px_2()
+                    .py_2()
+                    .gap_1()
+                    .children(
+                        conversations
+                            .into_iter()
+                            .filter(|conversation| {
+                                self.conversation_label(conversation)
+                                    .to_lowercase()
+                                    .contains(&search)
+                            })
+                            .map(|conversation| {
+                                let id = conversation.thread_id.clone();
+                                let selected =
+                                    self.assistant.selected_thread.as_deref() == Some(&id);
+                                Button::new(format!("assistant-thread-{id}"))
+                                    .ghost()
+                                    .small()
+                                    .w_full()
+                                    .h(self.ui_px(32.))
+                                    .justify_start()
+                                    .child(
+                                        h_flex().w_full().min_w_0().child(
+                                            div()
+                                                .min_w_0()
+                                                .truncate()
+                                                .child(self.conversation_label(conversation)),
+                                        ),
+                                    )
+                                    .selected(selected)
+                                    .when(selected, |button| {
+                                        button
+                                            .bg(cx.theme().sidebar_accent)
+                                            .text_color(cx.theme().sidebar_accent_foreground)
+                                    })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_assistant_thread(&id, window, cx);
+                                    }))
+                            }),
+                    ),
+            )
+    }
+
+    pub(super) fn assistant_panel(
+        &self,
+        width: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let narrow = width < self.ui_px(600.);
+        let show_threads = self.assistant_panel.thread_list_override.unwrap_or(!narrow);
         let action_size = self.ui_px(28.);
         let status = match &self.assistant_panel.status {
             Status::Idle => "Open the assistant to start Codex".to_owned(),
@@ -1444,26 +1515,58 @@ impl Qrow {
         };
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
         let entries = self.assistant_panel.transcripts.get(selected);
-        v_flex()
+        let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
+            self.settings
+                .assistant
+                .model
+                .as_deref()
+                .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
+                .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
+                .or_else(|| snapshot.models().first())
+        });
+        h_flex()
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
+            .when(show_threads, |panel| panel.child(self.assistant_thread_list(narrow, width, cx)))
+            .when(!narrow || !show_threads, |panel| panel.child(v_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .child(
                 h_flex()
-                    .h(self.ui_px(TAB_BAR_HEIGHT))
+                    .h(self.ui_px(36.))
                     .flex_shrink_0()
                     .items_center()
-                    .pl_3()
+                    .pl_2()
                     .pr_2()
-                    .gap_2()
+                    .gap_1()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
+                        Button::new("assistant-toggle-threads")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .icon(IconName::PanelLeft)
+                            .accessibility_label("Toggle conversation list")
+                            .tooltip("Toggle conversation list")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.assistant_panel.thread_list_override = Some(!show_threads);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
                         div()
                             .flex_1()
+                            .min_w_0()
+                            .truncate()
                             .text_base()
                             .font_weight(FontWeight::MEDIUM)
-                            .child("Assistant"),
+                            .child(self.assistant.conversations.iter()
+                                .find(|conversation| Some(&conversation.thread_id) == self.assistant.selected_thread.as_ref())
+                                .map_or_else(|| "New conversation".to_owned(), |conversation| conversation.title.clone())),
                     )
                     .child(
                         Button::new("assistant-new")
@@ -1483,23 +1586,28 @@ impl Qrow {
                                 this.create_assistant_conversation(cx);
                             })),
                     )
-            )
-            .child(
-                h_flex()
-                    .h_10()
-                    .flex_shrink_0()
-                    .px_3()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
                     .child(
-                        Select::new(&self.assistant_panel.conversation_select)
+                        Button::new("assistant-conversation-menu")
+                            .ghost()
                             .small()
-                            .flex_1()
-                            .min_w_0()
-                            .placeholder("New conversation")
-                            .disabled(self.assistant_panel.active_turn.is_some())
-                            .accessibility_label("Assistant conversation"),
-                    ),
+                            .w(action_size)
+                            .h(action_size)
+                            .icon(IconName::Ellipsis)
+                            .accessibility_label("Conversation actions")
+                            .tooltip("Conversation actions")
+                            .disabled(self.assistant.selected_thread.is_none() || self.assistant_panel.active_turn.is_some())
+                            .dropdown_menu({
+                                let rename = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.begin_assistant_rename(window, cx);
+                                }));
+                                let delete = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                    this.confirm_assistant_delete(window, cx);
+                                }));
+                                move |menu, _, _| menu
+                                    .item(PopupMenuItem::new("Rename…").on_click({let rename = rename.clone(); move |event, window, cx| rename(event, window, cx)}))
+                                    .item(PopupMenuItem::new("Delete…").on_click({let delete = delete.clone(); move |event, window, cx| delete(event, window, cx)}))
+                            }),
+                    )
             )
             .when_some(
                 self.assistant_panel.rename_input.as_ref(),
@@ -1532,48 +1640,12 @@ impl Qrow {
                     )
                 },
             )
-            .child(
+            .when(self.assistant_panel.active_turn.is_some() || matches!(self.assistant_panel.status, Status::Disconnected(_)), |panel| panel.child(
                 h_flex()
-                    .h_10()
                     .flex_shrink_0()
                     .px_3()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Select::new(&self.assistant_panel.mode_select)
-                            .small()
-                            .min_w_0()
-                            .disabled(self.assistant.selected_thread.is_none())
-                            .accessibility_label("Assistant query approval mode"),
-                    )
-                    .child(
-                        Button::new("assistant-rename")
-                            .ghost()
-                            .small()
-                            .label("Rename")
-                            .disabled(
-                                self.assistant.selected_thread.is_none()
-                                    || self.assistant_panel.active_turn.is_some(),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.begin_assistant_rename(window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("assistant-delete")
-                            .ghost()
-                            .small()
-                            .label("Delete")
-                            .disabled(
-                                self.assistant.selected_thread.is_none()
-                                    || self.assistant_panel.active_turn.is_some(),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.confirm_assistant_delete(window, cx)
-                            })),
-                    )
-                    .child(div().flex_1())
+                    .py_1()
+                    .justify_end()
                     .when(self.assistant_panel.active_turn.is_some(), |el| {
                         el.child(
                             Button::new("assistant-stop")
@@ -1595,7 +1667,7 @@ impl Qrow {
                             )
                         },
                     ),
-            )
+            ))
             .when(
                 matches!(self.assistant_panel.status, Status::SignInRequired),
                 |panel| {
@@ -1608,63 +1680,10 @@ impl Qrow {
                     )
                 },
             )
-            .when(
-                self.assistant_panel
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| !snapshot.models().is_empty()),
-                |panel| {
-                    let snapshot = self.assistant_panel.snapshot.as_ref().unwrap();
-                    let model = self
-                        .settings
-                        .assistant
-                        .model
-                        .as_deref()
-                        .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
-                        .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
-                        .or_else(|| snapshot.models().first())
-                        .unwrap();
-                    panel.child(
-                        h_flex()
-                            .h_10()
-                            .flex_shrink_0()
-                            .px_3()
-                            .gap_2()
-                            .border_b_1()
-                            .border_color(cx.theme().border)
-                            .child(
-                                Select::new(&self.assistant_panel.model_select)
-                                    .small()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .accessibility_label("Assistant model"),
-                            )
-                            .when(!model.reasoning_efforts().is_empty(), |row| {
-                                row.child(
-                                    Select::new(&self.assistant_panel.reasoning_select)
-                                        .small()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .accessibility_label("Assistant reasoning"),
-                                )
-                            })
-                            .when(!model.service_tiers().is_empty(), |row| {
-                                row.child(
-                                    Select::new(&self.assistant_panel.tier_select)
-                                        .small()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .accessibility_label("Assistant service tier"),
-                                )
-                            }),
-                    )
-                },
-            )
             .child(
-                v_flex()
+                div().relative().flex_1().min_h_0().child(v_flex()
                     .id("assistant-transcript")
-                    .flex_1()
-                    .min_h_0()
+                    .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.assistant_panel.scroll)
                     .px_3()
@@ -1747,24 +1766,27 @@ impl Qrow {
                                     ),
                                 )
                             }),
-                    ),
-            )
+                    ))
             .when(
                 entries.is_some_and(|entries| !entries.is_empty())
                     && !self.assistant_transcript_near_bottom(),
-                |panel| {
-                    panel.child(
+                |transcript| {
+                    transcript.child(
                         Button::new("assistant-jump-latest")
-                            .ghost()
                             .small()
-                            .label("Jump to latest")
+                            .absolute()
+                            .bottom_2()
+                            .right_3()
+                            .icon(IconName::ArrowDown)
+                            .accessibility_label("Jump to latest")
+                            .tooltip("Jump to latest")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.assistant_panel.scroll.scroll_to_bottom();
                                 cx.notify();
                             })),
                     )
                 },
-            )
+            ))
             .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
                 panel.child(
                     div()
@@ -1850,7 +1872,7 @@ impl Qrow {
                     .gap_2()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .child(
+                    .when(status != "Ready", |composer| composer.child(
                         div()
                             .id("assistant-status")
                             .role(Role::Status)
@@ -1858,7 +1880,7 @@ impl Qrow {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(status),
-                    )
+                    ))
                     .child(
                         div().key_context("AssistantComposer").child(
                             Textarea::new(&self.assistant_panel.composer)
@@ -1866,19 +1888,40 @@ impl Qrow {
                                 .w_full()
                                 .aria_label("Assistant message")),
                     )
+                    .when(model.is_some(), |composer| composer.child(
+                        h_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(Select::new(&self.assistant_panel.model_select)
+                                .small().appearance(false).flex_1().min_w_0()
+                                .accessibility_label("Assistant model"))
+                            .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                Select::new(&self.assistant_panel.reasoning_select)
+                                    .small().appearance(false).flex_1().min_w_0()
+                                    .accessibility_label("Assistant reasoning")))
+                            .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                Select::new(&self.assistant_panel.tier_select)
+                                    .small().appearance(false).flex_1().min_w_0()
+                                    .accessibility_label("Assistant service tier")))
+                    ))
                     .child(
                         h_flex()
-                            .justify_between()
+                            .min_w_0()
+                            .gap_1()
                             .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Enter to send · Shift-Enter for a new line"),
+                                Select::new(&self.assistant_panel.mode_select)
+                                    .small()
+                                    .appearance(false)
+                                    .disabled(self.assistant.selected_thread.is_none())
+                                    .accessibility_label("Assistant query approval mode"),
                             )
+                            .child(div().flex_1())
                             .child(
                                 Button::new("assistant-send")
                                     .small()
-                                    .label("Send")
+                                    .icon(AssetIconName::Send)
+                                    .accessibility_label("Send")
+                                    .tooltip("Send")
                                     .disabled(
                                         !matches!(self.assistant_panel.status, Status::Ready)
                                             || self.assistant.selected_thread.is_none(),
@@ -1888,6 +1931,6 @@ impl Qrow {
                                     })),
                             ),
                     ),
-            )
+            )))
     }
 }

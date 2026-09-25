@@ -362,7 +362,7 @@ impl Qrow {
                             Button::new("toggle-assistant")
                                 .ghost()
                                 .small()
-                                .icon(IconName::PanelRight)
+                                .icon(AssetIconName::Sparkles)
                                 .selected(self.assistant_panel.open)
                                 .accessibility_label("Toggle Assistant")
                                 .tooltip(
@@ -654,7 +654,7 @@ impl Render for Qrow {
         let assistant_width = self
             .ui_px(self.settings.assistant.panel_width)
             .min(available)
-            .max(self.ui_px(360.));
+            .max(self.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH));
         v_flex()
             .relative()
             .size_full()
@@ -699,8 +699,10 @@ impl Render for Qrow {
                             px(0.)
                         };
                     let width = (initial + start.x - e.position.x).clamp(
-                        this.ui_px(360.),
-                        this.ui_px(640.).min(available).max(this.ui_px(360.)),
+                        this.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH),
+                        this.ui_px(qrow::model::MAX_ASSISTANT_PANEL_WIDTH)
+                            .min(available)
+                            .max(this.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH)),
                     );
                     this.settings.assistant.panel_width = f32::from(width) / this.settings.ui_scale;
                     this.changed(cx);
@@ -789,7 +791,7 @@ impl Render for Qrow {
                                     .w(assistant_width)
                                     .flex_shrink_0()
                                     .min_h_0()
-                                    .child(self.assistant_panel(cx)),
+                                    .child(self.assistant_panel(assistant_width, cx)),
                             )
                         },
                     ),

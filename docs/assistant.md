@@ -43,21 +43,29 @@ need approval. In **Run automatically**, assistant queries start without this
 card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
 read-only. Select **Run automatically** only if you accept this risk.
 
-Use the conversation picker to change conversations. Select **New Conversation**
-in the pane header to start a separate conversation. **Rename** changes its
-title. **Delete** asks Codex to delete the selected conversation. Deleting a
-conversation does not change query tabs, SQL, sessions, Logs, or results. Qrow
+Use the thread list to change conversations. The list is beside the current
+conversation when the pane is wide. On a narrow pane, select **Toggle
+conversation list** to open the list. Search the list by title. Select **New
+Conversation** in the pane header to start a separate conversation. Open
+**Conversation actions** to rename or delete the current conversation. When you
+delete a conversation, Qrow asks Codex to remove it. This action does not
+change query tabs, SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text
 in its own data directory.
-Select **Load older messages** to read earlier conversation text.
+Select **Load older messages** to read earlier conversation text. Select **Jump
+to latest** to return to the newest message.
 
-Select a model, reasoning level, and service tier in the pane. Codex supplies
+Select **Ask** or **Run** in the composer to change the current conversation's
+query mode. These are the short names for **Ask before running** and **Run
+automatically**. Select a model, reasoning level, and service tier below the
+message field. Codex supplies
 the available choices. Your change applies to the next message. If a saved
 choice is no longer available, Qrow uses a Codex default and shows a notice.
 
 ## Pane and connection state
 
-Drag the pane's left edge to change its width. Qrow saves this width and starts
+Drag the pane's left edge to change its width. A narrow pane shows either the
+thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop Codex or a database query.
 The tab strip shows **Done** next to the assistant toggle if a hidden turn
 finishes. Reopen the pane to clear that state.

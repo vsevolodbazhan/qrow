@@ -11,8 +11,8 @@ pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
 pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 1;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
-pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 420.;
-pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 640.;
+pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
+pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
 
 fn title_with_suffix(title: &str, suffix: &str) -> String {
     let available = MAX_TAB_TITLE.saturating_sub(suffix.chars().count());

@@ -609,13 +609,21 @@ final class Driver {
         }
         try waitGone("Codex executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        let (headerPosition, _) = try elementBounds(waitExact("Assistant"))
-        let (conversationPosition, _) = try elementBounds(wait("Assistant conversation"))
-        try require(headerPosition.y < conversationPosition.y, "Assistant title is not in its own pane header")
         _ = try wait("Toggle Assistant")
         _ = try wait("New Conversation")
+        _ = try wait("Toggle conversation list")
+        _ = try wait("Conversation actions")
+        let listInitiallyVisible = find("Search conversations") != nil
+        try press("Toggle conversation list")
+        if listInitiallyVisible {
+            try waitGone("Search conversations")
+            try press("Toggle conversation list")
+        } else {
+            _ = try wait("Search conversations")
+            try press("Back to conversation")
+        }
         _ = try wait("Assistant model", timeout: 20)
-        _ = try wait("Ask before running")
+        _ = try wait("Ask", role: kAXPopUpButtonRole)
         try fill("Assistant message", "Keep this draft")
         try press("Run")
         let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
@@ -623,7 +631,6 @@ final class Driver {
         try fill("Assistant message", "Help me with this query")
         key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
         _ = try wait("I can help with this query", timeout: 20)
-        _ = try waitExact("Ready", timeout: 20)
         try fill("Assistant message", "Write SELECT 1 into this tab")
         try press("Send")
         _ = try wait("I updated the SQL.", timeout: 20)
@@ -644,7 +651,7 @@ final class Driver {
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
         try press("Toggle Assistant")
-        try waitGone("Assistant conversation")
+        try waitGone("Toggle conversation list")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
     func testAssistantQueries() throws {
@@ -665,17 +672,17 @@ final class Driver {
         let mode = try wait("Assistant query approval mode", role: kAXPopUpButtonRole)
         try activate(mode)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        key(125) // Down selects Run automatically.
+        key(125) // Down selects Run mode.
         key(36)
         try activate(try waitExact("Run automatically", timeout: 10, role: kAXButtonRole))
-        _ = try wait("Run automatically", timeout: 10, role: kAXPopUpButtonRole)
+        _ = try wait("Run", timeout: 10, role: kAXPopUpButtonRole)
         try fill("SQL Editor", "SELECT 2 AS assistant_value")
         try fill("Assistant message", "Run selected SQL automatically")
         try press("Send")
         _ = try wait("2", role: kAXCellRole)
         try require(find("Assistant query approval:") == nil, "Automatic mode requested approval")
         try press("Toggle Assistant")
-        try waitGone("Assistant conversation")
+        try waitGone("Toggle conversation list")
         print("PASS: Assistant approval and automatic execution use the selected query tab")
     }
     func test() throws {
