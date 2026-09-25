@@ -160,6 +160,22 @@ func scrollDown(_ element: AXUIElement) throws {
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
+func scrollLogsToTop(_ app: AXUIElement) throws {
+    guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first else {
+        throw Failure("Qrow window is unavailable while scrolling Logs")
+    }
+    let (origin, size) = try elementBounds(window)
+    let point = CGPoint(x: origin.x + size.width * 0.75, y: origin.y + size.height * 0.82)
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    for _ in 0..<32 {
+        let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
+        scroll.location = point
+        scroll.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+    }
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
 func command(_ args: [String]) throws -> String {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -410,6 +426,52 @@ final class Driver {
     func query(_ sql: String) throws {
         try fill("SQL Editor", sql)
         try press("Run")
+    }
+    func testActivityRetention() throws {
+        try press("Logs Panel")
+        try press("Clear Logs History")
+        for index in 0...100 {
+            let value = "retention-\(index)"
+            try query("SELECT '\(value)' AS value")
+            _ = try wait(value, timeout: 30, role: kAXCellRole)
+        }
+        try press("Logs Panel")
+        let clipboard = NSPasteboard.general
+        let saved = (clipboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+        defer {
+            clipboard.clearContents()
+            let restored = saved.map { data -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, value) in data { item.setData(value, forType: type) }
+                return item
+            }
+            clipboard.writeObjects(restored)
+        }
+        try press("Copy All Logs")
+        let deadline = clock.now.advanced(by: .seconds(5))
+        var copied = clipboard.string(forType: .string) ?? ""
+        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-100"))
+            && clock.now < deadline {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            copied = clipboard.string(forType: .string) ?? ""
+        }
+        try require(
+            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
+            "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
+        )
+        try require(
+            !copied.contains("reconnect-works"),
+            "Logs retained activity from before the retention scenario"
+        )
+        // Copy All focuses its toolbar button; reset the viewport after that
+        // interaction so the screenshot shows the start of retained history.
+        try scrollLogsToTop(app)
+        try snapshot("activity-retention")
+        print("PASS: Logs records when older activity is removed")
     }
     func selectConnection(_ name: String) throws {
         try press(name)
@@ -849,6 +911,7 @@ final class Driver {
         _ = try wait("Connected · Keep-alive enabled", timeout: 40)
         try waitGone("Sending keep-alive…", timeout: 40)
         try press("Disconnect")
+        try press("Logs Panel")
         _ = try wait("Disconnected", timeout: 10)
         try selectConnection("Qrow E2E copy")
         _ = try wait("switch-b-0000-UTC")
@@ -902,7 +965,9 @@ final class Driver {
         // Returning to the session's profile enables Disconnect without a Run.
         try selectConnection("Qrow E2E copy")
         try press("Disconnect")
+        try press("Logs Panel")
         _ = try wait("Disconnected", timeout: 10)
+        try press("Results Panel")
         _ = try wait("switch-b-reconnected")
         try query("SELECT 'switch-b-after-disconnect' AS value")
         _ = try wait("switch-b-after-disconnect")
@@ -911,6 +976,7 @@ final class Driver {
         try pressMenuItem("Delete")
         try press("Delete connection")
         try waitGone("Qrow E2E copy")
+        try press("Logs Panel")
         _ = try wait("Disconnected")
 
         // A profile metadata edit keeps the session in both tabs. Temporary
@@ -1116,8 +1182,9 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
+        try testActivityRetention()
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, Settings dialog, connection menus, connection validation, unique connection names, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, Settings dialog, connection menus, connection validation, unique connection names, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect, activity retention")
     }
 }
 

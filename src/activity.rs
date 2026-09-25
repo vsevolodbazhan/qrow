@@ -26,6 +26,7 @@ pub enum ActivityKind {
     Cancelled,
     Error,
     Disconnected,
+    HistoryTrimmed,
 }
 
 impl ActivityKind {
@@ -43,6 +44,7 @@ impl ActivityKind {
             Self::Cancelled => "Cancelled",
             Self::Error => "Error",
             Self::Disconnected => "Disconnected",
+            Self::HistoryTrimmed => "History trimmed",
         }
     }
 }
@@ -191,7 +193,7 @@ pub struct ActivityLog {
     next_group_id: u64,
     next_entry_id: u64,
     text_bytes: usize,
-    retention_notice: bool,
+    retention_entry_id: Option<u64>,
 }
 
 impl ActivityLog {
@@ -237,7 +239,7 @@ impl ActivityLog {
         self.groups.clear();
         self.ordered_entries.clear();
         self.text_bytes = 0;
-        self.retention_notice = false;
+        self.retention_entry_id = None;
     }
 
     pub fn groups(&self) -> &[ActivityGroup] {
@@ -254,10 +256,6 @@ impl ActivityLog {
 
     pub fn text_bytes(&self) -> usize {
         self.text_bytes
-    }
-
-    pub fn retention_notice(&self) -> bool {
-        self.retention_notice
     }
 
     pub fn latest_error(&self) -> Option<&ActivityEntry> {
@@ -313,12 +311,27 @@ impl ActivityLog {
             };
             let removed_group = self.groups.remove(index);
             self.text_bytes = self.text_bytes.saturating_sub(removed_group.text_bytes());
-            self.retention_notice = true;
             removed = true;
         }
         if removed {
-            self.ordered_entries
-                .retain(|entry| self.groups.iter().any(|group| group.id == entry.group_id));
+            self.ordered_entries.retain(|entry| {
+                Some(entry.id()) == self.retention_entry_id
+                    || self.groups.iter().any(|group| group.id == entry.group_id)
+            });
+            if self.retention_entry_id.is_none() {
+                let mut entry: ActivityEntry = ActivityEvent::new(
+                    None,
+                    Severity::Info,
+                    ActivityKind::HistoryTrimmed,
+                    "Older activity was removed",
+                )
+                .into();
+                entry.entry_id = self.next_entry_id;
+                self.next_entry_id += 1;
+                self.text_bytes += entry.text_bytes();
+                self.retention_entry_id = Some(entry.id());
+                self.ordered_entries.insert(0, entry);
+            }
         }
     }
 }
@@ -404,14 +417,27 @@ mod tests {
     #[test]
     fn retention_removes_whole_old_groups_and_keeps_latest_error_complete() {
         let mut log = ActivityLog::default();
-        for id in 0..=MAX_EXECUTION_GROUPS as u64 {
+        for id in 0..=(MAX_EXECUTION_GROUPS as u64 + 10) {
             log.record(event(Some(id), ActivityKind::Submitted, "start"));
             log.record(event(Some(id), ActivityKind::Error, "line one\nline two"));
         }
         assert_eq!(log.groups().len(), MAX_EXECUTION_GROUPS);
-        assert!(log.retention_notice());
-        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(1)));
+        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(11)));
         assert_eq!(log.latest_error().unwrap().text, "line one\nline two");
+        let entries: Vec<_> = log.entries().collect();
+        assert_eq!(entries[0].kind, ActivityKind::HistoryTrimmed);
+        assert_eq!(entries[0].text, "Older activity was removed");
+        assert_eq!(entries[1].execution_id, Some(ExecutionId(11)));
+        assert_eq!(
+            entries
+                .iter()
+                .copied()
+                .filter(|entry| entry.kind == ActivityKind::HistoryTrimmed)
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Older activity was removed"]
+        );
+        assert!(log.copy_all().starts_with("Older activity was removed\n"));
     }
 
     #[test]
@@ -422,7 +448,12 @@ mod tests {
         log.record(event(Some(2), ActivityKind::Submitted, &text));
         assert_eq!(log.groups().len(), 1);
         assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(2)));
-        assert!(log.retention_notice());
+        assert_eq!(
+            log.entries()
+                .filter(|entry| entry.kind == ActivityKind::HistoryTrimmed)
+                .count(),
+            1
+        );
 
         let mut connection_log = ActivityLog::default();
         for _ in 0..=MAX_EXECUTION_GROUPS {
@@ -456,12 +487,18 @@ mod tests {
     fn clear_drops_entries_but_does_not_break_later_events_for_the_same_execution() {
         let mut log = ActivityLog::default();
         log.record(event(Some(7), ActivityKind::Submitted, "old"));
+        for id in 0..=MAX_EXECUTION_GROUPS as u64 {
+            log.record(event(Some(id), ActivityKind::Submitted, "overflow"));
+        }
         log.clear();
         log.record(event(Some(7), ActivityKind::Error, "new"));
         assert_eq!(log.groups().len(), 1);
         assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(7)));
         assert_eq!(log.copy_all(), "new");
-        assert!(!log.retention_notice());
+        assert!(
+            log.entries()
+                .all(|entry| entry.kind != ActivityKind::HistoryTrimmed)
+        );
     }
 
     #[test]
