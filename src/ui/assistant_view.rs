@@ -1789,20 +1789,6 @@ impl Qrow {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
-                        Button::new("assistant-toggle-threads")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .icon(IconName::PanelRight)
-                            .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.assistant_panel.thread_list_override = Some(!show_threads);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
                         div()
                             .flex_1()
                             .min_w_0()
@@ -1812,6 +1798,21 @@ impl Qrow {
                             .child(self.assistant.conversations.iter()
                                 .find(|conversation| Some(&conversation.thread_id) == self.assistant.selected_thread.as_ref())
                                 .map_or_else(|| "New conversation".to_owned(), |conversation| conversation.title.clone())),
+                    )
+                    .child(
+                        Button::new("assistant-toggle-threads")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(IconName::GalleryVerticalEnd)
+                            .accessibility_label("Toggle conversation list")
+                            .tooltip("Toggle conversation list")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.assistant_panel.thread_list_override = Some(!show_threads);
+                                cx.notify();
+                            })),
                     )
                     .child(
                         Button::new("assistant-new")
