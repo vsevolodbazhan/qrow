@@ -118,14 +118,6 @@ impl Qrow {
                             .text_color(cx.theme().muted_foreground)
                             .child(format!("{} entries", tab.output.entries().count())),
                     )
-                    .when(tab.output.retention_notice(), |el| {
-                        el.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().warning)
-                                .child("Older activity was removed"),
-                        )
-                    })
                     .child(div().flex_1())
                     .child(
                         Button::new("output-copy-all")

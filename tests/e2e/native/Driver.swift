@@ -411,6 +411,37 @@ final class Driver {
         try fill("SQL Editor", sql)
         try press("Run")
     }
+    func testActivityRetention() throws {
+        for index in 0...100 {
+            let value = "retention-\(index)"
+            try query("SELECT '\(value)' AS value")
+            _ = try wait(value, timeout: 30, role: kAXCellRole)
+        }
+        try press("Logs Panel")
+        let clipboard = NSPasteboard.general
+        let saved = (clipboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
+                item.data(forType: type).map { (type, $0) }
+            }
+        }
+        defer {
+            clipboard.clearContents()
+            let restored = saved.map { data -> NSPasteboardItem in
+                let item = NSPasteboardItem()
+                for (type, value) in data { item.setData(value, forType: type) }
+                return item
+            }
+            clipboard.writeObjects(restored)
+        }
+        try press("Copy All Logs")
+        let copied = clipboard.string(forType: .string) ?? ""
+        try require(
+            copied.contains("Older activity was removed"),
+            "Copy All did not include the retention entry"
+        )
+        try snapshot("activity-retention")
+        print("PASS: Logs records when older activity is removed")
+    }
     func selectConnection(_ name: String) throws {
         try press(name)
         // Button styling does not expose selection through accessibility.
@@ -849,6 +880,7 @@ final class Driver {
         _ = try wait("Connected · Keep-alive enabled", timeout: 40)
         try waitGone("Sending keep-alive…", timeout: 40)
         try press("Disconnect")
+        try press("Logs Panel")
         _ = try wait("Disconnected", timeout: 10)
         try selectConnection("Qrow E2E copy")
         _ = try wait("switch-b-0000-UTC")
@@ -902,7 +934,9 @@ final class Driver {
         // Returning to the session's profile enables Disconnect without a Run.
         try selectConnection("Qrow E2E copy")
         try press("Disconnect")
+        try press("Logs Panel")
         _ = try wait("Disconnected", timeout: 10)
+        try press("Results Panel")
         _ = try wait("switch-b-reconnected")
         try query("SELECT 'switch-b-after-disconnect' AS value")
         _ = try wait("switch-b-after-disconnect")
@@ -911,6 +945,7 @@ final class Driver {
         try pressMenuItem("Delete")
         try press("Delete connection")
         try waitGone("Qrow E2E copy")
+        try press("Logs Panel")
         _ = try wait("Disconnected")
 
         // A profile metadata edit keeps the session in both tabs. Temporary
@@ -1116,8 +1151,9 @@ final class Driver {
         try query("SELECT 'reconnect-works' AS result")
         _ = try wait("reconnect-works")
         try snapshot("reconnected")
+        try testActivityRetention()
         try testFailedSaveExit(closeWindow: false)
-        print("PASS: About dialog, Settings dialog, connection menus, connection validation, unique connection names, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect")
+        print("PASS: About dialog, Settings dialog, connection menus, connection validation, unique connection names, tab duplication, unique tab names, tab rename, connection form, connection switching, retained results, real results, pagination, Unicode selection, concurrent tabs, server cancellation, reconnect, activity retention")
     }
 }
 
