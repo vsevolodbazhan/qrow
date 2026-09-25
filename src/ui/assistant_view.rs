@@ -4,6 +4,7 @@ use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     Selectable,
     bubble::{Bubble, BubbleVariant},
+    button::DropdownButton,
     h_flex,
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
@@ -1595,6 +1596,11 @@ impl Qrow {
         };
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
         let entries = self.assistant_panel.transcripts.get(selected);
+        let mode_is_run = self.assistant.conversations.iter().any(|conversation| {
+            conversation.thread_id == selected
+                && conversation.execution_mode
+                    == qrow::model::AssistantExecutionMode::RunAutomatically
+        });
         let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
             self.settings
                 .assistant
@@ -1972,7 +1978,7 @@ impl Qrow {
                         h_flex().min_w_0().gap_1()
                             .child(
                                 h_flex()
-                                    .w(self.ui_px(520.))
+                                    .w(self.ui_px(390.))
                                     .max_w_full()
                                     .h(action_size)
                                     .min_w_0()
@@ -1988,31 +1994,55 @@ impl Qrow {
                                     .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
                                         Select::new(&self.assistant_panel.tier_select)
                                             .small().appearance(false).w(self.ui_px(72.)).min_w_0()
-                                            .accessibility_label("Assistant service tier")))
-                                    .child(
-                                        Select::new(&self.assistant_panel.mode_select)
-                                            .small()
-                                            .appearance(false)
-                                            .w(self.ui_px(62.))
-                                            .min_w_0()
-                                            .disabled(self.assistant.selected_thread.is_none())
-                                            .accessibility_label("Assistant query approval mode"),
-                                    ),
+                                            .accessibility_label("Assistant service tier"))),
                             )
                             .child(div().flex_1())
                             .child(
-                                Button::new("assistant-send")
+                                DropdownButton::new("assistant-send-mode")
+                                    .primary()
                                     .small()
-                                    .icon(AssetIconName::Send)
-                                    .accessibility_label("Send")
-                                    .tooltip("Send")
                                     .disabled(
                                         !matches!(self.assistant_panel.status, Status::Ready)
                                             || self.assistant.selected_thread.is_none(),
                                     )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.send_assistant(window, cx)
-                                    })),
+                                    .button(
+                                        Button::new("assistant-send")
+                                            .icon(AssetIconName::Send)
+                                            .label(if mode_is_run { "Send · Run" } else { "Send · Ask" })
+                                            .tooltip(if mode_is_run {
+                                                "Send message · run assistant queries automatically"
+                                            } else {
+                                                "Send message · ask before running assistant queries"
+                                            })
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.send_assistant(window, cx)
+                                            })),
+                                    )
+                                    .dropdown_menu({
+                                        let ask = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            if this.assistant.conversations.iter().any(|conversation| {
+                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
+                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
+                                            }) {
+                                                this.toggle_assistant_mode(window, cx);
+                                            }
+                                        }));
+                                        let run = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                            if this.assistant.conversations.iter().any(|conversation| {
+                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
+                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::AskBeforeRunning
+                                            }) {
+                                                this.toggle_assistant_mode(window, cx);
+                                            }
+                                        }));
+                                        move |menu, _, _| menu
+                                            .item(PopupMenuItem::new("Ask before running")
+                                                .checked(!mode_is_run)
+                                                .on_click({ let ask = ask.clone(); move |event, window, cx| ask(event, window, cx) }))
+                                            .item(PopupMenuItem::new("Run automatically")
+                                                .checked(mode_is_run)
+                                                .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
+                                    }),
                             ),
                     ),
             )))

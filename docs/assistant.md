@@ -57,10 +57,10 @@ in its own data directory.
 Select **Load older messages** to read earlier conversation text. Select **Jump
 to latest** to return to the newest message.
 
-Select **Ask** or **Run** in the composer to change the current conversation's
-query mode. These are the short names for **Ask before running** and **Run
-automatically**. Select a model, reasoning level, and service tier below the
-message field. Codex supplies
+The Send button shows the current query mode, **Ask** or **Run**. Select **Ask
+before running** or **Run automatically** from its menu to change the mode.
+Changing the mode does not send a message. Select a model, reasoning level,
+and service tier below the message field. Codex supplies
 the available choices. Your change applies to the next message. If a saved
 choice is no longer available, Qrow uses a Codex default and shows a notice.
 
