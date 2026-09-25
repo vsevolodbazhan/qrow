@@ -10,6 +10,7 @@ use gpui_kit::component::{
     message::{Message, MessageAlignment, MessageContent},
     select::{SearchableVec, Select, SelectEvent, SelectState},
     text::{TextView, TextViewStyle},
+    tooltip::Tooltip,
     v_flex,
 };
 use qrow::{
@@ -1463,7 +1464,7 @@ impl Qrow {
             .h_full()
             .flex_shrink_0()
             .bg(cx.theme().sidebar)
-            .border_r_1()
+            .border_l_1()
             .border_color(cx.theme().border)
             .child(
                 h_flex()
@@ -1608,7 +1609,6 @@ impl Qrow {
             .size_full()
             .min_w_0()
             .bg(cx.theme().sidebar)
-            .when(show_threads, |panel| panel.child(self.assistant_thread_list(narrow, width, cx)))
             .when(!narrow || !show_threads, |panel| panel.child(v_flex()
             .flex_1()
             .min_w_0()
@@ -1629,7 +1629,7 @@ impl Qrow {
                             .small()
                             .w(action_size)
                             .h(action_size)
-                            .icon(IconName::PanelLeft)
+                            .icon(IconName::PanelRight)
                             .accessibility_label("Toggle conversation list")
                             .tooltip("Toggle conversation list")
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1970,24 +1970,23 @@ impl Qrow {
                                 .aria_label("Assistant message")),
                     )
                     .when(model.is_some(), |composer| composer.child(
-                        v_flex().min_w_0().gap_0p5()
-                            .child(h_flex().min_w_0().gap_1()
-                                .child(div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Model"))
-                                .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                    div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Reasoning")))
-                                .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                    div().flex_1().min_w_0().text_xs().text_color(cx.theme().muted_foreground).child("Tier"))))
-                            .child(h_flex().min_w_0().gap_1()
+                        h_flex().min_w_0().gap_1()
+                            .child(div().id("assistant-model-tooltip").flex_1().min_w_0()
+                                .tooltip(|window, cx| Tooltip::new("Model").build(window, cx))
                                 .child(Select::new(&self.assistant_panel.model_select)
-                                    .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant model"))
-                                .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                    Select::new(&self.assistant_panel.reasoning_select)
-                                        .small().appearance(false).flex_1().min_w_0()
-                                        .accessibility_label("Assistant reasoning")))
-                                .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                    Select::new(&self.assistant_panel.tier_select)
-                                        .small().appearance(false).flex_1().min_w_0()
+                                    .small().appearance(false).w_full().min_w_0()
+                                    .accessibility_label("Assistant model")))
+                            .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                div().id("assistant-reasoning-tooltip").flex_1().min_w_0()
+                                    .tooltip(|window, cx| Tooltip::new("Reasoning").build(window, cx))
+                                    .child(Select::new(&self.assistant_panel.reasoning_select)
+                                        .small().appearance(false).w_full().min_w_0()
+                                        .accessibility_label("Assistant reasoning"))))
+                            .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                div().id("assistant-tier-tooltip").flex_1().min_w_0()
+                                    .tooltip(|window, cx| Tooltip::new("Service tier").build(window, cx))
+                                    .child(Select::new(&self.assistant_panel.tier_select)
+                                        .small().appearance(false).w_full().min_w_0()
                                         .accessibility_label("Assistant service tier"))))
                     ))
                     .child(
@@ -2020,5 +2019,6 @@ impl Qrow {
                             ),
                     ),
             )))
+            .when(show_threads, |panel| panel.child(self.assistant_thread_list(narrow, width, cx)))
     }
 }

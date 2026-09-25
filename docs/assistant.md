@@ -43,7 +43,7 @@ need approval. In **Run automatically**, assistant queries start without this
 card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
 read-only. Select **Run automatically** only if you accept this risk.
 
-Use the thread list to change conversations. The list is beside the current
+Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Older saved conversations without an activity time show **Earlier**. On a
 narrow pane, select **Toggle conversation list** to open the list. Search the
