@@ -20,11 +20,11 @@ are **Ask before running** and **Run automatically**.
 
 ## Work with SQL
 
-Select a query tab. Select **Assistant** in the toolbar or press **⌘J**. Write
-a message and press **Enter** or **⌘Enter** to send it. Press **Shift-Enter** to
-start a new line. You can send another message while Codex works. The message
-steers the current turn. **Stop** stops the Codex turn. It does not cancel a
-database query that already started.
+Select a query tab. Select **Toggle Assistant** in the tab strip or press
+**⌘J**. Write a message and press **Enter** or **⌘Enter** to send it. Press
+**Shift-Enter** to start a new line. You can send another message while Codex
+works. The message steers the current turn. **Stop** stops the Codex turn. It
+does not cancel a database query that already started.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It
@@ -40,11 +40,12 @@ need approval. In **Run automatically**, assistant queries start without this
 card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
 read-only. Select **Run automatically** only if you accept this risk.
 
-Use the conversation picker to change conversations. **New** starts a separate
-conversation. **Rename** changes its title. **Delete** asks Codex to delete the
-selected conversation. Deleting a conversation does not change query tabs,
-SQL, sessions, Logs, or results. Qrow saves thread IDs and titles in the
-workspace. Codex stores conversation text in its own data directory.
+Use the conversation picker to change conversations. Select **New Conversation**
+in the pane header to start a separate conversation. **Rename** changes its
+title. **Delete** asks Codex to delete the selected conversation. Deleting a
+conversation does not change query tabs, SQL, sessions, Logs, or results. Qrow
+saves thread IDs and titles in the workspace. Codex stores conversation text
+in its own data directory.
 Select **Load older messages** to read earlier conversation text.
 
 Select a model, reasoning level, and service tier in the pane. Codex supplies
@@ -55,8 +56,8 @@ choice is no longer available, Qrow uses a Codex default and shows a notice.
 
 Drag the pane's left edge to change its width. Qrow saves this width and starts
 with the pane closed. Closing the pane does not stop Codex or a database query.
-The toolbar shows **Assistant · Done** if a hidden turn finishes. Reopen the
-pane to clear that state.
+The tab strip shows **Done** next to the assistant toggle if a hidden turn
+finishes. Reopen the pane to clear that state.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
 Select **Reconnect**. Qrow does not send the draft for you. A database query

@@ -609,6 +609,11 @@ final class Driver {
         }
         try waitGone("Codex executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        let (headerPosition, _) = try elementBounds(waitExact("Assistant"))
+        let (conversationPosition, _) = try elementBounds(wait("Assistant conversation"))
+        try require(headerPosition.y < conversationPosition.y, "Assistant title is not in its own pane header")
+        _ = try wait("Toggle Assistant")
+        _ = try wait("New Conversation")
         _ = try wait("Assistant model", timeout: 20)
         _ = try wait("Ask before running")
         try fill("Assistant message", "Keep this draft")
@@ -638,7 +643,7 @@ final class Driver {
         try waitInputValue("SQL Editor", "SELECT 1")
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
-        try activate(try waitExact("Close", role: kAXButtonRole))
+        try press("Toggle Assistant")
         try waitGone("Assistant conversation")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
@@ -669,7 +674,7 @@ final class Driver {
         try press("Send")
         _ = try wait("2", role: kAXCellRole)
         try require(find("Assistant query approval:") == nil, "Automatic mode requested approval")
-        try activate(try waitExact("Close", role: kAXButtonRole))
+        try press("Toggle Assistant")
         try waitGone("Assistant conversation")
         print("PASS: Assistant approval and automatic execution use the selected query tab")
     }

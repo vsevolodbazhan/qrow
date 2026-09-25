@@ -11,7 +11,7 @@ use gpui_kit::component::{
 use qrow::model::copied_profile_name;
 use std::rc::Rc;
 
-const TAB_BAR_HEIGHT: f32 = 36.;
+pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
 
 fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
     id.and_then(|id| profiles.iter().find(|profile| profile.id == id))
@@ -336,20 +336,52 @@ impl Qrow {
                 }
             }))
             .suffix(
-                h_flex().h(tab_height).px_2().flex_shrink_0().child(
-                    Button::new("new-tab")
-                        .ghost()
-                        .small()
-                        .w(self.ui_px(28.))
-                        .h(self.ui_px(28.))
-                        .icon(IconName::Plus)
-                        .disabled(self.active_profile().is_none())
-                        .accessibility_label("New Tab")
-                        .tooltip("New Tab · ⌘T")
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
-                        ),
-                ),
+                h_flex()
+                    .h(tab_height)
+                    .px_2()
+                    .gap_1()
+                    .flex_shrink_0()
+                    .child(
+                        Button::new("new-tab")
+                            .ghost()
+                            .small()
+                            .w(self.ui_px(28.))
+                            .h(self.ui_px(28.))
+                            .icon(IconName::Plus)
+                            .disabled(self.active_profile().is_none())
+                            .accessibility_label("New Tab")
+                            .tooltip("New Tab · ⌘T")
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.new_tab(&NewTab, window, cx)
+                                }),
+                            ),
+                    )
+                    .when(self.settings.assistant.enabled, |bar| {
+                        let toggle =
+                            Button::new("toggle-assistant")
+                                .ghost()
+                                .small()
+                                .icon(IconName::PanelRight)
+                                .selected(self.assistant_panel.open)
+                                .accessibility_label("Toggle Assistant")
+                                .tooltip(
+                                    if self.assistant_panel.unread && !self.assistant_panel.open {
+                                        "Assistant response ready · ⌘J"
+                                    } else {
+                                        "Toggle Assistant · ⌘J"
+                                    },
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_assistant(window, cx)
+                                }));
+                        let toggle = if self.assistant_panel.unread && !self.assistant_panel.open {
+                            toggle.label("Done")
+                        } else {
+                            toggle.w(self.ui_px(28.)).h(self.ui_px(28.))
+                        };
+                        bar.child(toggle)
+                    }),
             )
     }
 
@@ -398,19 +430,6 @@ impl Qrow {
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
             .child(div().flex_1())
-            .when(self.settings.assistant.enabled, |toolbar| {
-                toolbar.child(
-                    Button::new("toggle-assistant")
-                        .ghost()
-                        .small()
-                        .label(if self.assistant_panel.unread && !self.assistant_panel.open {
-                            "Assistant · Done"
-                        } else { "Assistant" })
-                        .selected(self.assistant_panel.open)
-                        .tooltip("AI Assistant · ⌘J")
-                        .on_click(cx.listener(|this, _, window, cx| this.toggle_assistant(window, cx))),
-                )
-            })
     }
 
     fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {

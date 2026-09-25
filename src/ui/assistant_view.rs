@@ -1,3 +1,4 @@
+use super::workspace_view::TAB_BAR_HEIGHT;
 use super::*;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
@@ -1406,6 +1407,7 @@ impl Qrow {
     }
 
     pub(super) fn assistant_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let action_size = self.ui_px(28.);
         let status = match &self.assistant_panel.status {
             Status::Idle => "Open the assistant to start Codex".to_owned(),
             Status::Starting => "Starting Codex…".to_owned(),
@@ -1445,10 +1447,45 @@ impl Qrow {
             .bg(cx.theme().sidebar)
             .child(
                 h_flex()
+                    .h(self.ui_px(TAB_BAR_HEIGHT))
+                    .flex_shrink_0()
+                    .items_center()
+                    .pl_3()
+                    .pr_2()
+                    .gap_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Assistant"),
+                    )
+                    .child(
+                        Button::new("assistant-new")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(IconName::Plus)
+                            .accessibility_label("New Conversation")
+                            .tooltip("New Conversation")
+                            .disabled(
+                                !matches!(self.assistant_panel.status, Status::Ready)
+                                    || self.assistant_panel.creating_conversation,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.create_assistant_conversation(cx);
+                            })),
+                    )
+            )
+            .child(
+                h_flex()
                     .h_10()
                     .flex_shrink_0()
                     .px_3()
-                    .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(
@@ -1459,30 +1496,6 @@ impl Qrow {
                             .placeholder("New conversation")
                             .disabled(self.assistant_panel.active_turn.is_some())
                             .accessibility_label("Assistant conversation"),
-                    )
-                    .child(
-                        Button::new("assistant-new")
-                            .ghost()
-                            .small()
-                            .label("New")
-                            .disabled(
-                                !matches!(self.assistant_panel.status, Status::Ready)
-                                    || self.assistant_panel.creating_conversation,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.create_assistant_conversation(cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("assistant-close")
-                            .ghost()
-                            .small()
-                            .label("Close")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.toggle_assistant(window, cx)
-                                }),
-                            ),
                     ),
             )
             .when_some(
