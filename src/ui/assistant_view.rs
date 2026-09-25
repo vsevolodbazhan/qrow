@@ -1970,28 +1970,36 @@ impl Qrow {
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
-                            .when(model.is_some(), |row| row.child(
-                                Select::new(&self.assistant_panel.model_select)
-                                    .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant model")))
-                            .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
-                                Select::new(&self.assistant_panel.reasoning_select)
-                                    .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant reasoning")))
-                            .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
-                                Select::new(&self.assistant_panel.tier_select)
-                                    .small().appearance(false).flex_1().min_w_0()
-                                    .accessibility_label("Assistant service tier")))
-                            .when(model.is_none(), |row| row.child(div().flex_1()))
                             .child(
-                                Select::new(&self.assistant_panel.mode_select)
-                                    .small()
-                                    .appearance(false)
-                                    .w(self.ui_px(62.))
+                                h_flex()
+                                    .w(self.ui_px(520.))
+                                    .max_w_full()
+                                    .h(action_size)
                                     .min_w_0()
-                                    .disabled(self.assistant.selected_thread.is_none())
-                                    .accessibility_label("Assistant query approval mode"),
+                                    .gap_1()
+                                    .when(model.is_some(), |row| row.child(
+                                        Select::new(&self.assistant_panel.model_select)
+                                            .small().appearance(false).flex_1().min_w_0()
+                                            .accessibility_label("Assistant model")))
+                                    .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                        Select::new(&self.assistant_panel.reasoning_select)
+                                            .small().appearance(false).w(self.ui_px(96.)).min_w_0()
+                                            .accessibility_label("Assistant reasoning")))
+                                    .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                        Select::new(&self.assistant_panel.tier_select)
+                                            .small().appearance(false).w(self.ui_px(72.)).min_w_0()
+                                            .accessibility_label("Assistant service tier")))
+                                    .child(
+                                        Select::new(&self.assistant_panel.mode_select)
+                                            .small()
+                                            .appearance(false)
+                                            .w(self.ui_px(62.))
+                                            .min_w_0()
+                                            .disabled(self.assistant.selected_thread.is_none())
+                                            .accessibility_label("Assistant query approval mode"),
+                                    ),
                             )
+                            .child(div().flex_1())
                             .child(
                                 Button::new("assistant-send")
                                     .small()
