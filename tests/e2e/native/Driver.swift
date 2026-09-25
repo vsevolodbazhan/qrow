@@ -431,7 +431,6 @@ final class Driver {
             _ = try wait(value, timeout: 30, role: kAXCellRole)
         }
         try press("Logs Panel")
-        try scrollLogsToTop(app)
         let clipboard = NSPasteboard.general
         let saved = (clipboard.pasteboardItems ?? []).map { item in
             item.types.compactMap { type -> (NSPasteboard.PasteboardType, Data)? in
@@ -459,6 +458,9 @@ final class Driver {
             copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
             "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
         )
+        // Copy All focuses its toolbar button; reset the viewport after that
+        // interaction so the screenshot shows the start of retained history.
+        try scrollLogsToTop(app)
         try snapshot("activity-retention")
         print("PASS: Logs records when older activity is removed")
     }
