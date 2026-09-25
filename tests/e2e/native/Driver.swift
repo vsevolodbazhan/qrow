@@ -168,9 +168,12 @@ func scrollLogsToTop(_ app: AXUIElement) throws {
     let point = CGPoint(x: origin.x + size.width * 0.75, y: origin.y + size.height * 0.82)
     let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)!
     move.post(tap: .cghidEventTap)
-    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
-    scroll.location = point
-    scroll.post(tap: .cghidEventTap)
+    for _ in 0..<32 {
+        let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
+        scroll.location = point
+        scroll.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+    }
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
 func command(_ args: [String]) throws -> String {
