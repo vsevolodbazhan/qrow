@@ -25,9 +25,9 @@ use qrow::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE,
-        MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab, Settings,
-        UI_SCALE_STEP, Workspace, copied_tab_title, unique_tab_title,
+        AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
+        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab,
+        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -250,6 +250,7 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 
 pub struct Qrow {
     settings: Settings,
+    assistant: AssistantWorkspace,
     fonts: Vec<String>,
     settings_open: bool,
     about_open: bool,
@@ -348,6 +349,7 @@ impl Qrow {
         });
         let mut this = Self {
             settings: workspace.settings,
+            assistant: workspace.assistant,
             fonts,
             settings_open: false,
             about_open: false,
@@ -468,8 +470,9 @@ impl Qrow {
     }
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
-            version: 2,
+            version: WORKSPACE_VERSION,
             settings: self.settings.clone(),
+            assistant: self.assistant.clone(),
             profiles: self.profiles.clone(),
             tabs: self
                 .tabs
@@ -1968,8 +1971,9 @@ fn demo_workspace() -> Workspace {
     tab.title = "Route overview".into();
     tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
-        version: 2,
+        version: WORKSPACE_VERSION,
         settings: Settings::default(),
+        assistant: AssistantWorkspace::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,

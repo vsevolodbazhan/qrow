@@ -3,10 +3,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
+pub const WORKSPACE_VERSION: u32 = 3;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_TAB_TITLE: usize = 60;
+pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 1;
+pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
+pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 420.;
+pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 640.;
 
 fn title_with_suffix(title: &str, suffix: &str) -> String {
     let available = MAX_TAB_TITLE.saturating_sub(suffix.chars().count());
@@ -86,6 +92,7 @@ pub struct Settings {
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
+    pub assistant: AssistantSettings,
 }
 
 impl Default for Settings {
@@ -99,6 +106,7 @@ impl Default for Settings {
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
+            assistant: AssistantSettings::default(),
         }
     }
 }
@@ -157,6 +165,73 @@ impl Settings {
         self.logs_line_height = self
             .logs_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant.sanitize();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantExecutionMode {
+    #[default]
+    AskBeforeRunning,
+    RunAutomatically,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    pub data_sharing_notice_version: u32,
+    pub default_execution_mode: AssistantExecutionMode,
+    pub codex_executable: Option<String>,
+    pub panel_width: f32,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            data_sharing_notice_version: 0,
+            default_execution_mode: AssistantExecutionMode::AskBeforeRunning,
+            codex_executable: None,
+            panel_width: DEFAULT_ASSISTANT_PANEL_WIDTH,
+            model: None,
+            reasoning_effort: None,
+            service_tier: None,
+        }
+    }
+}
+
+impl AssistantSettings {
+    pub fn sanitize(&mut self) {
+        if self.data_sharing_notice_version != ASSISTANT_DATA_SHARING_NOTICE_VERSION {
+            self.enabled = false;
+            self.data_sharing_notice_version = 0;
+        }
+        if !self.panel_width.is_finite() {
+            self.panel_width = DEFAULT_ASSISTANT_PANEL_WIDTH;
+        }
+        self.panel_width = self
+            .panel_width
+            .clamp(MIN_ASSISTANT_PANEL_WIDTH, MAX_ASSISTANT_PANEL_WIDTH);
+        sanitize_optional_string(&mut self.codex_executable);
+        sanitize_optional_string(&mut self.model);
+        sanitize_optional_string(&mut self.reasoning_effort);
+        sanitize_optional_string(&mut self.service_tier);
+    }
+}
+
+fn sanitize_optional_string(value: &mut Option<String>) {
+    if let Some(text) = value {
+        *text = text.trim().to_owned();
+        if text.is_empty() {
+            *value = None;
+        }
     }
 }
 
@@ -279,6 +354,81 @@ impl SavedTab {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantTitleSource {
+    #[default]
+    Temporary,
+    Codex,
+    User,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct AssistantConversation {
+    pub thread_id: String,
+    pub title: String,
+    pub title_source: AssistantTitleSource,
+    pub last_activity: u64,
+    pub execution_mode: AssistantExecutionMode,
+}
+
+impl AssistantConversation {
+    pub fn new(thread_id: impl Into<String>, execution_mode: AssistantExecutionMode) -> Self {
+        Self {
+            thread_id: thread_id.into(),
+            title: "New conversation".into(),
+            title_source: AssistantTitleSource::Temporary,
+            last_activity: 0,
+            execution_mode,
+        }
+    }
+
+    fn sanitize(&mut self) {
+        self.thread_id = self.thread_id.trim().to_owned();
+        self.title = self.title.trim().to_owned();
+        if self.title.is_empty() {
+            self.title = "New conversation".into();
+            self.title_source = AssistantTitleSource::Temporary;
+        }
+        self.title = self
+            .title
+            .chars()
+            .take(MAX_ASSISTANT_CONVERSATION_TITLE)
+            .collect();
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantWorkspace {
+    pub conversations: Vec<AssistantConversation>,
+    pub selected_thread: Option<String>,
+}
+
+impl AssistantWorkspace {
+    pub fn sanitize(&mut self) {
+        let mut thread_ids = BTreeSet::new();
+        self.conversations.retain_mut(|conversation| {
+            conversation.sanitize();
+            !conversation.thread_id.is_empty() && thread_ids.insert(conversation.thread_id.clone())
+        });
+        sanitize_optional_string(&mut self.selected_thread);
+        if self.selected_thread.as_ref().is_none_or(|selected| {
+            !self
+                .conversations
+                .iter()
+                .any(|conversation| conversation.thread_id == *selected)
+        }) {
+            self.selected_thread = self
+                .conversations
+                .first()
+                .map(|conversation| conversation.thread_id.clone());
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
     pub version: u32,
@@ -289,6 +439,8 @@ pub struct Workspace {
     pub active_tab: usize,
     #[serde(default)]
     pub active_tabs: BTreeMap<Uuid, Uuid>,
+    #[serde(default)]
+    pub assistant: AssistantWorkspace,
 }
 
 impl Workspace {
@@ -359,19 +511,21 @@ impl Workspace {
             tab.title = unique_tab_title(&title, |candidate| used.contains(candidate));
             used.insert(tab.title.clone());
         }
-        self.version = 2;
+        self.assistant.sanitize();
+        self.version = WORKSPACE_VERSION;
     }
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: WORKSPACE_VERSION,
             settings: Settings::default(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,
             active_tabs: BTreeMap::new(),
+            assistant: AssistantWorkspace::default(),
         }
     }
 }
@@ -475,7 +629,7 @@ mod tests {
             ..Workspace::default()
         };
         workspace.normalize();
-        assert_eq!(workspace.version, 2);
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
         assert_eq!(workspace.tabs[0].profile, Some(first.id));
         assert!(
             workspace
@@ -529,7 +683,7 @@ mod tests {
         let mut other_connection = SavedTab::new(1, Some(second_id));
         other_connection.title = "Shared".into();
         let mut workspace = Workspace {
-            version: 2,
+            version: WORKSPACE_VERSION,
             profiles: vec![first, second],
             tabs: vec![first_tab, duplicate, other_connection],
             active_tab: 0,
@@ -558,6 +712,7 @@ mod tests {
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,
+            assistant: AssistantSettings::default(),
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
@@ -625,5 +780,70 @@ mod tests {
         assert_eq!(settings.editor_font_size, 16.);
         let saved = serde_json::to_value(&settings).unwrap();
         assert!(saved.get("ui_font_size").is_none());
+    }
+
+    #[test]
+    fn assistant_settings_restore_safe_defaults_and_sanitize_values() {
+        let restored: AssistantSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored, AssistantSettings::default());
+        assert!(!restored.enabled);
+        assert_eq!(
+            restored.default_execution_mode,
+            AssistantExecutionMode::AskBeforeRunning
+        );
+
+        let mut settings = AssistantSettings {
+            enabled: true,
+            panel_width: f32::NAN,
+            codex_executable: Some("   ".into()),
+            model: Some(" gpt-test ".into()),
+            reasoning_effort: Some(" high ".into()),
+            service_tier: Some(" fast ".into()),
+            ..AssistantSettings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.panel_width, DEFAULT_ASSISTANT_PANEL_WIDTH);
+        assert!(!settings.enabled);
+        assert_eq!(settings.data_sharing_notice_version, 0);
+        assert_eq!(settings.codex_executable, None);
+        assert_eq!(settings.model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(settings.service_tier.as_deref(), Some("fast"));
+
+        settings.panel_width = MAX_ASSISTANT_PANEL_WIDTH + 1.;
+        settings.enabled = true;
+        settings.data_sharing_notice_version = ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+        settings.sanitize();
+        assert_eq!(settings.panel_width, MAX_ASSISTANT_PANEL_WIDTH);
+        assert!(settings.enabled);
+    }
+
+    #[test]
+    fn assistant_workspace_removes_invalid_threads_and_repairs_selection() {
+        let mut first =
+            AssistantConversation::new(" thread-1 ", AssistantExecutionMode::RunAutomatically);
+        first.title = format!("  {}  ", "x".repeat(MAX_ASSISTANT_CONVERSATION_TITLE + 5));
+        let mut duplicate =
+            AssistantConversation::new("thread-1", AssistantExecutionMode::AskBeforeRunning);
+        duplicate.title = "Duplicate".into();
+        let blank = AssistantConversation::new("   ", AssistantExecutionMode::AskBeforeRunning);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![first, duplicate, blank],
+            selected_thread: Some("missing".into()),
+        };
+
+        assistant.sanitize();
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "thread-1");
+        assert_eq!(
+            assistant.conversations[0].title.chars().count(),
+            MAX_ASSISTANT_CONVERSATION_TITLE
+        );
+        assert_eq!(assistant.selected_thread.as_deref(), Some("thread-1"));
+        assert_eq!(
+            assistant.conversations[0].execution_mode,
+            AssistantExecutionMode::RunAutomatically
+        );
     }
 }

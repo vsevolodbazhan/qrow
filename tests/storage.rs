@@ -1,5 +1,8 @@
 use qrow::{
-    model::{Profile, SavedTab, Workspace},
+    model::{
+        ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantConversation, AssistantExecutionMode,
+        AssistantTitleSource, Profile, SavedTab, WORKSPACE_VERSION, Workspace,
+    },
     storage::{self, Saver, WorkspaceFile},
 };
 use std::{
@@ -176,10 +179,56 @@ fn version_one_tabs_migrate_to_connection_ownership() {
     fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
     let restored = qrow::storage::load(&path).unwrap();
-    assert_eq!(restored.version, 2);
+    assert_eq!(restored.version, WORKSPACE_VERSION);
     assert_eq!(restored.tabs[0].profile, Some(profile.id));
     assert_eq!(restored.tabs[0].sql, "select λ");
     assert_eq!(restored.active_tabs[&profile.id], restored.tabs[0].id);
+}
+
+#[test]
+fn version_two_workspaces_get_safe_assistant_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let mut json = serde_json::to_value(Workspace::default()).unwrap();
+    let object = json.as_object_mut().unwrap();
+    object.insert("version".into(), 2.into());
+    object.remove("assistant");
+    object
+        .get_mut("settings")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("assistant");
+    fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let restored = qrow::storage::load(&path).unwrap();
+    assert_eq!(restored.version, WORKSPACE_VERSION);
+    assert_eq!(restored.settings.assistant, Default::default());
+    assert_eq!(restored.assistant, Default::default());
+}
+
+#[test]
+fn populated_assistant_state_round_trips_through_workspace_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let mut workspace = Workspace::default();
+    workspace.settings.assistant.enabled = true;
+    workspace.settings.assistant.data_sharing_notice_version =
+        ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+    workspace.settings.assistant.default_execution_mode = AssistantExecutionMode::RunAutomatically;
+    workspace.settings.assistant.model = Some("gpt-test".into());
+    let mut conversation =
+        AssistantConversation::new("thread-1", AssistantExecutionMode::RunAutomatically);
+    conversation.title = "Revenue review".into();
+    conversation.title_source = AssistantTitleSource::User;
+    conversation.last_activity = 1_800_000_000;
+    workspace.assistant.conversations.push(conversation);
+    workspace.assistant.selected_thread = Some("thread-1".into());
+    fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
+
+    let restored = qrow::storage::load(&path).unwrap();
+
+    assert_eq!(restored, workspace);
 }
 
 #[test]

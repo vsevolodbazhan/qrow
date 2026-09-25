@@ -35,8 +35,11 @@ These layout positions are not saved in the workspace.
 
 The workspace file contains connection profiles, connection-owned tabs, tab
 names, SQL, the selected connection, the last active tab for each connection,
-and appearance settings. It does not contain
-result rows or Logs history. Its default path is:
+and settings. Optional assistant state includes the enabled setting, panel and
+model preferences, Codex thread identifiers, conversation titles, and query
+execution modes. The workspace does not contain assistant messages, tool
+arguments, tool results, result rows, Logs history, or Codex credentials. Its
+default path is:
 
 ```text
 ~/Library/Application Support/Qrow/workspace.json
@@ -45,6 +48,11 @@ result rows or Logs history. Its default path is:
 Passwords remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords and result sets are not written to the workspace file. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.
+
+Workspace version 3 adds the optional assistant state. Qrow gives version 1
+and version 2 workspaces safe assistant defaults during load. The assistant is
+off by default. The migration preserves connections, tabs, SQL, active-tab
+state, and appearance settings.
 
 Qrow saves after a short editing delay. **Qrow → Quit Qrow**, **⌘Q**, and the
 window close button wait for confirmation that the latest workspace is saved.
