@@ -21,6 +21,7 @@ populated page stays visible. Changing pages clears the selection and resets
 the scroll position. New batches preserve the current scroll position.
 
 Scroll vertically to see more rows and horizontally to see more columns.
+The horizontal scrollbar sits in its own lane below the rows.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 

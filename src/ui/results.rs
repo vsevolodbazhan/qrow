@@ -295,8 +295,8 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> imp
     .inset_0()
 }
 
-/// Reserve a scrollbar lane inside the results viewport. An overlay track can
-/// otherwise fall outside the table's clipped container in the Kit layout.
+/// Reserve a scrollbar lane inside the results viewport. Match the track width
+/// so it does not rise into the table's clipped rows.
 pub(super) fn view(
     table: &Entity<TableState<Results>>,
     modal: bool,
@@ -330,9 +330,17 @@ pub(super) fn view(
                 )
                 .when(!modal, |el| el.child(horizontal_scroll(table, scale))),
         )
-        .child(div().h_3().w_full().flex_shrink_0().relative().child(
-            Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
-        ))
+        .child(
+            div()
+                .h(Scrollbar::width())
+                .w_full()
+                .flex_shrink_0()
+                .relative()
+                .child(
+                    Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle)
+                        .viewport_from_layout(),
+                ),
+        )
         .into_any_element()
 }
 
