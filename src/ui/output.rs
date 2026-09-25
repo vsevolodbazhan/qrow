@@ -72,6 +72,11 @@ impl Qrow {
                         .map_or((entry.text.as_str(), None), |(first, rest)| {
                             (first, Some(rest))
                         });
+                    let header = if entry.kind == ActivityKind::HistoryTrimmed {
+                        first_line.to_owned()
+                    } else {
+                        format!("[{}] {first_line}", timestamp_label(entry.timestamp))
+                    };
                     v_flex()
                         .id(("output-entry", entry.id()))
                         .w_full()
@@ -83,11 +88,7 @@ impl Qrow {
                             el.text_color(cx.theme().danger)
                         })
                         .child(
-                            SelectableText::new(
-                                "header",
-                                format!("[{}] {first_line}", timestamp_label(entry.timestamp)),
-                            )
-                            .document_order(index as u64 * 2),
+                            SelectableText::new("header", header).document_order(index as u64 * 2),
                         )
                         .when_some(remaining_lines, |el, text| {
                             el.child(

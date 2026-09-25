@@ -436,8 +436,8 @@ final class Driver {
         try press("Copy All Logs")
         let copied = clipboard.string(forType: .string) ?? ""
         try require(
-            copied.contains("Older activity was removed"),
-            "Copy All did not include the retention entry"
+            copied.hasPrefix("Older activity was removed\n"),
+            "Copy All did not put the retention boundary before the retained entries"
         )
         try snapshot("activity-retention")
         print("PASS: Logs records when older activity is removed")

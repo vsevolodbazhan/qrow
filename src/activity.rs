@@ -330,7 +330,7 @@ impl ActivityLog {
                 self.next_entry_id += 1;
                 self.text_bytes += entry.text_bytes();
                 self.retention_entry_id = Some(entry.id());
-                self.ordered_entries.push(entry);
+                self.ordered_entries.insert(0, entry);
             }
         }
     }
@@ -424,8 +424,14 @@ mod tests {
         assert_eq!(log.groups().len(), MAX_EXECUTION_GROUPS);
         assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(11)));
         assert_eq!(log.latest_error().unwrap().text, "line one\nline two");
+        let entries: Vec<_> = log.entries().collect();
+        assert_eq!(entries[0].kind, ActivityKind::HistoryTrimmed);
+        assert_eq!(entries[0].text, "Older activity was removed");
+        assert_eq!(entries[1].execution_id, Some(ExecutionId(11)));
         assert_eq!(
-            log.entries()
+            entries
+                .iter()
+                .copied()
                 .filter(|entry| entry.kind == ActivityKind::HistoryTrimmed)
                 .map(|entry| entry.text.as_str())
                 .collect::<Vec<_>>(),

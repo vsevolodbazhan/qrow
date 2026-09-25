@@ -56,8 +56,10 @@ on its tab.
 Qrow limits history to 100 activity groups and 8 MiB per query tab. Qrow
 removes complete old groups when a limit is reached. The latest execution and
 its complete error are kept. A single latest execution can exceed 8 MiB. Qrow
-adds an `Older activity was removed` line to Logs when it removes old groups.
-The line appears in the entry count and **Copy All** output.
+adds an `Older activity was removed` line at the start of Logs history when it
+removes old groups. The line marks the boundary before the retained entries.
+It has no timestamp because it does not describe a timed activity. The line
+appears in the entry count and **Copy All** output.
 
 ## Manage tabs
 
