@@ -1,5 +1,6 @@
 //! Harness-neutral state and operations for the optional AI assistant.
 
+pub mod broker;
 mod codex;
 
 pub use codex::CodexHarness;
