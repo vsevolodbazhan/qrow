@@ -6,6 +6,8 @@ mod codex;
 pub use codex::CodexHarness;
 
 use anyhow::Result;
+use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccountKind {
@@ -132,5 +134,101 @@ impl HarnessSnapshot {
 
 pub trait AssistantHarness: Send {
     fn snapshot(&mut self) -> Result<HarnessSnapshot>;
+    fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation>;
+    fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation>;
+    fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory>;
+    fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()>;
+    fn delete_conversation(&mut self, thread_id: &str) -> Result<()>;
+    fn start_turn(&mut self, request: TurnRequest) -> Result<Turn>;
+    fn steer_turn(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<()>;
+    fn interrupt_turn(&mut self, thread_id: &str, turn_id: &str) -> Result<()>;
+    fn next_event(&mut self, timeout: Duration) -> Result<Option<AssistantEvent>>;
+    fn answer_tool_call(&mut self, call: &ToolCall, result: ToolResult) -> Result<()>;
     fn shutdown(&mut self) -> Result<()>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub input_schema: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Conversation {
+    pub id: String,
+    pub title: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationHistory {
+    pub conversation: Conversation,
+    pub turns: Vec<HistoryTurn>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryTurn {
+    pub id: String,
+    pub status: String,
+    pub items: Vec<Value>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnRequest {
+    pub thread_id: String,
+    pub text: String,
+    pub context: Value,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Turn {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolCall {
+    pub request_id: Value,
+    pub call_id: String,
+    pub thread_id: String,
+    pub turn_id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolResult {
+    pub success: bool,
+    pub content: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssistantEvent {
+    MessageDelta {
+        thread_id: String,
+        turn_id: String,
+        text: String,
+    },
+    TurnCompleted {
+        thread_id: String,
+        turn: Turn,
+        error: Option<String>,
+    },
+    TitleChanged {
+        thread_id: String,
+        title: String,
+    },
+    ToolCall(ToolCall),
+    UnsupportedRequest {
+        request_id: Value,
+        method: String,
+    },
+    Other {
+        method: String,
+        params: Value,
+    },
 }
