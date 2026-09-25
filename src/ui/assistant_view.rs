@@ -7,6 +7,7 @@ use gpui_kit::component::{
     input::{Textarea, TextareaState},
     message::{Message, MessageAlignment, MessageContent},
     select::{SearchableVec, Select, SelectEvent, SelectState},
+    text::{TextView, TextViewStyle},
     v_flex,
 };
 use qrow::{
@@ -78,6 +79,7 @@ pub(super) enum Speaker {
 
 #[derive(Clone, Debug)]
 pub(super) struct TranscriptEntry {
+    id: Uuid,
     pub speaker: Speaker,
     pub text: String,
     pub turn_id: Option<String>,
@@ -88,6 +90,7 @@ pub(super) struct TranscriptEntry {
 impl TranscriptEntry {
     pub fn new(speaker: Speaker, text: String, turn_id: Option<String>) -> Self {
         Self {
+            id: Uuid::new_v4(),
             speaker,
             text,
             turn_id,
@@ -1677,6 +1680,22 @@ impl Qrow {
                             .flatten()
                             .enumerate()
                             .map(|(index, entry)| {
+                                let content = if entry.speaker == Speaker::Assistant {
+                                    let mut table_style = StyleRefinement::default();
+                                    table_style.overflow.x = Some(Overflow::Scroll);
+                                    TextView::markdown(
+                                        format!("assistant-markdown-{}", entry.id),
+                                        entry.text.clone(),
+                                    )
+                                    .style(TextViewStyle::default().table(table_style))
+                                    .min_w_0()
+                                    .max_w_full()
+                                    .into_any_element()
+                                } else {
+                                    SelectableText::new("message", entry.text.clone())
+                                        .document_order(index as u64 * 2)
+                                        .into_any_element()
+                                };
                                 let alignment = if entry.speaker == Speaker::User {
                                     MessageAlignment::End
                                 } else {
@@ -1692,7 +1711,7 @@ impl Qrow {
                                     MessageContent::new().bubble(
                                         Bubble::new().with_variant(variant).child(
                                         div()
-                                            .id(format!("assistant-entry-{index}"))
+                                            .id(format!("assistant-entry-{}", entry.id))
                                             .role(Role::Paragraph)
                                             .aria_label(format!(
                                                 "{}: {}",
@@ -1705,7 +1724,7 @@ impl Qrow {
                                                 entry.text
                                             ))
                                             .whitespace_normal()
-                                            .child(SelectableText::new("message", entry.text.clone()).document_order(index as u64 * 2))
+                                            .child(content)
                                             .when_some(entry.detail.as_ref(), |bubble, detail| {
                                                 let thread = selected.to_owned();
                                                 bubble.child(Button::new(format!("assistant-detail-{index}"))

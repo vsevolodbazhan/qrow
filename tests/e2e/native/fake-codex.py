@@ -155,7 +155,11 @@ for line in sys.stdin:
                     "params": {
                         "threadId": THREAD,
                         "turnId": turn_id,
-                        "delta": "I can help with this query.",
+                        "delta": (
+                            "**I can help with this query.**\n\n"
+                            "Use `SELECT 1` to check the selected tab.\n\n"
+                            "| Column | Value |\n| --- | --- |\n| Result | 1 |"
+                        ),
                     },
                 }
             )

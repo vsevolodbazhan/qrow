@@ -26,6 +26,9 @@ Select a query tab. Select **Toggle Assistant** in the tab strip or press
 works. The message steers the current turn. **Stop** stops the Codex turn. It
 does not cancel a database query that already started.
 
+Qrow renders assistant replies as Markdown. Replies can show headings, lists,
+code, links, and tables. Tool activity and error details stay as plain text.
+
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It
 can edit the selected query tab and run its one SQL statement through Qrow's
