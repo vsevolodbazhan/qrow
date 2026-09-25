@@ -1783,7 +1783,7 @@ impl Qrow {
                     .h(self.ui_px(36.))
                     .flex_shrink_0()
                     .items_center()
-                    .pl_2()
+                    .pl_3()
                     .pr_2()
                     .gap_1()
                     .border_b_1()
