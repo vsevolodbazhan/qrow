@@ -627,7 +627,17 @@ impl Qrow {
             self.settings.assistant.reasoning_effort = None;
             self.settings.assistant.service_tier = None;
             self.assistant_panel.notice =
-                Some("Saved model is unavailable. Codex defaults are in use.".into());
+                Some("Saved model is unavailable. Codex default model selected.".into());
+            self.changed(cx);
+        }
+        let default_model = models
+            .iter()
+            .find(|model| model.is_default())
+            .or_else(|| models.first());
+        if self.settings.assistant.model.is_none()
+            && let Some(model) = default_model
+        {
+            self.settings.assistant.model = Some(model.id().to_owned());
             self.changed(cx);
         }
         let model = self
@@ -636,28 +646,17 @@ impl Qrow {
             .model
             .as_deref()
             .and_then(|id| models.iter().find(|model| model.id() == id))
-            .or_else(|| models.iter().find(|model| model.is_default()))
-            .or_else(|| models.first());
-        let default_model_label = models
+            .or(default_model);
+        let model_labels = models
             .iter()
-            .find(|model| model.is_default())
-            .or_else(|| models.first())
-            .map_or_else(
-                || "Default".to_owned(),
-                |model| format!("Default · {}", model.display_name()),
-            );
-        let mut model_labels = vec![default_model_label.clone()];
-        model_labels.extend(models.iter().map(|model| model.display_name().to_owned()));
-        let selected_model_label = self
-            .settings
-            .assistant
-            .model
-            .as_ref()
-            .and_then(|id| models.iter().find(|model| model.id() == id))
-            .map_or(default_model_label, |model| model.display_name().to_owned());
+            .map(|model| model.display_name().to_owned())
+            .collect();
+        let selected_model_label = model.map(|model| model.display_name().to_owned());
         self.assistant_panel.model_select.update(cx, |state, cx| {
             state.set_items(SearchableVec::new(model_labels), window, cx);
-            state.set_selected_value(&selected_model_label, window, cx);
+            if let Some(label) = selected_model_label {
+                state.set_selected_value(&label, window, cx);
+            }
         });
         let efforts = model.map(|model| model.reasoning_efforts()).unwrap_or(&[]);
         if self
@@ -736,20 +735,21 @@ impl Qrow {
     }
 
     fn select_assistant_model(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings.assistant.model = if label == "Default" || label.starts_with("Default · ") {
-            None
-        } else {
-            self.assistant_panel
-                .snapshot
-                .as_ref()
-                .and_then(|snapshot| {
-                    snapshot
-                        .models()
-                        .iter()
-                        .find(|model| model.display_name() == label)
-                })
-                .map(|model| model.id().to_owned())
+        let Some(model_id) = self
+            .assistant_panel
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| {
+                snapshot
+                    .models()
+                    .iter()
+                    .find(|model| model.display_name() == label)
+            })
+            .map(|model| model.id().to_owned())
+        else {
+            return;
         };
+        self.settings.assistant.model = Some(model_id);
         self.settings.assistant.reasoning_effort = None;
         self.settings.assistant.service_tier = None;
         self.sync_assistant_selectors(window, cx);
@@ -1722,25 +1722,16 @@ impl Qrow {
             .snapshot
             .as_ref()
             .map(|snapshot| {
-                let default_model = snapshot
+                snapshot
                     .models()
                     .iter()
-                    .find(|candidate| candidate.is_default())
-                    .or_else(|| snapshot.models().first());
-                let mut options = vec![(
-                    default_model.map_or_else(
-                        || "Default".to_owned(),
-                        |candidate| format!("Default · {}", candidate.display_name()),
-                    ),
-                    self.settings.assistant.model.is_none(),
-                )];
-                options.extend(snapshot.models().iter().map(|candidate| {
-                    (
-                        candidate.display_name().to_owned(),
-                        self.settings.assistant.model.as_deref() == Some(candidate.id()),
-                    )
-                }));
-                options
+                    .map(|candidate| {
+                        (
+                            candidate.display_name().to_owned(),
+                            self.settings.assistant.model.as_deref() == Some(candidate.id()),
+                        )
+                    })
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
         let reasoning_options = model

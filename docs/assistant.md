@@ -61,11 +61,14 @@ The Send button shows the current query mode, **Ask** or **Run**. Select **Ask
 before running** or **Run automatically** from its menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
 and service tier below the message field. Codex supplies
-the available choices. Qrow shows the model's default reasoning level as the
+the available choices. Qrow selects Codex's default model when the workspace
+has no model choice. Qrow shows that model's default reasoning level as the
 selected level. Select **Default** for service tier to use the tier that Codex
 chooses. The controls show icons when the pane is narrow. Your change applies
-to the next message. If a saved choice is no longer available, Qrow uses a
-Codex default and shows a notice.
+to the next message. If a saved model is no longer available, Qrow selects
+Codex's default model and shows a notice. If a saved reasoning level or service
+tier is no longer available, Qrow uses the Codex default for that control and
+shows a notice.
 
 ## Pane and connection state
 
