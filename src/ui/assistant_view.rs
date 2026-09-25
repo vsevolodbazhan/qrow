@@ -1800,21 +1800,6 @@ impl Qrow {
                                 .map_or_else(|| "New conversation".to_owned(), |conversation| conversation.title.clone())),
                     )
                     .child(
-                        Button::new("assistant-toggle-threads")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(IconName::GalleryVerticalEnd)
-                            .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.assistant_panel.thread_list_override = Some(!show_threads);
-                                cx.notify();
-                            })),
-                    )
-                    .child(
                         Button::new("assistant-new")
                             .ghost()
                             .small()
@@ -1853,6 +1838,21 @@ impl Qrow {
                                     .item(PopupMenuItem::new("Rename…").on_click({let rename = rename.clone(); move |event, window, cx| rename(event, window, cx)}))
                                     .item(PopupMenuItem::new("Delete…").on_click({let delete = delete.clone(); move |event, window, cx| delete(event, window, cx)}))
                             }),
+                    )
+                    .child(
+                        Button::new("assistant-toggle-threads")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(IconName::Menu)
+                            .accessibility_label("Toggle conversation list")
+                            .tooltip("Toggle conversation list")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.assistant_panel.thread_list_override = Some(!show_threads);
+                                cx.notify();
+                            })),
                     )
             )
             .when_some(
