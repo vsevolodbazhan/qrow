@@ -2161,7 +2161,7 @@ impl Qrow {
                                     .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
                                         Button::new("assistant-reasoning")
                                             .ghost().small().compact()
-                                            .icon(AssetIconName::Brain)
+                                            .icon(AssetIconName::Asterisk)
                                             .accessibility_label(format!("Assistant reasoning: {reasoning_label}"))
                                             .tooltip(format!("Reasoning: {reasoning_label}"))
                                             .when(show_reasoning_label, |button| button.label(reasoning_label.clone()).dropdown_caret(true))
@@ -2182,7 +2182,7 @@ impl Qrow {
                                     .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
                                         Button::new("assistant-tier")
                                             .ghost().small().compact()
-                                            .icon(AssetIconName::Gauge)
+                                            .icon(AssetIconName::BatteryCharging)
                                             .accessibility_label(format!("Assistant service tier: {tier_label}"))
                                             .tooltip(format!("Service tier: {tier_label}"))
                                             .when(show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
