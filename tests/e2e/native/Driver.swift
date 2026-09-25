@@ -642,6 +642,37 @@ final class Driver {
         try waitGone("Assistant conversation")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
+    func testAssistantQueries() throws {
+        try fill("SQL Editor", "SELECT 1 AS assistant_value")
+        key(38, flags: .maskCommand) // Reopen the existing conversation.
+        _ = try wait("Assistant query approval mode", timeout: 20)
+        try fill("Assistant message", "Run selected SQL with approval")
+        try press("Send")
+        _ = try wait("Assistant query approval:", timeout: 20)
+        let runButtons = elements().filter {
+            attribute($0, kAXRoleAttribute) as? String == kAXButtonRole && strings($0).contains("Run")
+        }
+        try require(runButtons.count == 2, "Expected toolbar Run and assistant approval Run")
+        try activate(runButtons[1])
+        _ = try wait("I ran the query.", timeout: 90)
+        _ = try wait("1", role: kAXCellRole)
+
+        let mode = try wait("Assistant query approval mode", role: kAXPopUpButtonRole)
+        try activate(mode)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        key(125) // Down selects Run automatically.
+        key(36)
+        try activate(try waitExact("Run automatically", timeout: 10, role: kAXButtonRole))
+        _ = try wait("Run automatically", timeout: 10, role: kAXPopUpButtonRole)
+        try fill("SQL Editor", "SELECT 2 AS assistant_value")
+        try fill("Assistant message", "Run selected SQL automatically")
+        try press("Send")
+        _ = try wait("2", role: kAXCellRole)
+        try require(find("Assistant query approval:") == nil, "Automatic mode requested approval")
+        try activate(try waitExact("Close", role: kAXButtonRole))
+        try waitGone("Assistant conversation")
+        print("PASS: Assistant approval and automatic execution use the selected query tab")
+    }
     func test() throws {
         try start()
         try testAbout()
@@ -733,6 +764,7 @@ final class Driver {
         try waitGone("Qrow E2E copy")
 
         try press("Qrow E2E")
+        try testAssistantQueries()
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected", role: kAXCellRole)
         try snapshot("connected")

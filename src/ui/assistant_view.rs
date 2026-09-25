@@ -1696,7 +1696,7 @@ impl Qrow {
                                             .when_some(entry.detail.as_ref(), |bubble, detail| {
                                                 let thread = selected.to_owned();
                                                 bubble.child(Button::new(format!("assistant-detail-{index}"))
-                                                    .ghost().small().label(if entry.expanded { "Hide details" } else { "Details" })
+                                                    .small().label(if entry.expanded { "Hide details" } else { "Details" })
                                                     .on_click(cx.listener(move |this, _, _, cx| {
                                                         if let Some(entry) = this.assistant_panel.transcripts.get_mut(&thread)
                                                             .and_then(|entries| entries.get_mut(index)) {

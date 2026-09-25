@@ -7,6 +7,7 @@ import sys
 THREAD = "synthetic-thread-1"
 turn_number = 0
 pending_edit = None
+pending_run = None
 
 
 def send(message):
@@ -125,6 +126,28 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Run selected SQL"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            pending_run = turn_id
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": THREAD,
+                        "turnId": turn_id,
+                        "callId": f"run-{turn_number}",
+                        "tool": "run_selected_tab_query",
+                        "arguments": {
+                            "version": 1,
+                            "tab_id": tab["id"],
+                            "connection_id": tab["connection_id"],
+                            "editor_revision": tab["editor_revision"],
+                        },
+                    },
+                }
+            )
         else:
             send(
                 {
@@ -145,15 +168,18 @@ for line in sys.stdin:
                     },
                 }
             )
-    elif request_id is not None and pending_edit and request_id == 9000 + turn_number:
-        turn_id = pending_edit
+    elif (
+        request_id is not None
+        and (pending_edit or pending_run)
+        and request_id == 9000 + turn_number
+    ):
+        turn_id = pending_edit or pending_run
         text = request["result"]["contentItems"][0]["text"]
         result = json.loads(text)
-        message = (
-            "I updated the SQL."
-            if request["result"]["success"]
-            else f"Edit failed: {result}"
-        )
+        if request["result"]["success"]:
+            message = "I updated the SQL." if pending_edit else "I ran the query."
+        else:
+            message = f"Tool failed: {result}"
         send(
             {
                 "method": "item/agentMessage/delta",
@@ -174,3 +200,4 @@ for line in sys.stdin:
             }
         )
         pending_edit = None
+        pending_run = None

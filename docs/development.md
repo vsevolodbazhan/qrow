@@ -96,8 +96,8 @@ Hooks export snapshots into temporary directories and share a build cache under
 They do not package the application.
 
 The macOS end-to-end run uses a synthetic Codex app server to check assistant
-opt-in, the docked pane, a chat turn, a direct SQL edit, and Undo. It does not
-use a Codex account.
+opt-in, the docked pane, a chat turn, a direct SQL edit, Undo, query approval,
+and automatic query execution. It does not use a Codex account.
 
 The release profile favors size so the optional assistant stays within the
 macOS package budget. Run `core/performance` after a release-profile change.
