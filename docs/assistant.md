@@ -56,6 +56,8 @@ saves thread IDs and titles in the workspace. Codex stores conversation text
 in its own data directory.
 Select **Load older messages** to read earlier conversation text. Select **Jump
 to latest** to return to the newest message.
+Qrow scrolls to the latest message when you send a message or Codex starts a
+new reply. New text in that reply follows the bottom while you stay near it.
 
 The Send button shows the current query mode, **Ask** or **Run**. Select **Ask
 before running** or **Run automatically** from its menu to change the mode.

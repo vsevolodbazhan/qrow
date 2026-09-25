@@ -731,6 +731,7 @@ impl Qrow {
         if self.assistant_panel.thread_list_override == Some(true) {
             self.assistant_panel.thread_list_override = Some(false);
         }
+        self.assistant_panel.scroll.scroll_to_bottom();
         self.changed(cx);
     }
 
@@ -1233,8 +1234,13 @@ impl Qrow {
                 } else {
                     self.assistant_panel.older_cursors.remove(&thread);
                 }
+                let selected = self.assistant.selected_thread.as_deref() == Some(thread.as_str());
                 let entries = self.assistant_panel.transcripts.entry(thread).or_default();
+                let previous_count = entries.len();
                 merge_history(entries, history.turns);
+                if selected && entries.len() > previous_count {
+                    self.assistant_panel.scroll.scroll_to_bottom();
+                }
             }
             AssistantServiceEvent::HistoryPage(page) => {
                 self.assistant_panel.loading_older = false;
@@ -1294,24 +1300,27 @@ impl Qrow {
                 turn_id,
                 text,
             }) => {
+                let selected = self.assistant.selected_thread.as_deref() == Some(thread_id.as_str());
                 let entries = self
                     .assistant_panel
                     .transcripts
                     .entry(thread_id)
                     .or_default();
-                if let Some(last) = entries.last_mut().filter(|entry| {
+                let new_message = if let Some(last) = entries.last_mut().filter(|entry| {
                     entry.speaker == Speaker::Assistant
                         && entry.turn_id.as_deref() == Some(&turn_id)
                 }) {
                     last.text.push_str(&text);
+                    false
                 } else {
                     entries.push(TranscriptEntry::new(
                         Speaker::Assistant,
                         text,
                         Some(turn_id),
                     ));
-                }
-                if self.assistant_transcript_near_bottom() {
+                    true
+                };
+                if selected && (new_message || self.assistant_transcript_near_bottom()) {
                     self.assistant_panel.scroll.scroll_to_bottom();
                 }
             }
