@@ -723,7 +723,14 @@ final class Driver {
             if find("Search conversations") == nil {
                 try press("Toggle conversation list")
             }
-            _ = try wait("Search conversations")
+            let search = try wait("Search conversations")
+            let toggle = try wait("Toggle conversation list")
+            let (searchPosition, searchSize) = try elementBounds(search)
+            let (togglePosition, toggleSize) = try elementBounds(toggle)
+            try require(searchSize.height <= toggleSize.height + 1, "Conversation search input is taller than the header control")
+            let searchCenter = searchPosition.y + searchSize.height / 2
+            let toggleCenter = togglePosition.y + toggleSize.height / 2
+            try require(abs(searchCenter - toggleCenter) <= 2, "Conversation search input is not aligned with the header")
             try snapshot("assistant-conversation-search-spacing")
             if find("Assistant message") == nil {
                 try press("Back to conversation")
