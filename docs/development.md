@@ -97,7 +97,8 @@ They do not package the application.
 
 The macOS end-to-end run uses a synthetic Codex app server to check assistant
 opt-in, the docked pane, a chat turn, appended SQL, Undo, query approval,
-and automatic query execution. It does not use a Codex account.
+statement targeting, tab changes during a turn, automatic query execution, and
+generated conversation titles. It does not use a Codex account.
 
 The release profile favors size so the optional assistant stays within the
 macOS package budget. Run `core/performance` after a release-profile change.

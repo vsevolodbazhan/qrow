@@ -246,10 +246,18 @@ impl Qrow {
         Some(result.unwrap_or_else(|error| error))
     }
 
-    fn tool_workspace(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
+    fn tool_workspace(&mut self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let args: VersionInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        Ok(success(self.assistant_context(cx)))
+        let context = self.assistant_context(cx);
+        // This read makes a tab change visible and binds later actions to that tab.
+        self.assistant_panel.target =
+            self.assistant_target(&call.thread_id, cx)
+                .map(|mut target| {
+                    target.turn_id = call.turn_id.clone();
+                    target
+                });
+        Ok(success(context))
     }
 
     fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
@@ -259,7 +267,12 @@ impl Qrow {
             .tabs
             .iter()
             .find(|tab| tab.saved.id == args.tab_id)
-            .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
+            .ok_or_else(|| {
+                failure(
+                    "invalid_arguments",
+                    "The query tab was not found. Read the workspace and use the exact tab ID it returns.",
+                )
+            })?;
         let sql = tab.input.read(cx).value().to_string();
         if sql.len() > MAX_SQL_BYTES {
             return Err(failure("limit_reached", "The SQL text is too large."));
@@ -302,7 +315,20 @@ impl Qrow {
                 content: json!({"version": 1, "error": error}),
             })?;
         let editor = tab.input.clone();
-        let mapped = remap_selection(selected, &args.edits);
+        let appended_range = args
+            .edits
+            .iter()
+            .any(|edit| {
+                edit.start == sql.len()
+                    && edit.end == sql.len()
+                    && !edit.replacement.trim().is_empty()
+            })
+            .then(|| qrow::sql::last_statement_range(&plan.sql))
+            .flatten()
+            .filter(|range| range.start >= sql.len());
+        let mapped = appended_range
+            .clone()
+            .or_else(|| remap_selection(selected, &args.edits));
         self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
         self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
         editor.update(cx, |editor, cx| {
@@ -313,6 +339,11 @@ impl Qrow {
             }
             editor.set_scroll_offset(scroll, cx);
         });
+        if let Some(range) = appended_range
+            && let Some(target) = &mut self.assistant_panel.target
+        {
+            target.selected_range = Some(range);
+        }
         let revision = self.tabs[self.active].revision;
         self.changed(cx);
         Ok(success(
@@ -406,6 +437,14 @@ impl Qrow {
                     "tab_busy",
                     "Another assistant query request is pending.",
                 ));
+            }
+            if let Some(range) = args.statement_range {
+                tab.input.update(cx, |editor, cx| {
+                    editor.set_selected_range(range.clone(), cx);
+                });
+                if let Some(target) = &mut self.assistant_panel.target {
+                    target.selected_range = Some(range);
+                }
             }
             let mode = self
                 .assistant

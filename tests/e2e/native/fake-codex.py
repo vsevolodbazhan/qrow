@@ -12,6 +12,8 @@ state_dir = os.path.join(os.environ["QROW_DATA_DIR"], "fake-codex")
 os.makedirs(os.path.join(state_dir, "rollouts"), exist_ok=True)
 counter_path = os.path.join(state_dir, "thread-counter")
 live_threads = set()
+# Qrow asks for a conversation title in an ephemeral thread that Codex never saves.
+title_threads = set()
 
 
 def has_rollout(thread):
@@ -37,10 +39,19 @@ def next_thread_number():
     return number
 
 
+def generated_title(prompt):
+    # Title the first user message so that the driver can tell which text Qrow sent.
+    start = prompt.index('<message role="user">\n') + len('<message role="user">\n')
+    words = prompt[start:prompt.index("\n</message>", start)].split()
+    return "Title: " + " ".join(words[:3])
+
+
 thread_id = None
 turn_number = 0
 pending_edit = None
 pending_run = None
+pending_workspace = None
+pending_read_retry = None
 
 
 def wide_table():
@@ -121,6 +132,33 @@ for line in sys.stdin:
                 },
             }
         )
+    elif method == "thread/start" and request["params"].get("ephemeral"):
+        title_thread = f"synthetic-title-{len(title_threads) + 1}"
+        title_threads.add(title_thread)
+        send({"id": request_id, "result": {"thread": {"id": title_thread, "name": None, "updatedAt": 1, "turns": []}}})
+    elif method == "turn/start" and request["params"]["threadId"] in title_threads:
+        params = request["params"]
+        title_turn = f"{params['threadId']}-turn"
+        send({"id": request_id, "result": {"turn": {"id": title_turn, "status": "inProgress", "items": []}}})
+        reply = {"type": "agentMessage", "text": json.dumps({"title": generated_title(params["input"][0]["text"])})}
+        send({"method": "item/completed", "params": {"threadId": params["threadId"], "turnId": title_turn, "item": reply}})
+        send(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": params["threadId"], "turn": {"id": title_turn, "status": "completed", "items": []}},
+            }
+        )
+    elif method == "thread/unsubscribe":
+        title_threads.discard(request["params"]["threadId"])
+        send({"id": request_id, "result": {"status": "unsubscribed"}})
+    elif method == "thread/name/set":
+        send({"id": request_id, "result": {}})
+        send(
+            {
+                "method": "thread/name/updated",
+                "params": {"threadId": request["params"]["threadId"], "threadName": request["params"]["name"]},
+            }
+        )
     elif method in {"thread/start", "thread/resume", "thread/read"}:
         if method == "thread/start":
             thread_id = f"synthetic-thread-{next_thread_number()}"
@@ -147,7 +185,7 @@ for line in sys.stdin:
     elif method == "thread/delete":
         # Test deletion of a conversation whose Codex history is missing.
         send({"id": request_id, "error": missing_rollout(request["params"]["threadId"])})
-    elif method in {"thread/name/set", "turn/interrupt"}:
+    elif method == "turn/interrupt":
         send({"id": request_id, "result": {}})
     elif method == "thread/items/list":
         send({"id": request_id, "result": {"data": [], "nextCursor": None}})
@@ -197,7 +235,54 @@ for line in sys.stdin:
                     },
                 }
             )
-        elif message.startswith("Run selected SQL"):
+        elif message.startswith("Append two SQL statements with edit tool"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            pending_edit = turn_id
+            end = len(tab["sql"].encode("utf-8"))
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "callId": f"edit-{turn_number}",
+                        "tool": "edit_selected_tab_sql",
+                        "arguments": {
+                            "version": 1,
+                            "tab_id": tab["id"],
+                            "connection_id": tab["connection_id"],
+                            "editor_revision": tab["editor_revision"],
+                            "edits": [{
+                                "start": end,
+                                "end": end,
+                                "replacement": "\n\nSELECT 1;\n\nSELECT 2",
+                            }],
+                        },
+                    },
+                }
+            )
+        elif message.startswith("Run tab selected after rename"):
+            marker = os.path.join(state_dir, "retarget-ready")
+            deadline = time.monotonic() + 15
+            while not os.path.exists(marker) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            pending_read_retry = turn_id
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "callId": f"read-{turn_number}",
+                        "tool": "read_tab_sql",
+                        "arguments": {"version": 1, "tab_id": "00000000-0000-0000-0000-000000000001"},
+                    },
+                }
+            )
+        elif message.startswith(("Run selected SQL", "Run first SQL by range")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             pending_run = turn_id
@@ -215,6 +300,8 @@ for line in sys.stdin:
                             "tab_id": tab["id"],
                             "connection_id": tab["connection_id"],
                             "editor_revision": tab["editor_revision"],
+                            **({"statement_range": {"start": 0, "end": len("SELECT 0;".encode("utf-8"))}}
+                               if message.startswith("Run first SQL by range") else {}),
                         },
                     },
                 }
@@ -252,12 +339,53 @@ for line in sys.stdin:
             )
     elif (
         request_id is not None
-        and (pending_edit or pending_run)
+        and (pending_edit or pending_run or pending_workspace or pending_read_retry)
         and request_id == 9000 + turn_number
     ):
-        turn_id = pending_edit or pending_run
+        turn_id = pending_edit or pending_run or pending_workspace or pending_read_retry
         text = request["result"]["contentItems"][0]["text"]
         result = json.loads(text)
+        if pending_read_retry:
+            pending_read_retry = None
+            pending_workspace = turn_id
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "callId": f"workspace-{turn_number}",
+                        "tool": "get_workspace_context",
+                        "arguments": {"version": 1},
+                    },
+                }
+            )
+            continue
+        if pending_workspace:
+            pending_workspace = None
+            if request["result"]["success"]:
+                tab = result["selected_tab"]
+                pending_run = turn_id
+                send(
+                    {
+                        "id": 9000 + turn_number,
+                        "method": "item/tool/call",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "callId": f"run-{turn_number}",
+                            "tool": "run_selected_tab_query",
+                            "arguments": {
+                                "version": 1,
+                                "tab_id": tab["id"],
+                                "connection_id": tab["connection_id"],
+                                "editor_revision": tab["editor_revision"],
+                            },
+                        },
+                    }
+                )
+                continue
         if request["result"]["success"]:
             message = "I updated the SQL." if pending_edit else "I ran the query."
         else:

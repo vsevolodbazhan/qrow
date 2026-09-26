@@ -134,7 +134,33 @@ target/e2e-tools/native-driver --assistant-append-only
 ```
 
 The check asks for two queries. It verifies that the second query follows the
-first query in the same tab.
+first query in the same tab. It also checks that the conversation gets a
+generated title after the first reply, that Qrow saves the title, and that the
+second reply does not change it.
+
+To check how the assistant runs one statement from a tab with several queries,
+use the package steps in the assistant font check above. Use a new, empty
+workspace directory. Replace the last driver command with:
+
+```sh
+target/e2e-tools/native-driver --assistant-statement-only
+```
+
+The driver uses a synthetic connection and cancels each query before it
+connects. It checks the exact SQL in each approval card. One card shows the
+latest appended query. The other shows an earlier query that the assistant
+selected by its byte range.
+
+To check a tab rename and selection change during an assistant turn, use the
+same package steps and a new, empty workspace directory. Run:
+
+```sh
+target/e2e-tools/native-driver --assistant-retarget-only
+```
+
+The driver renames another tab and selects it during a turn. The assistant first
+uses an invalid tab ID, then reads the current workspace and retries. The check
+confirms that the query approval card names the renamed tab and shows its SQL.
 
 ## Inspect failures
 

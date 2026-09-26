@@ -153,6 +153,10 @@ pub trait AssistantHarness: Send {
         anyhow::bail!("Conversation paging is not supported by this harness")
     }
     fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()>;
+    /// Starts title generation. A generated title arrives later as `TitleChanged`.
+    fn generate_title(&mut self, _request: TitleRequest) -> Result<()> {
+        anyhow::bail!("Title generation is not supported by this harness")
+    }
     fn delete_conversation(&mut self, thread_id: &str) -> Result<()>;
     fn start_turn(&mut self, request: TurnRequest) -> Result<Turn>;
     fn steer_turn(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<()>;
@@ -230,6 +234,15 @@ pub struct TurnRequest {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TitleRequest {
+    pub thread_id: String,
+    /// Recent `(role, text)` messages, oldest first. Roles are `user` or `assistant`.
+    pub messages: Vec<(&'static str, String)>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

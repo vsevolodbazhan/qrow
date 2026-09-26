@@ -651,6 +651,21 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Missing Codex conversation stayed in the Qrow workspace")
     }
+    func waitSavedConversationTitle(_ expected: String) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]],
+               conversations.count == 1,
+               conversations[0]["title"] as? String == expected,
+               conversations[0]["title_source"] as? String == "codex" { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Generated conversation title \(expected) was not saved")
+    }
     func testAssistantRestart() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Assistant model: Synthetic Model", timeout: 20)
@@ -915,10 +930,108 @@ final class Driver {
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1")
         try waitGone("Assistant is working", timeout: 5)
+        // After the first reply, Codex generates the conversation title. GPUI
+        // does not expose the header text, so read the saved workspace.
+        try waitSavedConversationTitle("Title: Write SELECT 1")
+        try snapshot("assistant-generated-title")
         try fill("Assistant message", "Write SELECT 2 into this tab")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
-        print("PASS: Assistant appends a new SQL query and preserves the first query")
+        try waitGone("Assistant is working", timeout: 5)
+        // A generated title stays after later replies.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+        try waitSavedConversationTitle("Title: Write SELECT 1")
+        print("PASS: Assistant appends a new SQL query, preserves the first query, and titles the conversation")
+    }
+    func seedAssistantStatementWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The statement check needs an empty workspace directory")
+        let profileID = UUID().uuidString.lowercased()
+        let tabID = UUID().uuidString.lowercased()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3,
+            "settings": ["assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+            ]],
+            "profiles": [[
+                "id": profileID, "name": "Synthetic", "host": "example.invalid",
+                "port": 10009, "username": "synthetic", "database": "default",
+                "parameters": [:],
+            ]],
+            "tabs": [["id": tabID, "title": "Query 1", "sql": "SELECT 0;", "profile": profileID]],
+            "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    func testAssistantStatementRun() throws {
+        try waitInputValue("SQL Editor", "SELECT 0;")
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Append two SQL statements with edit tool")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 0;\n\nSELECT 1;\n\nSELECT 2")
+        try waitGone("Assistant is working", timeout: 5)
+
+        try fill("Assistant message", "Run selected SQL without range")
+        try press("Send")
+        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 2", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        try waitGone("Assistant query approval:", timeout: 5)
+        try waitGone("Assistant is working", timeout: 5)
+
+        try fill("Assistant message", "Run first SQL by range")
+        try press("Send")
+        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 0;", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        print("PASS: Assistant can target the newest and an earlier statement for execution")
+    }
+    func seedAssistantRetargetWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The retarget check needs an empty workspace directory")
+        let profileID = UUID().uuidString.lowercased()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3,
+            "settings": ["assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+            ]],
+            "profiles": [[
+                "id": profileID, "name": "Synthetic", "host": "example.invalid",
+                "port": 10009, "username": "synthetic", "database": "default",
+                "parameters": [:],
+            ]],
+            "tabs": [
+                ["id": UUID().uuidString.lowercased(), "title": "Query 1", "sql": "SELECT 1;", "profile": profileID],
+                ["id": UUID().uuidString.lowercased(), "title": "Query 2", "sql": "SELECT 99;", "profile": profileID],
+            ],
+            "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    func testAssistantRetargetAfterRename() throws {
+        try waitInputValue("SQL Editor", "SELECT 1;")
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Run tab selected after rename")
+        try press("Send")
+
+        try contextMenu("Query 2", exact: true)
+        try pressMenuItem("Rename…")
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", "Default")
+        try press("Rename")
+        try waitGone("Tab Name")
+        try click(try waitExact("Default"))
+        try waitInputValue("SQL Editor", "SELECT 99;")
+        let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex/retarget-ready")
+        try Data().write(to: marker)
+
+        _ = try wait("Assistant query approval: Default, Synthetic. SELECT 99;", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        print("PASS: Assistant refreshes its selected tab after a rename and switch")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, and the last
@@ -1617,6 +1730,14 @@ do {
                 try driver.seedAssistantLayoutWorkspace()
                 try driver.start()
                 try driver.testAssistantAppend()
+            } else if CommandLine.arguments.contains("--assistant-statement-only") {
+                try driver.seedAssistantStatementWorkspace()
+                try driver.start()
+                try driver.testAssistantStatementRun()
+            } else if CommandLine.arguments.contains("--assistant-retarget-only") {
+                try driver.seedAssistantRetargetWorkspace()
+                try driver.start()
+                try driver.testAssistantRetargetAfterRename()
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
@@ -1647,7 +1768,9 @@ do {
         }
         if CommandLine.arguments.contains("--editor-highlight-only")
             || CommandLine.arguments.contains("--assistant-layout-only")
-            || CommandLine.arguments.contains("--assistant-append-only") { exit(0) }
+            || CommandLine.arguments.contains("--assistant-append-only")
+            || CommandLine.arguments.contains("--assistant-statement-only")
+            || CommandLine.arguments.contains("--assistant-retarget-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

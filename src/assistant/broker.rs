@@ -153,6 +153,7 @@ pub struct RunRequest {
     pub tab_id: Uuid,
     pub connection_id: Uuid,
     pub editor_revision: u64,
+    pub statement_range: Option<Range<usize>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -382,7 +383,11 @@ impl ToolBroker {
                 "The editor selection changed. Send another message to set a new target.",
             ));
         }
-        let sql = match &target.selected_range {
+        let range = request
+            .statement_range
+            .as_ref()
+            .or(target.selected_range.as_ref());
+        let sql = match range {
             Some(range)
                 if range.start <= range.end
                     && range.end <= document.sql.len()
@@ -394,7 +399,7 @@ impl ToolBroker {
             Some(_) => {
                 return Err(ToolError::new(
                     ToolErrorCode::InvalidArguments,
-                    "The editor selection is invalid.",
+                    "The statement range is invalid.",
                 ));
             }
             None => document.sql,
@@ -689,6 +694,7 @@ mod tests {
                     tab_id: tab,
                     connection_id: connection,
                     editor_revision: 8,
+                    statement_range: None,
                 },
                 &document,
             )
@@ -739,6 +745,7 @@ mod tests {
                         tab_id: tab,
                         connection_id: Uuid::new_v4(),
                         editor_revision: 7,
+                        statement_range: None,
                     },
                     &document
                 )
@@ -920,6 +927,7 @@ mod tests {
             tab_id: tab,
             connection_id: connection,
             editor_revision: 7,
+            statement_range: None,
         };
         let mut document = document(tab, connection, "SELECT 1; SELECT 2");
         assert_eq!(
@@ -944,6 +952,41 @@ mod tests {
                 .unwrap_err()
                 .code,
             ToolErrorCode::TabBusy
+        );
+    }
+
+    #[test]
+    fn run_can_target_a_statement_by_utf8_byte_range() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let document = document(tab, connection, "SELECT '日本語';\n\nSELECT 2;");
+        let start = document.sql.find("SELECT 2").unwrap();
+        let mut request = RunRequest {
+            version: TOOL_SCHEMA_VERSION,
+            tab_id: tab,
+            connection_id: connection,
+            editor_revision: 7,
+            statement_range: Some(start..document.sql.len()),
+        };
+        assert_eq!(
+            broker.plan_run(call(), &request, &document).unwrap().sql,
+            "SELECT 2;"
+        );
+        request.statement_range = Some(0..document.sql.len());
+        assert_eq!(
+            broker
+                .plan_run(call(), &request, &document)
+                .unwrap_err()
+                .code,
+            ToolErrorCode::InvalidStatement
+        );
+        request.statement_range = Some(9..document.sql.len());
+        assert_eq!(
+            broker
+                .plan_run(call(), &request, &document)
+                .unwrap_err()
+                .code,
+            ToolErrorCode::InvalidArguments
         );
     }
 
@@ -1104,6 +1147,7 @@ mod tests {
             tab_id: tab,
             connection_id: connection,
             editor_revision: 7,
+            statement_range: None,
         };
         let mut selected_target = target(tab, connection);
         selected_target.selected_range = Some(0..8);

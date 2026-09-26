@@ -94,6 +94,29 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
     tokens
 }
 
+pub fn last_statement_range(sql: &str) -> Option<Range<usize>> {
+    let mut start = None;
+    let mut end = 0;
+    let mut last = None;
+    for (range, kind) in tokens(sql) {
+        if kind == Kind::Comment || sql[range.clone()].trim().is_empty() {
+            continue;
+        }
+        if kind == Kind::Separator {
+            if let Some(start) = start.take() {
+                last = Some(start..range.end);
+            }
+        } else {
+            start.get_or_insert(range.start);
+            end = range.end;
+        }
+    }
+    if let Some(start) = start {
+        last = Some(start..end);
+    }
+    last
+}
+
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     let mut statements = 0;
     let mut content = false;
@@ -135,5 +158,13 @@ mod tests {
         for (range, _) in tokens(sql) {
             let _ = &sql[range];
         }
+    }
+
+    #[test]
+    fn last_statement_skips_comments_and_preserves_utf8_offsets() {
+        let sql = "SELECT '日本語'; -- earlier\n\nSELECT 2 -- latest";
+        let range = last_statement_range(sql).unwrap();
+        assert_eq!(&sql[range], "SELECT 2");
+        assert_eq!(last_statement_range("-- only a comment"), None);
     }
 }

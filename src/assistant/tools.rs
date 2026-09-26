@@ -5,7 +5,7 @@ use serde_json::json;
 
 pub fn definitions() -> Vec<ToolDefinition> {
     [
-        ("get_workspace_context", "Read allowed connection and query-tab metadata.", json!({
+        ("get_workspace_context", "Read current connection and query-tab metadata. This refreshes the action target to the currently selected tab for this turn. Call it again after the user switches or renames a tab, then use the exact selected_tab IDs and revision it returns.", json!({
             "type": "object", "properties": {"version": {"const": 1}},
             "required": ["version"], "additionalProperties": false
         })),
@@ -36,11 +36,15 @@ pub fn definitions() -> Vec<ToolDefinition> {
             }, "required": ["version", "tab_id", "connection_id", "editor_revision", "edits"],
             "additionalProperties": false
         })),
-        ("run_selected_tab_query", "Run one SQL statement from the selected tab through Qrow, subject to user approval mode.", json!({
+        ("run_selected_tab_query", "Run one SQL statement from the selected tab through Qrow, subject to user approval mode. For a tab with several statements, pass the UTF-8 byte range of the statement from read_tab_sql as statement_range. The range must match the current editor revision.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": "string", "format": "uuid"},
-                "editor_revision": {"type": "integer", "minimum": 0}},
+                "editor_revision": {"type": "integer", "minimum": 0},
+                "statement_range": {"type": "object", "properties": {
+                    "start": {"type": "integer", "minimum": 0},
+                    "end": {"type": "integer", "minimum": 0}},
+                    "required": ["start", "end"], "additionalProperties": false}},
             "required": ["version", "tab_id", "connection_id", "editor_revision"], "additionalProperties": false
         })),
         ("cancel_selected_tab_query", "Request best-effort cancellation of the selected tab's running query.", target_schema()),

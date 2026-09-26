@@ -66,16 +66,20 @@ The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It
 appends each new query to the selected tab. It keeps existing queries and
 selects the new query so it can run that statement alone. If the previous
-query has no final semicolon, Qrow adds one. Ask the assistant to change
-existing SQL when you want an edit or replacement. The assistant can write SQL
-before you select a connection. Select a connection before it runs SQL. It
-cannot read connection passwords. Qrow does not send workspace context when
-you open the pane. It sends context when you send a message or when Codex calls
-a Qrow tool.
+query has no final semicolon, Qrow adds one. The assistant can select a
+specific statement in a tab with several queries before it runs that statement.
+If you switch or rename a tab during a turn, the assistant can read the
+workspace again to use the current selected tab. A rename keeps the tab ID.
+Ask the assistant to change existing SQL when you want an edit or replacement.
+The assistant can write SQL before you select a connection. Select a connection
+before it runs SQL. It cannot read connection passwords. Qrow does not send
+workspace context when you open the pane. It sends context when you send a
+message or when Codex calls a Qrow tool.
 
 If you started a conversation before this change, start a new conversation
-when you want to replace all SQL in a tab. Older conversations do not have the
-explicit replacement option.
+when you want to replace all SQL in a tab or run an earlier statement in a tab
+with several queries. Older conversations do not have those options. They can
+run the latest query after they append it.
 
 For a message during an active turn, Qrow adds the current workspace context
 to the text sent to Codex. Qrow omits that context from the conversation,
@@ -92,8 +96,14 @@ conversation when the pane is wide. Qrow lists recent conversations first.
 Older saved conversations without an activity time show **Earlier**. On a
 narrow pane, select **Toggle conversation list** to open the list. Search the
 list by title. Select **New
-Conversation** in the pane header to start a separate conversation. Open
-**Conversation actions** to rename or delete the current conversation. When you
+Conversation** in the pane header to start a separate conversation.
+After the first reply, Qrow sends recent messages from the conversation to
+Codex in a separate, unsaved request. Codex returns a short title. Qrow shows
+this title in the pane header and in the thread list. This request uses the
+selected model. It does not include workspace context. If Codex cannot make a
+title, Qrow shows **New conversation** and tries again after the next reply.
+Open **Conversation actions** to rename or delete the current conversation. Qrow
+does not replace a title that you set. When you
 delete a conversation, Qrow asks Codex to remove it. This action does not
 change query tabs, SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text

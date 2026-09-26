@@ -18,8 +18,8 @@ use gpui_kit::component::{
 };
 use qrow::{
     assistant::{
-        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, ToolCall, TurnRequest,
-        WORKSPACE_CONTEXT_SEPARATOR,
+        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, TitleRequest, ToolCall,
+        TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
             SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
@@ -1154,6 +1154,57 @@ impl Qrow {
         }
     }
 
+    /// Asks Codex for a title while the conversation still has the temporary title.
+    fn request_assistant_title(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        if !self.assistant.conversations.iter().any(|conversation| {
+            conversation.thread_id == thread_id
+                && conversation.title_source == AssistantTitleSource::Temporary
+        }) {
+            return;
+        }
+        let messages: Vec<_> = self
+            .assistant_panel
+            .transcripts
+            .get(thread_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| match entry.speaker {
+                Speaker::User => Some(("user", entry.text.clone())),
+                Speaker::Assistant => Some(("assistant", entry.text.clone())),
+                Speaker::Activity | Speaker::Error => None,
+            })
+            .collect();
+        if !messages.iter().any(|(role, _)| *role == "user") {
+            return;
+        }
+        let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
+            self.settings
+                .assistant
+                .model
+                .as_deref()
+                .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
+                .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
+        });
+        // A title needs little reasoning. Models without this level use their default.
+        let reasoning_effort = model
+            .and_then(|model| {
+                model
+                    .reasoning_efforts()
+                    .iter()
+                    .find(|effort| effort.id() == "low")
+            })
+            .map(|effort| effort.id().to_owned());
+        self.assistant_command(
+            AssistantCommand::GenerateTitle(TitleRequest {
+                thread_id: thread_id.to_owned(),
+                messages,
+                model: self.settings.assistant.model.clone(),
+                reasoning_effort,
+            }),
+            cx,
+        );
+    }
+
     pub(super) fn send_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.assistant_panel.status, Status::Ready) {
             return;
@@ -1231,7 +1282,7 @@ impl Qrow {
         cx.notify();
     }
 
-    fn assistant_target(&self, thread_id: &str, cx: &App) -> Option<ActionTarget> {
+    pub(super) fn assistant_target(&self, thread_id: &str, cx: &App) -> Option<ActionTarget> {
         let tab = self.tabs.get(self.active)?;
         let connection_id = tab.saved.profile;
         let selected = tab.input.read(cx).selected_range();
@@ -1566,6 +1617,7 @@ impl Qrow {
                     }
                 }
                 self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
+                self.request_assistant_title(&thread_id, cx);
                 if !self.assistant_panel.open {
                     self.assistant_panel.unread = true;
                 }
@@ -1687,6 +1739,10 @@ impl Qrow {
                 id,
                 error,
             } => {
+                // The temporary title stays. Qrow tries again after the next reply.
+                if operation == Operation::GenerateTitle {
+                    return;
+                }
                 if operation == Operation::Rename {
                     self.assistant_panel.pending_rename = None;
                 }

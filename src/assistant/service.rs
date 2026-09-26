@@ -5,7 +5,8 @@
 
 use super::{
     AssistantEvent, AssistantHarness, CodexHarness, Conversation, ConversationHistory,
-    ConversationPage, HarnessSnapshot, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
+    ConversationPage, HarnessSnapshot, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn,
+    TurnRequest,
 };
 use std::{
     path::PathBuf,
@@ -38,6 +39,7 @@ pub enum Command {
         title: String,
     },
     Delete(String),
+    GenerateTitle(TitleRequest),
     Start(TurnRequest),
     Steer {
         thread_id: String,
@@ -65,6 +67,7 @@ pub enum Operation {
     ReadOlder,
     Rename,
     Delete,
+    GenerateTitle,
     Start,
     Steer,
     Interrupt,
@@ -82,6 +85,7 @@ impl Command {
             Self::ReadOlder { .. } => Operation::ReadOlder,
             Self::Rename { .. } => Operation::Rename,
             Self::Delete(_) => Operation::Delete,
+            Self::GenerateTitle(_) => Operation::GenerateTitle,
             Self::Start(_) => Operation::Start,
             Self::Steer { .. } => Operation::Steer,
             Self::Interrupt { .. } => Operation::Interrupt,
@@ -98,6 +102,7 @@ impl Command {
             | Self::Steer { thread_id, .. }
             | Self::Interrupt { thread_id, .. } => Some(thread_id.clone()),
             Self::Start(request) => Some(request.thread_id.clone()),
+            Self::GenerateTitle(request) => Some(request.thread_id.clone()),
             Self::Answer { call, .. } => Some(call.call_id.clone()),
             Self::Login | Self::Refresh | Self::Create(_) | Self::Shutdown => None,
         }
@@ -115,6 +120,7 @@ pub enum Event {
     HistoryPage(ConversationPage),
     Renamed(String),
     Deleted(String),
+    TitleRequested(String),
     TurnStarted {
         thread_id: String,
         turn: Turn,
@@ -377,6 +383,12 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
         Command::Delete(id) => harness
             .delete_conversation(&id)
             .map(|()| Event::Deleted(id)),
+        Command::GenerateTitle(request) => {
+            let thread_id = request.thread_id.clone();
+            harness
+                .generate_title(request)
+                .map(|()| Event::TitleRequested(thread_id))
+        }
         Command::Start(request) => {
             let thread_id = request.thread_id.clone();
             harness
