@@ -3,7 +3,7 @@ use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     Selectable,
-    bubble::{Bubble, BubbleVariant},
+    bubble::{Bubble, BubbleContent, BubbleVariant},
     button::DropdownButton,
     h_flex,
     input::{Textarea, TextareaState},
@@ -2018,7 +2018,13 @@ impl Qrow {
                                 };
                                 Message::new().alignment(alignment).content(
                                     MessageContent::new().bubble(
-                                        Bubble::new().with_variant(variant).child(
+                                        Bubble::new()
+                                            .with_variant(variant)
+                                            .content(BubbleContent::new().when(
+                                                entry.speaker == Speaker::User,
+                                                |content| content.pt_1().pb_3(),
+                                            ))
+                                            .child(
                                         div()
                                             .id(format!("assistant-entry-{}", entry.id))
                                             .role(Role::Paragraph)
