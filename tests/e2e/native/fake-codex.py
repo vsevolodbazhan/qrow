@@ -2,10 +2,41 @@
 """Deterministic Codex app-server fixture for the native Qrow UI test."""
 
 import json
+import os
 import sys
 import time
 
-thread_number = 0
+# Like Codex, save a thread only after its first turn. The state directory
+# keeps thread IDs unique and saved threads resumable across app restarts.
+state_dir = os.path.join(os.environ["QROW_DATA_DIR"], "fake-codex")
+os.makedirs(os.path.join(state_dir, "rollouts"), exist_ok=True)
+counter_path = os.path.join(state_dir, "thread-counter")
+live_threads = set()
+
+
+def has_rollout(thread):
+    return thread in live_threads or os.path.exists(os.path.join(state_dir, "rollouts", thread))
+
+
+def save_rollout(thread):
+    open(os.path.join(state_dir, "rollouts", thread), "w").close()
+
+
+def missing_rollout(thread):
+    return {"code": -32600, "message": f"no rollout found for thread id {thread}"}
+
+
+def next_thread_number():
+    try:
+        with open(counter_path) as counter:
+            number = int(counter.read()) + 1
+    except FileNotFoundError:
+        number = 1
+    with open(counter_path, "w") as counter:
+        counter.write(str(number))
+    return number
+
+
 thread_id = None
 turn_number = 0
 pending_edit = None
@@ -69,10 +100,14 @@ for line in sys.stdin:
         )
     elif method in {"thread/start", "thread/resume", "thread/read"}:
         if method == "thread/start":
-            thread_number += 1
-            thread_id = f"synthetic-thread-{thread_number}"
+            thread_id = f"synthetic-thread-{next_thread_number()}"
+            live_threads.add(thread_id)
+        elif not has_rollout(request["params"]["threadId"]):
+            send({"id": request_id, "error": missing_rollout(request["params"]["threadId"])})
+            continue
         else:
             thread_id = request["params"]["threadId"]
+            live_threads.add(thread_id)
         send(
             {
                 "id": request_id,
@@ -87,16 +122,8 @@ for line in sys.stdin:
             }
         )
     elif method == "thread/delete":
-        deleted_id = request["params"]["threadId"]
-        send(
-            {
-                "id": request_id,
-                "error": {
-                    "code": -32600,
-                    "message": f"no rollout found for thread id {deleted_id}",
-                },
-            }
-        )
+        # Test deletion of a conversation whose Codex history is missing.
+        send({"id": request_id, "error": missing_rollout(request["params"]["threadId"])})
     elif method in {"thread/name/set", "turn/interrupt"}:
         send({"id": request_id, "result": {}})
     elif method == "thread/items/list":
@@ -104,9 +131,14 @@ for line in sys.stdin:
     elif method == "turn/steer":
         send({"id": request_id, "result": {"turnId": f"synthetic-turn-{turn_number}"}})
     elif method == "turn/start":
+        params = request["params"]
+        if params["threadId"] not in live_threads:
+            send({"id": request_id, "error": missing_rollout(params["threadId"])})
+            continue
+        thread_id = params["threadId"]
+        save_rollout(thread_id)
         turn_number += 1
         turn_id = f"synthetic-turn-{turn_number}"
-        params = request["params"]
         message = params["input"][0]["text"]
         send(
             {

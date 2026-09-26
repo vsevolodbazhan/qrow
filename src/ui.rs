@@ -519,7 +519,11 @@ impl Qrow {
         Workspace {
             version: WORKSPACE_VERSION,
             settings: self.settings.clone(),
-            assistant: self.assistant.clone(),
+            assistant: {
+                let mut assistant = self.assistant.clone();
+                assistant.remove_unstarted(&self.assistant_panel.unstarted_threads);
+                assistant
+            },
             profiles: self.profiles.clone(),
             tabs: self
                 .tabs

@@ -600,12 +600,27 @@ final class Driver {
                let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let assistant = content["assistant"] as? [String: Any],
                let conversations = assistant["conversations"] as? [[String: Any]],
-               assistant["selected_thread"] as? String == "synthetic-thread-2",
-               conversations.count == 1,
-               conversations[0]["thread_id"] as? String == "synthetic-thread-2" { return }
+               // Qrow opens a new conversation but saves it only after its first message.
+               assistant["selected_thread"] is NSNull,
+               conversations.isEmpty { return }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         } while clock.now < deadline
         throw Failure("Missing Codex conversation stayed in the Qrow workspace")
+    }
+    func testAssistantRestart() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Assistant message") == nil {
+            try press("Back to conversation")
+        }
+        // The previous process left an unsent conversation open.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+        try require(find("Codex cannot find this conversation") == nil, "An unsent conversation was restored after restart")
+        try fill("Assistant message", "Explain `SELECT 1` after restart")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try snapshot("assistant-after-restart")
+        print("PASS: An unsent Assistant conversation does not fail after restart")
     }
     func selectFont(_ label: String, _ family: String) throws {
         var popup = try wait(label, role: kAXPopUpButtonRole)
@@ -1389,6 +1404,18 @@ do {
             driver.stop()
         }
         catch { if driver.app != nil { try? driver.snapshot("failure") }; driver.stop(); throw error }
+        if CommandLine.arguments.contains("--assistant-font-only") {
+            let restartDriver = Driver(name: "qrow-assistant-restart")
+            do {
+                try restartDriver.start()
+                try restartDriver.testAssistantRestart()
+                restartDriver.stop()
+            } catch {
+                if restartDriver.app != nil { try? restartDriver.snapshot("failure-assistant-restart") }
+                restartDriver.stop()
+                throw error
+            }
+        }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

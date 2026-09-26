@@ -441,7 +441,8 @@ impl AssistantWorkspace {
             !conversation.thread_id.is_empty() && thread_ids.insert(conversation.thread_id.clone())
         });
         sanitize_optional_string(&mut self.selected_thread);
-        if self.selected_thread.as_ref().is_none_or(|selected| {
+        // No selection asks the assistant to start a new conversation.
+        if self.selected_thread.as_ref().is_some_and(|selected| {
             !self
                 .conversations
                 .iter()
@@ -451,6 +452,20 @@ impl AssistantWorkspace {
                 .conversations
                 .first()
                 .map(|conversation| conversation.thread_id.clone());
+        }
+    }
+
+    /// Remove conversations without a turn. Codex keeps them only in the
+    /// memory of its current process, so another process cannot resume them.
+    pub fn remove_unstarted(&mut self, unstarted: &BTreeSet<String>) {
+        self.conversations
+            .retain(|conversation| !unstarted.contains(&conversation.thread_id));
+        if self
+            .selected_thread
+            .as_ref()
+            .is_some_and(|selected| unstarted.contains(selected))
+        {
+            self.selected_thread = None;
         }
     }
 }
@@ -890,5 +905,31 @@ mod tests {
             assistant.conversations[0].execution_mode,
             AssistantExecutionMode::RunAutomatically
         );
+
+        assistant.selected_thread = None;
+        assistant.sanitize();
+        assert_eq!(assistant.selected_thread, None);
+    }
+
+    #[test]
+    fn assistant_workspace_removes_unstarted_threads() {
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![
+                AssistantConversation::new("used", AssistantExecutionMode::AskBeforeRunning),
+                AssistantConversation::new("new", AssistantExecutionMode::AskBeforeRunning),
+            ],
+            selected_thread: Some("new".into()),
+        };
+        let mut other = assistant.clone();
+        other.selected_thread = Some("used".into());
+        let unstarted = BTreeSet::from(["new".to_owned()]);
+
+        assistant.remove_unstarted(&unstarted);
+        other.remove_unstarted(&unstarted);
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "used");
+        assert_eq!(assistant.selected_thread, None);
+        assert_eq!(other.selected_thread.as_deref(), Some("used"));
     }
 }

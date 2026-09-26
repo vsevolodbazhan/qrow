@@ -313,6 +313,8 @@ pub(super) struct AssistantPanelState {
     pub rename_input: Option<Entity<InputState>>,
     pub pending_rename: Option<(String, String)>,
     pub creating_conversation: bool,
+    /// Conversations without a turn. Qrow does not save them.
+    pub unstarted_threads: BTreeSet<String>,
 }
 
 impl AssistantPanelState {
@@ -441,6 +443,7 @@ impl AssistantPanelState {
             rename_input: None,
             pending_rename: None,
             creating_conversation: false,
+            unstarted_threads: BTreeSet::new(),
         }
     }
 
@@ -1048,6 +1051,7 @@ impl Qrow {
                 ));
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
+        self.assistant_panel.unstarted_threads.remove(&thread_id);
         if let Some(conversation) = self
             .assistant
             .conversations
@@ -1205,6 +1209,18 @@ impl Qrow {
         };
         self.assistant_panel.snapshot = Some(snapshot);
         self.sync_assistant_selectors(window, cx);
+        if initial {
+            // A new Codex process cannot resume conversations without a turn.
+            let unstarted = std::mem::take(&mut self.assistant_panel.unstarted_threads);
+            if !unstarted.is_empty() {
+                self.assistant.remove_unstarted(&unstarted);
+                self.assistant_panel
+                    .transcripts
+                    .retain(|thread, _| !unstarted.contains(thread));
+                self.sync_assistant_selectors(window, cx);
+                self.changed(cx);
+            }
+        }
         if initial && matches!(self.assistant_panel.status, Status::Ready) {
             if let Some(thread) = self.assistant.selected_thread.clone() {
                 self.assistant_command(AssistantCommand::Resume(thread), cx);
@@ -1240,6 +1256,9 @@ impl Qrow {
                 );
                 entry.last_activity = unix_now_seconds();
                 self.assistant.conversations.push(entry);
+                self.assistant_panel
+                    .unstarted_threads
+                    .insert(conversation.id.clone());
                 self.assistant.selected_thread = Some(conversation.id);
                 self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
@@ -1493,6 +1512,7 @@ impl Qrow {
                     .conversations
                     .retain(|conversation| conversation.thread_id != id);
                 self.assistant_panel.transcripts.remove(&id);
+                self.assistant_panel.unstarted_threads.remove(&id);
                 if self.assistant.selected_thread.as_deref() == Some(&id) {
                     self.assistant.selected_thread = self
                         .assistant

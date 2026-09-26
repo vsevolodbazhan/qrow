@@ -83,7 +83,10 @@ target/e2e-tools/native-driver --assistant-font-only
 
 This check captures the conversation search row, selects System Font and Menlo,
 reads the saved settings, captures the transcript in each font, and deletes a
-conversation whose Codex history is missing.
+conversation whose Codex history is missing. It then starts Qrow again with the
+same workspace and checks that the unsent conversation does not cause an error.
+Like Codex, the synthetic Codex server saves a conversation only after its first
+message.
 
 ## Inspect failures
 
