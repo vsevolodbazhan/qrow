@@ -2258,7 +2258,6 @@ impl Qrow {
                             .child(div().flex_1())
                             .when(self.assistant_panel.active_turn.is_some(), |row| row.child(
                                 Button::new("assistant-stop")
-                                    .primary()
                                     .small()
                                     .label("Stop")
                                     .tooltip("Stop the current assistant turn")
