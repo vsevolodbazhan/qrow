@@ -28,8 +28,9 @@ use qrow::{
     },
     model::{
         AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
-        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SavedTab,
-        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, copied_tab_title, unique_tab_title,
+        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
+        SYSTEM_FONT_FAMILY, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
+        copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -251,6 +252,10 @@ fn installed_fonts(cx: &App) -> Vec<String> {
     fonts
 }
 
+fn font_available(font: &str, installed: &[String]) -> bool {
+    font == SYSTEM_FONT_FAMILY || installed.iter().any(|available| available == font)
+}
+
 fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     let theme = gpui_kit::component::Theme::global_mut(cx);
     theme.font_family = settings.ui_font_family.clone().into();
@@ -329,19 +334,14 @@ impl Qrow {
         let fonts = installed_fonts(cx);
         workspace.normalize();
         workspace.settings.sanitize();
-        let mut unavailable_font = !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.editor_font_family);
+        let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
             message.get_or_insert_with(|| {
                 "The saved editor font is unavailable, so Qrow is using Menlo.".into()
             });
         }
-        if !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.logs_font_family)
-        {
+        if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
             unavailable_font = true;
             let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
@@ -352,9 +352,7 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
-        if workspace.settings.assistant_font_family != Settings::default().assistant_font_family
-            && !fonts.contains(&workspace.settings.assistant_font_family)
-        {
+        if !font_available(&workspace.settings.assistant_font_family, &fonts) {
             workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
             unavailable_font = true;
             let warning =
@@ -366,9 +364,7 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
-        if workspace.settings.ui_font_family != Settings::default().ui_font_family
-            && !fonts.contains(&workspace.settings.ui_font_family)
-        {
+        if !font_available(&workspace.settings.ui_font_family, &fonts) {
             workspace.settings.ui_font_family = Settings::default().ui_font_family;
             unavailable_font = true;
             let warning =
@@ -1342,33 +1338,25 @@ impl Qrow {
         self.adjust_ui_scale(-UI_SCALE_STEP, window, cx);
     }
     fn set_editor_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if self.fonts.iter().any(|available| available == &font)
-            && self.settings.editor_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.editor_font_family != font {
             self.settings.editor_font_family = font;
             self.changed(cx);
         }
     }
     fn set_logs_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if self.fonts.iter().any(|available| available == &font)
-            && self.settings.logs_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.logs_font_family != font {
             self.settings.logs_font_family = font;
             self.changed(cx);
         }
     }
     fn set_assistant_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if (font == Settings::default().assistant_font_family || self.fonts.contains(&font))
-            && self.settings.assistant_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.assistant_font_family != font {
             self.settings.assistant_font_family = font;
             self.changed(cx);
         }
     }
     fn set_ui_font(&mut self, font: String, window: &mut Window, cx: &mut Context<Self>) {
-        if (font == Settings::default().ui_font_family || self.fonts.contains(&font))
-            && self.settings.ui_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.ui_font_family != font {
             self.settings.ui_font_family = font;
             apply_ui_theme(&self.settings, window, cx);
             self.changed(cx);
@@ -2056,5 +2044,18 @@ fn demo_workspace() -> Workspace {
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
         active_tabs: BTreeMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::{SYSTEM_FONT_FAMILY, font_available};
+
+    #[test]
+    fn system_font_is_valid_even_when_not_enumerated() {
+        let installed = vec!["Menlo".into()];
+        assert!(font_available(SYSTEM_FONT_FAMILY, &installed));
+        assert!(font_available("Menlo", &installed));
+        assert!(!font_available("Missing font", &installed));
     }
 }

@@ -11,7 +11,7 @@ use gpui_kit::component::{
     switch::Switch,
 };
 use qrow::model::{ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 const DIALOG_REMS: f32 = 56.;
 const DIALOG_HEIGHT_REMS: f32 = 44.;
@@ -141,16 +141,11 @@ impl FontSetting {
         }
     }
 
-    /// The option the select shows. System font identifiers need a readable
-    /// entry in the UI and assistant font selectors.
+    /// The option the select shows. The system font identifier needs a readable
+    /// entry in every font selector.
     fn selected(self, settings: &Settings) -> String {
         let family = self.family(settings);
-        let system_font = match self {
-            Self::Ui => Some(Settings::default().ui_font_family),
-            Self::Assistant => Some(Settings::default().assistant_font_family),
-            _ => None,
-        };
-        if system_font.as_deref() == Some(family) {
+        if family == SYSTEM_FONT_FAMILY {
             SYSTEM_FONT_LABEL.to_owned()
         } else {
             family.to_owned()
@@ -167,11 +162,31 @@ impl FontSetting {
     }
 }
 
+fn font_options(fonts: &[String]) -> Vec<String> {
+    let mut options: Vec<String> = fonts
+        .iter()
+        .filter(|font| font.as_str() != SYSTEM_FONT_FAMILY && font.as_str() != SYSTEM_FONT_LABEL)
+        .cloned()
+        .collect();
+    options.insert(0, SYSTEM_FONT_LABEL.into());
+    options
+}
+
+fn font_family_for_selection(value: String) -> String {
+    if value == SYSTEM_FONT_LABEL {
+        SYSTEM_FONT_FAMILY.to_owned()
+    } else {
+        value
+    }
+}
+
 pub(super) struct SettingsForm {
     /// Each stepper with the value it last displayed, so that a change made
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
-    fonts: Vec<(FontSetting, SettingSelect)>,
+    /// The last value sent from Qrow to each picker. Search and keyboard
+    /// navigation can change a picker's transient state before confirmation.
+    fonts: Vec<(FontSetting, SettingSelect, RefCell<String>)>,
     assistant_mode: SettingSelect,
     assistant_executable: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
@@ -191,7 +206,7 @@ impl SettingsForm {
         &self
             .fonts
             .iter()
-            .find(|(candidate, _)| *candidate == setting)
+            .find(|(candidate, ..)| *candidate == setting)
             .expect("the form holds every font setting")
             .1
     }
@@ -233,17 +248,19 @@ impl Qrow {
             ));
             numbers.push((setting, input, Cell::new(value)));
         }
-        let mut interface_fonts = self.fonts.clone();
-        interface_fonts.retain(|font| font != &Settings::default().ui_font_family);
-        interface_fonts.insert(0, SYSTEM_FONT_LABEL.into());
+        let options = font_options(&self.fonts);
         let mut fonts = Vec::new();
         for setting in FontSetting::ALL {
-            let options = match setting {
-                FontSetting::Ui | FontSetting::Assistant => interface_fonts.clone(),
-                _ => self.fonts.clone(),
-            };
+            let selected = setting.selected(&self.settings);
+            let selected_index = options.iter().position(|option| option == &selected);
             let select = cx.new(|cx| {
-                SelectState::new(SearchableVec::new(options), None, window, cx).searchable(true)
+                SelectState::new(
+                    SearchableVec::new(options.clone()),
+                    selected_index.map(|index| IndexPath::default().row(index)),
+                    window,
+                    cx,
+                )
+                .searchable(true)
             });
             subscriptions.push(cx.subscribe_in(
                 &select,
@@ -254,7 +271,7 @@ impl Qrow {
                     }
                 },
             ));
-            fonts.push((setting, select));
+            fonts.push((setting, select, RefCell::new(selected)));
         }
         let mode = cx.new(|cx| {
             SelectState::new(
@@ -388,25 +405,12 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let font = font_family_for_selection(font);
         match setting {
-            FontSetting::Ui => {
-                let font = if font == SYSTEM_FONT_LABEL {
-                    Settings::default().ui_font_family
-                } else {
-                    font
-                };
-                self.set_ui_font(font, window, cx);
-            }
+            FontSetting::Ui => self.set_ui_font(font, window, cx),
             FontSetting::Editor => self.set_editor_font(font, cx),
             FontSetting::Logs => self.set_logs_font(font, cx),
-            FontSetting::Assistant => {
-                let font = if font == SYSTEM_FONT_LABEL {
-                    Settings::default().assistant_font_family
-                } else {
-                    font
-                };
-                self.set_assistant_font(font, cx);
-            }
+            FontSetting::Assistant => self.set_assistant_font(font, cx),
         }
     }
 
@@ -552,9 +556,10 @@ impl Qrow {
                 input.update(cx, |input, cx| input.set_value(text, window, cx));
             }
         }
-        for (setting, select) in &form.fonts {
+        for (setting, select, displayed) in &form.fonts {
             let selected = setting.selected(&self.settings);
-            if select.read(cx).selected_value() != Some(&selected) {
+            if *displayed.borrow() != selected {
+                *displayed.borrow_mut() = selected.clone();
                 select.update(cx, |state, cx| {
                     state.set_selected_value(&selected, window, cx)
                 });
@@ -596,6 +601,7 @@ impl Qrow {
                     .sidebar_width(rem * SIDEBAR_REMS)
                     .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
                     .page(settings_page(form))
+                    .page(assistant_appearance_page(form))
                     .page(assistant_settings_page(
                         form,
                         cx.weak_entity(),
@@ -649,9 +655,7 @@ impl Qrow {
     }
 }
 
-/// The settings the dialog shows. One page holds every group, so each control
-/// stays rendered and reachable from the keyboard: the sidebar entries are a
-/// pointer-only shortcut that scrolls to a group.
+/// Appearance settings for the interface, editor, and logs.
 fn settings_page(form: &SettingsForm) -> SettingPage {
     SettingPage::new("Appearance")
         .default_open(true)
@@ -721,31 +725,36 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                     .keywords(["logs", "spacing"]),
                 ),
         )
-        .group(
-            SettingGroup::new()
-                .title("Assistant")
-                .item(
-                    SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
-                        .description("Font for conversation messages.")
-                        .keywords(["assistant", "messages", "typeface"]),
+}
+
+/// Keep assistant typography on its own page so the sidebar opens its controls
+/// directly instead of revealing a group below the virtual list's viewport.
+fn assistant_appearance_page(form: &SettingsForm) -> SettingPage {
+    SettingPage::new("Assistant").resettable(false).group(
+        SettingGroup::new()
+            .title("Messages")
+            .item(
+                SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
+                    .description("Font for conversation messages.")
+                    .keywords(["assistant", "messages", "typeface"]),
+            )
+            .item(
+                SettingItem::new(
+                    "Font Size",
+                    number_field(form, NumberSetting::AssistantFontSize),
                 )
-                .item(
-                    SettingItem::new(
-                        "Font Size",
-                        number_field(form, NumberSetting::AssistantFontSize),
-                    )
-                    .description("Base size, before Scale.")
-                    .keywords(["assistant", "messages"]),
+                .description("Base size, before Scale.")
+                .keywords(["assistant", "messages"]),
+            )
+            .item(
+                SettingItem::new(
+                    "Line Height",
+                    number_field(form, NumberSetting::AssistantLineHeight),
                 )
-                .item(
-                    SettingItem::new(
-                        "Line Height",
-                        number_field(form, NumberSetting::AssistantLineHeight),
-                    )
-                    .description("Line spacing, relative to the font size.")
-                    .keywords(["assistant", "messages", "spacing"]),
-                ),
-        )
+                .description("Line spacing, relative to the font size.")
+                .keywords(["assistant", "messages", "spacing"]),
+            ),
+    )
 }
 
 fn assistant_settings_page(
@@ -896,4 +905,37 @@ fn setting_stepper(
                         .child(gpui_kit::component::Icon::new(IconName::Plus).small())
                 }),
         )
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::{
+        FontSetting, SYSTEM_FONT_FAMILY, SYSTEM_FONT_LABEL, Settings, font_family_for_selection,
+        font_options,
+    };
+
+    #[test]
+    fn every_font_picker_can_select_and_display_the_system_font() {
+        let options = font_options(&[
+            "Menlo".into(),
+            SYSTEM_FONT_FAMILY.into(),
+            "Apple Symbols".into(),
+        ]);
+        assert_eq!(options, [SYSTEM_FONT_LABEL, "Menlo", "Apple Symbols"]);
+        assert_eq!(
+            font_family_for_selection(SYSTEM_FONT_LABEL.into()),
+            SYSTEM_FONT_FAMILY
+        );
+
+        let settings = Settings {
+            ui_font_family: SYSTEM_FONT_FAMILY.into(),
+            editor_font_family: SYSTEM_FONT_FAMILY.into(),
+            logs_font_family: SYSTEM_FONT_FAMILY.into(),
+            assistant_font_family: SYSTEM_FONT_FAMILY.into(),
+            ..Settings::default()
+        };
+        for setting in FontSetting::ALL {
+            assert_eq!(setting.selected(&settings), SYSTEM_FONT_LABEL);
+        }
+    }
 }

@@ -80,6 +80,7 @@ pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
 pub const MIN_LINE_HEIGHT: f32 = 1.;
 pub const MAX_LINE_HEIGHT: f32 = 2.;
 pub const LINE_HEIGHT_STEP: f32 = 0.1;
+pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -102,14 +103,14 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             ui_scale: 1.,
-            ui_font_family: ".SystemUIFont".into(),
+            ui_font_family: SYSTEM_FONT_FAMILY.into(),
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
             editor_line_height: 1.2,
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
-            assistant_font_family: ".SystemUIFont".into(),
+            assistant_font_family: SYSTEM_FONT_FAMILY.into(),
             assistant_font_size: 14.,
             assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),

@@ -67,6 +67,23 @@ replace `dist/Qrow.app`. It uses a temporary workspace and fresh synthetic
 Keychain credentials. The driver restores the previous clipboard contents
 after text entry.
 
+To check the Assistant font picker without a server fixture, use an isolated
+debug package and the synthetic Codex server:
+
+```sh
+qrow_font_test_dir=$(mktemp -d)
+mkdir -p "$qrow_font_test_dir/workspace"
+QROW_DIST_DIR="$qrow_font_test_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
+sh scripts/e2e/driver.sh --preflight
+QROW_E2E_ARTIFACTS="$qrow_font_test_dir" \
+QROW_DATA_DIR="$qrow_font_test_dir/workspace" \
+QROW_E2E_BUNDLE="$qrow_font_test_dir/package/Qrow.app" \
+target/e2e-tools/native-driver --assistant-font-only
+```
+
+This check selects System Font and Menlo, reads the saved settings, and captures
+the transcript in each font.
+
 ## Inspect failures
 
 Each run prints an artifact path under:

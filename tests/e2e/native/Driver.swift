@@ -580,34 +580,108 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("\(label) shows \(value ?? "nothing"), expected \(expected)")
     }
+    func waitSavedAssistantFont(_ expected: String) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let settings = content["settings"] as? [String: Any],
+               settings["assistant_font_family"] as? String == expected { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Assistant font was not saved as \(expected)")
+    }
+    func selectFont(_ label: String, _ family: String) throws {
+        var popup = try wait(label, role: kAXPopUpButtonRole)
+        scrollIntoView(popup)
+        popup = try wait(label, role: kAXPopUpButtonRole)
+        try click(popup)
+        let searchDeadline = clock.now.advanced(by: .seconds(5))
+        var search: AXUIElement?
+        repeat {
+            let fields = elements().filter {
+                attribute($0, kAXRoleAttribute) as? String == kAXTextFieldRole
+                    && strings($0).contains("Search...")
+            }
+            if fields.count > 1 { search = fields.last; break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < searchDeadline
+        guard let search else {
+            throw Failure("Font search did not open: \(label)")
+        }
+        try require(
+            AXUIElementSetAttributeValue(search, kAXValueAttribute as CFString, family as CFString) == .success,
+            "Could not search \(label) for \(family)"
+        )
+        // GPUI's virtual font rows do not expose AX bounds. With the exact
+        // family name filtered to one row, click the row below the search box.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        let (origin, size) = try elementBounds(search)
+        clickPoint(CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height + 16))
+        let valueDeadline = clock.now.advanced(by: .seconds(5))
+        repeat {
+            if let popup = find(label, role: kAXPopUpButtonRole),
+               attribute(popup, kAXValueAttribute) as? String == family { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < valueDeadline
+        throw Failure("\(label) did not select \(family)")
+    }
     func testSettings() throws {
         try selectApplicationMenuItem("Settings…")
-        // Every setting stays on one page, so each control is reachable without
-        // the pointer-only section list.
+        // Appearance and Assistant are separate pages in the Settings sidebar.
         try waitSettingValue("UI Scale", "100")
         try waitSettingValue("Editor Font Size", "13")
         try waitSettingValue("Logs Font Size", "13")
-        try waitSettingValue("Assistant Font Size", "14")
         try press("Increase Editor Font Size")
         try waitSettingValue("Editor Font Size", "14")
+        try selectFont("UI Font Family", "Menlo")
+        try selectFont("UI Font Family", "System Font")
+        try selectFont("Editor Font Family", "System Font")
+        try selectFont("Logs Font Family", "System Font")
+        // Selecting Assistant must open its font controls in the visible page.
+        let (search, _) = try elementBounds(waitInput("Search..."))
+        clickPoint(CGPoint(x: search.x + 42, y: search.y + 164))
+        try waitSettingValue("Assistant Font Size", "14")
+        let (assistantFont, _) = try elementBounds(wait("Assistant Font Family", role: kAXPopUpButtonRole))
+        let (save, _) = try elementBounds(wait("Save", role: kAXButtonRole))
+        try require(assistantFont.y < save.y, "Assistant settings opened below the visible page")
         try press("Increase Assistant Font Size")
         try waitSettingValue("Assistant Font Size", "15")
+        try selectFont("Assistant Font Family", "Menlo")
+        try waitSavedAssistantFont("Menlo")
+        try selectFont("Assistant Font Family", "System Font")
+        try waitSavedAssistantFont(".SystemUIFont")
         try snapshot("settings")
         try press("Restore defaults")
-        try waitSettingValue("Editor Font Size", "13")
         try waitSettingValue("Assistant Font Size", "14")
+        clickPoint(CGPoint(x: search.x + 42, y: search.y + 50))
+        try waitSettingValue("Editor Font Size", "13")
         try press("Save")
         try waitGone("UI Scale")
-        print("PASS: Settings shows every control, applies a change, and restores defaults")
+        print("PASS: Settings applies all font pickers, changes sizes, and restores defaults")
     }
-    func testAssistant() throws {
+    func verifyAssistantFontSwitch() throws {
+        for (choice, stored, screenshot) in [("System Font", ".SystemUIFont", "assistant-system-font"),
+                                              ("Menlo", "Menlo", "assistant-menlo-font")] {
+            try selectApplicationMenuItem("Settings…")
+            let (search, _) = try elementBounds(waitInput("Search..."))
+            clickPoint(CGPoint(x: search.x + 42, y: search.y + 164))
+            _ = try wait("Assistant Font Family", role: kAXPopUpButtonRole)
+            try selectFont("Assistant Font Family", choice)
+            try press("Save")
+            try waitSavedAssistantFont(stored)
+            try snapshot(screenshot)
+        }
+    }
+    func testAssistant(fontOnly: Bool = false) throws {
         try selectApplicationMenuItem("Settings…")
         // GPUI Kit does not publish the settings sidebar labels through AX.
         // Anchor the pointer to the visible search field in the same pane.
         for _ in 0..<3 {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
             let (search, _) = try elementBounds(waitInput("Search..."))
-            clickPoint(CGPoint(x: search.x + 42, y: search.y + 164))
+            clickPoint(CGPoint(x: search.x + 42, y: search.y + 196))
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
             if find("Codex executable") != nil { break }
         }
@@ -623,7 +697,17 @@ final class Driver {
         }
         try waitGone("Codex executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        let startingModel = try wait("Assistant model unavailable", timeout: 5)
+        if fontOnly {
+            _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+            try fill("Assistant message", "Explain `SELECT 1` in one sentence")
+            try press("Send")
+            _ = try wait("I can help with this query", timeout: 20)
+            try snapshot("assistant-before-font-change")
+            try verifyAssistantFontSwitch()
+            print("PASS: Assistant font changes persist while a transcript is visible")
+            return
+        }
+        let startingModel = try wait("Assistant model unavailable", timeout: 5, role: kAXButtonRole)
         try require(attribute(startingModel, kAXEnabledAttribute) as? Bool == false, "Model was enabled while Codex started")
         for label in ["Assistant reasoning unavailable", "Assistant service tier unavailable", "Send · Ask"] {
             let control = try wait(label, timeout: 5, role: kAXButtonRole)
@@ -654,6 +738,7 @@ final class Driver {
         key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
         _ = try wait("I can help with this query", timeout: 20)
         try snapshot("assistant-markdown")
+        try verifyAssistantFontSwitch()
         try fill("Assistant message", "Write SELECT 1 into this tab")
         try press("Send")
         _ = try wait("I updated the SQL.", timeout: 20)
@@ -1250,6 +1335,9 @@ do {
             } else if CommandLine.arguments.contains("--assistant-only") {
                 try driver.start()
                 try driver.testAssistant()
+            } else if CommandLine.arguments.contains("--assistant-font-only") {
+                try driver.start()
+                try driver.testAssistant(fontOnly: true)
             } else {
                 try driver.test()
             }
