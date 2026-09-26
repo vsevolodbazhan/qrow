@@ -569,6 +569,27 @@ impl Qrow {
                     .w_full()
                     .cursor(CursorStyle::ResizeUpDown)
             })
+            .when(horizontal, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(self.ui_px(3.))
+                        .right_0()
+                        .h_full()
+                        .bg(cx.theme().background),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(self.ui_px(3.))
+                        .right_0()
+                        .top_0()
+                        .h(self.ui_px(TAB_BAR_HEIGHT))
+                        .bg(cx.theme().tokens.tab_bar)
+                        .border_b_1()
+                        .border_color(cx.theme().border),
+                )
+            })
             .child(
                 div()
                     .absolute()
@@ -612,6 +633,24 @@ impl Qrow {
             .mx(self.ui_px(-2.))
             .h_full()
             .cursor(CursorStyle::ResizeLeftRight)
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(3.))
+                    .right_0()
+                    .h_full()
+                    .bg(cx.theme().sidebar),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(3.))
+                    .right_0()
+                    .top_0()
+                    .h(self.ui_px(TAB_BAR_HEIGHT))
+                    .border_b_1()
+                    .border_color(cx.theme().border),
+            )
             .child(
                 div()
                     .absolute()
