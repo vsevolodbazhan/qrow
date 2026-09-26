@@ -245,6 +245,7 @@ pub(super) enum Speaker {
 pub(super) enum ToolKind {
     Workspace,
     ReadQuery,
+    AppendQuery,
     EditQuery,
     RunQuery,
     CancelQuery,
@@ -260,6 +261,7 @@ impl ToolKind {
         match name {
             "get_workspace_context" => Self::Workspace,
             "read_tab_sql" => Self::ReadQuery,
+            "append_selected_tab_sql" => Self::AppendQuery,
             "edit_selected_tab_sql" => Self::EditQuery,
             "run_selected_tab_query" => Self::RunQuery,
             "cancel_selected_tab_query" => Self::CancelQuery,
@@ -275,6 +277,7 @@ impl ToolKind {
         match self {
             Self::Workspace => "Read workspace",
             Self::ReadQuery => "Read query",
+            Self::AppendQuery => "Append query",
             Self::EditQuery => "Edit query",
             Self::RunQuery => "Run query",
             Self::CancelQuery => "Cancel query",
@@ -290,6 +293,7 @@ impl ToolKind {
         match self {
             Self::Workspace => AssetIconName::LayoutDashboard,
             Self::ReadQuery => AssetIconName::FileText,
+            Self::AppendQuery => AssetIconName::ListPlus,
             Self::EditQuery => AssetIconName::Pencil,
             Self::RunQuery => AssetIconName::Play,
             Self::CancelQuery => AssetIconName::CircleStop,
@@ -2300,7 +2304,7 @@ impl Qrow {
                                 };
                                 let variant = match entry.speaker {
                                     Speaker::User => BubbleVariant::Tinted,
-                                    Speaker::Assistant => BubbleVariant::Muted,
+                                    Speaker::Assistant => BubbleVariant::Ghost,
                                     Speaker::Activity => BubbleVariant::Outline,
                                     Speaker::Error => BubbleVariant::Destructive,
                                 };
@@ -2347,7 +2351,7 @@ impl Qrow {
                                     .flex_shrink_0()
                                     .alignment(MessageAlignment::Start)
                                     .content(MessageContent::new().bubble(
-                                        Bubble::new().with_variant(BubbleVariant::Muted).child(
+                                        Bubble::new().with_variant(BubbleVariant::Ghost).child(
                                             div()
                                                 .id("assistant-thinking")
                                                 .role(Role::Status)

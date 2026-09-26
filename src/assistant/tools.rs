@@ -13,11 +13,21 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "type": "object", "properties": {"version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"}},
             "required": ["version", "tab_id"], "additionalProperties": false
         })),
-        ("edit_selected_tab_sql", "Apply atomic SQL text edits to the selected query tab at the specified revision.", json!({
+        ("append_selected_tab_sql", "Append one new SQL statement to the selected query tab, preserving existing queries. Use this when writing a new query. The appended statement becomes selected so it can run alone.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": ["string", "null"], "format": "uuid"},
                 "editor_revision": {"type": "integer", "minimum": 0},
+                "sql": {"type": "string"}},
+            "required": ["version", "tab_id", "connection_id", "editor_revision", "sql"],
+            "additionalProperties": false
+        })),
+        ("edit_selected_tab_sql", "Modify existing SQL in the selected query tab at the specified revision. Use this only when the user asks to change existing SQL. Use append_selected_tab_sql for a new query. Set replace_existing to true only when the user asks to replace all SQL.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
+                "connection_id": {"type": ["string", "null"], "format": "uuid"},
+                "editor_revision": {"type": "integer", "minimum": 0},
+                "replace_existing": {"type": "boolean"},
                 "edits": {"type": "array", "minItems": 1, "maxItems": 64,
                     "items": {"type": "object", "properties": {
                         "start": {"type": "integer", "minimum": 0}, "end": {"type": "integer", "minimum": 0},
@@ -81,7 +91,7 @@ mod tests {
     fn tool_surface_has_unique_names_and_closed_input_schemas() {
         let tools = definitions();
         let names: BTreeSet<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert_eq!(names.len(), tools.len());
         assert!(
             tools

@@ -132,6 +132,18 @@ pub struct EditRequest {
     pub connection_id: Option<Uuid>,
     pub editor_revision: u64,
     pub edits: Vec<TextEdit>,
+    #[serde(default)]
+    pub replace_existing: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AppendRequest {
+    pub version: u32,
+    pub tab_id: Uuid,
+    pub connection_id: Option<Uuid>,
+    pub editor_revision: u64,
+    pub sql: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -148,6 +160,13 @@ pub struct EditPlan {
     pub tab_id: Uuid,
     pub expected_revision: u64,
     pub sql: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AppendPlan {
+    pub tab_id: Uuid,
+    pub sql: String,
+    pub appended_range: Range<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -214,6 +233,17 @@ impl ToolBroker {
                 format!("Provide between 1 and {MAX_TEXT_EDITS} edits."),
             ));
         }
+        if !document.sql.is_empty()
+            && !request.replace_existing
+            && request.edits.len() == 1
+            && request.edits[0].start == 0
+            && request.edits[0].end == document.sql.len()
+        {
+            return Err(ToolError::new(
+                ToolErrorCode::InvalidArguments,
+                "A new query must be appended. Set replace_existing only when the user asks to replace all SQL.",
+            ));
+        }
         let replacement_bytes = request
             .edits
             .iter()
@@ -262,6 +292,65 @@ impl ToolBroker {
         Ok(EditPlan {
             tab_id: document.tab_id,
             expected_revision: document.revision,
+            sql,
+        })
+    }
+
+    pub fn plan_append(
+        &self,
+        call: CallIdentity<'_>,
+        request: &AppendRequest,
+        document: &EditorDocument<'_>,
+    ) -> Result<AppendPlan, ToolError> {
+        self.validate_request(
+            request.version,
+            call,
+            request.tab_id,
+            request.connection_id,
+            request.editor_revision,
+            document,
+        )?;
+        let new_query = request.sql.trim();
+        if request.sql.len() > MAX_EDIT_BYTES {
+            return Err(ToolError::new(
+                ToolErrorCode::LimitReached,
+                "Edit content is too large.",
+            ));
+        }
+        sql::validate_single(new_query)
+            .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
+
+        let mut sql = document.sql.to_owned();
+        let last_token = sql::tokens(document.sql)
+            .into_iter()
+            .rev()
+            .find(|(range, kind)| {
+                *kind != sql::Kind::Comment && !document.sql[range.clone()].trim().is_empty()
+            });
+        if let Some((range, kind)) = last_token
+            && kind != sql::Kind::Separator
+        {
+            sql.insert(range.end, ';');
+        }
+        if !sql.is_empty() {
+            if !sql.ends_with('\n') {
+                sql.push('\n');
+            }
+            if !sql.ends_with("\n\n") {
+                sql.push('\n');
+            }
+        }
+        let start = sql.len();
+        sql.push_str(new_query);
+        if sql.len() > MAX_SQL_BYTES {
+            return Err(ToolError::new(
+                ToolErrorCode::LimitReached,
+                "The edited query is too large.",
+            ));
+        }
+        Ok(AppendPlan {
+            tab_id: document.tab_id,
+            appended_range: start..sql.len(),
             sql,
         })
     }
@@ -502,7 +591,109 @@ mod tests {
             connection_id: Some(connection),
             editor_revision: 7,
             edits,
+            replace_existing: false,
         }
+    }
+
+    fn append_request(tab: Uuid, connection: Uuid, sql: &str) -> AppendRequest {
+        AppendRequest {
+            version: TOOL_SCHEMA_VERSION,
+            tab_id: tab,
+            connection_id: Some(connection),
+            editor_revision: 7,
+            sql: sql.into(),
+        }
+    }
+
+    #[test]
+    fn appends_new_statement_and_selects_only_it() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let first = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, " SELECT 2 "),
+                &document(tab, connection, "SELECT '日本語' -- keep this comment"),
+            )
+            .unwrap();
+        assert_eq!(
+            first.sql,
+            "SELECT '日本語'; -- keep this comment\n\nSELECT 2"
+        );
+        assert_eq!(&first.sql[first.appended_range], "SELECT 2");
+
+        let second = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, "SELECT 3;"),
+                &document(tab, connection, "SELECT 1;\n\nSELECT 2;\n"),
+            )
+            .unwrap();
+        assert_eq!(second.sql, "SELECT 1;\n\nSELECT 2;\n\nSELECT 3;");
+        assert_eq!(&second.sql[second.appended_range], "SELECT 3;");
+    }
+
+    #[test]
+    fn append_rejects_multiple_statements_and_stale_revision() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let document = document(tab, connection, "SELECT 1");
+        assert_eq!(
+            broker
+                .plan_append(
+                    call(),
+                    &append_request(tab, connection, "SELECT 2; SELECT 3"),
+                    &document,
+                )
+                .unwrap_err()
+                .code,
+            ToolErrorCode::InvalidStatement
+        );
+        let mut stale = append_request(tab, connection, "SELECT 2");
+        stale.editor_revision = 6;
+        assert_eq!(
+            broker
+                .plan_append(call(), &stale, &document)
+                .unwrap_err()
+                .code,
+            ToolErrorCode::StaleRevision
+        );
+    }
+
+    #[test]
+    fn appended_selection_can_run_without_running_older_queries() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let append = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, "SELECT 2"),
+                &document(tab, connection, "SELECT 1"),
+            )
+            .unwrap();
+        let mut target = target(tab, connection);
+        target.selected_range = Some(append.appended_range.clone());
+        let document = EditorDocument {
+            tab_id: tab,
+            connection_id: Some(connection),
+            revision: 8,
+            sql: &append.sql,
+            selected_range: Some(append.appended_range),
+            busy: false,
+        };
+        let run = ToolBroker::new(Some(target))
+            .plan_run(
+                call(),
+                &RunRequest {
+                    version: TOOL_SCHEMA_VERSION,
+                    tab_id: tab,
+                    connection_id: connection,
+                    editor_revision: 8,
+                },
+                &document,
+            )
+            .unwrap();
+        assert_eq!(run.sql, "SELECT 2");
     }
 
     #[test]
@@ -533,6 +724,7 @@ mod tests {
                 end: 0,
                 replacement: "SELECT 1".into(),
             }],
+            replace_existing: false,
         };
         assert_eq!(
             broker.plan_edit(call(), &edit, &document).unwrap().sql,
@@ -621,6 +813,34 @@ mod tests {
 
         assert_eq!(plan.sql, "VALUES second");
         assert_eq!(plan.expected_revision, 7);
+    }
+
+    #[test]
+    fn whole_document_edit_requires_explicit_replacement() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let mut request = edit_request(
+            tab,
+            connection,
+            vec![TextEdit {
+                start: 0,
+                end: "SELECT 1".len(),
+                replacement: "SELECT 2".into(),
+            }],
+        );
+        let document = document(tab, connection, "SELECT 1");
+        assert_eq!(
+            broker
+                .plan_edit(call(), &request, &document)
+                .unwrap_err()
+                .code,
+            ToolErrorCode::InvalidArguments
+        );
+        request.replace_existing = true;
+        assert_eq!(
+            broker.plan_edit(call(), &request, &document).unwrap().sql,
+            "SELECT 2"
+        );
     }
 
     #[test]

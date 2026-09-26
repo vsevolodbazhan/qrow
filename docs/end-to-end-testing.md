@@ -117,11 +117,24 @@ pane width of 536. At this width, messages can be measured at one width and
 drawn at another. The check makes sure that:
 
 - A message with inline code that fits on one line shows its last word.
+- The assistant reply starts at the left edge of the composer, and the user
+  message bubble ends at its right edge.
 - A reply with a wide table uses the full transcript width.
 - The transcript scrolls to the end of the table.
 - The mouse wheel scrolls the transcript over the table.
 
 The table checks run with the Connections sidebar shown and hidden.
+
+To check that the assistant keeps earlier SQL, use the package steps in the
+assistant font check above. Use a new, empty workspace directory. Replace the
+last driver command with:
+
+```sh
+target/e2e-tools/native-driver --assistant-append-only
+```
+
+The check asks for two queries. It verifies that the second query follows the
+first query in the same tab.
 
 ## Inspect failures
 

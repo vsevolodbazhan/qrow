@@ -5,8 +5,8 @@ use super::*;
 use qrow::assistant::{
     ToolCall, ToolResult,
     broker::{
-        CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES, MAX_TOOL_OUTPUT_BYTES,
-        RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows, bound_text,
+        AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
+        MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows, bound_text,
     },
     service::Command as AssistantCommand,
 };
@@ -230,6 +230,7 @@ impl Qrow {
         let result = match call.name.as_str() {
             "get_workspace_context" => self.tool_workspace(call, cx),
             "read_tab_sql" => self.tool_read_sql(call, cx),
+            "append_selected_tab_sql" => self.tool_append(call, window, cx),
             "edit_selected_tab_sql" => self.tool_edit(call, window, cx),
             "run_selected_tab_query" => return self.tool_run(call, window, cx),
             "cancel_selected_tab_query" => self.tool_cancel(call, cx),
@@ -312,6 +313,54 @@ impl Qrow {
             }
             editor.set_scroll_offset(scroll, cx);
         });
+        let revision = self.tabs[self.active].revision;
+        self.changed(cx);
+        Ok(success(
+            json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
+                "sql_bytes": plan.sql.len()}),
+        ))
+    }
+
+    fn tool_append(
+        &mut self,
+        call: &ToolCall,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<ToolResult, ToolResult> {
+        let args: AppendRequest = parse(call.arguments.clone())?;
+        let tab = &self.tabs[self.active];
+        let sql = tab.input.read(cx).value().to_string();
+        let document = EditorDocument {
+            tab_id: tab.saved.id,
+            connection_id: tab.saved.profile,
+            revision: tab.revision,
+            sql: &sql,
+            selected_range: None,
+            busy: tab.busy,
+        };
+        let plan = ToolBroker::new(self.assistant_panel.target.clone())
+            .plan_append(
+                CallIdentity {
+                    conversation_id: &call.thread_id,
+                    turn_id: &call.turn_id,
+                },
+                &args,
+                &document,
+            )
+            .map_err(|error| ToolResult {
+                success: false,
+                content: json!({"version": 1, "error": error}),
+            })?;
+        let editor = tab.input.clone();
+        self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
+        self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
+        editor.update(cx, |editor, cx| {
+            editor.replace_all(plan.sql.clone(), window, cx);
+            editor.set_selected_range(plan.appended_range.clone(), cx);
+        });
+        if let Some(target) = &mut self.assistant_panel.target {
+            target.selected_range = Some(plan.appended_range);
+        }
         let revision = self.tabs[self.active].revision;
         self.changed(cx);
         Ok(success(

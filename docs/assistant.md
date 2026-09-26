@@ -64,11 +64,18 @@ tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It
-can edit the selected query tab and run its one SQL statement through Qrow's
-query worker. It can edit a tab before you select a connection. Select a
-connection before it runs SQL. It cannot read connection passwords. Qrow does
-not send workspace context when you open the pane. It sends context when you
-send a message or when Codex calls a Qrow tool.
+appends each new query to the selected tab. It keeps existing queries and
+selects the new query so it can run that statement alone. If the previous
+query has no final semicolon, Qrow adds one. Ask the assistant to change
+existing SQL when you want an edit or replacement. The assistant can write SQL
+before you select a connection. Select a connection before it runs SQL. It
+cannot read connection passwords. Qrow does not send workspace context when
+you open the pane. It sends context when you send a message or when Codex calls
+a Qrow tool.
+
+If you started a conversation before this change, start a new conversation
+when you want to replace all SQL in a tab. Older conversations do not have the
+explicit replacement option.
 
 For a message during an active turn, Qrow adds the current workspace context
 to the text sent to Codex. Qrow omits that context from the conversation,

@@ -173,10 +173,11 @@ for line in sys.stdin:
         )
         if message.startswith("Return to the latest message"):
             time.sleep(1)
-        if message.startswith("Write SELECT 1"):
+        if message.startswith(("Write SELECT 1", "Write SELECT 2")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             pending_edit = turn_id
+            query = "SELECT 1" if message.startswith("Write SELECT 1") else "SELECT 2"
             send(
                 {
                     "id": 9000 + turn_number,
@@ -185,19 +186,13 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
-                        "tool": "edit_selected_tab_sql",
+                        "tool": "append_selected_tab_sql",
                         "arguments": {
                             "version": 1,
                             "tab_id": tab["id"],
                             "connection_id": tab["connection_id"],
                             "editor_revision": tab["editor_revision"],
-                            "edits": [
-                                {
-                                    "start": 0,
-                                    "end": len(tab["sql"].encode("utf-8")),
-                                    "replacement": "SELECT 1",
-                                }
-                            ],
+                            "sql": query,
                         },
                     },
                 }

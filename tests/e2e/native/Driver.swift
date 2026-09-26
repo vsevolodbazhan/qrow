@@ -848,7 +848,7 @@ final class Driver {
         _ = try wait("I updated the SQL.", timeout: 20)
         try waitInputValue("SQL Editor", "SELECT 1")
         // Tool calls are full-width cards that start collapsed.
-        let toolCard = try waitExact("Tool call: Edit query", timeout: 5)
+        let toolCard = try waitExact("Tool call: Append query", timeout: 5)
         try require(find("Arguments:") == nil, "The tool call opened expanded")
         try require(find("Tab: Query 1") == nil, "The collapsed tool call showed its tab")
         let (_, toolSize) = try elementBounds(toolCard)
@@ -859,7 +859,7 @@ final class Driver {
         _ = try wait("Arguments:", timeout: 5)
         _ = try wait("Tab: Query 1", timeout: 5)
         try snapshot("assistant-tool-expanded")
-        try activate(try waitExact("Tool call: Edit query", timeout: 5))
+        try activate(try waitExact("Tool call: Append query", timeout: 5))
         try waitGone("Arguments:", timeout: 5)
         let editor = try waitInput("SQL Editor")
         let (editorPosition, _) = try elementBounds(editor)
@@ -875,6 +875,13 @@ final class Driver {
         try waitInputValue("SQL Editor", "SELECT 1")
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1")
+        try waitGone("Assistant is working", timeout: 5)
+        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
         try fill("Assistant message", "Show many lines")
         try press("Send")
         _ = try wait("Line 40", timeout: 20)
@@ -900,6 +907,18 @@ final class Driver {
         try press("Toggle Assistant")
         try waitGone("Toggle conversation list")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
+    }
+    func testAssistantAppend() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1")
+        try waitGone("Assistant is working", timeout: 5)
+        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
+        print("PASS: Assistant appends a new SQL query and preserves the first query")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, and the last
@@ -971,6 +990,43 @@ final class Driver {
                              abs(top.greenComponent - bottom.greenComponent),
                              abs(top.blueComponent - bottom.blueComponent))
         try require(difference < 0.02, "The message with inline code extends below its bubble")
+        try checkMessageInsets(message)
+    }
+    /// The transcript and the composer share one horizontal inset. The reply
+    /// text starts at the left edge of the composer, and the user bubble ends
+    /// at its right edge. A reply bubble without a visible surface adds its
+    /// padding on the left only.
+    func checkMessageInsets(_ message: AXUIElement) throws {
+        let reply = try wait("Assistant: **I can help with this query", timeout: 5)
+        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (replyOrigin, _) = try elementBounds(reply)
+        try require(abs(replyOrigin.x - composerOrigin.x) <= 1,
+                    "The assistant reply starts \(replyOrigin.x - composerOrigin.x) points right of the composer")
+
+        // Scan a row through the user bubble from the transcript background
+        // on its left, and find the last point that has another color.
+        let (origin, extent) = try elementBounds(message)
+        let left = Int(composerOrigin.x) + 2
+        let width = Int(composerOrigin.x + composerSize.width) + 6 - left
+        let path = "\(artifacts)/assistant-message-insets.png"
+        _ = try command(["screencapture", "-x", "-R", "\(left),\(Int(origin.y + extent.height / 2)),\(width),1", path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data),
+              let background = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the message inset capture")
+        }
+        let scale = CGFloat(bitmap.pixelsWide) / CGFloat(width)
+        let bubbleEnd = (0..<bitmap.pixelsWide).last { x in
+            guard let color = bitmap.colorAt(x: x, y: 0)?.usingColorSpace(.deviceRGB) else { return false }
+            return max(abs(color.redComponent - background.redComponent),
+                       abs(color.greenComponent - background.greenComponent),
+                       abs(color.blueComponent - background.blueComponent)) > 0.02
+        }
+        guard let bubbleEnd else { throw Failure("Could not find the user bubble in the inset capture") }
+        let bubbleRight = CGFloat(left) + CGFloat(bubbleEnd + 1) / scale
+        let composerRight = composerOrigin.x + composerSize.width
+        try require(abs(bubbleRight - composerRight) <= 1,
+                    "The user bubble ends \(composerRight - bubbleRight) points left of the composer")
     }
     func checkWideTableReply(_ name: String) throws {
         // The tooltip has the same text, so look for the button only.
@@ -1557,6 +1613,10 @@ do {
             } else if CommandLine.arguments.contains("--assistant-only") {
                 try driver.start()
                 try driver.testAssistant()
+            } else if CommandLine.arguments.contains("--assistant-append-only") {
+                try driver.seedAssistantLayoutWorkspace()
+                try driver.start()
+                try driver.testAssistantAppend()
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
@@ -1586,7 +1646,8 @@ do {
             }
         }
         if CommandLine.arguments.contains("--editor-highlight-only")
-            || CommandLine.arguments.contains("--assistant-layout-only") { exit(0) }
+            || CommandLine.arguments.contains("--assistant-layout-only")
+            || CommandLine.arguments.contains("--assistant-append-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()
