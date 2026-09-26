@@ -696,12 +696,18 @@ final class Driver {
         try fill("Assistant message", "Run selected SQL with approval")
         try press("Send")
         _ = try wait("Assistant query approval:", timeout: 20)
+        let stop = try waitExact("Stop", timeout: 5, role: kAXButtonRole)
+        try require(find("Send", role: kAXButtonRole) == nil, "Send remained visible during the assistant turn")
+        let (stopPosition, _) = try elementBounds(stop)
+        let (composerPosition, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        try require(stopPosition.y >= composerPosition.y + composerSize.height, "Stop was not below the message field")
         let runButtons = elements().filter {
             attribute($0, kAXRoleAttribute) as? String == kAXButtonRole && strings($0).contains("Run")
         }
         try require(runButtons.count == 2, "Expected toolbar Run and assistant approval Run")
         try activate(runButtons[1])
         _ = try wait("I ran the query.", timeout: 90)
+        _ = try wait("Send", timeout: 5, role: kAXButtonRole)
         _ = try wait("1", role: kAXCellRole)
 
         let mode = try wait("Assistant query approval mode", role: kAXPopUpButtonRole)

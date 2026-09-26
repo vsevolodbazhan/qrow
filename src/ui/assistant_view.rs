@@ -1926,39 +1926,26 @@ impl Qrow {
                     )
                 },
             )
-            .when(self.assistant_panel.active_turn.is_some() || matches!(self.assistant_panel.status, Status::Disconnected(_)), |panel| panel.child(
+            .when(matches!(self.assistant_panel.status, Status::Disconnected(_)), |panel| panel.child(
                 h_flex()
                     .flex_shrink_0()
                     .px_3()
                     .py_1()
                     .justify_end()
-                    .when(self.assistant_panel.active_turn.is_some(), |el| {
-                        el.child(
-                            Button::new("assistant-stop")
-                                .small()
-                                .label("Stop")
-                                .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
-                        )
-                    })
-                    .when(
-                        matches!(self.assistant_panel.status, Status::Disconnected(_)),
-                        |el| {
-                            el.child(
-                                Button::new("assistant-reconnect")
-                                    .small()
-                                    .label("Reconnect")
-                                    .when_some(
-                                        match &self.assistant_panel.status {
-                                            Status::Disconnected(error) => Some(error.clone()),
-                                            _ => None,
-                                        },
-                                        |button, error| button.tooltip(error),
-                                    )
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.reconnect_assistant(cx)),
-                                    ),
+                    .child(
+                        Button::new("assistant-reconnect")
+                            .small()
+                            .label("Reconnect")
+                            .when_some(
+                                match &self.assistant_panel.status {
+                                    Status::Disconnected(error) => Some(error.clone()),
+                                    _ => None,
+                                },
+                                |button, error| button.tooltip(error),
                             )
-                        },
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.reconnect_assistant(cx)),
+                            ),
                     ),
             ))
             .when(
@@ -2269,7 +2256,15 @@ impl Qrow {
                                             })),
                             )
                             .child(div().flex_1())
-                            .child(
+                            .when(self.assistant_panel.active_turn.is_some(), |row| row.child(
+                                Button::new("assistant-stop")
+                                    .primary()
+                                    .small()
+                                    .label("Stop")
+                                    .tooltip("Stop the current assistant turn")
+                                    .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
+                            ))
+                            .when(self.assistant_panel.active_turn.is_none(), |row| row.child(
                                 DropdownButton::new("assistant-send-mode")
                                     .primary()
                                     .small()
@@ -2314,7 +2309,7 @@ impl Qrow {
                                                 .checked(mode_is_run)
                                                 .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
                                     }),
-                            ),
+                            )),
                     ),
             )))
             .when(show_threads, |panel| panel.child(self.assistant_thread_list(narrow, width, cx)))

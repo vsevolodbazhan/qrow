@@ -22,9 +22,10 @@ are **Ask before running** and **Run automatically**.
 
 Select a query tab. Select **Toggle Assistant** in the tab strip or press
 **⌘J**. Write a message and press **Enter** or **⌘Enter** to send it. Press
-**Shift-Enter** to start a new line. You can send another message while Codex
-works. The message steers the current turn. **Stop** stops the Codex turn. It
-does not cancel a database query that already started.
+**Shift-Enter** to start a new line. While Codex works, the Send button becomes
+**Stop**. Type a follow-up and press **Enter** to steer the current turn.
+**Stop** interrupts the Codex turn. It does not cancel a database query that
+already started. The Send button returns when the turn ends.
 
 You can draft a message while Codex starts. The model, reasoning, service tier,
 and Send controls stay disabled until Codex is ready. The pane does not show
