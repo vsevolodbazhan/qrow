@@ -62,6 +62,23 @@ sh scripts/check.sh e2e/macos --runtime docker
 The Docker mode requires a local daemon and does not require a host JDK.
 Java is a server-fixture dependency. Qrow itself remains a native Rust application.
 
+To check the editor's active line without a server, build an isolated package and
+run the native driver in demo mode:
+
+```sh
+qrow_editor_test_dir=$(mktemp -d)
+mkdir -p "$qrow_editor_test_dir/workspace"
+QROW_DIST_DIR="$qrow_editor_test_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
+sh scripts/e2e/driver.sh --preflight
+QROW_E2E_ARTIFACTS="$qrow_editor_test_dir" \
+QROW_DATA_DIR="$qrow_editor_test_dir/workspace" \
+QROW_E2E_BUNDLE="$qrow_editor_test_dir/package/Qrow.app" \
+target/e2e-tools/native-driver --editor-highlight-only
+```
+
+The driver checks the active line color at the editor's right edge. It saves
+`editor-highlight.png` in the temporary directory.
+
 The suite creates a release package inside the run directory. It does not
 replace `dist/Qrow.app`. It uses a temporary workspace and fresh synthetic
 Keychain credentials. The driver restores the previous clipboard contents

@@ -423,6 +423,9 @@ final class Driver {
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         log = try FileHandle(forWritingTo: logURL)
         process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
+        if CommandLine.arguments.contains("--editor-highlight-only") {
+            process.arguments = ["--demo"]
+        }
         process.environment = env
         process.standardOutput = log
         process.standardError = log
@@ -431,7 +434,7 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
-        _ = try wait("New Connection", timeout: 20)
+        _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -439,6 +442,47 @@ final class Driver {
                 self.samples.append("\(Date().timeIntervalSince1970) \(sample)")
             }
         }
+    }
+    func testEditorHighlight() throws {
+        let editor = try waitInput("SQL Editor")
+        let (origin, extent) = try elementBounds(editor)
+        clickPoint(CGPoint(x: origin.x + 100, y: origin.y + 20))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+
+        // Capture only the editor's right edge. The reference column is inside
+        // the text area; the edge column is inside the right padding.
+        let captureWidth = 40
+        let captureHeight = 90
+        let path = "\(artifacts)/editor-highlight.png"
+        let rect = "\(Int(origin.x + extent.width) - captureWidth),\(Int(origin.y)),\(captureWidth),\(captureHeight)"
+        _ = try command(["screencapture", "-x", "-R", rect, path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data) else {
+            throw Failure("Could not read editor highlight capture")
+        }
+        let scale = Double(bitmap.pixelsWide) / Double(captureWidth)
+        let referenceX = Int(15 * scale)
+        let edgeX = Int(38 * scale)
+        func color(_ x: Int, _ y: Int) -> NSColor? {
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        guard let background = color(referenceX, bitmap.pixelsHigh - 5) else {
+            throw Failure("Could not sample editor background")
+        }
+        let highlightedRows = (5..<(bitmap.pixelsHigh - 5)).filter { y in
+            color(referenceX, y).map { distance($0, background) > 0.015 } ?? false
+        }
+        try require(highlightedRows.count >= Int(8 * scale), "Active line highlight was not visible")
+        let middle = highlightedRows[highlightedRows.count / 2]
+        guard let reference = color(referenceX, middle), let edge = color(edgeX, middle) else {
+            throw Failure("Could not sample active line highlight")
+        }
+        try require(distance(reference, edge) < 0.015, "Active line highlight stops before the editor's right edge")
     }
     func stop() {
         sampleTimer?.invalidate()
@@ -975,6 +1019,7 @@ final class Driver {
         try testAssistantQueries()
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected", role: kAXCellRole)
+        try testEditorHighlight()
         try snapshot("connected")
 
         // Create a second disposable profile for the connection-switch test.
@@ -1398,6 +1443,9 @@ do {
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
+            } else if CommandLine.arguments.contains("--editor-highlight-only") {
+                try driver.start()
+                try driver.testEditorHighlight()
             } else {
                 try driver.test()
             }
@@ -1416,6 +1464,7 @@ do {
                 throw error
             }
         }
+        if CommandLine.arguments.contains("--editor-highlight-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

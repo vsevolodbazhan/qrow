@@ -33,6 +33,10 @@ security-framework = "3"
 [dev-dependencies]
 proptest = "=1.11.0"
 
+[patch.crates-io]
+# GPUI Base 0.6.6 stops the active-line paint at the editor's right padding.
+gpui-base = { path = "vendor/gpui-base" }
+
 [profile.release]
 # Keep the optional GPUI assistant inside the macOS package size budget.
 opt-level = "s"
