@@ -72,7 +72,7 @@ func fitWindowToMainDisplay(_ app: AXUIElement) throws {
     }
     let visible = screen.visibleFrame
     let minimum = CGSize(width: 850, height: 560)
-    let width = visible.width - 32
+    let width = min(visible.width - 32, CGFloat(env["QROW_E2E_MAX_WINDOW_WIDTH"].flatMap(Double.init) ?? .infinity))
     let height = visible.height - 32
     try require(
         width >= minimum.width && height >= minimum.height,
@@ -83,7 +83,7 @@ func fitWindowToMainDisplay(_ app: AXUIElement) throws {
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
     let currentFrame = CGRect(origin: position, size: extent)
-    guard !safeFrame.contains(currentFrame) else { return }
+    guard !safeFrame.contains(currentFrame) || extent.width > width else { return }
 
     var fittedSize = CGSize(width: min(extent.width, width), height: min(extent.height, height))
     guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
@@ -856,9 +856,14 @@ final class Driver {
                 try press("Toggle conversation list")
             }
             let search = try wait("Search conversations")
-            let toggle = try wait("Toggle conversation list")
+            let headerControl: AXUIElement
+            if let toggle = find("Toggle conversation list") {
+                headerControl = toggle
+            } else {
+                headerControl = try wait("Back to conversation")
+            }
             let (searchPosition, searchSize) = try elementBounds(search)
-            let (togglePosition, toggleSize) = try elementBounds(toggle)
+            let (togglePosition, toggleSize) = try elementBounds(headerControl)
             try require(searchSize.height <= toggleSize.height + 1, "Conversation search input is taller than the header control")
             let searchCenter = searchPosition.y + searchSize.height / 2
             let toggleCenter = togglePosition.y + toggleSize.height / 2
