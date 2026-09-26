@@ -1602,7 +1602,7 @@ impl Qrow {
             .h_full()
             .flex_shrink_0()
             .bg(cx.theme().sidebar)
-            .border_l_1()
+            .when(!narrow, |list| list.border_l_1())
             .border_color(cx.theme().border)
             .child(
                 h_flex()
