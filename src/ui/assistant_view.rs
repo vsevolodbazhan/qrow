@@ -30,12 +30,13 @@ use qrow::{
         },
         tools,
     },
-    model::{AssistantConversation, AssistantTitleSource},
+    model::{AssistantConversation, AssistantTitleSource, MAX_ASSISTANT_CONVERSATION_TITLE},
 };
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -440,6 +441,58 @@ pub(super) enum PendingQueryKind {
     Fetch,
 }
 
+/// The open rename dialog for one conversation.
+pub(super) struct ConversationEditor {
+    thread_id: String,
+    title: Entity<InputState>,
+    error: Option<String>,
+}
+
+const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
+    key: "conversation",
+    label: "Conversation Name",
+    tooltip: "Rename Conversation · ⌘Enter",
+    form: |this| {
+        this.assistant_panel
+            .rename_form
+            .as_ref()
+            .map(|form| (&form.title, form.error.clone()))
+    },
+    submit: Qrow::save_assistant_rename,
+    clear: |this| this.assistant_panel.rename_form = None,
+};
+
+type MenuAction = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+
+/// The actions for one conversation. The pane header menu and the thread list
+/// context menu use the same items and layout.
+struct ConversationMenu {
+    busy: bool,
+    can_regenerate: bool,
+    rename: MenuAction,
+    regenerate: MenuAction,
+    delete: MenuAction,
+}
+
+impl ConversationMenu {
+    fn build(&self, menu: PopupMenu) -> PopupMenu {
+        let item = |label: &'static str, action: &MenuAction, disabled: bool| {
+            let action = action.clone();
+            PopupMenuItem::new(label)
+                .on_click(move |event, window, cx| action(event, window, cx))
+                .disabled(disabled)
+        };
+        menu.item(item("Rename…", &self.rename, self.busy))
+            .item(item(
+                "Regenerate Title",
+                &self.regenerate,
+                !self.can_regenerate,
+            ))
+            .separator()
+            .item(item("Delete…", &self.delete, self.busy))
+    }
+}
+
 pub(super) struct AssistantPanelState {
     pub open: bool,
     pub status: Status,
@@ -468,8 +521,13 @@ pub(super) struct AssistantPanelState {
     pub unread: bool,
     pub notice: Option<String>,
     pub previous_focus: Option<FocusHandle>,
-    pub rename_input: Option<Entity<InputState>>,
+    pub rename_form: Option<ConversationEditor>,
     pub pending_rename: Option<(String, String)>,
+    /// Conversations with a title request from the user. The new title
+    /// replaces a title that the user set.
+    pub regenerating_titles: BTreeSet<String>,
+    /// Conversations that wait for their history before Qrow requests a title.
+    pub title_history_reads: BTreeSet<String>,
     pub creating_conversation: bool,
     /// Conversations without a turn. Qrow does not save them.
     pub unstarted_threads: BTreeSet<String>,
@@ -598,8 +656,10 @@ impl AssistantPanelState {
             unread: false,
             notice: None,
             previous_focus: None,
-            rename_input: None,
+            rename_form: None,
             pending_rename: None,
+            regenerating_titles: BTreeSet::new(),
+            title_history_reads: BTreeSet::new(),
             creating_conversation: false,
             unstarted_threads: BTreeSet::new(),
         }
@@ -710,48 +770,105 @@ impl Qrow {
         });
     }
 
-    fn begin_assistant_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(conversation) = self.assistant.conversations.iter().find(|conversation| {
-            Some(&conversation.thread_id) == self.assistant.selected_thread.as_ref()
-        }) else {
+    fn begin_assistant_rename(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() {
+            return;
+        }
+        let Some(conversation) = self
+            .assistant
+            .conversations
+            .iter()
+            .find(|conversation| conversation.thread_id == thread_id)
+        else {
             return;
         };
         let title = conversation.title.clone();
-        self.assistant_panel.rename_input =
-            Some(cx.new(|cx| InputState::new(window, cx).default_value(title)));
+        self.assistant_panel.rename_form = Some(ConversationEditor {
+            thread_id: thread_id.to_owned(),
+            title: cx.new(|cx| InputState::new(window, cx).default_value(title)),
+            error: None,
+        });
+        self.open_rename_dialog(CONVERSATION_RENAME, window, cx);
         cx.notify();
     }
 
-    fn save_assistant_rename(&mut self, cx: &mut Context<Self>) {
-        let (Some(id), Some(input)) = (
-            self.assistant.selected_thread.clone(),
-            self.assistant_panel.rename_input.as_ref(),
-        ) else {
+    fn save_assistant_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = self.assistant_panel.rename_form.as_mut() else {
             return;
         };
-        let title = input.read(cx).value().trim().to_owned();
-        if title.is_empty() || title.chars().count() > 120 {
-            self.assistant_panel.notice = Some("Use a title with 1 to 120 characters.".into());
+        let id = form.thread_id.clone();
+        let title = form.title.read(cx).value().trim().to_owned();
+        if title.is_empty() || title.chars().count() > MAX_ASSISTANT_CONVERSATION_TITLE {
+            form.error = Some(format!(
+                "Conversation name must have 1 to {MAX_ASSISTANT_CONVERSATION_TITLE} characters."
+            ));
             cx.notify();
             return;
         }
-        if self.assistant_command(
+        if !self.assistant_command(
             AssistantCommand::Rename {
                 thread_id: id.clone(),
                 title: title.clone(),
             },
             cx,
         ) {
-            self.assistant_panel.pending_rename = Some((id, title));
-            self.assistant_panel.rename_input = None;
+            if let Some(form) = self.assistant_panel.rename_form.as_mut() {
+                form.error = Some("Codex is not connected. Reconnect and try again.".into());
+            }
             cx.notify();
+            return;
         }
+        // Codex cancels a title that is still generating.
+        self.assistant_panel.regenerating_titles.remove(&id);
+        self.assistant_panel.title_history_reads.remove(&id);
+        self.assistant_panel.pending_rename = Some((id, title));
+        self.assistant_panel.rename_form = None;
+        // Programmatic close_dialog does not invoke Dialog::on_close.
+        window.close_dialog(cx);
+        cx.notify();
     }
 
-    fn confirm_assistant_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread_id) = self.assistant.selected_thread.clone() else {
+    /// Asks Codex for a new title, also when the user set the current title.
+    fn regenerate_assistant_title(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        if !self
+            .assistant_panel
+            .regenerating_titles
+            .insert(thread_id.to_owned())
+        {
             return;
+        }
+        let has_messages = self
+            .assistant_panel
+            .transcripts
+            .get(thread_id)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.speaker == Speaker::User));
+        let requested = if has_messages {
+            self.send_assistant_title_request(thread_id, cx)
+        } else {
+            // Qrow loads a conversation's messages when you open it.
+            self.assistant_panel
+                .title_history_reads
+                .insert(thread_id.to_owned());
+            self.assistant_command(AssistantCommand::Read(thread_id.to_owned()), cx)
         };
+        if !requested {
+            self.assistant_panel.regenerating_titles.remove(thread_id);
+            self.assistant_panel.title_history_reads.remove(thread_id);
+        }
+        cx.notify();
+    }
+
+    fn confirm_assistant_delete(
+        &mut self,
+        thread_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
@@ -768,22 +885,30 @@ impl Qrow {
         });
     }
 
-    fn conversation_label(&self, conversation: &AssistantConversation) -> String {
-        if self
-            .assistant
-            .conversations
-            .iter()
-            .filter(|other| other.title == conversation.title)
-            .count()
-            == 1
-        {
-            conversation.title.clone()
-        } else {
-            format!(
-                "{} · {}",
-                conversation.title,
-                conversation.thread_id.chars().take(8).collect::<String>()
-            )
+    /// Builds the actions of the pane header menu and the thread list context
+    /// menu.
+    fn conversation_menu(&self, thread_id: &str, cx: &mut Context<Self>) -> ConversationMenu {
+        let busy = self.assistant_panel.active_turn.is_some()
+            && self.assistant.selected_thread.as_deref() == Some(thread_id);
+        let id = thread_id.to_owned();
+        ConversationMenu {
+            busy,
+            can_regenerate: !busy
+                && !self.assistant_panel.unstarted_threads.contains(thread_id)
+                && !self.assistant_panel.regenerating_titles.contains(thread_id),
+            rename: Rc::new(cx.listener({
+                let id = id.clone();
+                move |this, _: &ClickEvent, window, cx| {
+                    this.begin_assistant_rename(&id, window, cx);
+                }
+            })),
+            regenerate: Rc::new(cx.listener({
+                let id = id.clone();
+                move |this, _: &ClickEvent, _, cx| this.regenerate_assistant_title(&id, cx)
+            })),
+            delete: Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                this.confirm_assistant_delete(id.clone(), window, cx);
+            })),
         }
     }
 
@@ -1055,6 +1180,9 @@ impl Qrow {
             Ok(service) => {
                 self.assistant_panel.service = Some(service);
                 self.assistant_panel.status = Status::Starting;
+                // A new Codex process has no title requests from the old one.
+                self.assistant_panel.regenerating_titles.clear();
+                self.assistant_panel.title_history_reads.clear();
             }
             Err(error) => {
                 self.assistant_panel.status =
@@ -1156,12 +1284,18 @@ impl Qrow {
 
     /// Asks Codex for a title while the conversation still has the temporary title.
     fn request_assistant_title(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        if !self.assistant.conversations.iter().any(|conversation| {
+        if self.assistant.conversations.iter().any(|conversation| {
             conversation.thread_id == thread_id
                 && conversation.title_source == AssistantTitleSource::Temporary
         }) {
-            return;
+            self.send_assistant_title_request(thread_id, cx);
         }
+    }
+
+    /// Sends the loaded messages of a conversation to Codex for a title.
+    /// Returns false when the conversation has no user message or Codex is
+    /// not connected.
+    fn send_assistant_title_request(&mut self, thread_id: &str, cx: &mut Context<Self>) -> bool {
         let messages: Vec<_> = self
             .assistant_panel
             .transcripts
@@ -1175,7 +1309,7 @@ impl Qrow {
             })
             .collect();
         if !messages.iter().any(|(role, _)| *role == "user") {
-            return;
+            return false;
         }
         let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
             self.settings
@@ -1202,7 +1336,7 @@ impl Qrow {
                 reasoning_effort,
             }),
             cx,
-        );
+        )
     }
 
     pub(super) fn send_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1482,11 +1616,19 @@ impl Qrow {
                     self.assistant_panel.older_cursors.remove(&thread);
                 }
                 let selected = self.assistant.selected_thread.as_deref() == Some(thread.as_str());
+                let thread_id = thread.clone();
                 let entries = self.assistant_panel.transcripts.entry(thread).or_default();
                 let previous_count = entries.len();
                 merge_history(entries, history.turns);
                 if selected && entries.len() > previous_count {
                     self.scroll_assistant_to_bottom(window, cx);
+                }
+                if self.assistant_panel.title_history_reads.remove(&thread_id)
+                    && !self.send_assistant_title_request(&thread_id, cx)
+                {
+                    self.assistant_panel.regenerating_titles.remove(&thread_id);
+                    self.assistant_panel.notice =
+                        Some("This conversation has no messages for a title.".into());
                 }
             }
             AssistantServiceEvent::HistoryPage(page) => {
@@ -1646,18 +1788,25 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
+                let regenerated = self.assistant_panel.regenerating_titles.remove(&thread_id);
                 if let Some(conversation) = self
                     .assistant
                     .conversations
                     .iter_mut()
                     .find(|conversation| conversation.thread_id == thread_id)
-                    && conversation.title_source != AssistantTitleSource::User
+                    && (regenerated || conversation.title_source != AssistantTitleSource::User)
                 {
                     conversation.title = title;
                     conversation.title_source = AssistantTitleSource::Codex;
                     self.changed(cx);
                 }
                 self.sync_assistant_selectors(window, cx);
+            }
+            AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
+                if self.assistant_panel.regenerating_titles.remove(&thread_id) {
+                    self.assistant_panel.notice =
+                        Some("Codex did not return a title. Try again.".into());
+                }
             }
             AssistantServiceEvent::Harness(AssistantEvent::ToolCall(call)) => {
                 self.handle_assistant_tool(call, window, cx)
@@ -1710,6 +1859,8 @@ impl Qrow {
                     .retain(|conversation| conversation.thread_id != id);
                 self.assistant_panel.transcripts.remove(&id);
                 self.assistant_panel.unstarted_threads.remove(&id);
+                self.assistant_panel.regenerating_titles.remove(&id);
+                self.assistant_panel.title_history_reads.remove(&id);
                 if self.assistant.selected_thread.as_deref() == Some(&id) {
                     self.assistant.selected_thread = self
                         .assistant
@@ -1739,9 +1890,27 @@ impl Qrow {
                 id,
                 error,
             } => {
-                // The temporary title stays. Qrow tries again after the next reply.
                 if operation == Operation::GenerateTitle {
+                    if let Some(thread) = id.as_ref()
+                        && self.assistant_panel.regenerating_titles.remove(thread)
+                    {
+                        self.assistant_panel.notice =
+                            Some(format!("Could not regenerate the title: {error}"));
+                    }
+                    // The temporary title stays. Qrow tries again after the next reply.
                     return;
+                }
+                if operation == Operation::Read
+                    && let Some(thread) = id.as_ref()
+                    && self.assistant_panel.title_history_reads.remove(thread)
+                {
+                    self.assistant_panel.regenerating_titles.remove(thread);
+                    self.assistant_panel.notice =
+                        Some(format!("Could not regenerate the title: {error}"));
+                    // The conversation shows its own error when you open it.
+                    if self.assistant.selected_thread.as_ref() != Some(thread) {
+                        return;
+                    }
                 }
                 if operation == Operation::Rename {
                     self.assistant_panel.pending_rename = None;
@@ -2007,20 +2176,24 @@ impl Qrow {
                         conversations
                             .into_iter()
                             .filter(|conversation| {
-                                self.conversation_label(conversation)
-                                    .to_lowercase()
-                                    .contains(&search)
+                                conversation.title.to_lowercase().contains(&search)
                             })
                             .map(|conversation| {
                                 let id = conversation.thread_id.clone();
+                                let row = h_flex()
+                                    .id(SharedString::from(format!("assistant-thread-row-{id}")))
+                                    .w_full()
+                                    .h(self.ui_px(48.))
+                                    .flex_shrink_0();
                                 let selected =
                                     self.assistant.selected_thread.as_deref() == Some(&id);
-                                let label = self.conversation_label(conversation);
-                                Button::new(format!("assistant-thread-{id}"))
+                                let label = conversation.title.clone();
+                                let menu = self.conversation_menu(&id, cx);
+                                let button = Button::new(format!("assistant-thread-{id}"))
                                     .ghost()
                                     .small()
                                     .w_full()
-                                    .h(self.ui_px(48.))
+                                    .h_full()
                                     .justify_start()
                                     .accessibility_label(format!("Open conversation: {label}"))
                                     .child(
@@ -2047,7 +2220,10 @@ impl Qrow {
                                     })
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.select_assistant_thread(&id, window, cx);
-                                    }))
+                                    }));
+                                row.child(button)
+                                    .context_menu(move |popup, _, _| menu.build(popup))
+                                    .into_any_element()
                             }),
                     ),
             )
@@ -2212,15 +2388,8 @@ impl Qrow {
                             .tooltip("Conversation actions")
                             .disabled(self.assistant.selected_thread.is_none() || self.assistant_panel.active_turn.is_some())
                             .dropdown_menu({
-                                let rename = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.begin_assistant_rename(window, cx);
-                                }));
-                                let delete = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                    this.confirm_assistant_delete(window, cx);
-                                }));
-                                move |menu, _, _| menu
-                                    .item(PopupMenuItem::new("Rename…").on_click({let rename = rename.clone(); move |event, window, cx| rename(event, window, cx)}))
-                                    .item(PopupMenuItem::new("Delete…").on_click({let delete = delete.clone(); move |event, window, cx| delete(event, window, cx)}))
+                                let menu = self.conversation_menu(selected, cx);
+                                move |popup, _, _| menu.build(popup)
                             }),
                     )
                     .child(
@@ -2238,37 +2407,6 @@ impl Qrow {
                                 cx.notify();
                             })),
                     )
-            )
-            .when_some(
-                self.assistant_panel.rename_input.as_ref(),
-                |panel, input| {
-                    panel.child(
-                        h_flex()
-                            .px_3()
-                            .py_2()
-                            .gap_2()
-                            .child(Input::new(input).flex_1().aria_label("Conversation name"))
-                            .child(
-                                Button::new("assistant-save-rename")
-                                    .small()
-                                    .label("Save")
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.save_assistant_rename(cx)
-                                        }),
-                                    ),
-                            )
-                            .child(
-                                Button::new("assistant-cancel-rename")
-                                    .small()
-                                    .label("Cancel")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.assistant_panel.rename_input = None;
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                },
             )
             .when(matches!(self.assistant_panel.status, Status::Disconnected(_)), |panel| panel.child(
                 h_flex()

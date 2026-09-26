@@ -283,6 +283,10 @@ pub enum AssistantEvent {
         thread_id: String,
         title: String,
     },
+    /// Codex finished a title request without a usable title.
+    TitleFailed {
+        thread_id: String,
+    },
     ToolCall(ToolCall),
     UnsupportedRequest {
         request_id: Value,

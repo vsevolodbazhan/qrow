@@ -105,8 +105,17 @@ Codex in a separate, unsaved request. Codex returns a short title. Qrow shows
 this title in the pane header and in the thread list. This request uses the
 selected model. It does not include workspace context. If Codex cannot make a
 title, Qrow shows **New conversation** and tries again after the next reply.
-Open **Conversation actions** to rename or delete the current conversation. Qrow
-does not replace a title that you set. When you
+Open **Conversation actions** in the pane header to rename the current
+conversation, make a new title, or delete it. To use these actions on a
+conversation in the thread list, right-click it. You cannot use them on a
+conversation while Codex works on it. Two conversations can have the same title.
+**Rename…** opens the same dialog as a query tab rename. Type a title with 1 to
+120 characters and select **Rename** or press **⌘Enter**.
+Automatic title requests do not replace a title that you set. Select
+**Regenerate Title** to ask Codex for a new title from the conversation
+messages. This title replaces a title that you set. If the conversation is not
+open, Qrow first reads its messages from Codex. If Codex cannot make a title,
+Qrow keeps the current title and shows a notice. When you
 delete a conversation, Qrow asks Codex to remove it. This action does not
 change query tabs, SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text

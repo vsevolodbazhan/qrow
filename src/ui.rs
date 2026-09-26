@@ -59,7 +59,7 @@ actions!(
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
-        RenameTab,
+        SubmitRename,
         Quit
     ]
 );
@@ -80,7 +80,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
+        KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
     ]);
     set_menus(cx, false);
 }
@@ -1033,7 +1033,11 @@ impl Qrow {
     }
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
-        self.form.is_some() || self.settings_open || self.about_open || self.tab_form.is_some()
+        self.form.is_some()
+            || self.settings_open
+            || self.about_open
+            || self.tab_form.is_some()
+            || self.assistant_panel.rename_form.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1606,10 +1610,10 @@ impl Qrow {
             title,
             error: None,
         });
-        self.open_tab_rename_dialog(window, cx);
+        self.open_rename_dialog(tab_view::TAB_RENAME, window, cx);
         cx.notify();
     }
-    fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = &self.tab_form else {
             return;
         };

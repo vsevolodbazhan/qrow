@@ -817,10 +817,7 @@ final class Driver {
             try snapshot("assistant-before-font-change")
             try verifyAssistantFontSwitch()
             try click(wait("Conversation actions", role: kAXButtonRole))
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-            key(125) // Down selects Rename.
-            key(125) // Down selects Delete.
-            key(36)  // Return opens the confirmation.
+            try pressMenuItem("Delete…")
             try press("Delete")
             try waitStaleConversationRemoved()
             print("PASS: Assistant fonts persist and a missing Codex conversation can be deleted")
@@ -942,6 +939,106 @@ final class Driver {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
         print("PASS: Assistant appends a new SQL query, preserves the first query, and titles the conversation")
+    }
+    /// Waits until the saved workspace has these conversation titles and
+    /// title sources, in any order.
+    func waitSavedConversations(_ expected: [(String, String)]) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var saved: [[String: Any]] = []
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]] {
+                saved = conversations
+                let titles = conversations.map { "\($0["title"] ?? "")|\($0["title_source"] ?? "")" }.sorted()
+                if titles == expected.map({ "\($0.0)|\($0.1)" }).sorted() { return }
+            }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Saved conversations \(saved) did not match \(expected)")
+    }
+    func openConversationMenu(_ title: String) throws {
+        try contextMenu("Open conversation: \(title)", exact: true)
+    }
+    /// The conversation header menu and the thread list context menu rename,
+    /// regenerate titles, and delete conversations. Both renames use the
+    /// query tab rename dialog. Duplicate titles do not show Codex thread IDs.
+    func testAssistantConversationTitles() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Assistant message") == nil {
+            try press("Back to conversation")
+        }
+        let generated = "Title: Count sandbox schemas"
+        try fill("Assistant message", "Count sandbox schemas now")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try waitSavedConversations([(generated, "codex")])
+
+        try click(wait("Conversation actions", role: kAXButtonRole))
+        try pressMenuItem("Rename…")
+        let nameField = try wait("Conversation Name", role: kAXTextFieldRole)
+        try require(
+            attribute(nameField, kAXValueAttribute) as? String == generated,
+            "Rename form did not prefill the current conversation title"
+        )
+        // An empty name keeps the dialog open. GPUI does not publish the
+        // validation text in the macOS accessibility tree.
+        try fill("Conversation Name", "")
+        try press("Rename")
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        _ = try wait("Conversation Name", role: kAXTextFieldRole)
+        try waitSavedConversations([(generated, "codex")])
+        try snapshot("assistant-rename-dialog-error")
+        try fill("Conversation Name", "Custom title")
+        try press("Rename")
+        try waitGone("Conversation Name", timeout: 5)
+        try waitSavedConversations([("Custom title", "user")])
+        try click(wait("Conversation actions", role: kAXButtonRole))
+        _ = try wait("Regenerate Title", timeout: 5)
+        try snapshot("assistant-header-menu")
+        try pressMenuItem("Regenerate Title")
+        try waitSavedConversations([(generated, "codex")])
+
+        try press("New Conversation")
+        try fill("Assistant message", "Count sandbox schemas again")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try waitSavedConversations([(generated, "codex"), (generated, "codex")])
+        if find("Search conversations") == nil {
+            try press("Toggle conversation list")
+        }
+        _ = try waitExact("Open conversation: \(generated)", timeout: 10)
+        try require(find("\(generated) ·") == nil, "The thread list showed a Codex thread ID")
+        try snapshot("assistant-duplicate-titles")
+
+        try openConversationMenu(generated)
+        try pressMenuItem("Rename…")
+        _ = try waitInput("Conversation Name")
+        try snapshot("assistant-rename-dialog")
+        try press("Cancel")
+        try waitGone("Conversation Name", timeout: 5)
+        try openConversationMenu(generated)
+        try pressMenuItem("Rename…")
+        try fill("Conversation Name", "Listed title")
+        try press("Rename")
+        try waitGone("Conversation Name", timeout: 5)
+        _ = try waitExact("Open conversation: Listed title", timeout: 10)
+        try waitSavedConversations([(generated, "codex"), ("Listed title", "user")])
+        try snapshot("assistant-list-renamed")
+        try openConversationMenu("Listed title")
+        _ = try wait("Regenerate Title", timeout: 5)
+        try snapshot("assistant-list-menu")
+        try pressMenuItem("Regenerate Title")
+        try waitSavedConversations([(generated, "codex"), (generated, "codex")])
+        try waitGone("Open conversation: Listed title", timeout: 10)
+        try openConversationMenu(generated)
+        try pressMenuItem("Delete…")
+        try press("Delete")
+        try waitSavedConversations([(generated, "codex")])
+        print("PASS: Assistant conversation menus rename, regenerate titles, and delete conversations without thread IDs in the list")
     }
     func seedAssistantStatementWorkspace() throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
@@ -1730,6 +1827,10 @@ do {
                 try driver.seedAssistantLayoutWorkspace()
                 try driver.start()
                 try driver.testAssistantAppend()
+            } else if CommandLine.arguments.contains("--assistant-titles-only") {
+                try driver.seedAssistantLayoutWorkspace()
+                try driver.start()
+                try driver.testAssistantConversationTitles()
             } else if CommandLine.arguments.contains("--assistant-statement-only") {
                 try driver.seedAssistantStatementWorkspace()
                 try driver.start()
@@ -1769,6 +1870,7 @@ do {
         if CommandLine.arguments.contains("--editor-highlight-only")
             || CommandLine.arguments.contains("--assistant-layout-only")
             || CommandLine.arguments.contains("--assistant-append-only")
+            || CommandLine.arguments.contains("--assistant-titles-only")
             || CommandLine.arguments.contains("--assistant-statement-only")
             || CommandLine.arguments.contains("--assistant-retarget-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")

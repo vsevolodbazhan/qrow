@@ -151,6 +151,22 @@ connects. It checks the exact SQL in each approval card. One card shows the
 latest appended query. The other shows an earlier query that the assistant
 selected by its byte range.
 
+To check the conversation actions, use the package steps in the assistant font
+check above. Use a new, empty workspace directory. Replace the last command
+with:
+
+```sh
+target/e2e-tools/native-driver --assistant-titles-only
+```
+
+The driver submits an empty name in the rename dialog and checks that the
+dialog stays open. It renames a conversation and makes a new title from the
+pane header. It starts a second conversation with the same generated title and
+checks that the thread list does not show thread IDs. Then it uses the thread
+list context menu to cancel a rename, rename a conversation, make a new title,
+and delete a conversation. The driver reads the saved workspace to check each
+title and title source.
+
 To check a tab rename and selection change during an assistant turn, use the
 same package steps and a new, empty workspace directory. Run:
 

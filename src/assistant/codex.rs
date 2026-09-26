@@ -425,13 +425,14 @@ impl CodexHarness {
                         .and_then(Value::as_array)
                         .and_then(|items| items.iter().rev().find_map(agent_text));
                 }
-                let Some(title) = job
-                    .text
-                    .as_deref()
-                    .and_then(generated_title)
-                    .filter(|_| !job.cancelled)
-                else {
+                // A rename cancels the job and replaces its title.
+                if job.cancelled {
                     return Ok(None);
+                }
+                let Some(title) = job.text.as_deref().and_then(generated_title) else {
+                    return Ok(Some(AssistantEvent::TitleFailed {
+                        thread_id: job.target,
+                    }));
                 };
                 // Qrow keeps its own copy of the title, so a Codex refusal to
                 // store it does not hide the title.
@@ -1719,6 +1720,48 @@ done
         (0..20)
             .filter_map(|_| harness.next_event(Duration::from_millis(20)).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn title_generation_reports_a_reply_without_a_title() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+        *'"method":"thread/start"'*)
+            printf '{"id":%s,"result":{"thread":{"id":"title-1","name":null,"updatedAt":1,"turns":[]}}}\n' "$id"
+            ;;
+        *'"method":"turn/start"'*)
+            printf '{"id":%s,"result":{"turn":{"id":"turn-t","status":"inProgress","items":[]}}}\n' "$id"
+            printf '%s\n' '{"method":"item/completed","params":{"threadId":"title-1","turnId":"turn-t","item":{"type":"agentMessage","text":"{\"title\":\" ... \"}"}}}'
+            printf '%s\n' '{"method":"turn/completed","params":{"threadId":"title-1","turn":{"id":"turn-t","status":"completed","items":[]}}}'
+            ;;
+        *'"method":"thread/unsubscribe"'*) printf '{"id":%s,"result":{"status":"unsubscribed"}}\n' "$id" ;;
+    esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+        harness
+            .generate_title(TitleRequest {
+                thread_id: "thread-1".into(),
+                messages: vec![("user", "Show the newest orders".into())],
+                model: None,
+                reasoning_effort: None,
+            })
+            .unwrap();
+        assert_eq!(
+            drain_events(&mut harness),
+            vec![AssistantEvent::TitleFailed {
+                thread_id: "thread-1".into()
+            }]
+        );
+        harness.shutdown().unwrap();
     }
 
     #[test]
