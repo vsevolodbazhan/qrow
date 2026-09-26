@@ -2274,6 +2274,7 @@ impl Qrow {
                                         Button::new("assistant-send")
                                             .icon(AssetIconName::Send)
                                             .label(if mode_is_run { "Send · Run" } else { "Send · Ask" })
+                                            .pr_0()
                                             .tooltip(if mode_is_run {
                                                 "Send message · run assistant queries automatically"
                                             } else {
