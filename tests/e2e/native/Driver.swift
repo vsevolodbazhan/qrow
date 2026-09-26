@@ -718,6 +718,8 @@ final class Driver {
         }
         try waitGone("Codex executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Toggle Assistant")
+        try require(find("New Connection") != nil, "Opening the assistant hid the Connections sidebar")
         if fontOnly {
             _ = try wait("Assistant model: Synthetic Model", timeout: 20)
             if find("Search conversations") == nil {

@@ -95,6 +95,9 @@ shows a notice.
 
 ## Pane and connection state
 
+Opening the pane does not hide the Connections sidebar. In a small window, the
+pane uses its minimum width. Press **⌘B** to hide the sidebar if you need more
+space.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop Codex or a database query.

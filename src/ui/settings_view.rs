@@ -424,10 +424,6 @@ impl Qrow {
             self.settings.assistant.enabled = false;
             set_menus(cx, false);
             self.assistant_panel.open = false;
-            if self.assistant_panel.auto_hidden_sidebar {
-                self.sidebar = true;
-                self.assistant_panel.auto_hidden_sidebar = false;
-            }
             self.assistant_panel.unread = false;
             self.assistant_panel.active_turn = None;
             self.assistant_panel.target = None;

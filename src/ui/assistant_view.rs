@@ -307,7 +307,6 @@ pub(super) struct AssistantPanelState {
     pub pending_query: Option<PendingQuery>,
     pub scroll: ScrollHandle,
     pub resizing: Option<(Point<Pixels>, Pixels)>,
-    pub auto_hidden_sidebar: bool,
     pub unread: bool,
     pub notice: Option<String>,
     pub previous_focus: Option<FocusHandle>,
@@ -436,7 +435,6 @@ impl AssistantPanelState {
             pending_query: None,
             scroll: ScrollHandle::new(),
             resizing: None,
-            auto_hidden_sidebar: false,
             unread: false,
             notice: None,
             previous_focus: None,
@@ -863,24 +861,12 @@ impl Qrow {
         self.assistant_panel.open = !self.assistant_panel.open;
         if self.assistant_panel.open {
             self.assistant_panel.previous_focus = window.focused(cx);
-            let needed =
-                self.sidebar_width + self.ui_px(self.settings.assistant.panel_width + 420.);
-            if self.sidebar && window.viewport_size().width < needed {
-                self.sidebar = false;
-                self.assistant_panel.auto_hidden_sidebar = true;
-            }
             self.assistant_panel.unread = false;
             self.start_assistant(cx);
             self.assistant_panel
                 .composer
                 .update(cx, |composer, cx| composer.focus(window, cx));
-        } else if self.assistant_panel.auto_hidden_sidebar {
-            self.sidebar = true;
-            self.assistant_panel.auto_hidden_sidebar = false;
-        }
-        if !self.assistant_panel.open
-            && let Some(focus) = self.assistant_panel.previous_focus.take()
-        {
+        } else if let Some(focus) = self.assistant_panel.previous_focus.take() {
             focus.focus(window, cx);
         }
         cx.notify();

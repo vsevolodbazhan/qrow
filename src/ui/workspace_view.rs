@@ -672,7 +672,6 @@ impl Render for Qrow {
             )
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
                 this.sidebar = !this.sidebar;
-                this.assistant_panel.auto_hidden_sidebar = false;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
