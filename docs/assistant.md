@@ -38,11 +38,25 @@ the placeholder if the turn ends or fails without a reply.
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
 
+Your messages show at the right. Assistant replies and errors use the full width
+of the conversation. If a table is too wide for a reply, its columns become
+narrower and their text wraps. If the columns are at their minimum width, you
+can scroll the table horizontally.
+
 Each Qrow tool call shows as a card across the full width of the conversation.
-The card is collapsed and shows only the tool action, for example
-**Edited SQL · Query 1**. Select the card to show or hide the tool arguments and
-the result as plain text. A spinner shows while an assistant query runs. A
-failed tool call shows an error icon and an error color.
+The card is collapsed. It shows the tool icon, the tool name, for example
+**Edit query** or **Run query**, and the state at the right:
+
+- A spinner and the current step, for example **Executing**, show while a
+  query runs.
+- A finished query shows its downloaded rows and duration. **500+ rows** means
+  that more rows are available.
+- **Failed** and an error icon show when the tool call fails.
+- **Cancelled** shows when Qrow does not run a query request, for example when
+  you cancel it.
+
+Select the card to show or hide the query tab, the tool arguments, and the
+result. The arguments and result are plain text.
 
 Use **Settings… → Appearance → Assistant** to change the message font family,
 font size, and line height. These settings do not change the message field or

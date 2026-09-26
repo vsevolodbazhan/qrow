@@ -43,6 +43,29 @@ pending_edit = None
 pending_run = None
 
 
+def wide_table():
+    # The rows match a reply that the transcript cut off. The driver's table
+    # check depends on these text widths.
+    rows = [
+        (2866700, "16:09:01", "yandex.org"),
+        (2866682, "16:30:38", "sbscr"),
+        (2866652, "16:13:34", "yandex.org"),
+        (2866964, "16:38:26", "yandex.org"),
+        (2866859, "16:06:59", "sbscr"),
+        (2866801, "16:55:37", "yandex.org"),
+        (2866661, "16:15:20", "google.org"),
+        (2866651, "16:11:08", "yandex.org"),
+        (2866799, "16:59:18", "yandex.org"),
+        (2866762, "16:34:18", "google.org"),
+    ]
+    table = "".join(f"| {click} | 2010-02-19 {time} | gate | {marker} |\n" for click, time, marker in rows)
+    return (
+        "Ran a synthetic wide table query: `SELECT * FROM avia.clicks LIMIT 10;` on the Clicks tab. "
+        "It returned 10 rows. Here\u2019s a compact preview; `LIMIT 10` does not guarantee row order.\n\n"
+        "| click_id | created_at | type | marker |\n| --: | --- | --- | --- |\n" + table
+    )
+
+
 def send(message):
     print(json.dumps(message, separators=(",", ":")), flush=True)
 
@@ -205,6 +228,8 @@ for line in sys.stdin:
             answer = (
                 "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
                 if message.startswith("Show many lines")
+                else wide_table()
+                if message.startswith("Show a wide table")
                 else (
                     "**I can help with this query.**\n\n"
                     "Use `SELECT 1` to check the selected tab.\n\n"

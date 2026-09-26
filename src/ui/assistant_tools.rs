@@ -1,4 +1,6 @@
-use super::assistant_view::{PendingQuery, PendingQueryKind, Speaker, TranscriptEntry};
+use super::assistant_view::{
+    PendingQuery, PendingQueryKind, ToolActivity, ToolKind, ToolState, TranscriptEntry,
+};
 use super::*;
 use qrow::assistant::{
     ToolCall, ToolResult,
@@ -86,6 +88,46 @@ fn success(value: Value) -> ToolResult {
     }
 }
 
+/// Names the current step of a running query from the tab status, for example
+/// `Executing` for `Executing…`. The spinner already shows that work continues.
+fn running_step(status: &str) -> String {
+    let step = status
+        .split(" · ")
+        .next()
+        .unwrap_or(status)
+        .trim_end_matches('…');
+    if step.is_empty() {
+        "Running".into()
+    } else {
+        step.into()
+    }
+}
+
+/// Summarizes a finished query as its downloaded rows and duration.
+fn query_outcome(rows: usize, more: bool, elapsed: Option<Duration>) -> String {
+    let rows = match (rows, more) {
+        (1, false) => "1 row".to_owned(),
+        (rows, false) => format!("{rows} rows"),
+        (rows, true) => format!("{rows}+ rows"),
+    };
+    match elapsed {
+        Some(elapsed) => format!("{rows} · {:.2} s", elapsed.as_secs_f64()),
+        None => rows,
+    }
+}
+
+/// Returns the error message of a failed tool result as the first detail line.
+fn error_line(result: &ToolResult) -> String {
+    if result.success {
+        return String::new();
+    }
+    result
+        .content
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .map_or_else(String::new, |message| format!("Error: {message}\n"))
+}
+
 fn parse<T: for<'de> Deserialize<'de>>(value: Value) -> Result<T, ToolResult> {
     serde_json::from_value(value).map_err(|_| {
         failure(
@@ -147,54 +189,33 @@ impl Qrow {
         let name = call.name.clone();
         let result = self.dispatch_assistant_tool(&call, window, cx);
         if let Some(result) = result {
-            let action = match name.as_str() {
-                "get_workspace_context" => "Read workspace context",
-                "read_tab_sql" => "Read SQL",
-                "edit_selected_tab_sql" => "Edited SQL",
-                "cancel_selected_tab_query" => "Requested query cancellation",
-                "get_query_status" => "Checked query status",
-                "read_results" => "Read result rows",
-                "fetch_more_results" => "Fetched more result rows",
-                "read_query_logs" => "Read query Logs",
-                _ => "Used assistant tool",
-            };
             let target = call
                 .arguments
                 .get("tab_id")
                 .and_then(Value::as_str)
                 .and_then(|id| Uuid::parse_str(id).ok())
                 .and_then(|id| self.tabs.iter().find(|tab| tab.saved.id == id))
-                .map(|tab| tab.saved.title.as_str());
-            let label = format!(
-                "{action}{}{}",
-                target.map_or("", |_| " · "),
-                target.unwrap_or("")
-            );
-            let label = if result.success {
-                label
-            } else {
-                format!("{label} failed")
-            };
+                .map(|tab| tab.saved.title.clone());
             let (detail, _) = bound_text(&format!(
-                "Arguments:\n{}\nResult:\n{}",
-                call.arguments, result.content
+                "{}Arguments:\n{}\nResult:\n{}",
+                error_line(&result),
+                call.arguments,
+                result.content
             ));
+            let tool = ToolActivity {
+                kind: ToolKind::from_name(&name),
+                target,
+                state: if result.success {
+                    ToolState::Done(None)
+                } else {
+                    ToolState::Failed
+                },
+            };
             self.assistant_panel
                 .transcripts
                 .entry(call.thread_id.clone())
                 .or_default()
-                .push(
-                    TranscriptEntry::new(
-                        if result.success {
-                            Speaker::Activity
-                        } else {
-                            Speaker::Error
-                        },
-                        label,
-                        Some(call.turn_id.clone()),
-                    )
-                    .with_detail(detail),
-                );
+                .push(TranscriptEntry::tool(tool, call.turn_id.clone()).with_detail(detail));
             self.answer_assistant_call(call, result.success, result.content, cx);
         }
         cx.notify();
@@ -372,18 +393,7 @@ impl Qrow {
 
     pub(super) fn cancel_assistant_approval(&mut self, cx: &mut Context<Self>) {
         if let Some(pending) = self.assistant_panel.pending_query.take() {
-            self.assistant_panel
-                .transcripts
-                .entry(pending.call.thread_id.clone())
-                .or_default()
-                .push(
-                    TranscriptEntry::new(
-                        Speaker::Activity,
-                        "Query request cancelled".into(),
-                        Some(pending.call.turn_id.clone()),
-                    )
-                    .with_detail(bound_text(&format!("SQL:\n{}", pending.sql)).0),
-                );
+            self.record_assistant_query_cancelled(&pending, "You cancelled this query request.");
             self.answer_assistant_call(
                 pending.call,
                 false,
@@ -461,23 +471,55 @@ impl Qrow {
         self.complete_assistant_query(cx);
     }
 
+    /// Describes an assistant query request as a tool call card.
+    pub(super) fn assistant_query_tool(
+        &self,
+        pending: &PendingQuery,
+        state: ToolState,
+    ) -> ToolActivity {
+        ToolActivity {
+            kind: match pending.kind {
+                PendingQueryKind::Run => ToolKind::RunQuery,
+                PendingQueryKind::Fetch => ToolKind::FetchRows,
+            },
+            target: self
+                .tabs
+                .iter()
+                .find(|tab| tab.saved.id == pending.tab_id)
+                .map(|tab| tab.saved.title.clone()),
+            state,
+        }
+    }
+
+    /// Records a query request that Qrow did not run, with the reason.
+    pub(super) fn record_assistant_query_cancelled(
+        &mut self,
+        pending: &PendingQuery,
+        reason: &str,
+    ) {
+        let entry = TranscriptEntry::tool(
+            self.assistant_query_tool(pending, ToolState::Cancelled),
+            pending.call.turn_id.clone(),
+        )
+        .with_detail(bound_text(&format!("{reason}\nQuery:\n{}", pending.sql)).0);
+        self.assistant_panel
+            .transcripts
+            .entry(pending.call.thread_id.clone())
+            .or_default()
+            .push(entry);
+    }
+
     fn record_assistant_query_started(&mut self, cx: &mut Context<Self>) {
         let Some(pending) = self.assistant_panel.pending_query.as_ref() else {
             return;
         };
         let thread = pending.call.thread_id.clone();
         let turn = pending.call.turn_id.clone();
-        let tab = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id);
-        let title = tab.map_or("Query tab", |tab| tab.saved.title.as_str());
-        let label = match pending.kind {
-            PendingQueryKind::Run => format!("Running in {title} · Preparing"),
-            PendingQueryKind::Fetch => format!("Fetching more rows in {title}"),
-        };
-        let detail = bound_text(&format!("SQL:\n{}", pending.sql)).0;
+        let tool = self.assistant_query_tool(pending, ToolState::Running("Preparing".into()));
+        let detail = bound_text(&format!("Query:\n{}", pending.sql)).0;
         let entries = self.assistant_panel.transcripts.entry(thread).or_default();
         let index = entries.len();
-        entries
-            .push(TranscriptEntry::new(Speaker::Activity, label, Some(turn)).with_detail(detail));
+        entries.push(TranscriptEntry::tool(tool, turn).with_detail(detail));
         if let Some(pending) = &mut self.assistant_panel.pending_query {
             pending.activity_index = Some(index);
         }
@@ -494,19 +536,15 @@ impl Qrow {
         let Some(tab) = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id) else {
             return;
         };
-        let verb = match pending.kind {
-            PendingQueryKind::Run => "Running",
-            PendingQueryKind::Fetch => "Fetching rows",
-        };
-        let label = format!("{verb} in {} · {}", tab.saved.title, tab.status);
+        let state = ToolState::Running(running_step(&tab.status));
         if let Some(entry) = self
             .assistant_panel
             .transcripts
             .get_mut(&pending.call.thread_id)
             .and_then(|entries| entries.get_mut(index))
-            && entry.text != label
+            && entry.tool.as_ref().is_some_and(|tool| tool.state != state)
         {
-            entry.text = label;
+            entry.set_tool_state(state);
             cx.notify();
         }
     }
@@ -533,21 +571,32 @@ impl Qrow {
             "columns": results.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
             "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
             "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
+        let state = if ok {
+            ToolState::Done(Some(query_outcome(
+                results.rows.len(),
+                tab.more,
+                tab.elapsed,
+            )))
+        } else if tab.status.starts_with("Cancelled") {
+            ToolState::Cancelled
+        } else {
+            ToolState::Failed
+        };
+        let status = (!ok).then(|| format!("Status: {}\n", tab.status));
         let pending = self.assistant_panel.pending_query.take().unwrap();
-        let entry = TranscriptEntry::new(
-            if ok {
-                Speaker::Activity
-            } else {
-                Speaker::Error
-            },
-            if ok {
-                format!("Query finished in {}", tab.saved.title)
-            } else {
-                tab.status.clone()
-            },
-            Some(pending.call.turn_id.clone()),
+        let entry = TranscriptEntry::tool(
+            self.assistant_query_tool(&pending, state),
+            pending.call.turn_id.clone(),
         )
-        .with_detail(bound_text(&format!("SQL:\n{}\nResult:\n{}", pending.sql, content)).0);
+        .with_detail(
+            bound_text(&format!(
+                "{}Query:\n{}\nResult:\n{}",
+                status.unwrap_or_default(),
+                pending.sql,
+                content
+            ))
+            .0,
+        );
         let entries = self
             .assistant_panel
             .transcripts

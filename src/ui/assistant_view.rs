@@ -112,19 +112,36 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
-    fn tool_calls_and_their_failures_render_as_tool_cards() {
-        let turn = Some("turn-1".to_owned());
-        let entry = |speaker| TranscriptEntry::new(speaker, "text".into(), turn.clone());
-        assert!(entry(Speaker::Activity).is_tool_activity());
-        assert!(!entry(Speaker::Activity).expanded);
-        assert!(
-            entry(Speaker::Error)
-                .with_detail("Result".into())
-                .is_tool_activity()
+    fn tool_cards_keep_the_tool_name_and_show_the_state_separately() {
+        let tool = |kind, state| ToolActivity {
+            kind,
+            target: Some("Clicks".into()),
+            state,
+        };
+        let mut entry = TranscriptEntry::tool(
+            tool(ToolKind::RunQuery, ToolState::Running("Preparing".into())),
+            "turn-1".into(),
         );
-        assert!(!entry(Speaker::Error).is_tool_activity());
-        assert!(!entry(Speaker::User).is_tool_activity());
-        assert!(!entry(Speaker::Assistant).is_tool_activity());
+        assert!(!entry.expanded);
+        assert_eq!(entry.text, "Run query · Preparing");
+        entry.set_tool_state(ToolState::Done(Some("3 rows · 0.20 s".into())));
+        assert_eq!(entry.text, "Run query · 3 rows · 0.20 s");
+        entry.set_tool_state(ToolState::Failed);
+        assert_eq!(entry.text, "Run query · Failed");
+        let edit = TranscriptEntry::tool(
+            tool(
+                ToolKind::from_name("edit_selected_tab_sql"),
+                ToolState::Done(None),
+            ),
+            "turn-1".into(),
+        );
+        assert_eq!(edit.text, "Edit query");
+        assert_eq!(ToolKind::from_name("unknown_tool"), ToolKind::Other);
+        assert!(
+            TranscriptEntry::new(Speaker::Error, "Failed".into(), None)
+                .tool
+                .is_none()
+        );
     }
 
     #[::core::prelude::v1::test]
@@ -222,12 +239,116 @@ pub(super) enum Speaker {
     Error,
 }
 
+/// A Qrow tool that the assistant can call. The name stays the same while the
+/// call runs and after it ends. The card state shows the progress and outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ToolKind {
+    Workspace,
+    ReadQuery,
+    EditQuery,
+    RunQuery,
+    CancelQuery,
+    QueryStatus,
+    ReadResults,
+    FetchRows,
+    ReadLogs,
+    Other,
+}
+
+impl ToolKind {
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "get_workspace_context" => Self::Workspace,
+            "read_tab_sql" => Self::ReadQuery,
+            "edit_selected_tab_sql" => Self::EditQuery,
+            "run_selected_tab_query" => Self::RunQuery,
+            "cancel_selected_tab_query" => Self::CancelQuery,
+            "get_query_status" => Self::QueryStatus,
+            "read_results" => Self::ReadResults,
+            "fetch_more_results" => Self::FetchRows,
+            "read_query_logs" => Self::ReadLogs,
+            _ => Self::Other,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Workspace => "Read workspace",
+            Self::ReadQuery => "Read query",
+            Self::EditQuery => "Edit query",
+            Self::RunQuery => "Run query",
+            Self::CancelQuery => "Cancel query",
+            Self::QueryStatus => "Check query status",
+            Self::ReadResults => "Read results",
+            Self::FetchRows => "Fetch more rows",
+            Self::ReadLogs => "Read logs",
+            Self::Other => "Use tool",
+        }
+    }
+
+    fn icon(self) -> AssetIconName {
+        match self {
+            Self::Workspace => AssetIconName::LayoutDashboard,
+            Self::ReadQuery => AssetIconName::FileText,
+            Self::EditQuery => AssetIconName::Pencil,
+            Self::RunQuery => AssetIconName::Play,
+            Self::CancelQuery => AssetIconName::CircleStop,
+            Self::QueryStatus => AssetIconName::Activity,
+            Self::ReadResults => AssetIconName::Table,
+            Self::FetchRows => AssetIconName::ListPlus,
+            Self::ReadLogs => AssetIconName::ScrollText,
+            Self::Other => AssetIconName::SquareTerminal,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum ToolState {
+    /// The call is in progress. The text names the current step.
+    Running(String),
+    /// The call succeeded. The optional text is a short outcome.
+    Done(Option<String>),
+    Failed,
+    /// Qrow did not run the call, for example because the user declined it.
+    Cancelled,
+}
+
+impl ToolState {
+    fn label(&self) -> Option<&str> {
+        match self {
+            Self::Running(step) => Some(step),
+            Self::Done(outcome) => outcome.as_deref(),
+            Self::Failed => Some("Failed"),
+            Self::Cancelled => Some("Cancelled"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ToolActivity {
+    pub kind: ToolKind,
+    /// The query tab the call used. The expanded card shows it.
+    pub target: Option<String>,
+    pub state: ToolState,
+}
+
+impl ToolActivity {
+    /// Matches the collapsed card header: the tool name and its state.
+    fn label(&self) -> String {
+        match self.state.label() {
+            Some(state) => format!("{} · {state}", self.kind.title()),
+            None => self.kind.title().to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct TranscriptEntry {
     id: Uuid,
     pub speaker: Speaker,
     pub text: String,
     pub turn_id: Option<String>,
+    pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
     pub expanded: bool,
 }
@@ -239,9 +360,16 @@ impl TranscriptEntry {
             speaker,
             text,
             turn_id,
+            tool: None,
             detail: None,
             expanded: false,
         }
+    }
+
+    pub fn tool(tool: ToolActivity, turn_id: String) -> Self {
+        let mut entry = Self::new(Speaker::Activity, tool.label(), Some(turn_id));
+        entry.tool = Some(tool);
+        entry
     }
 
     pub fn with_detail(mut self, detail: String) -> Self {
@@ -249,9 +377,12 @@ impl TranscriptEntry {
         self
     }
 
-    /// Tool calls and their failures render as collapsible cards, not bubbles.
-    fn is_tool_activity(&self) -> bool {
-        self.speaker == Speaker::Activity || self.speaker == Speaker::Error && self.detail.is_some()
+    /// Replaces the tool state and keeps the accessible text in step with it.
+    pub fn set_tool_state(&mut self, state: ToolState) {
+        if let Some(tool) = &mut self.tool {
+            tool.state = state;
+            self.text = tool.label();
+        }
     }
 }
 
@@ -1063,15 +1194,10 @@ impl Qrow {
             .is_some_and(|pending| !pending.started)
             && let Some(pending) = self.assistant_panel.pending_query.take()
         {
-            self.assistant_panel
-                .transcripts
-                .entry(pending.call.thread_id.clone())
-                .or_default()
-                .push(TranscriptEntry::new(
-                    Speaker::Activity,
-                    "Query approval replaced by a new instruction".into(),
-                    Some(pending.call.turn_id.clone()),
-                ));
+            self.record_assistant_query_cancelled(
+                &pending,
+                "A new instruction replaced this query request.",
+            );
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
         self.assistant_panel.unstarted_threads.remove(&thread_id);
@@ -1429,18 +1555,10 @@ impl Qrow {
                             pending.detached = true;
                         }
                     } else if let Some(pending) = self.assistant_panel.pending_query.take() {
-                        self.assistant_panel
-                            .transcripts
-                            .entry(thread_id.clone())
-                            .or_default()
-                            .push(
-                                TranscriptEntry::new(
-                                    Speaker::Activity,
-                                    "Query approval cancelled because the turn ended".into(),
-                                    Some(turn.id.clone()),
-                                )
-                                .with_detail(bound_text(&pending.sql).0),
-                            );
+                        self.record_assistant_query_cancelled(
+                            &pending,
+                            "The turn ended before the query ran.",
+                        );
                     }
                 }
                 self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
@@ -1630,50 +1748,44 @@ impl Qrow {
         thread: &str,
         index: usize,
         entry: &TranscriptEntry,
+        tool: &ToolActivity,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let failed = entry.speaker == Speaker::Error;
-        let running = self
-            .assistant_panel
-            .pending_query
-            .as_ref()
-            .is_some_and(|pending| {
-                pending.started
-                    && pending.activity_index == Some(index)
-                    && pending.call.thread_id == thread
-            });
         let muted = cx.theme().muted_foreground;
-        let accessible_label = format!(
-            "{}: {}",
-            if failed {
-                "Assistant error"
-            } else {
-                "Assistant activity"
-            },
-            entry.text
-        );
+        let destructive = cx.theme().semantic_tokens().colors.destructive;
+        let accessible_label = format!("Tool call: {}", entry.text);
         let summary = h_flex()
             .flex_1()
             .min_w_0()
             .gap_1p5()
-            .text_color(if failed {
-                cx.theme().semantic_tokens().colors.destructive
-            } else {
-                muted
-            })
-            .when(running, |row| {
-                row.child(Spinner::new().xsmall().color(muted))
-            })
-            .when(failed, |row| {
-                row.child(Icon::new(IconName::CircleX).xsmall())
+            .text_color(muted)
+            .map(|row| match tool.state {
+                ToolState::Running(_) => row.child(Spinner::new().xsmall().color(muted)),
+                ToolState::Failed => row.child(
+                    Icon::new(IconName::CircleX)
+                        .xsmall()
+                        .text_color(destructive),
+                ),
+                _ => row.child(Icon::new(tool.kind.icon()).xsmall()),
             })
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .whitespace_normal()
-                    .child(entry.text.clone()),
-            );
+                    .flex_none()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(tool.kind.title()),
+            )
+            .child(div().flex_1())
+            .when_some(tool.state.label().map(str::to_owned), |row, state| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_xs()
+                        .when(tool.state == ToolState::Failed, |label| {
+                            label.text_color(destructive)
+                        })
+                        .child(state),
+                )
+            });
         let header = if entry.detail.is_some() {
             let id = entry.id;
             let thread = thread.to_owned();
@@ -1730,22 +1842,39 @@ impl Qrow {
             .child(header)
             .when_some(entry.detail.as_ref(), |card, detail| {
                 card.content(
-                    div()
-                        .id(format!("assistant-tool-detail-{}", entry.id))
-                        .role(Role::Paragraph)
-                        .aria_label(detail.clone())
-                        .max_h_40()
-                        .overflow_y_scroll()
-                        .overflow_x_scroll()
+                    v_flex()
                         .border_t_1()
                         .border_color(cx.theme().border)
-                        .px_2()
-                        .py_1p5()
-                        .font_family(self.settings.editor_font_family.clone())
-                        .text_xs()
+                        .when_some(tool.target.clone(), |content, target| {
+                            content.child(
+                                h_flex()
+                                    .id(format!("assistant-tool-tab-{}", entry.id))
+                                    .role(Role::Paragraph)
+                                    .aria_label(format!("Tab: {target}"))
+                                    .px_2()
+                                    .pt_1p5()
+                                    .gap_1p5()
+                                    .text_xs()
+                                    .child(div().flex_none().text_color(muted).child("Tab"))
+                                    .child(div().min_w_0().text_ellipsis().child(target)),
+                            )
+                        })
                         .child(
-                            SelectableText::new("detail", detail.clone())
-                                .document_order(index as u64 * 2 + 1),
+                            div()
+                                .id(format!("assistant-tool-detail-{}", entry.id))
+                                .role(Role::Paragraph)
+                                .aria_label(detail.clone())
+                                .max_h_40()
+                                .overflow_y_scroll()
+                                .overflow_x_scroll()
+                                .px_2()
+                                .py_1p5()
+                                .font_family(self.settings.editor_font_family.clone())
+                                .text_xs()
+                                .child(
+                                    SelectableText::new("detail", detail.clone())
+                                        .document_order(index as u64 * 2 + 1),
+                                ),
                         ),
                 )
             })
@@ -2144,8 +2273,8 @@ impl Qrow {
                             .flatten()
                             .enumerate()
                             .map(|(index, entry)| {
-                                if entry.is_tool_activity() {
-                                    return self.assistant_tool_entry(selected, index, entry, cx);
+                                if let Some(tool) = &entry.tool {
+                                    return self.assistant_tool_entry(selected, index, entry, tool, cx);
                                 }
                                 let mut table_style = StyleRefinement::default();
                                 table_style.overflow.x = Some(Overflow::Scroll);
@@ -2175,14 +2304,20 @@ impl Qrow {
                                     Speaker::Activity => BubbleVariant::Outline,
                                     Speaker::Error => BubbleVariant::Destructive,
                                 };
-                                // Constrain the column before Markdown measures its wrapped
-                                // height. A cap on the bubble alone can leave its height stale.
+                                // Give every level a definite width before Markdown measures
+                                // its wrapped height. A shrink-to-fit bubble measures a table at
+                                // one width and draws it at another, so the transcript clips it.
+                                // Replies use the full width, as tool cards do.
+                                let full_width = entry.speaker != Speaker::User;
                                 Message::new().flex_shrink_0().alignment(alignment).content(
-                                    MessageContent::new().w(relative(0.8)).bubble(
+                                    MessageContent::new()
+                                        .map(|content| if full_width { content.w_full() } else { content.w(relative(0.8)) })
+                                        .bubble(
                                         Bubble::new()
                                             .with_variant(variant)
                                             .max_w_full()
-                                            .content(BubbleContent::new().text_base())
+                                            .when(full_width, |bubble| bubble.w_full())
+                                            .content(BubbleContent::new().text_base().when(full_width, |content| content.w_full()))
                                             .child(
                                         div()
                                             .id(format!("assistant-entry-{}", entry.id))

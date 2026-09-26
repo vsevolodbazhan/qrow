@@ -115,12 +115,12 @@ func scrollDown(_ element: AXUIElement) throws {
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
-func scrollUpAbove(_ element: AXUIElement) throws {
+func scrollUpAbove(_ element: AXUIElement, by distance: Int32 = 1200) throws {
     let (point, extent) = try elementBounds(element)
     let location = CGPoint(x: point.x + extent.width / 2, y: point.y - 120)
     let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: location, mouseButton: .left)!
     move.post(tap: .cghidEventTap)
-    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 1200, wheel2: 0, wheel3: 0)!
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: distance, wheel2: 0, wheel3: 0)!
     scroll.location = location
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
@@ -848,16 +848,18 @@ final class Driver {
         _ = try wait("I updated the SQL.", timeout: 20)
         try waitInputValue("SQL Editor", "SELECT 1")
         // Tool calls are full-width cards that start collapsed.
-        let toolCard = try wait("Assistant activity: Edited SQL", timeout: 5)
+        let toolCard = try waitExact("Tool call: Edit query", timeout: 5)
         try require(find("Arguments:") == nil, "The tool call opened expanded")
+        try require(find("Tab: Query 1") == nil, "The collapsed tool call showed its tab")
         let (_, toolSize) = try elementBounds(toolCard)
         let (_, composerSize) = try elementBounds(try waitInput("Assistant message"))
         try require(toolSize.width >= composerSize.width * 0.9, "The tool call card did not use the full transcript width")
         try snapshot("assistant")
         try activate(toolCard)
         _ = try wait("Arguments:", timeout: 5)
+        _ = try wait("Tab: Query 1", timeout: 5)
         try snapshot("assistant-tool-expanded")
-        try activate(try wait("Assistant activity: Edited SQL", timeout: 5))
+        try activate(try waitExact("Tool call: Edit query", timeout: 5))
         try waitGone("Arguments:", timeout: 5)
         let editor = try waitInput("SQL Editor")
         let (editorPosition, _) = try elementBounds(editor)
@@ -898,6 +900,82 @@ final class Driver {
         try press("Toggle Assistant")
         try waitGone("Toggle conversation list")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
+    }
+    /// Writes a new synthetic workspace with the UI scale and pane width at
+    /// which the transcript cut off a wide table reply. At that width the
+    /// table is slightly wider than an 80% reply, so a column wraps.
+    func seedWideTableWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The table check needs an empty workspace directory")
+        let settings: [String: Any] = [
+            "ui_scale": 1.1,
+            "assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "panel_width": 536,
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3, "settings": settings, "profiles": [], "tabs": [], "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    /// A reply with a wide table uses the transcript width, the transcript
+    /// scrolls to the end of the table, and the wheel scrolls past the table.
+    /// The check runs with the Connections sidebar shown and hidden.
+    func testAssistantWideTable() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Search conversations") != nil {
+            try press("Toggle conversation list")
+            try waitGone("Search conversations", timeout: 5)
+        }
+        // Earlier messages make the transcript long enough to scroll.
+        try fill("Assistant message", "Show many lines")
+        try press("Send")
+        _ = try wait("Line 40", timeout: 20)
+        try fill("Assistant message", "Show a wide table")
+        try press("Send")
+        _ = try wait("Assistant: Ran a synthetic wide table query", timeout: 20)
+        try checkWideTableReply("assistant-wide-table")
+        key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
+        try waitGone("New Connection", timeout: 5)
+        try checkWideTableReply("assistant-wide-table-no-sidebar")
+        print("PASS: Assistant wide table replies use the transcript width, show the whole table, and scroll")
+    }
+    func checkWideTableReply(_ name: String) throws {
+        // The tooltip has the same text, so look for the button only.
+        func jumpButtonVisible() -> Bool { find("Jump to latest", role: kAXButtonRole) != nil }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        if jumpButtonVisible() { try press("Jump to latest") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try require(!jumpButtonVisible(), "The transcript did not scroll to the latest message")
+        let reply = try wait("Assistant: Ran a synthetic wide table query", timeout: 5)
+        let composer = try waitInput("Assistant message")
+        let (origin, extent) = try elementBounds(reply)
+        let (composerOrigin, composerSize) = try elementBounds(composer)
+        try snapshot(name)
+
+        // At the end of the transcript, the whole reply is above the composer.
+        // A transcript that cannot scroll that far cuts off the table.
+        try require(origin.y + extent.height <= composerOrigin.y, "The transcript cut off the bottom of the assistant table")
+        try require(extent.width >= composerSize.width * 0.9, "The assistant reply did not use the full transcript width")
+
+        // The wheel over the table scrolls the transcript in both directions.
+        // A negative distance scrolls down at the same point.
+        try scrollUpAbove(composer, by: 300)
+        var deadline = Date(timeIntervalSinceNow: 5)
+        while !jumpButtonVisible() {
+            try require(Date() < deadline, "The wheel over the assistant table did not scroll the transcript up")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        for _ in 0..<3 { try scrollUpAbove(composer, by: -1200) }
+        deadline = Date(timeIntervalSinceNow: 5)
+        while jumpButtonVisible() {
+            try require(Date() < deadline, "The wheel over the assistant table did not scroll the transcript to the end")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
     }
     func testAssistantQueries() throws {
         try fill("SQL Editor", "SELECT 1 AS assistant_value")
@@ -1454,6 +1532,10 @@ do {
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
+            } else if CommandLine.arguments.contains("--assistant-table-only") {
+                try driver.seedWideTableWorkspace()
+                try driver.start()
+                try driver.testAssistantWideTable()
             } else if CommandLine.arguments.contains("--editor-highlight-only") {
                 try driver.start()
                 try driver.testEditorHighlight()
@@ -1475,7 +1557,8 @@ do {
                 throw error
             }
         }
-        if CommandLine.arguments.contains("--editor-highlight-only") { exit(0) }
+        if CommandLine.arguments.contains("--editor-highlight-only")
+            || CommandLine.arguments.contains("--assistant-table-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()
