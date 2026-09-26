@@ -17,6 +17,8 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/e2e/fixture"
 DOWNLOAD_REPORT_INTERVAL = 15
+DOWNLOAD_TIMEOUT_SECONDS = 120 * 60
+DOWNLOAD_WATCHDOG_SECONDS = DOWNLOAD_TIMEOUT_SECONDS + 60
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -95,7 +97,8 @@ def distribution(item, label=None):
             initial_received = partial.stat().st_size if partial.exists() else 0
             if initial_received:
                 announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
-            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-", "--max-time", "600",
+            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-",
+                       "--max-time", str(DOWNLOAD_TIMEOUT_SECONDS),
                        "--output", str(partial), item["url"]]
             total_text = f" ({human_size(total)} total)" if total else ""
             announce(f"{label}: downloading {item['url']}{total_text}.")
@@ -109,8 +112,8 @@ def distribution(item, label=None):
                         received = partial.stat().st_size if partial.exists() else initial_received
                         report_download_progress(label, received, total, started, initial_received)
                         next_report = now + DOWNLOAD_REPORT_INTERVAL
-                    if now - started >= 650:
-                        raise subprocess.TimeoutExpired(command, 650)
+                    if now - started >= DOWNLOAD_WATCHDOG_SECONDS:
+                        raise subprocess.TimeoutExpired(command, DOWNLOAD_WATCHDOG_SECONDS)
                     time.sleep(1)
                 if process.returncode:
                     raise subprocess.CalledProcessError(process.returncode, command)

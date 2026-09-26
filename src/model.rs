@@ -13,6 +13,7 @@ pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 1;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
 pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
 pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
+pub const SYSTEM_THEME: &str = "System";
 
 fn title_with_suffix(title: &str, suffix: &str) -> String {
     let available = MAX_TAB_TITLE.saturating_sub(suffix.chars().count());
@@ -85,6 +86,7 @@ pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    pub theme: String,
     pub ui_scale: f32,
     pub ui_font_family: String,
     pub editor_font_family: String,
@@ -102,6 +104,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: SYSTEM_THEME.into(),
             ui_scale: 1.,
             ui_font_family: SYSTEM_FONT_FAMILY.into(),
             editor_font_family: "Menlo".into(),
@@ -120,6 +123,11 @@ impl Default for Settings {
 
 impl Settings {
     pub fn sanitize(&mut self) {
+        self.theme = self.theme.trim().into();
+        if self.theme.is_empty() {
+            self.theme = Self::default().theme;
+        }
+
         if !self.ui_scale.is_finite() {
             self.ui_scale = Self::default().ui_scale;
         }
@@ -745,6 +753,7 @@ mod tests {
         assert_eq!(restored, Settings::default());
 
         let mut settings = Settings {
+            theme: String::new(),
             ui_scale: f32::INFINITY,
             ui_font_family: "   ".into(),
             editor_font_family: "   ".into(),

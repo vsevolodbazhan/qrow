@@ -231,12 +231,18 @@ including Spark engines and executors, after the run.
 [Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
 sizes, and SHA-512 checksums. Verified native downloads are cached under
 `target/e2e-downloads` between local runs. The first run after a dependency
-change still downloads from the public archive service, which can be slow.
+change still downloads from the public archive service, which can be slow. CI
+uses a checksum-keyed Actions cache for this directory and also preserves
+incomplete download progress for a later run. Each native archive transfer has
+a 2-hour limit. The macOS CI job allows 150 minutes so a slow first download
+still leaves time to start the fixture and run the native checks.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
 and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
+The driver resizes and centers the Qrow window on the main display if the window
+does not fit. The display must support the app's minimum window size.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
 ends when the New Connection control becomes accessible. This does not measure
@@ -277,4 +283,13 @@ competing processes and lock release after a process is killed.
 
 ## Continuous integration
 
-End-to-end tests are currently not run in CI/CD.
+The `test` workflow runs `e2e-backend` and `e2e-macos` after the core checks for
+pushes to `main`, manual dispatches, and non-draft pull requests from this
+repository. It skips fork pull requests. The backend job uses the disposable
+Docker fixture. The macOS job uses the hosted `macos-15` runner, Java 17, and
+the native accessibility driver.
+
+The macOS E2E job reuses the package artifact from `core-macos` by default. A
+manual `test` dispatch can set `reuse_macos_package` to `false` to build a fresh
+package. The release workflow runs the same E2E jobs before it packages a
+release. CI keeps E2E evidence artifacts for one day.

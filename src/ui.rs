@@ -12,6 +12,7 @@ mod tab_view;
 mod workspace_view;
 pub(crate) use workspace_view::WindowView;
 
+use crate::themes;
 use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
@@ -29,8 +30,8 @@ use qrow::{
     model::{
         AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
         MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
-        SYSTEM_FONT_FAMILY, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
-        copied_tab_title, unique_tab_title,
+        SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION,
+        Workspace, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -257,11 +258,15 @@ fn font_available(font: &str, installed: &[String]) -> bool {
 }
 
 fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
-    let theme = gpui_kit::component::Theme::global_mut(cx);
-    theme.font_family = settings.ui_font_family.clone().into();
-    theme.font_size = px(14. * settings.ui_scale);
-    theme.mono_font_size = px(13. * settings.ui_scale);
-    window.set_rem_size(theme.font_size);
+    let font_size = {
+        let theme = gpui_kit::component::Theme::global_mut(cx);
+        theme.font_family = settings.ui_font_family.clone().into();
+        theme.font_size = px(14. * settings.ui_scale);
+        theme.mono_font_size = px(13. * settings.ui_scale);
+        theme.font_size
+    };
+    gpui_kit::component::Theme::sync_base(cx);
+    window.set_rem_size(font_size);
     window.refresh();
 }
 
@@ -302,6 +307,7 @@ pub struct Qrow {
     resize: Option<(bool, Point<Pixels>, Pixels)>,
     focus: FocusHandle,
     _quit: Subscription,
+    _appearance: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
     quit_confirmed: bool,
     finished: bool,
@@ -334,12 +340,28 @@ impl Qrow {
         let fonts = installed_fonts(cx);
         workspace.normalize();
         workspace.settings.sanitize();
+        let mut unavailable_theme = false;
+        if !themes::is_available(&workspace.settings.theme, cx) {
+            workspace.settings.theme = Settings::default().theme;
+            unavailable_theme = true;
+            let warning = "The saved theme is unavailable, so Qrow is using System.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
+        }
         let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
-            message.get_or_insert_with(|| {
-                "The saved editor font is unavailable, so Qrow is using Menlo.".into()
-            });
+            let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
         }
         if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
@@ -378,12 +400,20 @@ impl Qrow {
         }
         let scale = workspace.settings.ui_scale;
         set_menus(cx, workspace.settings.assistant.enabled);
+        themes::apply(&workspace.settings.theme, Some(window), cx);
         apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
             this.finish(cx);
             async {}
         });
         let assistant_panel = assistant_view::AssistantPanelState::new(window, cx);
+        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.settings.theme == SYSTEM_THEME {
+                themes::apply(SYSTEM_THEME, Some(window), cx);
+                apply_ui_theme(&this.settings, window, cx);
+                cx.notify();
+            }
+        });
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -400,7 +430,7 @@ impl Qrow {
             tab_form: None,
             menu: None,
             saver,
-            dirty: (!demo && unavailable_font).then(Instant::now),
+            dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
             demo,
             sidebar: true,
@@ -409,6 +439,7 @@ impl Qrow {
             resize: None,
             focus: cx.focus_handle(),
             _quit: quit,
+            _appearance: appearance,
             pending_quit: None,
             quit_confirmed: false,
             finished: false,
@@ -1306,6 +1337,15 @@ impl Qrow {
             cx.notify();
         }
     }
+    fn set_theme(&mut self, theme: String, window: &mut Window, cx: &mut Context<Self>) {
+        if theme == self.settings.theme || !themes::is_available(&theme, cx) {
+            return;
+        }
+        self.settings.theme = theme;
+        themes::apply(&self.settings.theme, Some(window), cx);
+        apply_ui_theme(&self.settings, window, cx);
+        self.changed(cx);
+    }
     fn apply_ui_scale(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
         let previous = self.settings.ui_scale;
         self.settings.ui_scale = scale;
@@ -1372,6 +1412,7 @@ impl Qrow {
     }
     fn reset_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = Settings::default();
+        self.settings.theme = settings.theme;
         self.settings.ui_font_family = settings.ui_font_family;
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
@@ -1383,6 +1424,7 @@ impl Qrow {
         self.settings.assistant_font_size = settings.assistant_font_size;
         self.settings.assistant_line_height = settings.assistant_line_height;
         self.apply_ui_scale(settings.ui_scale, window, cx);
+        themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
         self.changed(cx);
     }

@@ -64,6 +64,57 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
     AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
     return (point, extent)
 }
+func fitWindowToMainDisplay(_ app: AXUIElement) throws {
+    _ = NSApplication.shared
+    guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
+          let screen = NSScreen.screens.first else {
+        throw Failure("Qrow window or main display is unavailable")
+    }
+    let visible = screen.visibleFrame
+    let minimum = CGSize(width: 850, height: 560)
+    let width = visible.width - 32
+    let height = visible.height - 32
+    try require(
+        width >= minimum.width && height >= minimum.height,
+        "Main display is too small for the minimum Qrow window"
+    )
+
+    let (position, extent) = try elementBounds(window)
+    let top = screen.frame.maxY - visible.maxY
+    let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
+    let currentFrame = CGRect(origin: position, size: extent)
+    guard !safeFrame.contains(currentFrame) else { return }
+
+    var fittedSize = CGSize(width: min(extent.width, width), height: min(extent.height, height))
+    guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
+        throw Failure("Could not create the Qrow window size")
+    }
+    try require(
+        AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success,
+        "Could not resize the Qrow window for the main display"
+    )
+
+    var fittedPosition = CGPoint(
+        x: visible.minX + (visible.width - fittedSize.width) / 2,
+        y: top + 16
+    )
+    guard let positionValue = AXValueCreate(.cgPoint, &fittedPosition) else {
+        throw Failure("Could not create the Qrow window position")
+    }
+    try require(
+        AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success,
+        "Could not move the Qrow window onto the main display"
+    )
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+
+    let (actualPosition, actualSize) = try elementBounds(window)
+    let actualFrame = CGRect(origin: actualPosition, size: actualSize)
+    try require(
+        safeFrame.insetBy(dx: -1, dy: -1).contains(actualFrame),
+        "Qrow window is outside the main display after repositioning"
+    )
+    print("Fitted Qrow window to the main display: \(actualPosition) \(actualSize)")
+}
 func click(_ element: AXUIElement) throws {
     // Dialog accessibility nodes appear before their opening animation settles.
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
@@ -436,6 +487,7 @@ final class Driver {
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
         _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
+        try fitWindowToMainDisplay(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let sample = try? command(["ps", "-o", "rss=,%cpu=", "-p", "\(self.process.processIdentifier)"]) {
@@ -609,7 +661,10 @@ final class Driver {
     // that the control and its binding are both checked.
     func settingValue(_ label: String) -> String? {
         let control = elements().first {
-            attribute($0, kAXRoleAttribute) as? String == kAXTextFieldRole && strings($0).contains(label)
+            [kAXTextFieldRole, kAXComboBoxRole, kAXPopUpButtonRole].contains(
+                attribute($0, kAXRoleAttribute) as? String ?? ""
+            )
+                && strings($0).contains(label)
         }
         return control.flatMap { attribute($0, kAXValueAttribute) as? String }
     }
@@ -719,6 +774,7 @@ final class Driver {
     func testSettings() throws {
         try selectApplicationMenuItem("Settings…")
         // Assistant typography is a section within Appearance.
+        try waitSettingValue("Theme", "System")
         try waitSettingValue("UI Scale", "100")
         try selectFont("UI Font Family", "Menlo")
         try selectFont("UI Font Family", "System Font")

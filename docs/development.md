@@ -118,29 +118,38 @@ draft pull request, including a `converted_to_draft` event, starts no jobs.
 The workflow runs one job at a time in this order:
 
 ```text
-dependencies -> scripts -> backend -> macos
+core-dependencies -> core-scripts -> core-backend -> core-macos ->
+e2e-backend -> e2e-macos
 ```
 
 A failed job skips all jobs that follow it. Every job checks out the same pull
-request merge result. A newer run cancels an older run for the same pull request
-or branch, including manual runs.
+request merge result. Core jobs run for fork pull requests. E2E jobs run for
+pushes, manual dispatches, and pull requests from this repository. They skip
+fork pull requests because they execute repository code in Docker and through
+macOS accessibility APIs. A newer run cancels an older run for the same pull
+request or branch, including manual runs.
 
-E2E tests run locally only. They do not run in GitHub Actions. Use the
-[end-to-end testing guide](end-to-end-testing.md) to run them.
+The `e2e-macos` job reuses the package from `core-macos` by default. A manual
+dispatch has the `reuse_macos_package` input. Set it to `false` to build the
+package in the E2E job. Native fixture archives use a checksum-keyed Actions
+cache. A failed download can save progress for a later run.
 
-The workflow retains `core-coverage` and `macos-package-and-performance` for one
-day. Configure these individual checks as required branch-protection checks:
+The workflow retains `core-coverage`, `macos-package-and-performance`,
+`backend-evidence`, and `macos-evidence` for one day. Configure these individual
+checks as required branch-protection checks:
 
 ```text
-test / dependencies
-test / scripts
-test / backend
-test / macos
+test / core-dependencies
+test / core-scripts
+test / core-backend
+test / core-macos
+test / e2e-backend
+test / e2e-macos
 ```
 
 There is no aggregate CI gate. The [release workflow](../.github/workflows/release.yml)
-is manual. Use it to publish a nightly or stable release after the core checks
-pass.
+is manual. Use it to publish a nightly or stable release after the core and E2E
+checks pass.
 
 The release workflow accepts an optional commit SHA or ref. Leave the field
 blank to use the latest commit on the branch selected for the workflow run. It
@@ -148,17 +157,19 @@ reads the application version from `Cargo.toml`. The stable tag is
 `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
 
-The workflow runs `sh scripts/check.sh core/backend` and
-`sh scripts/check.sh core/macos`. It does not run E2E tests. The macOS job
-builds the application bundle, creates a DMG, and publishes it as the GitHub
-Release asset. The workflow uses the latest non-draft release on the selected
-channel as the changelog start tag. If the channel has no previous release, it
-writes the target commit history as the changelog.
+The workflow runs `sh scripts/check.sh core/backend`,
+`sh scripts/check.sh core/macos`, `sh scripts/check.sh e2e/backend`, and
+`sh scripts/check.sh e2e/macos`. The E2E jobs run before packaging. The macOS
+package job builds the application bundle, creates a DMG, and publishes it as
+the GitHub Release asset. The workflow uses the latest non-draft release on the
+selected channel as the changelog start tag. If the channel has no previous
+release, it writes the target commit history as the changelog.
 
 The jobs run in this order:
 
 ```text
-resolve-target -> test-core-backend -> test-core-macos -> package -> publish
+resolve-target -> test-core-backend -> test-core-macos -> test-e2e-backend ->
+test-e2e-macos -> package -> publish
 ```
 
 The publish job creates the release tag before it creates the GitHub Release.

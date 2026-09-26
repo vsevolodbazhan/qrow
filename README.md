@@ -19,7 +19,7 @@ Building a whole new SQL client from scratch on top of a
 full-time job wasn't realistic for me — until AI models got good enough, that is.
 
 I'm not a Rust developer, so practically every line of code here is written by one
-model or the other. I bring in my direction, general coding expertise, and user sense. 
+model or the other. I bring in my direction, general coding expertise, and product sense.
 
 ## Inspiration
 

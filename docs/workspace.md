@@ -7,7 +7,7 @@ to a database until you run SQL.
 
 Open **Qrow → Settings…** to change the appearance. The Appearance page shows
 the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
-has **Scale** and **Font Family**. Editor, Logs, and Assistant have
+has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results.
 Editor settings apply to SQL. Logs settings apply to log entries.
@@ -17,16 +17,17 @@ Editor, Logs, and Assistant font sizes.
 Each font picker has a **System Font** option. This option uses the macOS
 interface font.
 
+The theme defaults to **System**. System follows the macOS appearance and uses
+GPUI Kit's default light or dark theme. The selector also includes One Dark and
+the themes bundled from GPUI Kit. A selected theme takes effect immediately.
+
 Select a page or section in the list at the left. Use the search box above the
 list to show only settings that match a word in their name or description.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
-restores the defaults of all appearance settings, including the system interface
-font. If a saved font is unavailable, Qrow uses a default font and reports the
-substitution.
-
-The application uses its bundled dark theme, independent of the macOS appearance.
-There is no light-theme setting.
+restores the defaults of all appearance settings, including the System theme and
+the system interface font. If a saved font or theme is unavailable, Qrow uses a
+default and reports the substitution.
 
 Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the

@@ -1,7 +1,6 @@
 use gpui_kit::component::{
     ActiveTheme, Sizable,
     menu::{PopupMenu, PopupMenuItem},
-    scroll::Scrollbar,
     table::{Column, DataTable, TableDelegate, TableState},
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -187,7 +186,8 @@ impl TableDelegate for Results {
                 el.text_color(cx.theme().muted_foreground)
             })
             .when(self.selected == Some((r, c)), |el| {
-                el.bg(cx.theme().selection).text_color(rgb(0xf0f4fc))
+                el.bg(cx.theme().selection)
+                    .text_color(cx.theme().foreground)
             })
             .child(div().line_height(relative(1.)).truncate().child(display))
             .on_mouse_down(
@@ -294,8 +294,6 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> imp
     .inset_0()
 }
 
-/// Reserve a scrollbar lane inside the results viewport. An overlay track can
-/// otherwise fall outside the table's clipped container in the Kit layout.
 pub(super) fn view(
     table: &Entity<TableState<Results>>,
     modal: bool,
@@ -308,30 +306,19 @@ pub(super) fn view(
     }
 
     div()
-        .flex()
-        .flex_col()
         .size_full()
         .min_h_0()
         .min_w_0()
+        .relative()
+        .overflow_hidden()
         .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .relative()
-                .overflow_hidden()
-                .child(
-                    DataTable::new(table)
-                        .small()
-                        .stripe(true)
-                        .bordered(false)
-                        .scrollbar_visible(true, false),
-                )
-                .when(!modal, |el| el.child(horizontal_scroll(table, scale))),
+            DataTable::new(table)
+                .small()
+                .stripe(true)
+                .bordered(false)
+                .scrollbar_visible(true, true),
         )
-        .child(div().h_3().w_full().flex_shrink_0().relative().child(
-            Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
-        ))
+        .when(!modal, |el| el.child(horizontal_scroll(table, scale)))
         .into_any_element()
 }
 
