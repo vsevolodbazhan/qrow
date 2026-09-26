@@ -2014,7 +2014,7 @@ impl Qrow {
                                 };
                                 let variant = match entry.speaker {
                                     Speaker::User => BubbleVariant::Tinted,
-                                    Speaker::Assistant => BubbleVariant::Ghost,
+                                    Speaker::Assistant => BubbleVariant::Muted,
                                     Speaker::Activity => BubbleVariant::Outline,
                                     Speaker::Error => BubbleVariant::Destructive,
                                 };
@@ -2070,7 +2070,7 @@ impl Qrow {
                                 Message::new()
                                     .alignment(MessageAlignment::Start)
                                     .content(MessageContent::new().bubble(
-                                        Bubble::new().with_variant(BubbleVariant::Ghost).child(
+                                        Bubble::new().with_variant(BubbleVariant::Muted).child(
                                             div()
                                                 .id("assistant-thinking")
                                                 .role(Role::Status)
