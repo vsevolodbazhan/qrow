@@ -4,7 +4,6 @@ use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     Selectable,
     bubble::{Bubble, BubbleVariant},
-    button::DropdownButton,
     h_flex,
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
@@ -2265,17 +2264,18 @@ impl Qrow {
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(self.assistant_panel.active_turn.is_none(), |row| row.child(
-                                DropdownButton::new("assistant-send-mode")
-                                    .primary()
-                                    .small()
-                                    .disabled(
-                                        !controls_ready || self.assistant.selected_thread.is_none(),
-                                    )
-                                    .button(
+                                h_flex()
+                                    .id("assistant-send-mode")
+                                    .flex_shrink_0()
+                                    .child(
                                         Button::new("assistant-send")
+                                            .primary()
+                                            .small()
                                             .icon(AssetIconName::Send)
                                             .label(if mode_is_run { "Send · Run" } else { "Send · Ask" })
-                                            .pr_0()
+                                            .rounded_none()
+                                            .rounded_l(cx.theme().radius)
+                                            .disabled(!controls_ready || self.assistant.selected_thread.is_none())
                                             .tooltip(if mode_is_run {
                                                 "Send message · run assistant queries automatically"
                                             } else {
@@ -2285,31 +2285,43 @@ impl Qrow {
                                                 this.send_assistant(window, cx)
                                             })),
                                     )
-                                    .dropdown_menu({
-                                        let ask = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                            if this.assistant.conversations.iter().any(|conversation| {
-                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
-                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
-                                            }) {
-                                                this.toggle_assistant_mode(window, cx);
-                                            }
-                                        }));
-                                        let run = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                            if this.assistant.conversations.iter().any(|conversation| {
-                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
-                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::AskBeforeRunning
-                                            }) {
-                                                this.toggle_assistant_mode(window, cx);
-                                            }
-                                        }));
-                                        move |menu, _, _| menu
-                                            .item(PopupMenuItem::new("Ask before running")
-                                                .checked(!mode_is_run)
-                                                .on_click({ let ask = ask.clone(); move |event, window, cx| ask(event, window, cx) }))
-                                            .item(PopupMenuItem::new("Run automatically")
-                                                .checked(mode_is_run)
-                                                .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
-                                    }),
+                                    .child(
+                                        Button::new("assistant-send-mode-picker")
+                                            .primary()
+                                            .small()
+                                            .dropdown_caret(true)
+                                            .w_4()
+                                            .rounded_none()
+                                            .rounded_r(cx.theme().radius)
+                                            .accessibility_label("Assistant query approval mode")
+                                            .tooltip("Choose assistant query approval mode")
+                                            .disabled(!controls_ready || self.assistant.selected_thread.is_none())
+                                            .dropdown_menu_with_anchor(Anchor::TopRight, {
+                                                let ask = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                    if this.assistant.conversations.iter().any(|conversation| {
+                                                        Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
+                                                            && conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
+                                                    }) {
+                                                        this.toggle_assistant_mode(window, cx);
+                                                    }
+                                                }));
+                                                let run = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                    if this.assistant.conversations.iter().any(|conversation| {
+                                                        Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
+                                                            && conversation.execution_mode == qrow::model::AssistantExecutionMode::AskBeforeRunning
+                                                    }) {
+                                                        this.toggle_assistant_mode(window, cx);
+                                                    }
+                                                }));
+                                                move |menu, _, _| menu
+                                                    .item(PopupMenuItem::new("Ask before running")
+                                                        .checked(!mode_is_run)
+                                                        .on_click({ let ask = ask.clone(); move |event, window, cx| ask(event, window, cx) }))
+                                                    .item(PopupMenuItem::new("Run automatically")
+                                                        .checked(mode_is_run)
+                                                        .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
+                                            }),
+                                    ),
                             )),
                     ),
             )))
