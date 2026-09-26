@@ -35,8 +35,9 @@ After you send a message, a shimmering **Thinking…** reply appears in the
 conversation. The reply replaces it when Codex starts to answer. Qrow removes
 the placeholder if the turn ends or fails without a reply.
 
-Qrow renders assistant replies as Markdown. Replies can show headings, lists,
-code, links, and tables. Tool activity and error details stay as plain text.
+Qrow renders all conversation messages as Markdown. This includes your messages,
+assistant replies, tool activity, and errors. Messages can show headings, lists,
+code, links, and tables. Expanded tool and error details stay as plain text.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It

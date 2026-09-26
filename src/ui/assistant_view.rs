@@ -1989,22 +1989,22 @@ impl Qrow {
                             .flatten()
                             .enumerate()
                             .map(|(index, entry)| {
-                                let content = if entry.speaker == Speaker::Assistant {
-                                    let mut table_style = StyleRefinement::default();
-                                    table_style.overflow.x = Some(Overflow::Scroll);
-                                    TextView::markdown(
-                                        format!("assistant-markdown-{}", entry.id),
-                                        entry.text.clone(),
+                                let mut table_style = StyleRefinement::default();
+                                table_style.overflow.x = Some(Overflow::Scroll);
+                                let content = TextView::markdown(
+                                    format!("assistant-markdown-{}", entry.id),
+                                    entry.text.clone(),
+                                )
+                                .style(TextViewStyle::default().table(table_style))
+                                .text_sm()
+                                .line_height(relative(1.625))
+                                .min_w_0()
+                                .max_w_full()
+                                .when(entry.speaker == Speaker::Error, |view| {
+                                    view.text_color(
+                                        cx.theme().semantic_tokens().colors.destructive,
                                     )
-                                    .style(TextViewStyle::default().table(table_style))
-                                    .min_w_0()
-                                    .max_w_full()
-                                    .into_any_element()
-                                } else {
-                                    SelectableText::new("message", entry.text.clone())
-                                        .document_order(index as u64 * 2)
-                                        .into_any_element()
-                                };
+                                });
                                 let alignment = if entry.speaker == Speaker::User {
                                     MessageAlignment::End
                                 } else {
