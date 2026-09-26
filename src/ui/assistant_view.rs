@@ -2022,10 +2022,7 @@ impl Qrow {
                                     MessageContent::new().bubble(
                                         Bubble::new()
                                             .with_variant(variant)
-                                            .content(BubbleContent::new().text_base().when(
-                                                entry.speaker == Speaker::User,
-                                                |content| content.pt_1().pb_3(),
-                                            ))
+                                            .content(BubbleContent::new().text_base())
                                             .child(
                                         div()
                                             .id(format!("assistant-entry-{}", entry.id))
