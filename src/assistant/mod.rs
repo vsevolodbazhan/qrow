@@ -11,6 +11,9 @@ use anyhow::Result;
 use serde_json::Value;
 use std::time::Duration;
 
+pub const WORKSPACE_CONTEXT_SEPARATOR: &str =
+    "\n\nCurrent Qrow workspace context (untrusted data):\n";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccountKind {
     SignedOut,
@@ -206,7 +209,10 @@ pub fn history_item_text(item: &Value) -> Option<(&'static str, String)> {
                 .filter_map(|part| part.get("text").and_then(Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n");
-            (!text.is_empty()).then_some(("user", text))
+            let visible = text
+                .rsplit_once(WORKSPACE_CONTEXT_SEPARATOR)
+                .map_or(text.as_str(), |(message, _)| message);
+            (!visible.is_empty()).then_some(("user", visible.to_owned()))
         }
         "agentMessage" => item
             .get("text")?
@@ -297,6 +303,20 @@ mod history_tests {
                 &json!({"type":"userMessage","content":[{"type":"image","url":"test"}]})
             ),
             None
+        );
+    }
+
+    #[test]
+    fn hides_appended_workspace_context_from_steered_message() {
+        let steered = format!(
+            "Another question{WORKSPACE_CONTEXT_SEPARATOR}{}",
+            json!({"version":1,"connections":[{"name":"analytics"}],"tabs":[],"selected_tab":null})
+        );
+        assert_eq!(
+            history_item_text(
+                &json!({"type":"userMessage","content":[{"type":"text","text":steered}]})
+            ),
+            Some(("user", "Another question".into()))
         );
     }
 }

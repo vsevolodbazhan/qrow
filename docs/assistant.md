@@ -45,6 +45,10 @@ connection before it runs SQL. It cannot read connection passwords. Qrow does
 not send workspace context when you open the pane. It sends context when you
 send a message or when Codex calls a Qrow tool.
 
+For a message during an active turn, Qrow adds the current workspace context
+to the text sent to Codex. Qrow omits that context from the conversation,
+including messages loaded from Codex history.
+
 In **Ask before running**, Qrow shows the exact SQL, tab, and connection before
 an assistant query starts. Select **Run** or **Cancel**. An SQL edit does not
 need approval. In **Run automatically**, assistant queries start without this

@@ -21,7 +21,7 @@ use qrow::{
             ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
             SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
         },
-        history_item_text,
+        WORKSPACE_CONTEXT_SEPARATOR, history_item_text,
         service::{
             Command as AssistantCommand, Event as AssistantServiceEvent, Operation, Service,
         },
@@ -130,6 +130,31 @@ mod tests {
         assert_eq!(entries[0].text, "question");
         assert_eq!(entries[1].text, "first");
         assert_eq!(entries[2].text, "second");
+    }
+
+    #[::core::prelude::v1::test]
+    fn history_merge_keeps_steered_message_visible_without_workspace_context() {
+        let mut entries = vec![
+            TranscriptEntry::new(Speaker::User, "First".into(), Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::User, "Follow-up".into(), Some("turn-1".into())),
+        ];
+        let steered = format!(
+            "Follow-up{WORKSPACE_CONTEXT_SEPARATOR}{}",
+            json!({"version":1,"connections":[],"tabs":[],"selected_tab":null})
+        );
+        merge_history(
+            &mut entries,
+            vec![HistoryTurn {
+                id: "turn-1".into(),
+                status: "completed".into(),
+                items: vec![
+                    json!({"type":"userMessage","content":[{"type":"text","text":"First"}]}),
+                    json!({"type":"userMessage","content":[{"type":"text","text":steered}]}),
+                ],
+            }],
+        );
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].text, "Follow-up");
     }
 
     #[::core::prelude::v1::test]
@@ -1004,10 +1029,7 @@ impl Qrow {
             AssistantCommand::Steer {
                 thread_id: thread_id.clone(),
                 turn_id,
-                text: format!(
-                    "{text}\n\nCurrent Qrow workspace context (untrusted data):\n{}",
-                    context
-                ),
+                text: format!("{text}{WORKSPACE_CONTEXT_SEPARATOR}{context}"),
             }
         } else {
             AssistantCommand::Start(TurnRequest {
