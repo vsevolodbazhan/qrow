@@ -601,7 +601,6 @@ impl Qrow {
                     .sidebar_width(rem * SIDEBAR_REMS)
                     .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
                     .page(settings_page(form))
-                    .page(assistant_appearance_page(form))
                     .page(assistant_settings_page(
                         form,
                         cx.weak_entity(),
@@ -655,12 +654,12 @@ impl Qrow {
     }
 }
 
-/// Appearance settings for the interface, editor, and logs.
+/// Appearance settings for the interface, editor, logs, and assistant messages.
 fn settings_page(form: &SettingsForm) -> SettingPage {
     SettingPage::new("Appearance")
         .default_open(true)
-        // Restore defaults in the footer already resets this page, and it is
-        // the only page.
+        // The footer resets all appearance settings, so this page does not
+        // need a second reset action.
         .resettable(false)
         .group(
             SettingGroup::new()
@@ -676,6 +675,31 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                             "Used everywhere except the Editor, Logs, and assistant messages.",
                         )
                         .keywords(["interface", "ui", "typeface"]),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Assistant")
+                .item(
+                    SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
+                        .description("Font for conversation messages.")
+                        .keywords(["assistant", "messages", "typeface"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Font Size",
+                        number_field(form, NumberSetting::AssistantFontSize),
+                    )
+                    .description("Base size, before Scale.")
+                    .keywords(["assistant", "messages"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Line Height",
+                        number_field(form, NumberSetting::AssistantLineHeight),
+                    )
+                    .description("Line spacing, relative to the font size.")
+                    .keywords(["assistant", "messages", "spacing"]),
                 ),
         )
         .group(
@@ -725,36 +749,6 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                     .keywords(["logs", "spacing"]),
                 ),
         )
-}
-
-/// Keep assistant typography on its own page so the sidebar opens its controls
-/// directly instead of revealing a group below the virtual list's viewport.
-fn assistant_appearance_page(form: &SettingsForm) -> SettingPage {
-    SettingPage::new("Assistant").resettable(false).group(
-        SettingGroup::new()
-            .title("Messages")
-            .item(
-                SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
-                    .description("Font for conversation messages.")
-                    .keywords(["assistant", "messages", "typeface"]),
-            )
-            .item(
-                SettingItem::new(
-                    "Font Size",
-                    number_field(form, NumberSetting::AssistantFontSize),
-                )
-                .description("Base size, before Scale.")
-                .keywords(["assistant", "messages"]),
-            )
-            .item(
-                SettingItem::new(
-                    "Line Height",
-                    number_field(form, NumberSetting::AssistantLineHeight),
-                )
-                .description("Line spacing, relative to the font size.")
-                .keywords(["assistant", "messages", "spacing"]),
-            ),
-    )
 }
 
 fn assistant_settings_page(

@@ -6,12 +6,12 @@ to a database until you run SQL.
 ## Appearance and layout
 
 Open **Qrow → Settings…** to change the appearance. The Appearance page shows
-the **Interface**, **Editor**, and **Logs** sections. The **Assistant** page
-shows the message text settings. The Interface section has **Scale** and
-**Font Family**. Editor, Logs, and Assistant have **Font Family**, **Font Size**,
-and **Line Height**. The interface font applies to controls and results.
-Editor settings apply to SQL. Logs settings apply to
-Logs. Assistant settings apply to conversation messages. Code in messages keeps
+the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
+has **Scale** and **Font Family**. Editor, Logs, and Assistant have
+**Font Family**, **Font Size**, and **Line Height**. The interface font applies
+to controls and results.
+Editor settings apply to SQL. Logs settings apply to log entries.
+Assistant settings apply to conversation messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the
 Editor, Logs, and Assistant font sizes.
 Each font picker has a **System Font** option. This option uses the macOS
