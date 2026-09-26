@@ -35,12 +35,18 @@ After you send a message, a shimmering **Thinking…** reply appears in the
 conversation. The reply replaces it when Codex starts to answer. Qrow removes
 the placeholder if the turn ends or fails without a reply.
 
-Qrow renders all conversation messages as Markdown. This includes your messages,
-assistant replies, tool activity, and errors. Messages can show headings, lists,
-code, links, and tables. Expanded tool and error details stay as plain text.
+Qrow renders your messages, assistant replies, and errors as Markdown. Messages
+can show headings, lists, code, links, and tables.
+
+Each Qrow tool call shows as a card across the full width of the conversation.
+The card is collapsed and shows only the tool action, for example
+**Edited SQL · Query 1**. Select the card to show or hide the tool arguments and
+the result as plain text. A spinner shows while an assistant query runs. A
+failed tool call shows an error icon and an error color.
+
 Use **Settings… → Appearance → Assistant** to change the message font family,
 font size, and line height. These settings do not change the message field or
-expanded technical details.
+tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It

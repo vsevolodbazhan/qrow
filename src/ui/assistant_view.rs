@@ -2,15 +2,17 @@ use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
-    Selectable,
+    Icon, Selectable,
     bubble::{Bubble, BubbleContent, BubbleVariant},
-    button::DropdownButton,
+    button::{ButtonRounded, DropdownButton},
+    collapsible::Collapsible,
     h_flex,
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
     message::{Message, MessageAlignment, MessageContent},
     select::{SearchableVec, SelectEvent, SelectState},
     shimmer::ShimmerText,
+    spinner::Spinner,
     text::{TextView, TextViewStyle},
     v_flex,
 };
@@ -108,6 +110,22 @@ pub(super) enum Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn tool_calls_and_their_failures_render_as_tool_cards() {
+        let turn = Some("turn-1".to_owned());
+        let entry = |speaker| TranscriptEntry::new(speaker, "text".into(), turn.clone());
+        assert!(entry(Speaker::Activity).is_tool_activity());
+        assert!(!entry(Speaker::Activity).expanded);
+        assert!(
+            entry(Speaker::Error)
+                .with_detail("Result".into())
+                .is_tool_activity()
+        );
+        assert!(!entry(Speaker::Error).is_tool_activity());
+        assert!(!entry(Speaker::User).is_tool_activity());
+        assert!(!entry(Speaker::Assistant).is_tool_activity());
+    }
 
     #[::core::prelude::v1::test]
     fn history_keeps_distinct_messages_from_one_turn() {
@@ -229,6 +247,11 @@ impl TranscriptEntry {
     pub fn with_detail(mut self, detail: String) -> Self {
         self.detail = Some(detail);
         self
+    }
+
+    /// Tool calls and their failures render as collapsible cards, not bubbles.
+    fn is_tool_activity(&self) -> bool {
+        self.speaker == Speaker::Activity || self.speaker == Speaker::Error && self.detail.is_some()
     }
 }
 
@@ -1602,6 +1625,133 @@ impl Qrow {
         }
     }
 
+    fn assistant_tool_entry(
+        &self,
+        thread: &str,
+        index: usize,
+        entry: &TranscriptEntry,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let failed = entry.speaker == Speaker::Error;
+        let running = self
+            .assistant_panel
+            .pending_query
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.started
+                    && pending.activity_index == Some(index)
+                    && pending.call.thread_id == thread
+            });
+        let muted = cx.theme().muted_foreground;
+        let accessible_label = format!(
+            "{}: {}",
+            if failed {
+                "Assistant error"
+            } else {
+                "Assistant activity"
+            },
+            entry.text
+        );
+        let summary = h_flex()
+            .flex_1()
+            .min_w_0()
+            .gap_1p5()
+            .text_color(if failed {
+                cx.theme().semantic_tokens().colors.destructive
+            } else {
+                muted
+            })
+            .when(running, |row| {
+                row.child(Spinner::new().xsmall().color(muted))
+            })
+            .when(failed, |row| {
+                row.child(Icon::new(IconName::CircleX).xsmall())
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .whitespace_normal()
+                    .child(entry.text.clone()),
+            );
+        let header = if entry.detail.is_some() {
+            let id = entry.id;
+            let thread = thread.to_owned();
+            Button::new(format!("assistant-tool-{id}"))
+                .ghost()
+                .small()
+                .w_full()
+                .h_auto()
+                .min_h_7()
+                .py_1()
+                .rounded(ButtonRounded::None)
+                .toggled(entry.expanded)
+                .accessibility_label(accessible_label)
+                .child(
+                    summary.child(
+                        Icon::new(IconName::ChevronRight)
+                            .xsmall()
+                            .text_color(muted)
+                            .rotate(percentage(if entry.expanded { 0.25 } else { 0. })),
+                    ),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(entry) = this
+                        .assistant_panel
+                        .transcripts
+                        .get_mut(&thread)
+                        .and_then(|entries| entries.iter_mut().find(|entry| entry.id == id))
+                    {
+                        entry.expanded = !entry.expanded;
+                        cx.notify();
+                    }
+                }))
+                .into_any_element()
+        } else {
+            h_flex()
+                .id(format!("assistant-tool-{}", entry.id))
+                .role(Role::Paragraph)
+                .aria_label(accessible_label)
+                .min_h_7()
+                .py_1()
+                .px_2()
+                .text_sm()
+                .child(summary)
+                .into_any_element()
+        };
+        Collapsible::new()
+            .open(entry.expanded)
+            .flex_shrink_0()
+            .w_full()
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius_lg)
+            .overflow_hidden()
+            .child(header)
+            .when_some(entry.detail.as_ref(), |card, detail| {
+                card.content(
+                    div()
+                        .id(format!("assistant-tool-detail-{}", entry.id))
+                        .role(Role::Paragraph)
+                        .aria_label(detail.clone())
+                        .max_h_40()
+                        .overflow_y_scroll()
+                        .overflow_x_scroll()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .px_2()
+                        .py_1p5()
+                        .font_family(self.settings.editor_font_family.clone())
+                        .text_xs()
+                        .child(
+                            SelectableText::new("detail", detail.clone())
+                                .document_order(index as u64 * 2 + 1),
+                        ),
+                )
+            })
+            .into_any_element()
+    }
+
     fn assistant_thread_list(
         &self,
         narrow: bool,
@@ -1994,6 +2144,9 @@ impl Qrow {
                             .flatten()
                             .enumerate()
                             .map(|(index, entry)| {
+                                if entry.is_tool_activity() {
+                                    return self.assistant_tool_entry(selected, index, entry, cx);
+                                }
                                 let mut table_style = StyleRefinement::default();
                                 table_style.overflow.x = Some(Overflow::Scroll);
                                 let content = TextView::markdown(
@@ -2045,29 +2198,10 @@ impl Qrow {
                                                 entry.text
                                             ))
                                             .whitespace_normal()
-                                            .when(entry.speaker == Speaker::Activity, |bubble| bubble.font_weight(FontWeight::MEDIUM))
-                                            .child(content)
-                                            .when_some(entry.detail.as_ref(), |bubble, detail| {
-                                                let thread = selected.to_owned();
-                                                bubble.child(Button::new(format!("assistant-detail-{index}"))
-                                                    .small().label(if entry.expanded { "Hide details" } else { "Details" })
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        if let Some(entry) = this.assistant_panel.transcripts.get_mut(&thread)
-                                                            .and_then(|entries| entries.get_mut(index)) {
-                                                            entry.expanded = !entry.expanded;
-                                                            cx.notify();
-                                                        }
-                                                    })))
-                                                    .when(entry.expanded, |bubble| bubble.child(
-                                                        div().id(format!("assistant-detail-content-{index}"))
-                                                            .max_h_40().max_w_full().overflow_y_scroll().overflow_x_scroll()
-                                                            .font_family(self.settings.editor_font_family.clone())
-                                                            .text_xs()
-                                                            .child(SelectableText::new("detail", detail.clone()).document_order(index as u64 * 2 + 1))
-                                                    ))
-                                            })),
+                                            .child(content)),
                                     ),
                                 )
+                                .into_any_element()
                             }),
                     )
                     .when(
