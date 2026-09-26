@@ -5,7 +5,8 @@ import json
 import sys
 import time
 
-THREAD = "synthetic-thread-1"
+thread_number = 0
+thread_id = None
 turn_number = 0
 pending_edit = None
 pending_run = None
@@ -67,12 +68,17 @@ for line in sys.stdin:
             }
         )
     elif method in {"thread/start", "thread/resume", "thread/read"}:
+        if method == "thread/start":
+            thread_number += 1
+            thread_id = f"synthetic-thread-{thread_number}"
+        else:
+            thread_id = request["params"]["threadId"]
         send(
             {
                 "id": request_id,
                 "result": {
                     "thread": {
-                        "id": THREAD,
+                        "id": thread_id,
                         "name": None,
                         "updatedAt": 1,
                         "turns": [],
@@ -80,7 +86,18 @@ for line in sys.stdin:
                 },
             }
         )
-    elif method in {"thread/delete", "thread/name/set", "turn/interrupt"}:
+    elif method == "thread/delete":
+        deleted_id = request["params"]["threadId"]
+        send(
+            {
+                "id": request_id,
+                "error": {
+                    "code": -32600,
+                    "message": f"no rollout found for thread id {deleted_id}",
+                },
+            }
+        )
+    elif method in {"thread/name/set", "turn/interrupt"}:
         send({"id": request_id, "result": {}})
     elif method == "thread/items/list":
         send({"id": request_id, "result": {"data": [], "nextCursor": None}})
@@ -110,7 +127,7 @@ for line in sys.stdin:
                     "id": 9000 + turn_number,
                     "method": "item/tool/call",
                     "params": {
-                        "threadId": THREAD,
+                        "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
                         "tool": "edit_selected_tab_sql",
@@ -139,7 +156,7 @@ for line in sys.stdin:
                     "id": 9000 + turn_number,
                     "method": "item/tool/call",
                     "params": {
-                        "threadId": THREAD,
+                        "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"run-{turn_number}",
                         "tool": "run_selected_tab_query",
@@ -166,7 +183,7 @@ for line in sys.stdin:
                 {
                     "method": "item/agentMessage/delta",
                     "params": {
-                        "threadId": THREAD,
+                        "threadId": thread_id,
                         "turnId": turn_id,
                         "delta": answer,
                     },
@@ -176,7 +193,7 @@ for line in sys.stdin:
                 {
                     "method": "turn/completed",
                     "params": {
-                        "threadId": THREAD,
+                        "threadId": thread_id,
                         "turn": {"id": turn_id, "status": "completed", "items": []},
                     },
                 }
@@ -197,7 +214,7 @@ for line in sys.stdin:
             {
                 "method": "item/agentMessage/delta",
                 "params": {
-                    "threadId": THREAD,
+                    "threadId": thread_id,
                     "turnId": turn_id,
                     "delta": message,
                 },
@@ -207,7 +224,7 @@ for line in sys.stdin:
             {
                 "method": "turn/completed",
                 "params": {
-                    "threadId": THREAD,
+                    "threadId": thread_id,
                     "turn": {"id": turn_id, "status": "completed", "items": []},
                 },
             }

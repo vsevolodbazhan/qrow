@@ -81,8 +81,9 @@ QROW_E2E_BUNDLE="$qrow_font_test_dir/package/Qrow.app" \
 target/e2e-tools/native-driver --assistant-font-only
 ```
 
-This check selects System Font and Menlo, reads the saved settings, and captures
-the transcript in each font.
+This check captures the conversation search row, selects System Font and Menlo,
+reads the saved settings, captures the transcript in each font, and deletes a
+conversation whose Codex history is missing.
 
 ## Inspect failures
 

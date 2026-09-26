@@ -71,6 +71,10 @@ delete a conversation, Qrow asks Codex to remove it. This action does not
 change query tabs, SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text
 in its own data directory.
+If Codex cannot find a saved conversation, Qrow keeps its entry. If you restore
+the Codex history, you can try to open it again. You can also delete the entry
+from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
+conversation text from its workspace.
 Select **Load older messages** to read earlier conversation text. Select **Jump
 to latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a

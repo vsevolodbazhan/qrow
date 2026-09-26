@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeSet, VecDeque},
     ffi::OsStr,
+    fmt,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -409,7 +410,12 @@ impl CodexHarness {
                         .get("message")
                         .and_then(Value::as_str)
                         .unwrap_or("Unknown app-server error");
-                    bail!("Codex request {method} failed ({code}): {message}");
+                    return Err(CodexRequestError {
+                        method,
+                        code,
+                        message: message.to_owned(),
+                    }
+                    .into());
                 }
                 let result = message.get("result").cloned().with_context(|| {
                     format!("Codex response to {method} did not contain a result")
@@ -754,16 +760,18 @@ impl AssistantHarness for CodexHarness {
 
     fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation> {
         Self::ensure_identifier(thread_id)?;
-        let response: ThreadResponse = self.request(
-            "thread/resume",
-            json!({
-                "threadId": thread_id,
-                "cwd": self.cwd,
-                "sandbox": "read-only",
-                "approvalPolicy": "never",
-                "excludeTurns": true,
-            }),
-        )?;
+        let response: ThreadResponse = self
+            .request(
+                "thread/resume",
+                json!({
+                    "threadId": thread_id,
+                    "cwd": self.cwd,
+                    "sandbox": "read-only",
+                    "approvalPolicy": "never",
+                    "excludeTurns": true,
+                }),
+            )
+            .map_err(|error| explain_missing_rollout(error, thread_id))?;
         anyhow::ensure!(
             response.thread.id == thread_id,
             "Codex resumed the wrong thread"
@@ -773,10 +781,12 @@ impl AssistantHarness for CodexHarness {
 
     fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory> {
         Self::ensure_identifier(thread_id)?;
-        let response: ThreadResponse = self.request(
-            "thread/read",
-            json!({ "threadId": thread_id, "includeTurns": true }),
-        )?;
+        let response: ThreadResponse = self
+            .request(
+                "thread/read",
+                json!({ "threadId": thread_id, "includeTurns": true }),
+            )
+            .map_err(|error| explain_missing_rollout(error, thread_id))?;
         anyhow::ensure!(
             response.thread.id == thread_id,
             "Codex read the wrong thread"
@@ -845,8 +855,11 @@ impl AssistantHarness for CodexHarness {
 
     fn delete_conversation(&mut self, thread_id: &str) -> Result<()> {
         Self::ensure_identifier(thread_id)?;
-        let _: Value = self.request("thread/delete", json!({ "threadId": thread_id }))?;
-        Ok(())
+        match self.request::<Value>("thread/delete", json!({ "threadId": thread_id })) {
+            Ok(_) => Ok(()),
+            Err(error) if is_missing_rollout(&error, thread_id) => Ok(()),
+            Err(error) => Err(error),
+        }
     }
 
     fn start_turn(&mut self, request: TurnRequest) -> Result<Turn> {
@@ -1009,6 +1022,46 @@ struct SuccessResponse<'a> {
 struct ErrorResponse<'a> {
     id: &'a Value,
     error: Value,
+}
+
+#[derive(Debug)]
+struct CodexRequestError {
+    method: &'static str,
+    code: Value,
+    message: String,
+}
+
+impl CodexRequestError {
+    fn is_missing_rollout(&self, thread_id: &str) -> bool {
+        self.code.as_i64() == Some(-32600)
+            && self.message == format!("no rollout found for thread id {thread_id}")
+    }
+}
+
+impl fmt::Display for CodexRequestError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "Codex request {} failed ({}): {}",
+            self.method, self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for CodexRequestError {}
+
+fn is_missing_rollout(error: &anyhow::Error, thread_id: &str) -> bool {
+    error
+        .downcast_ref::<CodexRequestError>()
+        .is_some_and(|error| error.is_missing_rollout(thread_id))
+}
+
+fn explain_missing_rollout(error: anyhow::Error, thread_id: &str) -> anyhow::Error {
+    if is_missing_rollout(&error, thread_id) {
+        anyhow!("Codex cannot find this conversation. You can delete it from Qrow.")
+    } else {
+        error
+    }
 }
 
 #[derive(Deserialize)]
@@ -1614,6 +1667,45 @@ while :; do sleep 1; done
             b"{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"item/agentMessage/delta\"}\n";
         read_protocol_stream(Cursor::new(deltas), &tx, &overflowed);
         assert!(!overflowed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn missing_rollout_can_be_removed_without_hiding_other_delete_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+    id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+    case "$line" in
+        *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+        *'"method":"thread/resume"'*|*'"method":"thread/read"'*)
+            printf '{"id":%s,"error":{"code":-32600,"message":"no rollout found for thread id thread-missing"}}\n' "$id" ;;
+        *'"method":"thread/delete"'*'"threadId":"thread-missing"'*)
+            printf '{"id":%s,"error":{"code":-32600,"message":"no rollout found for thread id thread-missing"}}\n' "$id" ;;
+        *'"method":"thread/delete"'*)
+            printf '{"id":%s,"error":{"code":-32000,"message":"permission denied"}}\n' "$id" ;;
+    esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+        let resume_error = harness.resume_conversation("thread-missing").unwrap_err();
+        assert_eq!(
+            resume_error.to_string(),
+            "Codex cannot find this conversation. You can delete it from Qrow."
+        );
+        let read_error = harness.read_conversation("thread-missing").unwrap_err();
+        assert_eq!(read_error.to_string(), resume_error.to_string());
+        harness.delete_conversation("thread-missing").unwrap();
+        assert!(
+            harness
+                .delete_conversation("thread-denied")
+                .unwrap_err()
+                .to_string()
+                .contains("permission denied")
+        );
     }
 
     #[test]

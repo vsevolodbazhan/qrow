@@ -592,6 +592,21 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Assistant font was not saved as \(expected)")
     }
+    func waitStaleConversationRemoved() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]],
+               assistant["selected_thread"] as? String == "synthetic-thread-2",
+               conversations.count == 1,
+               conversations[0]["thread_id"] as? String == "synthetic-thread-2" { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Missing Codex conversation stayed in the Qrow workspace")
+    }
     func selectFont(_ label: String, _ family: String) throws {
         var popup = try wait(label, role: kAXPopUpButtonRole)
         scrollIntoView(popup)
@@ -699,12 +714,27 @@ final class Driver {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         if fontOnly {
             _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+            if find("Search conversations") == nil {
+                try press("Toggle conversation list")
+            }
+            _ = try wait("Search conversations")
+            try snapshot("assistant-conversation-search-spacing")
+            if find("Assistant message") == nil {
+                try press("Back to conversation")
+            }
             try fill("Assistant message", "Explain `SELECT 1` in one sentence")
             try press("Send")
             _ = try wait("I can help with this query", timeout: 20)
             try snapshot("assistant-before-font-change")
             try verifyAssistantFontSwitch()
-            print("PASS: Assistant font changes persist while a transcript is visible")
+            try click(wait("Conversation actions", role: kAXButtonRole))
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            key(125) // Down selects Rename.
+            key(125) // Down selects Delete.
+            key(36)  // Return opens the confirmation.
+            try press("Delete")
+            try waitStaleConversationRemoved()
+            print("PASS: Assistant fonts persist and a missing Codex conversation can be deleted")
             return
         }
         let startingModel = try wait("Assistant model unavailable", timeout: 5, role: kAXButtonRole)

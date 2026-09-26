@@ -1620,11 +1620,11 @@ impl Qrow {
             .border_color(cx.theme().border)
             .child(
                 h_flex()
-                    .h(self.ui_px(36.))
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
                     .px_2()
+                    .py_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .when(narrow, |row| {
