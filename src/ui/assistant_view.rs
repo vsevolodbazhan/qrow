@@ -17,11 +17,12 @@ use gpui_kit::component::{
 use qrow::{
     assistant::{
         AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, ToolCall, TurnRequest,
+        WORKSPACE_CONTEXT_SEPARATOR,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
             SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
         },
-        WORKSPACE_CONTEXT_SEPARATOR, history_item_text,
+        history_item_text,
         service::{
             Command as AssistantCommand, Event as AssistantServiceEvent, Operation, Service,
         },
@@ -186,7 +187,10 @@ mod tests {
     fn selector_labels_expand_in_priority_order() {
         let widths = [148., 100., 68.];
         assert_eq!(assistant_selector_labels(116., widths), [false; 3]);
-        assert_eq!(assistant_selector_labels(228., widths), [true, false, false]);
+        assert_eq!(
+            assistant_selector_labels(228., widths),
+            [true, false, false]
+        );
         assert_eq!(assistant_selector_labels(292., widths), [true, true, false]);
         assert_eq!(assistant_selector_labels(324., widths), [true; 3]);
     }
@@ -825,12 +829,7 @@ impl Qrow {
         self.changed(cx);
     }
 
-    fn select_assistant_tier(
-        &mut self,
-        label: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_assistant_tier(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
         let tier = if label == "Default" {
             None
         } else {
@@ -1340,7 +1339,8 @@ impl Qrow {
                 turn_id,
                 text,
             }) => {
-                let selected = self.assistant.selected_thread.as_deref() == Some(thread_id.as_str());
+                let selected =
+                    self.assistant.selected_thread.as_deref() == Some(thread_id.as_str());
                 if !text.is_empty()
                     && self.assistant_panel.pending_reply_thread.as_deref()
                         == Some(thread_id.as_str())
@@ -1379,8 +1379,7 @@ impl Qrow {
                 turn,
                 error,
             }) => {
-                if self.assistant_panel.pending_reply_thread.as_deref()
-                    == Some(thread_id.as_str())
+                if self.assistant_panel.pending_reply_thread.as_deref() == Some(thread_id.as_str())
                 {
                     self.assistant_panel.pending_reply_thread = None;
                 }
@@ -1805,11 +1804,10 @@ impl Qrow {
         let assistant_entity = cx.entity();
         let conversation_width = width.as_f32() / self.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
-        let [show_model_label, show_reasoning_label, show_tier_label] =
-            assistant_selector_labels(
-                (conversation_width - 196.).max(0.),
-                [model_width, reasoning_width, tier_width],
-            );
+        let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
+            (conversation_width - 196.).max(0.),
+            [model_width, reasoning_width, tier_width],
+        );
         h_flex()
             .size_full()
             .min_w_0()
@@ -1996,8 +1994,9 @@ impl Qrow {
                                     entry.text.clone(),
                                 )
                                 .style(TextViewStyle::default().table(table_style))
-                                .text_base()
-                                .line_height(relative(1.625))
+                                .font_family(self.settings.assistant_font_family.clone())
+                                .text_size(self.ui_px(self.settings.assistant_font_size))
+                                .line_height(relative(self.settings.assistant_line_height))
                                 .min_w_0()
                                 .max_w_full()
                                 .when(entry.speaker == Speaker::Error, |view| {

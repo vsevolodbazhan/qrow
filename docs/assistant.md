@@ -38,6 +38,9 @@ the placeholder if the turn ends or fails without a reply.
 Qrow renders all conversation messages as Markdown. This includes your messages,
 assistant replies, tool activity, and errors. Messages can show headings, lists,
 code, links, and tables. Expanded tool and error details stay as plain text.
+Use **Settings… → Appearance → Assistant** to change the message font family,
+font size, and line height. These settings do not change the message field or
+expanded technical details.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, selected SQL, query status, and requested result rows and Logs. It

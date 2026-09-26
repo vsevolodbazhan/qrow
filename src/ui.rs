@@ -352,6 +352,20 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
+        if workspace.settings.assistant_font_family != Settings::default().assistant_font_family
+            && !fonts.contains(&workspace.settings.assistant_font_family)
+        {
+            workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
+            unavailable_font = true;
+            let warning =
+                "The saved assistant font is unavailable, so Qrow is using the system font.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
+        }
         if workspace.settings.ui_font_family != Settings::default().ui_font_family
             && !fonts.contains(&workspace.settings.ui_font_family)
         {
@@ -1343,6 +1357,14 @@ impl Qrow {
             self.changed(cx);
         }
     }
+    fn set_assistant_font(&mut self, font: String, cx: &mut Context<Self>) {
+        if (font == Settings::default().assistant_font_family || self.fonts.contains(&font))
+            && self.settings.assistant_font_family != font
+        {
+            self.settings.assistant_font_family = font;
+            self.changed(cx);
+        }
+    }
     fn set_ui_font(&mut self, font: String, window: &mut Window, cx: &mut Context<Self>) {
         if (font == Settings::default().ui_font_family || self.fonts.contains(&font))
             && self.settings.ui_font_family != font
@@ -1361,6 +1383,9 @@ impl Qrow {
         self.settings.logs_font_family = settings.logs_font_family;
         self.settings.logs_font_size = settings.logs_font_size;
         self.settings.logs_line_height = settings.logs_line_height;
+        self.settings.assistant_font_family = settings.assistant_font_family;
+        self.settings.assistant_font_size = settings.assistant_font_size;
+        self.settings.assistant_line_height = settings.assistant_line_height;
         self.apply_ui_scale(settings.ui_scale, window, cx);
         apply_ui_theme(&self.settings, window, cx);
         self.changed(cx);

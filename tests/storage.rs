@@ -130,6 +130,9 @@ fn flush_acknowledges_its_snapshot_and_subsequent_edits_are_saved() {
     state.settings.logs_font_family = "Courier".into();
     state.settings.logs_font_size = 15.;
     state.settings.logs_line_height = 1.4;
+    state.settings.assistant_font_family = "Helvetica".into();
+    state.settings.assistant_font_size = 17.;
+    state.settings.assistant_line_height = 1.5;
     saver.save(Workspace::default()).unwrap();
     let receipt = saver.flush(state.clone()).unwrap();
     receipt.recv_timeout(TIMEOUT).unwrap().unwrap();

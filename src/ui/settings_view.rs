@@ -35,15 +35,19 @@ enum NumberSetting {
     EditorLineHeight,
     LogsFontSize,
     LogsLineHeight,
+    AssistantFontSize,
+    AssistantLineHeight,
 }
 
 impl NumberSetting {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 7] = [
         Self::Scale,
         Self::EditorFontSize,
         Self::EditorLineHeight,
         Self::LogsFontSize,
         Self::LogsLineHeight,
+        Self::AssistantFontSize,
+        Self::AssistantLineHeight,
     ];
 
     /// The value as the dialog shows it. The scale is a percentage; the others
@@ -55,6 +59,8 @@ impl NumberSetting {
             Self::EditorLineHeight => settings.editor_line_height,
             Self::LogsFontSize => settings.logs_font_size,
             Self::LogsLineHeight => settings.logs_line_height,
+            Self::AssistantFontSize => settings.assistant_font_size,
+            Self::AssistantLineHeight => settings.assistant_line_height,
         }
     }
 
@@ -66,10 +72,10 @@ impl NumberSetting {
                 MAX_UI_SCALE * 100.,
                 UI_SCALE_STEP * 100.,
             ),
-            Self::EditorFontSize | Self::LogsFontSize => {
+            Self::EditorFontSize | Self::LogsFontSize | Self::AssistantFontSize => {
                 (MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, 1.)
             }
-            Self::EditorLineHeight | Self::LogsLineHeight => {
+            Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => {
                 (MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP)
             }
         }
@@ -77,7 +83,10 @@ impl NumberSetting {
 
     /// Line heights carry one decimal. The others are whole numbers.
     fn fractional(self) -> bool {
-        matches!(self, Self::EditorLineHeight | Self::LogsLineHeight)
+        matches!(
+            self,
+            Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight
+        )
     }
 
     fn format(self, value: f32) -> String {
@@ -91,8 +100,8 @@ impl NumberSetting {
     fn unit(self) -> &'static str {
         match self {
             Self::Scale => "%",
-            Self::EditorFontSize | Self::LogsFontSize => "px",
-            Self::EditorLineHeight | Self::LogsLineHeight => "x",
+            Self::EditorFontSize | Self::LogsFontSize | Self::AssistantFontSize => "px",
+            Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => "x",
         }
     }
 
@@ -105,6 +114,8 @@ impl NumberSetting {
             Self::EditorLineHeight => "Editor Line Height",
             Self::LogsFontSize => "Logs Font Size",
             Self::LogsLineHeight => "Logs Line Height",
+            Self::AssistantFontSize => "Assistant Font Size",
+            Self::AssistantLineHeight => "Assistant Line Height",
         }
     }
 }
@@ -115,24 +126,31 @@ enum FontSetting {
     Ui,
     Editor,
     Logs,
+    Assistant,
 }
 
 impl FontSetting {
-    const ALL: [Self; 3] = [Self::Ui, Self::Editor, Self::Logs];
+    const ALL: [Self; 4] = [Self::Ui, Self::Editor, Self::Logs, Self::Assistant];
 
     fn family(self, settings: &Settings) -> &str {
         match self {
             Self::Ui => &settings.ui_font_family,
             Self::Editor => &settings.editor_font_family,
             Self::Logs => &settings.logs_font_family,
+            Self::Assistant => &settings.assistant_font_family,
         }
     }
 
-    /// The option the select shows. The interface font falls back to a named
-    /// entry, because the stored default is a system font identifier.
+    /// The option the select shows. System font identifiers need a readable
+    /// entry in the UI and assistant font selectors.
     fn selected(self, settings: &Settings) -> String {
         let family = self.family(settings);
-        if self == Self::Ui && family == Settings::default().ui_font_family {
+        let system_font = match self {
+            Self::Ui => Some(Settings::default().ui_font_family),
+            Self::Assistant => Some(Settings::default().assistant_font_family),
+            _ => None,
+        };
+        if system_font.as_deref() == Some(family) {
             SYSTEM_FONT_LABEL.to_owned()
         } else {
             family.to_owned()
@@ -144,6 +162,7 @@ impl FontSetting {
             Self::Ui => "UI Font Family",
             Self::Editor => "Editor Font Family",
             Self::Logs => "Logs Font Family",
+            Self::Assistant => "Assistant Font Family",
         }
     }
 }
@@ -220,7 +239,7 @@ impl Qrow {
         let mut fonts = Vec::new();
         for setting in FontSetting::ALL {
             let options = match setting {
-                FontSetting::Ui => interface_fonts.clone(),
+                FontSetting::Ui | FontSetting::Assistant => interface_fonts.clone(),
                 _ => self.fonts.clone(),
             };
             let select = cx.new(|cx| {
@@ -350,6 +369,14 @@ impl Qrow {
                 self.settings.logs_line_height = value;
                 self.changed(cx);
             }
+            NumberSetting::AssistantFontSize if self.settings.assistant_font_size != value => {
+                self.settings.assistant_font_size = value;
+                self.changed(cx);
+            }
+            NumberSetting::AssistantLineHeight if self.settings.assistant_line_height != value => {
+                self.settings.assistant_line_height = value;
+                self.changed(cx);
+            }
             _ => {}
         }
     }
@@ -372,6 +399,14 @@ impl Qrow {
             }
             FontSetting::Editor => self.set_editor_font(font, cx),
             FontSetting::Logs => self.set_logs_font(font, cx),
+            FontSetting::Assistant => {
+                let font = if font == SYSTEM_FONT_LABEL {
+                    Settings::default().assistant_font_family
+                } else {
+                    font
+                };
+                self.set_assistant_font(font, cx);
+            }
         }
     }
 
@@ -633,7 +668,9 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                 )
                 .item(
                     SettingItem::new("Font Family", font_field(form, FontSetting::Ui))
-                        .description("Used everywhere except the Editor and Logs.")
+                        .description(
+                            "Used everywhere except the Editor, Logs, and assistant messages.",
+                        )
                         .keywords(["interface", "ui", "typeface"]),
                 ),
         )
@@ -682,6 +719,31 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                     )
                     .description("Line spacing, relative to the font size.")
                     .keywords(["logs", "spacing"]),
+                ),
+        )
+        .group(
+            SettingGroup::new()
+                .title("Assistant")
+                .item(
+                    SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
+                        .description("Font for conversation messages.")
+                        .keywords(["assistant", "messages", "typeface"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Font Size",
+                        number_field(form, NumberSetting::AssistantFontSize),
+                    )
+                    .description("Base size, before Scale.")
+                    .keywords(["assistant", "messages"]),
+                )
+                .item(
+                    SettingItem::new(
+                        "Line Height",
+                        number_field(form, NumberSetting::AssistantLineHeight),
+                    )
+                    .description("Line spacing, relative to the font size.")
+                    .keywords(["assistant", "messages", "spacing"]),
                 ),
         )
 }

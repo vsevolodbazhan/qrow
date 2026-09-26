@@ -92,6 +92,9 @@ pub struct Settings {
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
+    pub assistant_font_family: String,
+    pub assistant_font_size: f32,
+    pub assistant_line_height: f32,
     pub assistant: AssistantSettings,
 }
 
@@ -106,6 +109,9 @@ impl Default for Settings {
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
+            assistant_font_family: ".SystemUIFont".into(),
+            assistant_font_size: 14.,
+            assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),
         }
     }
@@ -164,6 +170,25 @@ impl Settings {
         self.logs_line_height = (self.logs_line_height * 10.).round() / 10.;
         self.logs_line_height = self
             .logs_line_height
+            .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant_font_family = self.assistant_font_family.trim().into();
+        if self.assistant_font_family.is_empty() {
+            self.assistant_font_family = Self::default().assistant_font_family;
+        }
+        if !self.assistant_font_size.is_finite() {
+            self.assistant_font_size = Self::default().assistant_font_size;
+        }
+        self.assistant_font_size = self
+            .assistant_font_size
+            .round()
+            .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
+        if !self.assistant_line_height.is_finite() {
+            self.assistant_line_height = Self::default().assistant_line_height;
+        }
+        self.assistant_line_height = (self.assistant_line_height * 10.).round() / 10.;
+        self.assistant_line_height = self
+            .assistant_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
 
         self.assistant.sanitize();
@@ -712,6 +737,9 @@ mod tests {
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,
+            assistant_font_family: "   ".into(),
+            assistant_font_size: f32::NAN,
+            assistant_line_height: f32::NAN,
             assistant: AssistantSettings::default(),
         };
         settings.sanitize();
@@ -722,12 +750,16 @@ mod tests {
         settings.editor_line_height = 2.1;
         settings.logs_font_size = 33.;
         settings.logs_line_height = 2.1;
+        settings.assistant_font_size = 33.;
+        settings.assistant_line_height = 2.1;
         settings.sanitize();
         assert_eq!(settings.ui_scale, 1.46);
         assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.editor_line_height, MAX_LINE_HEIGHT);
         assert_eq!(settings.logs_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.logs_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.assistant_font_size, MAX_EDITOR_FONT_SIZE);
+        assert_eq!(settings.assistant_line_height, MAX_LINE_HEIGHT);
         let encoded = serde_json::to_string(&settings).unwrap();
         let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
         restored.sanitize();
@@ -761,6 +793,18 @@ mod tests {
             Settings::default().logs_line_height
         );
         assert_eq!(settings.ui_scale, 1.2);
+        assert_eq!(
+            settings.assistant_font_family,
+            Settings::default().assistant_font_family
+        );
+        assert_eq!(
+            settings.assistant_font_size,
+            Settings::default().assistant_font_size
+        );
+        assert_eq!(
+            settings.assistant_line_height,
+            Settings::default().assistant_line_height
+        );
 
         settings.ui_font_family = " Helvetica ".into();
         settings.sanitize();
