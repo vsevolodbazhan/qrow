@@ -52,6 +52,7 @@ pending_edit = None
 pending_run = None
 pending_workspace = None
 pending_read_retry = None
+unknown_tab_id = "00000000-0000-0000-0000-000000000001"
 
 
 def wide_table():
@@ -278,7 +279,7 @@ for line in sys.stdin:
                         "turnId": turn_id,
                         "callId": f"read-{turn_number}",
                         "tool": "read_tab_sql",
-                        "arguments": {"version": 1, "tab_id": "00000000-0000-0000-0000-000000000001"},
+                        "arguments": {"version": 1, "tab_id": unknown_tab_id},
                     },
                 }
             )
@@ -347,6 +348,7 @@ for line in sys.stdin:
         result = json.loads(text)
         if pending_read_retry:
             pending_read_retry = None
+            assert request["result"]["success"] and result["sql"] == "SELECT 99;"
             pending_workspace = turn_id
             send(
                 {
@@ -378,7 +380,7 @@ for line in sys.stdin:
                             "tool": "run_selected_tab_query",
                             "arguments": {
                                 "version": 1,
-                                "tab_id": tab["id"],
+                                "tab_id": unknown_tab_id,
                                 "connection_id": tab["connection_id"],
                                 "editor_revision": tab["editor_revision"],
                             },

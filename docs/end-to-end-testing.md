@@ -158,9 +158,10 @@ same package steps and a new, empty workspace directory. Run:
 target/e2e-tools/native-driver --assistant-retarget-only
 ```
 
-The driver renames another tab and selects it during a turn. The assistant first
-uses an invalid tab ID, then reads the current workspace and retries. The check
-confirms that the query approval card names the renamed tab and shows its SQL.
+The driver renames another tab and selects it during a turn. The assistant
+reads SQL and requests a run with a tab ID that is not in the open tabs. The
+check confirms that the query approval card names the selected tab and shows
+its SQL. The driver cancels the request before it connects.
 
 ## Inspect failures
 

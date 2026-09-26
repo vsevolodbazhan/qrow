@@ -31,6 +31,19 @@ fn remap_selection(
     Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
 }
 
+fn resolve_selected_tab_id(
+    requested: Uuid,
+    selected: Option<Uuid>,
+    known: impl IntoIterator<Item = Uuid>,
+) -> Uuid {
+    // Keep a real other-tab ID so selected-tab actions still reject it.
+    if known.into_iter().any(|id| id == requested) {
+        requested
+    } else {
+        selected.unwrap_or(requested)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VersionInput {
@@ -149,6 +162,14 @@ fn version(version: u32) -> Result<(), ToolResult> {
 }
 
 impl Qrow {
+    fn selected_tab_id_for_tool(&self, requested: Uuid) -> Uuid {
+        resolve_selected_tab_id(
+            requested,
+            self.tabs.get(self.active).map(|tab| tab.saved.id),
+            self.tabs.iter().map(|tab| tab.saved.id),
+        )
+    }
+
     pub(super) fn answer_assistant_call(
         &mut self,
         call: ToolCall,
@@ -189,9 +210,10 @@ impl Qrow {
         let name = call.name.clone();
         let result = self.dispatch_assistant_tool(&call, window, cx);
         if let Some(result) = result {
-            let target = call
-                .arguments
+            let target = result
+                .content
                 .get("tab_id")
+                .or_else(|| call.arguments.get("tab_id"))
                 .and_then(Value::as_str)
                 .and_then(|id| Uuid::parse_str(id).ok())
                 .and_then(|id| self.tabs.iter().find(|tab| tab.saved.id == id))
@@ -261,8 +283,9 @@ impl Qrow {
     }
 
     fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
-        let args: TabInput = parse(call.arguments.clone())?;
+        let mut args: TabInput = parse(call.arguments.clone())?;
         version(args.version)?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         let tab = self
             .tabs
             .iter()
@@ -289,7 +312,8 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
-        let args: EditRequest = parse(call.arguments.clone())?;
+        let mut args: EditRequest = parse(call.arguments.clone())?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         let tab = &self.tabs[self.active];
         let sql = tab.input.read(cx).value().to_string();
         let selected = tab.input.read(cx).selected_range();
@@ -358,7 +382,8 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
-        let args: AppendRequest = parse(call.arguments.clone())?;
+        let mut args: AppendRequest = parse(call.arguments.clone())?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         let tab = &self.tabs[self.active];
         let sql = tab.input.read(cx).value().to_string();
         let document = EditorDocument {
@@ -407,7 +432,8 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let result = (|| {
-            let args: RunRequest = parse(call.arguments.clone())?;
+            let mut args: RunRequest = parse(call.arguments.clone())?;
+            args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
             let tab = &self.tabs[self.active];
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
@@ -708,8 +734,9 @@ impl Qrow {
         call: &ToolCall,
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
-        let args: TargetInput = parse(call.arguments.clone())?;
+        let mut args: TargetInput = parse(call.arguments.clone())?;
         version(args.version)?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         let target =
             self.assistant_panel.target.as_ref().ok_or_else(|| {
                 failure("no_action_target", "Select a tab and send a new message.")
@@ -730,13 +757,14 @@ impl Qrow {
             self.cancel(cx);
         }
         Ok(success(
-            json!({"version": 1, "cancellation_requested": was_running}),
+            json!({"version": 1, "tab_id": args.tab_id, "cancellation_requested": was_running}),
         ))
     }
 
     fn tool_status(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
-        let args: TabInput = parse(call.arguments.clone())?;
+        let mut args: TabInput = parse(call.arguments.clone())?;
         version(args.version)?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         let tab = self
             .tabs
             .iter()
@@ -754,8 +782,9 @@ impl Qrow {
     }
 
     fn tool_results(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
-        let args: RowsInput = parse(call.arguments.clone())?;
+        let mut args: RowsInput = parse(call.arguments.clone())?;
         version(args.version)?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         if self.assistant_panel.target.is_none() {
             return Err(failure(
                 "no_action_target",
@@ -783,8 +812,9 @@ impl Qrow {
 
     fn tool_fetch(&mut self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
         let result = (|| {
-            let args: TargetInput = parse(call.arguments.clone())?;
+            let mut args: TargetInput = parse(call.arguments.clone())?;
             version(args.version)?;
+            args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
             let target = self.assistant_panel.target.as_ref().ok_or_else(|| {
                 failure("no_action_target", "Select a tab and send a new message.")
             })?;
@@ -847,8 +877,9 @@ impl Qrow {
     }
 
     fn tool_logs(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
-        let args: LogsInput = parse(call.arguments.clone())?;
+        let mut args: LogsInput = parse(call.arguments.clone())?;
         version(args.version)?;
+        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
         if self.assistant_panel.target.is_none() {
             return Err(failure(
                 "no_action_target",
@@ -888,5 +919,27 @@ impl Qrow {
         Ok(success(
             json!({"version": 1, "tab_id": args.tab_id, "scope": args.scope, "text": text, "truncated": truncated}),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_selected_tab_id;
+    use uuid::Uuid;
+
+    #[test]
+    fn unknown_tab_id_uses_selected_tab_but_existing_other_tab_remains_distinct() {
+        let selected = Uuid::new_v4();
+        let other = Uuid::new_v4();
+        let unknown = Uuid::new_v4();
+        assert_eq!(
+            resolve_selected_tab_id(unknown, Some(selected), [selected, other]),
+            selected
+        );
+        assert_eq!(
+            resolve_selected_tab_id(other, Some(selected), [selected, other]),
+            other
+        );
+        assert_eq!(resolve_selected_tab_id(unknown, None, [selected]), unknown);
     }
 }

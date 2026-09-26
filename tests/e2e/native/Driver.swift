@@ -1031,7 +1031,7 @@ final class Driver {
 
         _ = try wait("Assistant query approval: Default, Synthetic. SELECT 99;", timeout: 20)
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
-        print("PASS: Assistant refreshes its selected tab after a rename and switch")
+        print("PASS: Assistant targets the selected tab after a rename and invalid tab ID")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, and the last

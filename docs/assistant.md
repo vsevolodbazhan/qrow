@@ -70,6 +70,9 @@ query has no final semicolon, Qrow adds one. The assistant can select a
 specific statement in a tab with several queries before it runs that statement.
 If you switch or rename a tab during a turn, the assistant can read the
 workspace again to use the current selected tab. A rename keeps the tab ID.
+If an assistant tool uses an ID that is not in the open tabs, Qrow uses the
+selected tab and returns its ID. Qrow rejects an ID for a different open tab
+when the tool must act on the selected tab.
 Ask the assistant to change existing SQL when you want an edit or replacement.
 The assistant can write SQL before you select a connection. Select a connection
 before it runs SQL. It cannot read connection passwords. Qrow does not send
