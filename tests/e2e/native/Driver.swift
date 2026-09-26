@@ -681,6 +681,11 @@ final class Driver {
         try snapshot("assistant-scrolled")
         try press("Jump to latest")
         try waitGone("Jump to latest", timeout: 5)
+        // Revisit the wrapped user message after the transcript has been scrolled.
+        for _ in 0..<4 { try scrollUpAbove(waitInput("Assistant message")) }
+        try snapshot("assistant-wrapped-after-scroll")
+        try press("Jump to latest")
+        try waitGone("Jump to latest", timeout: 5)
         try scrollUpAbove(waitInput("Assistant message"))
         _ = try wait("Jump to latest", timeout: 5)
         try fill("Assistant message", "Return to the latest message")

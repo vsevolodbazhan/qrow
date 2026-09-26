@@ -2015,10 +2015,13 @@ impl Qrow {
                                     Speaker::Activity => BubbleVariant::Outline,
                                     Speaker::Error => BubbleVariant::Destructive,
                                 };
-                                Message::new().alignment(alignment).content(
-                                    MessageContent::new().bubble(
+                                // Constrain the column before Markdown measures its wrapped
+                                // height. A cap on the bubble alone can leave its height stale.
+                                Message::new().flex_shrink_0().alignment(alignment).content(
+                                    MessageContent::new().w(relative(0.8)).bubble(
                                         Bubble::new()
                                             .with_variant(variant)
+                                            .max_w_full()
                                             .content(BubbleContent::new().text_base())
                                             .child(
                                         div()
@@ -2065,6 +2068,7 @@ impl Qrow {
                         |transcript| {
                             transcript.child(
                                 Message::new()
+                                    .flex_shrink_0()
                                     .alignment(MessageAlignment::Start)
                                     .content(MessageContent::new().bubble(
                                         Bubble::new().with_variant(BubbleVariant::Muted).child(
