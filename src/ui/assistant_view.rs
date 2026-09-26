@@ -1996,8 +1996,6 @@ impl Qrow {
                                     entry.text.clone(),
                                 )
                                 .style(TextViewStyle::default().table(table_style))
-                                // Inline code uses GPUI Kit's measured inline-flow path.
-                                // Use the base body size for both rich and plain paragraphs.
                                 .text_base()
                                 .line_height(relative(1.625))
                                 .min_w_0()

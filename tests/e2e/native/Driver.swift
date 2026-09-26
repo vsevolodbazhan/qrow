@@ -646,7 +646,7 @@ final class Driver {
         try press("Run")
         let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
         try require(draft == "Keep this draft", "Toolbar Run sent the assistant draft")
-        try fill("Assistant message", "Help me with `SELECT 1` in this query")
+        try fill("Assistant message", "Help me understand how `SELECT 1` behaves in the currently selected query tab and explain its result")
         key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
         _ = try wait("I can help with this query", timeout: 20)
         try snapshot("assistant-markdown")
