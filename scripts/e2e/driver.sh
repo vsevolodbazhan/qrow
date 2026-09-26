@@ -63,3 +63,11 @@ if [ ! -d "$QROW_E2E_BUNDLE" ] || [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" 
 fi
 test "${1:-}" != --prepare || exit 0
 target/e2e-tools/native-driver
+for scenario in assistant-font-only assistant-append-only assistant-statement-only assistant-retarget-only assistant-titles-only assistant-layout-only; do
+    scenario_dir="$QROW_E2E_ARTIFACTS/$scenario"
+    mkdir -p "$scenario_dir/workspace"
+    echo "[e2e] Running $scenario with an isolated workspace."
+    QROW_E2E_ARTIFACTS="$scenario_dir" \
+        QROW_DATA_DIR="$scenario_dir/workspace" \
+        target/e2e-tools/native-driver "--$scenario"
+done

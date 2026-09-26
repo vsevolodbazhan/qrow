@@ -84,6 +84,10 @@ replace `dist/Qrow.app`. It uses a temporary workspace and fresh synthetic
 Keychain credentials. The driver restores the previous clipboard contents
 after text entry.
 
+The full native suite also checks assistant fonts, appended SQL, statement
+selection, tab changes, titles, and layout. It runs each check with a separate
+temporary workspace and the same isolated package.
+
 To check the Assistant font picker without a server fixture, use an isolated
 debug package and the synthetic Codex server:
 

@@ -880,10 +880,12 @@ final class Driver {
             return
         }
         let startingModel = try wait("Assistant model unavailable", timeout: 5, role: kAXButtonRole)
-        try require(attribute(startingModel, kAXEnabledAttribute) as? Bool == false, "Model was enabled while Codex started")
+        try click(startingModel)
+        try require(find("Synthetic Model") == nil, "Model picker opened while Codex started")
         for label in ["Assistant reasoning unavailable", "Assistant service tier unavailable", "Send · Ask"] {
             let control = try wait(label, timeout: 5, role: kAXButtonRole)
-            try require(attribute(control, kAXEnabledAttribute) as? Bool == false, "\(label) was enabled while Codex started")
+            try click(control)
+            try require(find("Run automatically") == nil, "\(label) opened while Codex started")
         }
         try require(find("Starting Codex") == nil, "Startup status appeared above the message field")
         _ = try wait("Toggle Assistant")
@@ -901,7 +903,7 @@ final class Driver {
         }
         let readyModel = try wait("Assistant model: Synthetic Model", timeout: 20)
         try require(attribute(readyModel, kAXEnabledAttribute) as? Bool != false, "Model stayed disabled after Codex started")
-        _ = try wait("Ask", role: kAXPopUpButtonRole)
+        _ = try wait("Send · Ask", role: kAXButtonRole)
         try fill("Assistant message", "Keep this draft")
         try press("Run")
         let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
@@ -994,6 +996,7 @@ final class Driver {
         // A generated title stays after later replies.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
+        try setAssistantRunMode()
         print("PASS: Assistant appends a new SQL query, preserves the first query, and titles the conversation")
     }
     /// Waits until the saved workspace has these conversation titles and
@@ -1327,10 +1330,36 @@ final class Driver {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
     }
+    func openAssistantRunModeConfirmation() throws {
+        let send = try wait("Send · Ask", role: kAXButtonRole)
+        let (sendOrigin, sendSize) = try elementBounds(send)
+        // GPUI Kit exposes the split button's caret as an unnamed AX button.
+        // Select the adjacent caret by its bounds, then choose its named item.
+        let caret = elements().first { element in
+            guard attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
+                  strings(element).isEmpty,
+                  let (origin, size) = try? elementBounds(element) else { return false }
+            return abs(origin.y - sendOrigin.y) < 2
+                && origin.x >= sendOrigin.x + sendSize.width - 2
+                && size.width > 0 && size.width < 60
+        }
+        guard let caret else { throw Failure("Assistant mode caret was not found") }
+        try click(caret)
+        try activate(try waitExact("Run automatically", timeout: 10, role: kAXMenuItemRole))
+        _ = try waitExact("Run automatically", timeout: 10, role: kAXButtonRole)
+    }
+    func setAssistantRunMode() throws {
+        try openAssistantRunModeConfirmation()
+        try press("Cancel")
+        _ = try wait("Send · Ask", timeout: 10, role: kAXButtonRole)
+        try openAssistantRunModeConfirmation()
+        try press("Run automatically")
+        _ = try wait("Send · Run", timeout: 10, role: kAXButtonRole)
+    }
     func testAssistantQueries() throws {
         try fill("SQL Editor", "SELECT 1 AS assistant_value")
         key(38, flags: .maskCommand) // Reopen the existing conversation.
-        _ = try wait("Assistant query approval mode", timeout: 20)
+        _ = try wait("Send · Ask", timeout: 20)
         try fill("Assistant message", "Run selected SQL with approval")
         try press("Send")
         _ = try wait("Assistant query approval:", timeout: 20)
@@ -1348,13 +1377,7 @@ final class Driver {
         _ = try wait("Send", timeout: 5, role: kAXButtonRole)
         _ = try wait("1", role: kAXCellRole)
 
-        let mode = try wait("Assistant query approval mode", role: kAXPopUpButtonRole)
-        try activate(mode)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-        key(125) // Down selects Run mode.
-        key(36)
-        try activate(try waitExact("Run automatically", timeout: 10, role: kAXButtonRole))
-        _ = try wait("Run", timeout: 10, role: kAXPopUpButtonRole)
+        try setAssistantRunMode()
         try fill("SQL Editor", "SELECT 2 AS assistant_value")
         try fill("Assistant message", "Run selected SQL automatically")
         try press("Send")

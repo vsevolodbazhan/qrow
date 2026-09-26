@@ -88,7 +88,7 @@ for line in sys.stdin:
     method = request.get("method")
     request_id = request.get("id")
     if method == "initialize":
-        time.sleep(2)  # Keep the startup controls visible long enough for UI checks.
+        time.sleep(5)  # Keep the startup controls visible through the UI checks.
         send({"id": request_id, "result": {}})
     elif method == "account/read":
         send(
@@ -288,6 +288,13 @@ for line in sys.stdin:
         elif message.startswith(("Run selected SQL", "Run first SQL by range")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
+            if message.startswith("Run first SQL by range"):
+                assert tab["statement_ranges"] == [
+                    {"start": 0, "end": 9},
+                    {"start": 11, "end": 20},
+                    {"start": 22, "end": 30},
+                ]
+                assert tab["statement_ranges_truncated"] is False
             pending_run = turn_id
             send(
                 {
@@ -303,7 +310,7 @@ for line in sys.stdin:
                             "tab_id": tab["id"],
                             "connection_id": tab["connection_id"],
                             "editor_revision": tab["editor_revision"],
-                            **({"statement_range": {"start": 0, "end": len("SELECT 0;".encode("utf-8"))}}
+                            **({"statement_range": tab["statement_ranges"][0]}
                                if message.startswith("Run first SQL by range") else {}),
                         },
                     },
@@ -400,7 +407,13 @@ for line in sys.stdin:
                 message = f"Tool failed: the query result has no expected rows: {result}"
             else:
                 message = "I ran the query."
-        elif "statement_range" in result or "selected_range" in result:
+        elif pending_message.startswith("Append two SQL statements with edit tool"):
+            message = (
+                "I updated the SQL."
+                if result.get("selected_range") == {"start": 22, "end": 30}
+                else f"Tool failed: the edited statement was not selected: {result}"
+            )
+        elif result.get("statement_range") is not None:
             message = "I updated the SQL."
         else:
             message = f"Tool failed: the edit result has no range: {result}"
