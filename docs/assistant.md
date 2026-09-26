@@ -26,6 +26,10 @@ Select a query tab. Select **Toggle Assistant** in the tab strip or press
 works. The message steers the current turn. **Stop** stops the Codex turn. It
 does not cancel a database query that already started.
 
+You can draft a message while Codex starts. The model, reasoning, service tier,
+and Send controls stay disabled until Codex is ready. The pane does not show
+routine status text above the message field.
+
 After you send a message, a shimmering **Thinking…** reply appears in the
 conversation. The reply replaces it when Codex starts to answer. Qrow removes
 the placeholder if the turn ends or fails without a reply.
@@ -85,13 +89,14 @@ The tab strip shows **Done** next to the assistant toggle if a hidden turn
 finishes. Reopen the pane to clear that state.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
-Select **Reconnect**. Qrow does not send the draft for you. A database query
-that already started can finish while Codex is disconnected.
+The **Reconnect** tooltip shows the error. Select **Reconnect** to try again.
+Qrow does not send the draft for you. A database query that already started can
+finish while Codex is disconnected.
 
 If Codex is signed out, select **Sign in with ChatGPT**. Codex opens its sign-in
-page in your browser. If Codex uses an API key, the pane says that API-key
-billing applies. Manage sign-out in Codex, because its account is shared with
-other Codex clients.
+page in your browser. If Codex uses an API key, Codex applies API-key billing.
+Manage sign-out in Codex, because its account is shared with other Codex
+clients.
 
 The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. A conversation can remain if

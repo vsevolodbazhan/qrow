@@ -619,6 +619,13 @@ final class Driver {
         }
         try waitGone("Codex executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        let startingModel = try wait("Assistant model unavailable", timeout: 5)
+        try require(attribute(startingModel, kAXEnabledAttribute) as? Bool == false, "Model was enabled while Codex started")
+        for label in ["Assistant reasoning unavailable", "Assistant service tier unavailable", "Send · Ask"] {
+            let control = try wait(label, timeout: 5, role: kAXButtonRole)
+            try require(attribute(control, kAXEnabledAttribute) as? Bool == false, "\(label) was enabled while Codex started")
+        }
+        try require(find("Starting Codex") == nil, "Startup status appeared above the message field")
         _ = try wait("Toggle Assistant")
         _ = try wait("New Conversation")
         _ = try wait("Toggle conversation list")
@@ -632,7 +639,8 @@ final class Driver {
             _ = try wait("Search conversations")
             try press("Back to conversation")
         }
-        _ = try wait("Assistant model", timeout: 20)
+        let readyModel = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try require(attribute(readyModel, kAXEnabledAttribute) as? Bool != false, "Model stayed disabled after Codex started")
         _ = try wait("Ask", role: kAXPopUpButtonRole)
         try fill("Assistant message", "Keep this draft")
         try press("Run")

@@ -20,6 +20,7 @@ for line in sys.stdin:
     method = request.get("method")
     request_id = request.get("id")
     if method == "initialize":
+        time.sleep(2)  # Keep the startup controls visible long enough for UI checks.
         send({"id": request_id, "result": {}})
     elif method == "account/read":
         send(

@@ -1694,37 +1694,7 @@ impl Qrow {
         let narrow = width < self.ui_px(600.);
         let show_threads = show_thread_list(narrow, self.assistant_panel.thread_list_override);
         let action_size = self.ui_px(28.);
-        let status = match &self.assistant_panel.status {
-            Status::Idle => "Open the assistant to start Codex".to_owned(),
-            Status::Starting => "Starting Codex…".to_owned(),
-            Status::SignInRequired => {
-                "Sign in to Codex with ChatGPT to use your subscription.".to_owned()
-            }
-            Status::Ready => {
-                if self
-                    .assistant_panel
-                    .pending_query
-                    .as_ref()
-                    .is_some_and(|query| query.started)
-                {
-                    "Query running…".into()
-                } else if self.assistant_panel.active_turn.is_some() {
-                    "Ready".into()
-                } else if self
-                    .assistant_panel
-                    .snapshot
-                    .as_ref()
-                    .is_some_and(|snapshot| {
-                        matches!(snapshot.account().kind(), AccountKind::ApiKey)
-                    })
-                {
-                    "Ready · API-key billing applies".into()
-                } else {
-                    "Ready".into()
-                }
-            }
-            Status::Disconnected(error) => error.clone(),
-        };
+        let controls_ready = matches!(self.assistant_panel.status, Status::Ready);
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
         let entries = self.assistant_panel.transcripts.get(selected);
         let mode_is_run = self.assistant.conversations.iter().any(|conversation| {
@@ -1955,6 +1925,13 @@ impl Qrow {
                                 Button::new("assistant-reconnect")
                                     .small()
                                     .label("Reconnect")
+                                    .when_some(
+                                        match &self.assistant_panel.status {
+                                            Status::Disconnected(error) => Some(error.clone()),
+                                            _ => None,
+                                        },
+                                        |button, error| button.tooltip(error),
+                                    )
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.reconnect_assistant(cx)),
                                     ),
@@ -1974,6 +1951,16 @@ impl Qrow {
                     )
                 },
             )
+            .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
+                panel.child(
+                    div()
+                        .px_3()
+                        .py_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(notice.clone()),
+                )
+            })
             .child(
                 div().relative().flex_1().min_h_0().child(v_flex()
                     .id("assistant-transcript")
@@ -2103,16 +2090,6 @@ impl Qrow {
                     )
                 },
             ))
-            .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
-                panel.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(notice.clone()),
-                )
-            })
             .when_some(
                 self.assistant_panel
                     .pending_query
@@ -2188,15 +2165,6 @@ impl Qrow {
                     .gap_2()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .when(status != "Ready", |composer| composer.child(
-                        div()
-                            .id("assistant-status")
-                            .role(Role::Status)
-                            .aria_label(status.clone())
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(status),
-                    ))
                     .child(
                         div().key_context("AssistantComposer").child(
                             Textarea::new(&self.assistant_panel.composer)
@@ -2211,13 +2179,14 @@ impl Qrow {
                                     .h(action_size)
                                     .min_w_0()
                                     .gap_1()
-                                    .when(model.is_some(), |row| row.child(
+                                    .child(
                                         Button::new("assistant-model")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::Cpu)
-                                            .accessibility_label(format!("Assistant model: {model_label}"))
-                                            .tooltip(format!("Model: {model_label}"))
-                                            .when(show_model_label, |button| button.label(model_label.clone()).dropdown_caret(true))
+                                            .accessibility_label(if model.is_some() { format!("Assistant model: {model_label}") } else { "Assistant model unavailable".into() })
+                                            .tooltip(if controls_ready { format!("Model: {model_label}") } else { "Model unavailable until Codex is ready".into() })
+                                            .disabled(!controls_ready || model.is_none())
+                                            .when(model.is_some() && show_model_label, |button| button.label(model_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
                                                 let assistant_entity = assistant_entity.clone();
                                                 move |menu, _, _| model_options.iter().fold(menu, |menu, (label, selected)| {
@@ -2231,14 +2200,15 @@ impl Qrow {
                                                         },
                                                     ))
                                                 })
-                                            })))
-                                    .when(model.is_some_and(|model| !model.reasoning_efforts().is_empty()), |row| row.child(
+                                            }))
+                                    .child(
                                         Button::new("assistant-reasoning")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::Asterisk)
-                                            .accessibility_label(format!("Assistant reasoning: {reasoning_label}"))
-                                            .tooltip(format!("Reasoning: {reasoning_label}"))
-                                            .when(show_reasoning_label, |button| button.label(reasoning_label.clone()).dropdown_caret(true))
+                                            .accessibility_label(if model.is_some() { format!("Assistant reasoning: {reasoning_label}") } else { "Assistant reasoning unavailable".into() })
+                                            .tooltip(if controls_ready { format!("Reasoning: {reasoning_label}") } else { "Reasoning unavailable until Codex is ready".into() })
+                                            .disabled(!controls_ready || !model.is_some_and(|model| !model.reasoning_efforts().is_empty()))
+                                            .when(model.is_some() && show_reasoning_label, |button| button.label(reasoning_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
                                                 let assistant_entity = assistant_entity.clone();
                                                 move |menu, _, _| reasoning_options.iter().fold(menu, |menu, (label, selected)| {
@@ -2252,14 +2222,15 @@ impl Qrow {
                                                         },
                                                     ))
                                                 })
-                                            })))
-                                    .when(model.is_some_and(|model| !model.service_tiers().is_empty()), |row| row.child(
+                                            }))
+                                    .child(
                                         Button::new("assistant-tier")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::BatteryCharging)
-                                            .accessibility_label(format!("Assistant service tier: {tier_label}"))
-                                            .tooltip(format!("Service tier: {tier_label}"))
-                                            .when(show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
+                                            .accessibility_label(if model.is_some() { format!("Assistant service tier: {tier_label}") } else { "Assistant service tier unavailable".into() })
+                                            .tooltip(if controls_ready { format!("Service tier: {tier_label}") } else { "Service tier unavailable until Codex is ready".into() })
+                                            .disabled(!controls_ready || !model.is_some_and(|model| !model.service_tiers().is_empty()))
+                                            .when(model.is_some() && show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
                                                 let assistant_entity = assistant_entity.clone();
                                                 move |menu, _, _| tier_options.iter().fold(menu, |menu, (label, selected)| {
@@ -2273,7 +2244,7 @@ impl Qrow {
                                                         },
                                                     ))
                                                 })
-                                            }))),
+                                            })),
                             )
                             .child(div().flex_1())
                             .child(
@@ -2281,8 +2252,7 @@ impl Qrow {
                                     .primary()
                                     .small()
                                     .disabled(
-                                        !matches!(self.assistant_panel.status, Status::Ready)
-                                            || self.assistant.selected_thread.is_none(),
+                                        !controls_ready || self.assistant.selected_thread.is_none(),
                                     )
                                     .button(
                                         Button::new("assistant-send")
