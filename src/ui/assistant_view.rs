@@ -10,6 +10,7 @@ use gpui_kit::component::{
     menu::DropdownMenu,
     message::{Message, MessageAlignment, MessageContent},
     select::{SearchableVec, SelectEvent, SelectState},
+    shimmer::ShimmerText,
     text::{TextView, TextViewStyle},
     v_flex,
 };
@@ -272,6 +273,7 @@ pub(super) struct AssistantPanelState {
     pub loaded_cursors: BTreeMap<String, BTreeSet<String>>,
     pub loading_older: bool,
     pub active_turn: Option<String>,
+    pub pending_reply_thread: Option<String>,
     pub target: Option<ActionTarget>,
     pub pending_query: Option<PendingQuery>,
     pub scroll: ScrollHandle,
@@ -400,6 +402,7 @@ impl AssistantPanelState {
             loaded_cursors: BTreeMap::new(),
             loading_older: false,
             active_turn: None,
+            pending_reply_thread: None,
             target: None,
             pending_query: None,
             scroll: ScrollHandle::new(),
@@ -735,6 +738,7 @@ impl Qrow {
             return;
         }
         self.assistant.selected_thread = Some(id.to_owned());
+        self.assistant_panel.pending_reply_thread = None;
         self.assistant_command(AssistantCommand::Resume(id.to_owned()), cx);
         self.sync_assistant_selectors(window, cx);
         if self.assistant_panel.thread_list_override == Some(true) {
@@ -892,6 +896,7 @@ impl Qrow {
     pub(super) fn reconnect_assistant(&mut self, cx: &mut Context<Self>) {
         self.assistant_panel.shutdown();
         self.assistant_panel.active_turn = None;
+        self.assistant_panel.pending_reply_thread = None;
         self.assistant_panel.target = None;
         self.assistant_panel.pending_query = None;
         self.start_assistant(cx);
@@ -905,6 +910,8 @@ impl Qrow {
             return;
         };
         self.assistant_command(AssistantCommand::Interrupt { thread_id, turn_id }, cx);
+        self.assistant_panel.pending_reply_thread = None;
+        cx.notify();
     }
 
     pub(super) fn toggle_assistant_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1043,6 +1050,7 @@ impl Qrow {
             conversation.last_activity = unix_now_seconds();
             self.changed(cx);
         }
+        self.assistant_panel.pending_reply_thread = Some(thread_id.clone());
         self.assistant_panel
             .transcripts
             .entry(thread_id)
@@ -1311,6 +1319,12 @@ impl Qrow {
                 text,
             }) => {
                 let selected = self.assistant.selected_thread.as_deref() == Some(thread_id.as_str());
+                if !text.is_empty()
+                    && self.assistant_panel.pending_reply_thread.as_deref()
+                        == Some(thread_id.as_str())
+                {
+                    self.assistant_panel.pending_reply_thread = None;
+                }
                 let entries = self
                     .assistant_panel
                     .transcripts
@@ -1343,6 +1357,11 @@ impl Qrow {
                 turn,
                 error,
             }) => {
+                if self.assistant_panel.pending_reply_thread.as_deref()
+                    == Some(thread_id.as_str())
+                {
+                    self.assistant_panel.pending_reply_thread = None;
+                }
                 if self
                     .assistant_panel
                     .pending_query
@@ -1458,6 +1477,9 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
+                if self.assistant_panel.pending_reply_thread.as_deref() == Some(id.as_str()) {
+                    self.assistant_panel.pending_reply_thread = None;
+                }
                 self.assistant_panel.older_cursors.remove(&id);
                 self.assistant_panel.loaded_cursors.remove(&id);
                 self.assistant
@@ -1484,6 +1506,7 @@ impl Qrow {
                 self.assistant_panel.status = Status::Disconnected(error);
                 self.assistant_panel.service = None;
                 self.assistant_panel.active_turn = None;
+                self.assistant_panel.pending_reply_thread = None;
                 self.assistant_panel.target = None;
                 self.assistant_panel.pending_query = None;
             }
@@ -1514,12 +1537,14 @@ impl Qrow {
                     && id.as_deref() == self.assistant.selected_thread.as_deref()
                 {
                     self.assistant_panel.active_turn = None;
+                    self.assistant_panel.pending_reply_thread = None;
                     self.assistant_panel.target = None;
                     self.assistant_panel.pending_query = None;
                 }
                 if operation == Operation::Answer {
                     self.assistant_panel.status = Status::Disconnected(error);
                     self.assistant_panel.service = None;
+                    self.assistant_panel.pending_reply_thread = None;
                     return;
                 }
                 if let Some(thread) = id
@@ -1684,7 +1709,7 @@ impl Qrow {
                 {
                     "Query running…".into()
                 } else if self.assistant_panel.active_turn.is_some() {
-                    "Assistant is working…".into()
+                    "Ready".into()
                 } else if self
                     .assistant_panel
                     .snapshot
@@ -2036,6 +2061,27 @@ impl Qrow {
                                     ),
                                 )
                             }),
+                    )
+                    .when(
+                        self.assistant_panel.pending_reply_thread.as_deref() == Some(selected),
+                        |transcript| {
+                            transcript.child(
+                                Message::new()
+                                    .alignment(MessageAlignment::Start)
+                                    .content(MessageContent::new().bubble(
+                                        Bubble::new().with_variant(BubbleVariant::Ghost).child(
+                                            div()
+                                                .id("assistant-thinking")
+                                                .role(Role::Status)
+                                                .aria_label("Assistant is thinking")
+                                                .child(
+                                                    ShimmerText::new("Thinking…")
+                                                        .text_color(cx.theme().muted_foreground),
+                                                ),
+                                        ),
+                                    )),
+                            )
+                        },
                     ))
             .when(
                 entries.is_some_and(|entries| !entries.is_empty())

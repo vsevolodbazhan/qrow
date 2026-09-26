@@ -26,6 +26,10 @@ Select a query tab. Select **Toggle Assistant** in the tab strip or press
 works. The message steers the current turn. **Stop** stops the Codex turn. It
 does not cancel a database query that already started.
 
+After you send a message, a shimmering **Thinking…** reply appears in the
+conversation. The reply replaces it when Codex starts to answer. Qrow removes
+the placeholder if the turn ends or fails without a reply.
+
 Qrow renders assistant replies as Markdown. Replies can show headings, lists,
 code, links, and tables. Tool activity and error details stay as plain text.
 
