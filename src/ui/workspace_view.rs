@@ -570,19 +570,20 @@ impl Qrow {
                     .cursor(CursorStyle::ResizeUpDown)
             })
             .when(horizontal, |el| {
+                // Overlap the divider so display scaling cannot leave a pixel gap.
                 el.child(
                     div()
                         .absolute()
-                        .left(self.ui_px(3.))
-                        .w(self.ui_px(2.))
+                        .left(self.ui_px(2.))
+                        .w(self.ui_px(3.))
                         .h_full()
                         .bg(cx.theme().background),
                 )
                 .child(
                     div()
                         .absolute()
-                        .left(self.ui_px(3.))
-                        .w(self.ui_px(2.))
+                        .left(self.ui_px(2.))
+                        .w(self.ui_px(3.))
                         .top_0()
                         .h(self.ui_px(TAB_BAR_HEIGHT))
                         .bg(cx.theme().tokens.tab_bar)
@@ -633,19 +634,20 @@ impl Qrow {
             .mx(self.ui_px(-2.))
             .h_full()
             .cursor(CursorStyle::ResizeLeftRight)
+            // The backing starts under the divider to avoid a rounded gap.
             .child(
                 div()
                     .absolute()
-                    .left(self.ui_px(3.))
-                    .w(self.ui_px(2.))
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(3.))
                     .h_full()
                     .bg(cx.theme().sidebar),
             )
             .child(
                 div()
                     .absolute()
-                    .left(self.ui_px(3.))
-                    .w(self.ui_px(2.))
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(3.))
                     .top_0()
                     .h(self.ui_px(TAB_BAR_HEIGHT))
                     .border_b_1()
