@@ -696,11 +696,11 @@ final class Driver {
         try fill("Assistant message", "Run selected SQL with approval")
         try press("Send")
         _ = try wait("Assistant query approval:", timeout: 20)
-        let stop = try waitExact("Stop", timeout: 5, role: kAXButtonRole)
+        let cancel = try waitExact("Cancel assistant turn", timeout: 5, role: kAXButtonRole)
         try require(find("Send", role: kAXButtonRole) == nil, "Send remained visible during the assistant turn")
-        let (stopPosition, _) = try elementBounds(stop)
+        let (cancelPosition, _) = try elementBounds(cancel)
         let (composerPosition, composerSize) = try elementBounds(try waitInput("Assistant message"))
-        try require(stopPosition.y >= composerPosition.y + composerSize.height, "Stop was not below the message field")
+        try require(cancelPosition.y >= composerPosition.y + composerSize.height, "Cancel was not below the message field")
         let runButtons = elements().filter {
             attribute($0, kAXRoleAttribute) as? String == kAXButtonRole && strings($0).contains("Run")
         }

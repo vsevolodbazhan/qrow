@@ -2259,8 +2259,9 @@ impl Qrow {
                             .when(self.assistant_panel.active_turn.is_some(), |row| row.child(
                                 Button::new("assistant-stop")
                                     .small()
-                                    .label("Stop")
-                                    .tooltip("Stop the current assistant turn")
+                                    .label("Cancel")
+                                    .accessibility_label("Cancel assistant turn")
+                                    .tooltip("Cancel the current assistant turn")
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(self.assistant_panel.active_turn.is_none(), |row| row.child(
