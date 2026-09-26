@@ -105,20 +105,23 @@ same workspace and checks that the unsent conversation does not cause an error.
 Like Codex, the synthetic Codex server saves a conversation only after its first
 message.
 
-To check an assistant reply with a wide table, use the same package steps with
-a new, empty workspace directory and run:
+To check the layout of assistant messages, use the same package steps with a
+new, empty workspace directory and run:
 
 ```sh
-target/e2e-tools/native-driver --assistant-table-only
+target/e2e-tools/native-driver --assistant-layout-only
 ```
 
 The driver writes a synthetic workspace with a UI scale of 1.1 and an assistant
-pane width of 536. At this width, a table column wraps if the reply does not use
-the full transcript width, and the transcript can cut off the table. The check
-makes sure that the reply uses the full transcript width. It also makes sure
-that the transcript scrolls to the end of the table and that the mouse wheel
-scrolls the transcript over the table. The check runs with the Connections
-sidebar shown and hidden.
+pane width of 536. At this width, messages can be measured at one width and
+drawn at another. The check makes sure that:
+
+- A message with inline code that fits on one line shows its last word.
+- A reply with a wide table uses the full transcript width.
+- The transcript scrolls to the end of the table.
+- The mouse wheel scrolls the transcript over the table.
+
+The table checks run with the Connections sidebar shown and hidden.
 
 ## Inspect failures
 

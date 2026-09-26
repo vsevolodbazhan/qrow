@@ -693,13 +693,33 @@ fn layout_measured_flow(
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
     window: &mut Window,
-    _cx: &mut App,
+    cx: &mut App,
 ) -> InlineFlowLayout {
     let line_height = window.pixel_snap(window.line_height());
     let rem_size = window.rem_size();
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
     if total_len == 0 {
         return InlineFlowLayout::default();
+    }
+
+    // The line wrapper adds per-character advances, which can be wider than the
+    // shaped text. A line that fits unwrapped could then break at a wrap width
+    // equal to its max-content width. A parent sized from the max-content
+    // measurement would clip the extra line. Keep the unwrapped layout when it
+    // fits, so both measurements agree.
+    if let Some(wrap_width) = wrap_width {
+        let unwrapped = layout_measured_flow(
+            items,
+            image_sizes,
+            prepared_objects,
+            text_style,
+            None,
+            window,
+            cx,
+        );
+        if unwrapped.size.width <= wrap_width {
+            return unwrapped;
+        }
     }
 
     let objects = prepared_objects
@@ -1283,6 +1303,55 @@ mod tests {
         let measured = inline_image_size_for_line(None, px(20.));
 
         assert_eq!(measured, size(px(15.), px(15.)));
+    }
+
+    /// A flow laid out at its own max-content width keeps one line. The line
+    /// wrapper adds glyph advances, which are wider than kerned shaped text,
+    /// so it would break the line. A parent sized from the max-content height
+    /// would then clip the second line.
+    #[test]
+    fn flow_at_its_max_content_width_keeps_one_line() {
+        use super::super::inline::test_fonts::{BODY, KernedTextSystem, MONO};
+        use gpui::{AbsoluteLength, Empty, HighlightStyle, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(KernedTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+
+        let text_style = TextStyle {
+            font_family: SharedString::from(BODY),
+            font_size: AbsoluteLength::Pixels(px(10.)),
+            ..Default::default()
+        };
+        let text = "How many tables are in sandbox_schema schema?";
+        let code = text.find("sandbox_schema").unwrap();
+        let items = vec![MeasureItem::Text {
+            text: SharedString::from(text),
+            links: vec![],
+            highlights: vec![(
+                code..code + "sandbox_schema".len(),
+                InlineHighlight {
+                    style: HighlightStyle::default(),
+                    font_family: Some(SharedString::from(MONO)),
+                    font_size_scale: None,
+                },
+            )],
+        }];
+        let image_sizes = vec![None];
+
+        let (unwrapped, wrapped) = window.update(|_, window, cx| {
+            let unwrapped = layout_flow(&items, &image_sizes, &text_style, None, window, cx);
+            let wrapped = layout_flow(
+                &items,
+                &image_sizes,
+                &text_style,
+                Some(unwrapped.size.width),
+                window,
+                cx,
+            );
+            (unwrapped, wrapped)
+        });
+
+        assert_eq!(wrapped.size, unwrapped.size);
     }
 
     /// Line breaking must see the width of an inline code span in its own

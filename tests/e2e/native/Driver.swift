@@ -902,11 +902,11 @@ final class Driver {
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
-    /// which the transcript cut off a wide table reply. At that width the
-    /// table is slightly wider than an 80% reply, so a column wraps.
-    func seedWideTableWorkspace() throws {
+    /// which the transcript cut off messages: a wide table reply, and the last
+    /// word of a message with inline code.
+    func seedAssistantLayoutWorkspace() throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
-        try require(!FileManager.default.fileExists(atPath: workspace.path), "The table check needs an empty workspace directory")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
         let settings: [String: Any] = [
             "ui_scale": 1.1,
             "assistant": [
@@ -921,16 +921,18 @@ final class Driver {
         ])
         try data.write(to: workspace)
     }
-    /// A reply with a wide table uses the transcript width, the transcript
-    /// scrolls to the end of the table, and the wheel scrolls past the table.
-    /// The check runs with the Connections sidebar shown and hidden.
-    func testAssistantWideTable() throws {
+    /// A message with inline code shows its last word. A reply with a wide
+    /// table uses the transcript width, the transcript scrolls to the end of
+    /// the table, and the wheel scrolls past the table. The table check runs
+    /// with the Connections sidebar shown and hidden.
+    func testAssistantLayout() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Assistant model: Synthetic Model", timeout: 20)
         if find("Search conversations") != nil {
             try press("Toggle conversation list")
             try waitGone("Search conversations", timeout: 5)
         }
+        try checkInlineCodeMessage()
         // Earlier messages make the transcript long enough to scroll.
         try fill("Assistant message", "Show many lines")
         try press("Send")
@@ -942,7 +944,33 @@ final class Driver {
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
         try waitGone("New Connection", timeout: 5)
         try checkWideTableReply("assistant-wide-table-no-sidebar")
-        print("PASS: Assistant wide table replies use the transcript width, show the whole table, and scroll")
+        print("PASS: Assistant messages with inline code show every line, and wide table replies use the transcript width, show the whole table, and scroll")
+    }
+    /// At this width the message fits on one line. If the text breaks before
+    /// the last word, the bubble keeps its one-line height and hides the
+    /// second line, and the message extends below the bubble. Left of the
+    /// text, the bottom of the message must have the bubble color of its top.
+    func checkInlineCodeMessage() throws {
+        try fill("Assistant message", "How many tables are in `sandbox_vbazhan` schema?")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let message = try wait("You: How many tables are in", timeout: 5)
+        let (origin, extent) = try elementBounds(message)
+        try snapshot("assistant-inline-code-message")
+        let path = "\(artifacts)/assistant-inline-code-message-edge.png"
+        let rect = "\(Int(origin.x) + 1),\(Int(origin.y)),1,\(Int(extent.height))"
+        _ = try command(["screencapture", "-x", "-R", rect, path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data),
+              let top = bitmap.colorAt(x: 0, y: 2)?.usingColorSpace(.deviceRGB),
+              let bottom = bitmap.colorAt(x: 0, y: bitmap.pixelsHigh - 3)?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the message edge capture")
+        }
+        let difference = max(abs(top.redComponent - bottom.redComponent),
+                             abs(top.greenComponent - bottom.greenComponent),
+                             abs(top.blueComponent - bottom.blueComponent))
+        try require(difference < 0.02, "The message with inline code extends below its bubble")
     }
     func checkWideTableReply(_ name: String) throws {
         // The tooltip has the same text, so look for the button only.
@@ -1532,10 +1560,10 @@ do {
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
-            } else if CommandLine.arguments.contains("--assistant-table-only") {
-                try driver.seedWideTableWorkspace()
+            } else if CommandLine.arguments.contains("--assistant-layout-only") {
+                try driver.seedAssistantLayoutWorkspace()
                 try driver.start()
-                try driver.testAssistantWideTable()
+                try driver.testAssistantLayout()
             } else if CommandLine.arguments.contains("--editor-highlight-only") {
                 try driver.start()
                 try driver.testEditorHighlight()
@@ -1558,7 +1586,7 @@ do {
             }
         }
         if CommandLine.arguments.contains("--editor-highlight-only")
-            || CommandLine.arguments.contains("--assistant-table-only") { exit(0) }
+            || CommandLine.arguments.contains("--assistant-layout-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

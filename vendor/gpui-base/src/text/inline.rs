@@ -1481,6 +1481,80 @@ pub(super) mod test_fonts {
             TextRenderingMode::Grayscale
         }
     }
+
+    /// Like [`WideMonoTextSystem`], but shaped lines are 1% narrower than the
+    /// sum of glyph advances, as with kerning. The line wrapper adds advances,
+    /// so it sees a wider line than the shaped layout reports.
+    pub(crate) struct KernedTextSystem;
+
+    impl PlatformTextSystem for KernedTextSystem {
+        fn add_fonts(&self, fonts: Vec<Cow<'static, [u8]>>) -> anyhow::Result<()> {
+            WideMonoTextSystem.add_fonts(fonts)
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            WideMonoTextSystem.all_font_names()
+        }
+
+        fn font_id(&self, descriptor: &Font) -> anyhow::Result<FontId> {
+            WideMonoTextSystem.font_id(descriptor)
+        }
+
+        fn font_metrics(&self, font_id: FontId) -> FontMetrics {
+            WideMonoTextSystem.font_metrics(font_id)
+        }
+
+        fn typographic_bounds(
+            &self,
+            font_id: FontId,
+            glyph_id: GlyphId,
+        ) -> anyhow::Result<Bounds<f32>> {
+            WideMonoTextSystem.typographic_bounds(font_id, glyph_id)
+        }
+
+        fn advance(&self, font_id: FontId, glyph_id: GlyphId) -> anyhow::Result<Size<f32>> {
+            WideMonoTextSystem.advance(font_id, glyph_id)
+        }
+
+        fn glyph_for_char(&self, font_id: FontId, ch: char) -> Option<GlyphId> {
+            WideMonoTextSystem.glyph_for_char(font_id, ch)
+        }
+
+        fn glyph_raster_bounds(
+            &self,
+            params: &RenderGlyphParams,
+        ) -> anyhow::Result<Bounds<DevicePixels>> {
+            WideMonoTextSystem.glyph_raster_bounds(params)
+        }
+
+        fn rasterize_glyph(
+            &self,
+            params: &RenderGlyphParams,
+            raster_bounds: Bounds<DevicePixels>,
+        ) -> anyhow::Result<(Size<DevicePixels>, Vec<u8>)> {
+            WideMonoTextSystem.rasterize_glyph(params, raster_bounds)
+        }
+
+        fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+            const KERNING: f32 = 0.99;
+            let mut layout = WideMonoTextSystem.layout_line(text, font_size, runs);
+            for run in &mut layout.runs {
+                for glyph in &mut run.glyphs {
+                    glyph.position.x *= KERNING;
+                }
+            }
+            layout.width *= KERNING;
+            layout
+        }
+
+        fn recommended_rendering_mode(
+            &self,
+            font_id: FontId,
+            font_size: Pixels,
+        ) -> TextRenderingMode {
+            WideMonoTextSystem.recommended_rendering_mode(font_id, font_size)
+        }
+    }
 }
 
 #[cfg(test)]
