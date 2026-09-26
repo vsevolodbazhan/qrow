@@ -7,6 +7,7 @@ use qrow::assistant::{
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
         MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows, bound_text,
+        context_statement_ranges, preview_rows,
     },
     service::Command as AssistantCommand,
 };
@@ -300,9 +301,11 @@ impl Qrow {
         if sql.len() > MAX_SQL_BYTES {
             return Err(failure("limit_reached", "The SQL text is too large."));
         }
+        let (statement_ranges, statement_ranges_truncated) = context_statement_ranges(&sql);
         Ok(success(
             json!({"version": 1, "tab_id": args.tab_id, "connection_id": tab.saved.profile,
-            "editor_revision": tab.revision, "sql": sql}),
+            "editor_revision": tab.revision, "sql": sql, "statement_ranges": statement_ranges,
+            "statement_ranges_truncated": statement_ranges_truncated}),
         ))
     }
 
@@ -369,10 +372,13 @@ impl Qrow {
             target.selected_range = Some(range);
         }
         let revision = self.tabs[self.active].revision;
+        let selected = editor.read(cx).selected_range();
         self.changed(cx);
+        // A run without statement_range uses this selection, so the model does not read it back.
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
-                "sql_bytes": plan.sql.len()}),
+                "sql_bytes": plan.sql.len(),
+                "selected_range": (!selected.is_empty()).then_some(selected)}),
         ))
     }
 
@@ -415,13 +421,13 @@ impl Qrow {
             editor.set_selected_range(plan.appended_range.clone(), cx);
         });
         if let Some(target) = &mut self.assistant_panel.target {
-            target.selected_range = Some(plan.appended_range);
+            target.selected_range = Some(plan.appended_range.clone());
         }
         let revision = self.tabs[self.active].revision;
         self.changed(cx);
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
-                "sql_bytes": plan.sql.len()}),
+                "sql_bytes": plan.sql.len(), "statement_range": plan.appended_range}),
         ))
     }
 
@@ -489,6 +495,7 @@ impl Qrow {
                 kind: PendingQueryKind::Run,
                 activity_index: None,
                 detached: false,
+                first_row: 0,
             });
             if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
                 self.begin_assistant_query(window, cx);
@@ -681,10 +688,21 @@ impl Qrow {
         let ok = !tab.status.starts_with("Error")
             && !tab.status.starts_with("Rejected")
             && !tab.status.starts_with("Cancelled");
-        let content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status,
+        let mut content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status,
             "columns": results.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
             "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
             "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
+        if ok {
+            // Returning the first rows saves a read_results call and a model turn.
+            let used =
+                serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
+            let preview = preview_rows(&results.rows, pending.first_row, used);
+            content["rows"] = json!(preview.rows);
+            content["next_offset"] = json!(preview.next_offset);
+            if !preview.omitted_row_offsets.is_empty() {
+                content["omitted_row_offsets"] = json!(preview.omitted_row_offsets);
+            }
+        }
         let state = if ok {
             ToolState::Done(Some(query_outcome(
                 results.rows.len(),
@@ -848,9 +866,10 @@ impl Qrow {
                     "The query worker is no longer available.",
                 )
             })?;
-            let next_page = {
+            let (next_page, first_row) = {
                 let data = tab.table.read(cx);
-                data.delegate().pagination.pages(data.delegate().rows.len())
+                let rows = data.delegate().rows.len();
+                (data.delegate().pagination.pages(rows), rows)
             };
             worker.more();
             let tab = &mut self.tabs[self.active];
@@ -869,6 +888,7 @@ impl Qrow {
                 kind: PendingQueryKind::Fetch,
                 activity_index: None,
                 detached: false,
+                first_row,
             });
             self.record_assistant_query_started(cx);
             Ok(())

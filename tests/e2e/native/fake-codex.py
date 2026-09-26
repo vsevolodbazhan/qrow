@@ -50,6 +50,7 @@ thread_id = None
 turn_number = 0
 pending_edit = None
 pending_run = None
+pending_message = ""
 pending_workspace = None
 pending_read_retry = None
 unknown_tab_id = "00000000-0000-0000-0000-000000000001"
@@ -202,6 +203,7 @@ for line in sys.stdin:
         turn_number += 1
         turn_id = f"synthetic-turn-{turn_number}"
         message = params["input"][0]["text"]
+        pending_message = message
         send(
             {
                 "id": request_id,
@@ -388,10 +390,20 @@ for line in sys.stdin:
                     }
                 )
                 continue
-        if request["result"]["success"]:
-            message = "I updated the SQL." if pending_edit else "I ran the query."
-        else:
+        if not request["result"]["success"]:
             message = f"Tool failed: {result}"
+        elif pending_run:
+            # A finished query returns its first rows, so the model needs no read_results call.
+            expected = {"with approval": [["1"]], "automatically": [["2"]]}
+            rows = next((rows for key, rows in expected.items() if key in pending_message), None)
+            if "next_offset" not in result or (rows is not None and result.get("rows") != rows):
+                message = f"Tool failed: the query result has no expected rows: {result}"
+            else:
+                message = "I ran the query."
+        elif "statement_range" in result or "selected_range" in result:
+            message = "I updated the SQL."
+        else:
+            message = f"Tool failed: the edit result has no range: {result}"
         send(
             {
                 "method": "item/agentMessage/delta",

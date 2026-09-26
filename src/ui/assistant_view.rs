@@ -22,7 +22,7 @@ use qrow::{
         TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
-            SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
+            SelectedTabContext, TabSummary, WorkspaceContext, bound_text, context_statement_ranges,
         },
         history_item_text,
         service::{
@@ -433,6 +433,8 @@ pub(super) struct PendingQuery {
     pub kind: PendingQueryKind,
     pub activity_index: Option<usize>,
     pub detached: bool,
+    /// The first result row that this request adds, for the rows in its result.
+    pub first_row: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1490,10 +1492,14 @@ impl Qrow {
                 .output
                 .latest_error()
                 .map(|entry| bound_text(&entry.text).0);
+            let sql = tab.input.read(cx).value().to_string();
+            let (statement_ranges, statement_ranges_truncated) = context_statement_ranges(&sql);
             SelectedTabContext {
                 tab: tabs[self.active].clone(),
-                sql: tab.input.read(cx).value().to_string(),
+                sql,
                 selected_range: (!selection.is_empty()).then_some(selection),
+                statement_ranges,
+                statement_ranges_truncated,
                 editor_revision: tab.revision,
                 results: ResultSummary {
                     columns: results

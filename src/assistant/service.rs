@@ -22,6 +22,8 @@ use std::{
 const COMMAND_CAPACITY: usize = 64;
 const EVENT_CAPACITY: usize = 1_024;
 const EVENT_POLL: Duration = Duration::from_millis(50);
+/// Codex is silent while it waits for a tool result, so a short poll sends the answer sooner.
+const TOOL_ANSWER_POLL: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
 pub enum Command {
@@ -230,6 +232,7 @@ impl Service {
                         return;
                     }
                 }
+                let mut unanswered_tools = 0_usize;
                 loop {
                     if thread_stopping.load(Ordering::Acquire) {
                         break;
@@ -237,6 +240,9 @@ impl Service {
                     match command_rx.try_recv() {
                         Ok(Command::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
                         Ok(command) => {
+                            if matches!(command, Command::Answer { .. }) {
+                                unanswered_tools = unanswered_tools.saturating_sub(1);
+                            }
                             let event = execute(&mut harness, command);
                             if !emit(event) {
                                 break;
@@ -244,8 +250,19 @@ impl Service {
                         }
                         Err(mpsc::TryRecvError::Empty) => {}
                     }
-                    match harness.next_event(EVENT_POLL) {
+                    let poll = if unanswered_tools > 0 {
+                        TOOL_ANSWER_POLL
+                    } else {
+                        EVENT_POLL
+                    };
+                    match harness.next_event(poll) {
                         Ok(Some(event)) => {
+                            match &event {
+                                AssistantEvent::ToolCall(_) => unanswered_tools += 1,
+                                // Codex does not wait for answers after its turn ends.
+                                AssistantEvent::TurnCompleted { .. } => unanswered_tools = 0,
+                                _ => {}
+                            }
                             if !emit(Event::Harness(event)) {
                                 break;
                             }

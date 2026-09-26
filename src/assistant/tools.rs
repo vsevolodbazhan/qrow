@@ -5,15 +5,15 @@ use serde_json::json;
 
 pub fn definitions() -> Vec<ToolDefinition> {
     [
-        ("get_workspace_context", "Read current connection and query-tab metadata. This refreshes the action target to the currently selected tab for this turn. Call it again after the user switches or renames a tab, then use the exact selected_tab IDs and revision it returns.", json!({
+        ("get_workspace_context", "Read current connection and query-tab metadata. Each user message already includes this context, so do not call this tool to start a turn. Call it after the user switches or renames a tab or after a tool reports a stale target. It refreshes the action target to the currently selected tab for this turn. Use the exact selected_tab IDs and revision it returns.", json!({
             "type": "object", "properties": {"version": {"const": 1}},
             "required": ["version"], "additionalProperties": false
         })),
-        ("read_tab_sql", "Read the current SQL and editor revision of one query tab.", json!({
+        ("read_tab_sql", "Read the current SQL, editor revision, and statement byte ranges of one query tab. Tool results return the new revision and selection after a change, so do not call this tool only to read them.", json!({
             "type": "object", "properties": {"version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"}},
             "required": ["version", "tab_id"], "additionalProperties": false
         })),
-        ("append_selected_tab_sql", "Append one new SQL statement to the selected query tab, preserving existing queries. Use this when writing a new query. The appended statement becomes selected so it can run alone.", json!({
+        ("append_selected_tab_sql", "Append one new SQL statement to the selected query tab, preserving existing queries. Use this when writing a new query. The appended statement becomes selected. The result returns the new editor_revision and the statement_range of the appended statement. To run it, call run_selected_tab_query with that revision and without statement_range.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": ["string", "null"], "format": "uuid"},
@@ -36,7 +36,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
             }, "required": ["version", "tab_id", "connection_id", "editor_revision", "edits"],
             "additionalProperties": false
         })),
-        ("run_selected_tab_query", "Run one SQL statement from the selected tab through Qrow, subject to user approval mode. For a tab with several statements, pass the UTF-8 byte range of the statement from read_tab_sql as statement_range. The range must match the current editor revision.", json!({
+        ("run_selected_tab_query", "Run one SQL statement from the selected tab through Qrow, subject to user approval mode. Without statement_range, it runs the selected text, or the whole tab when nothing is selected. To run another statement in a tab with several statements, pass one of the statement_ranges from the workspace context or read_tab_sql as statement_range. The range must match the current editor revision. A finished query returns its first downloaded rows in rows and the offset for read_results in next_offset.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": "string", "format": "uuid"},
@@ -49,14 +49,14 @@ pub fn definitions() -> Vec<ToolDefinition> {
         })),
         ("cancel_selected_tab_query", "Request best-effort cancellation of the selected tab's running query.", target_schema()),
         ("get_query_status", "Read the current query status and bounded result metadata for a tab.", tab_schema()),
-        ("read_results", "Read downloaded result rows only; does not fetch from the database.", json!({
+        ("read_results", "Read downloaded result rows only; does not fetch from the database. A finished query already returns its first rows, so use this only for rows after that.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "offset": {"type": "integer", "minimum": 0},
                 "count": {"type": "integer", "minimum": 1, "maximum": 100}},
             "required": ["version", "tab_id", "offset", "count"], "additionalProperties": false
         })),
-        ("fetch_more_results", "Fetch one more bounded preview batch from the selected tab's existing cursor.", target_schema()),
+        ("fetch_more_results", "Fetch one more bounded preview batch from the selected tab's existing cursor. The result returns the first fetched rows.", target_schema()),
         ("read_query_logs", "Read bounded Logs from a tab's latest execution or latest error.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},

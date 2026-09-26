@@ -63,7 +63,10 @@ font size, and line height. These settings do not change the message field or
 tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
-query tabs, selected SQL, query status, and requested result rows and Logs. It
+query tabs, selected SQL, query status, and requested result rows and Logs.
+When an assistant query or row fetch ends, Qrow sends its first downloaded rows
+to Codex with the result: up to 20 rows and 16 KB. Codex then does not need a
+separate request to read them. It
 appends each new query to the selected tab. It keeps existing queries and
 selects the new query so it can run that statement alone. If the previous
 query has no final semicolon, Qrow adds one. The assistant can select a
@@ -144,6 +147,11 @@ to the next message. If a saved model is no longer available, Qrow selects
 Codex's default model and shows a notice. If a saved reasoning level or service
 tier is no longer available, Qrow uses the Codex default for that control and
 shows a notice.
+
+Codex thinks before each step, for example before each tool call and before the
+reply. A higher reasoning level makes each step slower. A turn that edits and
+runs a query has several steps. If assistant turns are slow, select a lower
+reasoning level.
 
 ## Pane and connection state
 

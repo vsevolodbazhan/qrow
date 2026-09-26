@@ -10,6 +10,10 @@ pub const MAX_TEXT_EDITS: usize = 64;
 pub const MAX_EDIT_BYTES: usize = 1024 * 1024;
 pub const MAX_SQL_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_TOOL_ROWS: usize = 100;
+/// Leading rows that a finished query returns, so a short result needs no `read_results` call.
+pub const MAX_PREVIEW_ROWS: usize = 20;
+pub const MAX_PREVIEW_BYTES: usize = 16 * 1024;
+pub const MAX_CONTEXT_STATEMENTS: usize = 100;
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 pub const MAX_HARNESS_ID_BYTES: usize = 256;
 const TOOL_OUTPUT_ENVELOPE_BYTES: usize = 1024;
@@ -63,6 +67,9 @@ pub struct SelectedTabContext {
     pub tab: TabSummary,
     pub sql: String,
     pub selected_range: Option<Range<usize>>,
+    /// Byte ranges that `run_selected_tab_query` accepts as `statement_range`.
+    pub statement_ranges: Vec<Range<usize>>,
+    pub statement_ranges_truncated: bool,
     pub editor_revision: u64,
     pub results: ResultSummary,
     pub latest_error: Option<String>,
@@ -74,6 +81,14 @@ pub struct WorkspaceContext {
     pub connections: Vec<ConnectionContext>,
     pub tabs: Vec<TabSummary>,
     pub selected_tab: Option<SelectedTabContext>,
+}
+
+/// Returns up to `MAX_CONTEXT_STATEMENTS` statement ranges and whether more exist.
+pub fn context_statement_ranges(sql: &str) -> (Vec<Range<usize>>, bool) {
+    let mut ranges = sql::statement_ranges(sql);
+    let truncated = ranges.len() > MAX_CONTEXT_STATEMENTS;
+    ranges.truncate(MAX_CONTEXT_STATEMENTS);
+    (ranges, truncated)
 }
 
 impl WorkspaceContext {
@@ -484,6 +499,22 @@ pub fn bound_rows(
     offset: usize,
     requested: usize,
 ) -> Result<BoundedRows, ToolError> {
+    bound_rows_within(rows, offset, requested, MAX_TOOL_PAYLOAD_BYTES)
+}
+
+/// Rows from `offset` for a query result that already uses `used_bytes` of the tool output.
+pub fn preview_rows(rows: &[Vec<Option<String>>], offset: usize, used_bytes: usize) -> BoundedRows {
+    let budget = MAX_PREVIEW_BYTES.min(MAX_TOOL_PAYLOAD_BYTES.saturating_sub(used_bytes));
+    bound_rows_within(rows, offset, MAX_PREVIEW_ROWS, budget)
+        .expect("the preview row count is within the tool row limit")
+}
+
+fn bound_rows_within(
+    rows: &[Vec<Option<String>>],
+    offset: usize,
+    requested: usize,
+    budget: usize,
+) -> Result<BoundedRows, ToolError> {
     if requested == 0 || requested > MAX_TOOL_ROWS {
         return Err(ToolError::new(
             ToolErrorCode::InvalidArguments,
@@ -497,7 +528,7 @@ pub fn bound_rows(
     let end = offset.saturating_add(requested).min(rows.len());
     for (index, row) in rows.get(offset..end).unwrap_or_default().iter().enumerate() {
         let separator = usize::from(!output.is_empty());
-        let remaining = MAX_TOOL_PAYLOAD_BYTES.saturating_sub(bytes.saturating_add(separator));
+        let remaining = budget.saturating_sub(bytes.saturating_add(separator));
         let Some(full_row_bytes) = encoded_len_with_limit(row, MAX_TOOL_PAYLOAD_BYTES) else {
             omitted_row_offsets.push(offset + index);
             consumed += 1;
@@ -776,6 +807,8 @@ mod tests {
                 },
                 sql: "SELECT 1".into(),
                 selected_range: None,
+                statement_ranges: sql::statement_ranges("SELECT 1"),
+                statement_ranges_truncated: false,
                 editor_revision: 2,
                 results: ResultSummary {
                     columns: vec!["value".into()],
@@ -1186,5 +1219,40 @@ mod tests {
         assert_eq!(second.rows, rows[2..]);
         assert_eq!(second.next_offset, 3);
         assert!(!second.truncated);
+    }
+
+    #[test]
+    fn result_preview_is_bounded_by_rows_bytes_and_remaining_output() {
+        let rows: Vec<_> = (0..30).map(|row| vec![Some(row.to_string())]).collect();
+        let preview = preview_rows(&rows, 0, 0);
+        assert_eq!(preview.rows, rows[..MAX_PREVIEW_ROWS]);
+        assert_eq!(preview.next_offset, MAX_PREVIEW_ROWS);
+
+        let fetched = preview_rows(&rows, 25, 0);
+        assert_eq!(fetched.rows, rows[25..]);
+        assert_eq!(fetched.next_offset, 30);
+
+        let wide: Vec<_> = (0..3)
+            .map(|_| vec![Some("x".repeat(MAX_PREVIEW_BYTES / 2))])
+            .collect();
+        let preview = preview_rows(&wide, 0, 0);
+        assert_eq!(preview.rows.len(), 1);
+        assert_eq!(preview.next_offset, 1);
+        assert!(preview.truncated);
+
+        let full = preview_rows(&rows, 0, MAX_TOOL_PAYLOAD_BYTES);
+        assert!(full.rows.is_empty());
+        assert_eq!(full.next_offset, 0);
+    }
+
+    #[test]
+    fn context_lists_a_bounded_number_of_statement_ranges() {
+        let (ranges, truncated) = context_statement_ranges("SELECT 1;\nSELECT 2");
+        assert_eq!(ranges, [0..9, 10..18]);
+        assert!(!truncated);
+        let many = "SELECT 1;".repeat(MAX_CONTEXT_STATEMENTS + 1);
+        let (ranges, truncated) = context_statement_ranges(&many);
+        assert_eq!(ranges.len(), MAX_CONTEXT_STATEMENTS);
+        assert!(truncated);
     }
 }
