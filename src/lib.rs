@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod assistant;
 pub mod build_info;
 pub mod connector;
 pub mod model;

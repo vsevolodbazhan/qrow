@@ -94,6 +94,35 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
     tokens
 }
 
+/// Byte ranges of the statements in `sql`, each with its separator. Comments
+/// between statements stay outside the ranges.
+pub fn statement_ranges(sql: &str) -> Vec<Range<usize>> {
+    let mut start = None;
+    let mut end = 0;
+    let mut ranges = vec![];
+    for (range, kind) in tokens(sql) {
+        if kind == Kind::Comment || sql[range.clone()].trim().is_empty() {
+            continue;
+        }
+        if kind == Kind::Separator {
+            if let Some(start) = start.take() {
+                ranges.push(start..range.end);
+            }
+        } else {
+            start.get_or_insert(range.start);
+            end = range.end;
+        }
+    }
+    if let Some(start) = start {
+        ranges.push(start..end);
+    }
+    ranges
+}
+
+pub fn last_statement_range(sql: &str) -> Option<Range<usize>> {
+    statement_ranges(sql).pop()
+}
+
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     let mut statements = 0;
     let mut content = false;
@@ -135,5 +164,24 @@ mod tests {
         for (range, _) in tokens(sql) {
             let _ = &sql[range];
         }
+    }
+
+    #[test]
+    fn last_statement_skips_comments_and_preserves_utf8_offsets() {
+        let sql = "SELECT '日本語'; -- earlier\n\nSELECT 2 -- latest";
+        let range = last_statement_range(sql).unwrap();
+        assert_eq!(&sql[range], "SELECT 2");
+        assert_eq!(last_statement_range("-- only a comment"), None);
+    }
+
+    #[test]
+    fn statement_ranges_cover_each_statement_with_its_separator() {
+        let sql = "SELECT '日;本';\n-- note; not a query\n;SELECT 2;\n\nSELECT 3 -- open";
+        let statements: Vec<_> = statement_ranges(sql)
+            .into_iter()
+            .map(|range| &sql[range])
+            .collect();
+        assert_eq!(statements, ["SELECT '日;本';", "SELECT 2;", "SELECT 3"]);
+        assert!(statement_ranges(" -- only a comment\n").is_empty());
     }
 }

@@ -19,11 +19,20 @@ Building a whole new SQL client from scratch on top of a
 full-time job wasn't realistic for me — until AI models got good enough, that is.
 
 I'm not a Rust developer, so practically every line of code here is written by one
-model or the other. I bring in my direction, general coding expertise, and product sense. 
+model or the other. I bring in my direction, general coding expertise, and product sense.
 
 ## Inspiration
 
 Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built using [GPUI](https://gpui.rs/), which is a UI framework by Zed's creators.
+
+## Optional AI assistant
+
+Qrow can open an AI assistant beside your query tab. It uses a separately
+installed Codex program and your Codex sign-in. The feature is off by default.
+Enable it in **Qrow → Settings… → AI Assistant**. Qrow can ask before an assistant
+query runs, or run assistant queries automatically. The assistant writes SQL in
+the selected tab, so you can work on it together. See [AI assistant](docs/assistant.md)
+for setup, data sharing, and query safety.
 
 ## Metrics
 

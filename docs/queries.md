@@ -100,7 +100,8 @@ session settings from earlier SQL statements.
 
 ## Syntax
 
-The editor provides syntax generic SQL syntax highlighting. Autocomplete, schema exploration, and LSPs are not implemented.
+The editor highlights SQL syntax and the full width of the active line.
+Autocomplete, schema exploration, and language server features are not available.
 
 ## Design
 

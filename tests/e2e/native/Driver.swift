@@ -72,7 +72,7 @@ func fitWindowToMainDisplay(_ app: AXUIElement) throws {
     }
     let visible = screen.visibleFrame
     let minimum = CGSize(width: 850, height: 560)
-    let width = visible.width - 32
+    let width = min(visible.width - 32, CGFloat(env["QROW_E2E_MAX_WINDOW_WIDTH"].flatMap(Double.init) ?? .infinity))
     let height = visible.height - 32
     try require(
         width >= minimum.width && height >= minimum.height,
@@ -83,7 +83,7 @@ func fitWindowToMainDisplay(_ app: AXUIElement) throws {
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
     let currentFrame = CGRect(origin: position, size: extent)
-    guard !safeFrame.contains(currentFrame) else { return }
+    guard !safeFrame.contains(currentFrame) || extent.width > width else { return }
 
     var fittedSize = CGSize(width: min(extent.width, width), height: min(extent.height, height))
     guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
@@ -130,6 +130,12 @@ func click(_ element: AXUIElement) throws {
         event.post(tap: .cghidEventTap)
     }
 }
+func clickPoint(_ point: CGPoint) {
+    for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
+        let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: point, mouseButton: .left)!
+        event.post(tap: .cghidEventTap)
+    }
+}
 func rightClick(_ element: AXUIElement) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
@@ -157,6 +163,16 @@ func scrollDown(_ element: AXUIElement) throws {
     move.post(tap: .cghidEventTap)
     let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: -1200, wheel2: 0, wheel3: 0)!
     scroll.location = scrollPoint
+    scroll.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+}
+func scrollUpAbove(_ element: AXUIElement, by distance: Int32 = 1200) throws {
+    let (point, extent) = try elementBounds(element)
+    let location = CGPoint(x: point.x + extent.width / 2, y: point.y - 120)
+    let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: location, mouseButton: .left)!
+    move.post(tap: .cghidEventTap)
+    let scroll = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: distance, wheel2: 0, wheel3: 0)!
+    scroll.location = location
     scroll.post(tap: .cghidEventTap)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
 }
@@ -343,6 +359,16 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Missing accessible input: \(label)")
     }
+    func waitInputValue(_ label: String, _ expected: String, timeout: Double = 10) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        repeat {
+            if let input = accessibleInput(label),
+               attribute(input, kAXValueAttribute) as? String == expected { return }
+            try require(process.isRunning, "Qrow exited while waiting for \(label)")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < deadline
+        throw Failure("\(label) did not become \(expected)")
+    }
     func fill(_ label: String, _ value: String) throws {
         // GPUI exposes inputs as text fields or text areas depending on the control.
         var element = try waitInput(label)
@@ -448,6 +474,9 @@ final class Driver {
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         log = try FileHandle(forWritingTo: logURL)
         process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
+        if CommandLine.arguments.contains("--editor-highlight-only") {
+            process.arguments = ["--demo"]
+        }
         process.environment = env
         process.standardOutput = log
         process.standardError = log
@@ -456,7 +485,7 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
-        _ = try wait("New Connection", timeout: 20)
+        _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
         try fitWindowToMainDisplay(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -465,6 +494,47 @@ final class Driver {
                 self.samples.append("\(Date().timeIntervalSince1970) \(sample)")
             }
         }
+    }
+    func testEditorHighlight() throws {
+        let editor = try waitInput("SQL Editor")
+        let (origin, extent) = try elementBounds(editor)
+        clickPoint(CGPoint(x: origin.x + 100, y: origin.y + 20))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+
+        // Capture only the editor's right edge. The reference column is inside
+        // the text area; the edge column is inside the right padding.
+        let captureWidth = 40
+        let captureHeight = 90
+        let path = "\(artifacts)/editor-highlight.png"
+        let rect = "\(Int(origin.x + extent.width) - captureWidth),\(Int(origin.y)),\(captureWidth),\(captureHeight)"
+        _ = try command(["screencapture", "-x", "-R", rect, path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data) else {
+            throw Failure("Could not read editor highlight capture")
+        }
+        let scale = Double(bitmap.pixelsWide) / Double(captureWidth)
+        let referenceX = Int(15 * scale)
+        let edgeX = Int(38 * scale)
+        func color(_ x: Int, _ y: Int) -> NSColor? {
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        guard let background = color(referenceX, bitmap.pixelsHigh - 5) else {
+            throw Failure("Could not sample editor background")
+        }
+        let highlightedRows = (5..<(bitmap.pixelsHigh - 5)).filter { y in
+            color(referenceX, y).map { distance($0, background) > 0.015 } ?? false
+        }
+        try require(highlightedRows.count >= Int(8 * scale), "Active line highlight was not visible")
+        let middle = highlightedRows[highlightedRows.count / 2]
+        guard let reference = color(referenceX, middle), let edge = color(edgeX, middle) else {
+            throw Failure("Could not sample active line highlight")
+        }
+        try require(distance(reference, edge) < 0.015, "Active line highlight stops before the editor's right edge")
     }
     func stop() {
         sampleTimer?.invalidate()
@@ -609,27 +679,724 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("\(label) shows \(value ?? "nothing"), expected \(expected)")
     }
+    func waitSavedAssistantFont(_ expected: String) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let settings = content["settings"] as? [String: Any],
+               settings["assistant_font_family"] as? String == expected { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Assistant font was not saved as \(expected)")
+    }
+    func waitStaleConversationRemoved() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]],
+               // Qrow opens a new conversation but saves it only after its first message.
+               assistant["selected_thread"] is NSNull,
+               conversations.isEmpty { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Missing Codex conversation stayed in the Qrow workspace")
+    }
+    func waitSavedConversationTitle(_ expected: String) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]],
+               conversations.count == 1,
+               conversations[0]["title"] as? String == expected,
+               conversations[0]["title_source"] as? String == "codex" { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Generated conversation title \(expected) was not saved")
+    }
+    func testAssistantRestart() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Assistant message") == nil {
+            try press("Back to conversation")
+        }
+        // The previous process left an unsent conversation open.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+        try require(find("Codex cannot find this conversation") == nil, "An unsent conversation was restored after restart")
+        try fill("Assistant message", "Explain `SELECT 1` after restart")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try snapshot("assistant-after-restart")
+        print("PASS: An unsent Assistant conversation does not fail after restart")
+    }
+    func selectFont(_ label: String, _ family: String) throws {
+        var popup = try wait(label, role: kAXPopUpButtonRole)
+        scrollIntoView(popup)
+        popup = try wait(label, role: kAXPopUpButtonRole)
+        try click(popup)
+        let searchDeadline = clock.now.advanced(by: .seconds(5))
+        var search: AXUIElement?
+        repeat {
+            let fields = elements().filter {
+                attribute($0, kAXRoleAttribute) as? String == kAXTextFieldRole
+                    && strings($0).contains("Search...")
+            }
+            if fields.count > 1 { search = fields.last; break }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < searchDeadline
+        guard let search else {
+            throw Failure("Font search did not open: \(label)")
+        }
+        try require(
+            AXUIElementSetAttributeValue(search, kAXValueAttribute as CFString, family as CFString) == .success,
+            "Could not search \(label) for \(family)"
+        )
+        // GPUI's virtual font rows do not expose AX bounds. With the exact
+        // family name filtered to one row, click the row below the search box.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        let (origin, size) = try elementBounds(search)
+        clickPoint(CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height + 16))
+        let valueDeadline = clock.now.advanced(by: .seconds(5))
+        repeat {
+            if let popup = find(label, role: kAXPopUpButtonRole),
+               attribute(popup, kAXValueAttribute) as? String == family { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        } while clock.now < valueDeadline
+        throw Failure("\(label) did not select \(family)")
+    }
     func testSettings() throws {
         try selectApplicationMenuItem("Settings…")
-        // Every setting stays on one page, so each control is reachable without
-        // the pointer-only section list.
+        // Assistant typography is a section within Appearance.
         try waitSettingValue("Theme", "System")
         try waitSettingValue("UI Scale", "100")
+        try selectFont("UI Font Family", "Menlo")
+        try selectFont("UI Font Family", "System Font")
+        // Selecting Assistant must reveal its font controls in Appearance.
+        try snapshot("settings-before-assistant")
+        let (search, _) = try elementBounds(waitInput("Search..."))
+        clickPoint(CGPoint(x: search.x + 42, y: search.y + 100))
+        try snapshot("settings-after-assistant")
+        try waitSettingValue("Assistant Font Size", "14")
+        let (assistantFont, _) = try elementBounds(wait("Assistant Font Family", role: kAXPopUpButtonRole))
+        let (save, _) = try elementBounds(wait("Save", role: kAXButtonRole))
+        try require(assistantFont.y < save.y, "Assistant settings opened below the visible page")
+        try press("Increase Assistant Font Size")
+        try waitSettingValue("Assistant Font Size", "15")
+        try selectFont("Assistant Font Family", "Menlo")
+        try waitSavedAssistantFont("Menlo")
+        try selectFont("Assistant Font Family", "System Font")
+        try waitSavedAssistantFont(".SystemUIFont")
+        try snapshot("settings")
+        try fill("Search...", "editor")
         try waitSettingValue("Editor Font Size", "13")
-        try waitSettingValue("Logs Font Size", "13")
         try press("Increase Editor Font Size")
         try waitSettingValue("Editor Font Size", "14")
-        try snapshot("settings")
+        try selectFont("Editor Font Family", "System Font")
+        try fill("Search...", "logs")
+        try waitSettingValue("Logs Font Size", "13")
+        try selectFont("Logs Font Family", "System Font")
+        try fill("Search...", "")
         try press("Restore defaults")
+        try fill("Search...", "assistant")
+        try waitSettingValue("Assistant Font Size", "14")
+        try fill("Search...", "editor")
         try waitSettingValue("Editor Font Size", "13")
         try press("Save")
         try waitGone("UI Scale")
-        print("PASS: Settings shows every control, applies a change, and restores defaults")
+        print("PASS: Settings applies all font pickers, changes sizes, and restores defaults")
+    }
+    func verifyAssistantFontSwitch() throws {
+        for (choice, stored, screenshot) in [("System Font", ".SystemUIFont", "assistant-system-font"),
+                                              ("Menlo", "Menlo", "assistant-menlo-font")] {
+            try selectApplicationMenuItem("Settings…")
+            let (search, _) = try elementBounds(waitInput("Search..."))
+            clickPoint(CGPoint(x: search.x + 42, y: search.y + 100))
+            _ = try wait("Assistant Font Family", role: kAXPopUpButtonRole)
+            try selectFont("Assistant Font Family", choice)
+            try press("Save")
+            try waitSavedAssistantFont(stored)
+            try snapshot(screenshot)
+        }
+    }
+    func testAssistant(fontOnly: Bool = false) throws {
+        try selectApplicationMenuItem("Settings…")
+        // GPUI Kit does not publish the settings sidebar labels through AX.
+        // Anchor the pointer to the visible search field in the same pane.
+        for _ in 0..<3 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            let (search, _) = try elementBounds(waitInput("Search..."))
+            clickPoint(CGPoint(x: search.x + 42, y: search.y + 196))
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            if find("Codex executable") != nil { break }
+        }
+        _ = try wait("Codex executable", timeout: 5)
+        try fill("Codex executable", FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh")
+        try press("Enable AI assistant")
+        try press("Enable assistant")
+        for _ in 0..<3 {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            try press("Save")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+            if find("Codex executable") == nil { break }
+        }
+        try waitGone("Codex executable", timeout: 5)
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Toggle Assistant")
+        try require(find("New Connection") != nil, "Opening the assistant hid the Connections sidebar")
+        if fontOnly {
+            _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+            if find("Search conversations") == nil {
+                try press("Toggle conversation list")
+            }
+            let search = try wait("Search conversations")
+            let headerControl: AXUIElement
+            if let toggle = find("Toggle conversation list") {
+                headerControl = toggle
+            } else {
+                headerControl = try wait("Back to conversation")
+            }
+            let (searchPosition, searchSize) = try elementBounds(search)
+            let (togglePosition, toggleSize) = try elementBounds(headerControl)
+            try require(searchSize.height <= toggleSize.height + 1, "Conversation search input is taller than the header control")
+            let searchCenter = searchPosition.y + searchSize.height / 2
+            let toggleCenter = togglePosition.y + toggleSize.height / 2
+            try require(abs(searchCenter - toggleCenter) <= 2, "Conversation search input is not aligned with the header")
+            try snapshot("assistant-conversation-search-spacing")
+            if find("Assistant message") == nil {
+                try press("Back to conversation")
+            }
+            try fill("Assistant message", "Explain `SELECT 1` in one sentence")
+            try press("Send")
+            _ = try wait("I can help with this query", timeout: 20)
+            try snapshot("assistant-before-font-change")
+            try verifyAssistantFontSwitch()
+            try click(wait("Conversation actions", role: kAXButtonRole))
+            try pressMenuItem("Delete…")
+            try press("Delete")
+            try waitStaleConversationRemoved()
+            print("PASS: Assistant fonts persist and a missing Codex conversation can be deleted")
+            return
+        }
+        let startingModel = try wait("Assistant model unavailable", timeout: 5, role: kAXButtonRole)
+        try click(startingModel)
+        try require(find("Synthetic Model") == nil, "Model picker opened while Codex started")
+        for label in ["Assistant reasoning unavailable", "Assistant service tier unavailable", "Send · Ask"] {
+            let control = try wait(label, timeout: 5, role: kAXButtonRole)
+            try click(control)
+            try require(find("Run automatically") == nil, "\(label) opened while Codex started")
+        }
+        try require(find("Starting Codex") == nil, "Startup status appeared above the message field")
+        _ = try wait("Toggle Assistant")
+        _ = try wait("New Conversation")
+        _ = try wait("Toggle conversation list")
+        _ = try wait("Conversation actions")
+        let listInitiallyVisible = find("Search conversations") != nil
+        try press("Toggle conversation list")
+        if listInitiallyVisible {
+            try waitGone("Search conversations")
+            try press("Toggle conversation list")
+        } else {
+            _ = try wait("Search conversations")
+            try press("Back to conversation")
+        }
+        let readyModel = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try require(attribute(readyModel, kAXEnabledAttribute) as? Bool != false, "Model stayed disabled after Codex started")
+        _ = try wait("Send · Ask", role: kAXButtonRole)
+        try fill("Assistant message", "Keep this draft")
+        try press("Run")
+        let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
+        try require(draft == "Keep this draft", "Toolbar Run sent the assistant draft")
+        try fill("Assistant message", "Help me understand how `SELECT 1` behaves in the currently selected query tab and explain its result")
+        key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
+        _ = try wait("I can help with this query", timeout: 20)
+        try snapshot("assistant-markdown")
+        try verifyAssistantFontSwitch()
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        _ = try wait("I updated the SQL.", timeout: 20)
+        try waitInputValue("SQL Editor", "SELECT 1")
+        // Tool calls are full-width cards that start collapsed.
+        let toolCard = try waitExact("Tool call: Append query", timeout: 5)
+        try require(find("Arguments:") == nil, "The tool call opened expanded")
+        try require(find("Tab: Query 1") == nil, "The collapsed tool call showed its tab")
+        let (_, toolSize) = try elementBounds(toolCard)
+        let (_, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        try require(toolSize.width >= composerSize.width * 0.9, "The tool call card did not use the full transcript width")
+        try snapshot("assistant")
+        try activate(toolCard)
+        _ = try wait("Arguments:", timeout: 5)
+        _ = try wait("Tab: Query 1", timeout: 5)
+        try snapshot("assistant-tool-expanded")
+        try activate(try waitExact("Tool call: Append query", timeout: 5))
+        try waitGone("Arguments:", timeout: 5)
+        let editor = try waitInput("SQL Editor")
+        let (editorPosition, _) = try elementBounds(editor)
+        clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
+        try require(
+            AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+            "Could not focus SQL Editor for Undo",
+        )
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        key(0) // A normal user edit must not merge with the assistant edit.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        key(6, flags: .maskCommand)
+        try waitInputValue("SQL Editor", "SELECT 1")
+        key(6, flags: .maskCommand) // The assistant edit is one Undo step.
+        try waitInputValue("SQL Editor", "")
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1")
+        try waitGone("Assistant is working", timeout: 5)
+        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
+        try fill("Assistant message", "Show many lines")
+        try press("Send")
+        _ = try wait("Line 40", timeout: 20)
+        try scrollUpAbove(waitInput("Assistant message"))
+        _ = try wait("Jump to latest", timeout: 5)
+        try snapshot("assistant-scrolled")
+        try press("Jump to latest")
+        try waitGone("Jump to latest", timeout: 5)
+        // Revisit the wrapped user message after the transcript has been scrolled.
+        for _ in 0..<4 { try scrollUpAbove(waitInput("Assistant message")) }
+        try snapshot("assistant-wrapped-after-scroll")
+        try press("Jump to latest")
+        try waitGone("Jump to latest", timeout: 5)
+        try scrollUpAbove(waitInput("Assistant message"))
+        _ = try wait("Jump to latest", timeout: 5)
+        try fill("Assistant message", "Return to the latest message")
+        try press("Send")
+        _ = try wait("Assistant is thinking", timeout: 5)
+        try snapshot("assistant-thinking")
+        try waitGone("Assistant is working", timeout: 5)
+        try waitGone("Jump to latest", timeout: 5)
+        try waitGone("Assistant is thinking", timeout: 5)
+        try press("Toggle Assistant")
+        try waitGone("Toggle conversation list")
+        print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
+    }
+    func testAssistantAppend() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1")
+        try waitGone("Assistant is working", timeout: 5)
+        // After the first reply, Codex generates the conversation title. GPUI
+        // does not expose the header text, so read the saved workspace.
+        try waitSavedConversationTitle("Title: Write SELECT 1")
+        try snapshot("assistant-generated-title")
+        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
+        try waitGone("Assistant is working", timeout: 5)
+        // A generated title stays after later replies.
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+        try waitSavedConversationTitle("Title: Write SELECT 1")
+        try setAssistantRunMode()
+        print("PASS: Assistant appends a new SQL query, preserves the first query, and titles the conversation")
+    }
+    /// Waits until the saved workspace has these conversation titles and
+    /// title sources, in any order.
+    func waitSavedConversations(_ expected: [(String, String)]) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        let deadline = clock.now.advanced(by: .seconds(10))
+        var saved: [[String: Any]] = []
+        repeat {
+            if let data = try? Data(contentsOf: workspace),
+               let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let assistant = content["assistant"] as? [String: Any],
+               let conversations = assistant["conversations"] as? [[String: Any]] {
+                saved = conversations
+                let titles = conversations.map { "\($0["title"] ?? "")|\($0["title_source"] ?? "")" }.sorted()
+                if titles == expected.map({ "\($0.0)|\($0.1)" }).sorted() { return }
+            }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("Saved conversations \(saved) did not match \(expected)")
+    }
+    func openConversationMenu(_ title: String) throws {
+        try contextMenu("Open conversation: \(title)", exact: true)
+    }
+    /// The conversation header menu and the thread list context menu rename,
+    /// regenerate titles, and delete conversations. Both renames use the
+    /// query tab rename dialog. Duplicate titles do not show Codex thread IDs.
+    func testAssistantConversationTitles() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Assistant message") == nil {
+            try press("Back to conversation")
+        }
+        let generated = "Title: Count sandbox schemas"
+        try fill("Assistant message", "Count sandbox schemas now")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try waitSavedConversations([(generated, "codex")])
+
+        try click(wait("Conversation actions", role: kAXButtonRole))
+        try pressMenuItem("Rename…")
+        let nameField = try wait("Conversation Name", role: kAXTextFieldRole)
+        try require(
+            attribute(nameField, kAXValueAttribute) as? String == generated,
+            "Rename form did not prefill the current conversation title"
+        )
+        // An empty name keeps the dialog open. GPUI does not publish the
+        // validation text in the macOS accessibility tree.
+        try fill("Conversation Name", "")
+        try press("Rename")
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        _ = try wait("Conversation Name", role: kAXTextFieldRole)
+        try waitSavedConversations([(generated, "codex")])
+        try snapshot("assistant-rename-dialog-error")
+        try fill("Conversation Name", "Custom title")
+        try press("Rename")
+        try waitGone("Conversation Name", timeout: 5)
+        try waitSavedConversations([("Custom title", "user")])
+        try click(wait("Conversation actions", role: kAXButtonRole))
+        _ = try wait("Regenerate Title", timeout: 5)
+        try snapshot("assistant-header-menu")
+        try pressMenuItem("Regenerate Title")
+        try waitSavedConversations([(generated, "codex")])
+
+        try press("New Conversation")
+        try fill("Assistant message", "Count sandbox schemas again")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        try waitSavedConversations([(generated, "codex"), (generated, "codex")])
+        if find("Search conversations") == nil {
+            try press("Toggle conversation list")
+        }
+        _ = try waitExact("Open conversation: \(generated)", timeout: 10)
+        try require(find("\(generated) ·") == nil, "The thread list showed a Codex thread ID")
+        try snapshot("assistant-duplicate-titles")
+
+        try openConversationMenu(generated)
+        try pressMenuItem("Rename…")
+        _ = try waitInput("Conversation Name")
+        try snapshot("assistant-rename-dialog")
+        try press("Cancel")
+        try waitGone("Conversation Name", timeout: 5)
+        try openConversationMenu(generated)
+        try pressMenuItem("Rename…")
+        try fill("Conversation Name", "Listed title")
+        try press("Rename")
+        try waitGone("Conversation Name", timeout: 5)
+        _ = try waitExact("Open conversation: Listed title", timeout: 10)
+        try waitSavedConversations([(generated, "codex"), ("Listed title", "user")])
+        try snapshot("assistant-list-renamed")
+        try openConversationMenu("Listed title")
+        _ = try wait("Regenerate Title", timeout: 5)
+        try snapshot("assistant-list-menu")
+        try pressMenuItem("Regenerate Title")
+        try waitSavedConversations([(generated, "codex"), (generated, "codex")])
+        try waitGone("Open conversation: Listed title", timeout: 10)
+        try openConversationMenu(generated)
+        try pressMenuItem("Delete…")
+        try press("Delete")
+        try waitSavedConversations([(generated, "codex")])
+        print("PASS: Assistant conversation menus rename, regenerate titles, and delete conversations without thread IDs in the list")
+    }
+    func seedAssistantStatementWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The statement check needs an empty workspace directory")
+        let profileID = UUID().uuidString.lowercased()
+        let tabID = UUID().uuidString.lowercased()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3,
+            "settings": ["assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+            ]],
+            "profiles": [[
+                "id": profileID, "name": "Synthetic", "host": "example.invalid",
+                "port": 10009, "username": "synthetic", "database": "default",
+                "parameters": [:],
+            ]],
+            "tabs": [["id": tabID, "title": "Query 1", "sql": "SELECT 0;", "profile": profileID]],
+            "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    func testAssistantStatementRun() throws {
+        try waitInputValue("SQL Editor", "SELECT 0;")
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Append two SQL statements with edit tool")
+        try press("Send")
+        try waitInputValue("SQL Editor", "SELECT 0;\n\nSELECT 1;\n\nSELECT 2")
+        try waitGone("Assistant is working", timeout: 5)
+
+        try fill("Assistant message", "Run selected SQL without range")
+        try press("Send")
+        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 2", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        try waitGone("Assistant query approval:", timeout: 5)
+        try waitGone("Assistant is working", timeout: 5)
+
+        try fill("Assistant message", "Run first SQL by range")
+        try press("Send")
+        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 0;", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        print("PASS: Assistant can target the newest and an earlier statement for execution")
+    }
+    func seedAssistantRetargetWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The retarget check needs an empty workspace directory")
+        let profileID = UUID().uuidString.lowercased()
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3,
+            "settings": ["assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+            ]],
+            "profiles": [[
+                "id": profileID, "name": "Synthetic", "host": "example.invalid",
+                "port": 10009, "username": "synthetic", "database": "default",
+                "parameters": [:],
+            ]],
+            "tabs": [
+                ["id": UUID().uuidString.lowercased(), "title": "Query 1", "sql": "SELECT 1;", "profile": profileID],
+                ["id": UUID().uuidString.lowercased(), "title": "Query 2", "sql": "SELECT 99;", "profile": profileID],
+            ],
+            "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    func testAssistantRetargetAfterRename() throws {
+        try waitInputValue("SQL Editor", "SELECT 1;")
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        try fill("Assistant message", "Run tab selected after rename")
+        try press("Send")
+
+        try contextMenu("Query 2", exact: true)
+        try pressMenuItem("Rename…")
+        _ = try wait("Tab Name", role: kAXTextFieldRole)
+        try fill("Tab Name", "Default")
+        try press("Rename")
+        try waitGone("Tab Name")
+        try click(try waitExact("Default"))
+        try waitInputValue("SQL Editor", "SELECT 99;")
+        let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex/retarget-ready")
+        try Data().write(to: marker)
+
+        _ = try wait("Assistant query approval: Default, Synthetic. SELECT 99;", timeout: 20)
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        print("PASS: Assistant targets the selected tab after a rename and invalid tab ID")
+    }
+    /// Writes a new synthetic workspace with the UI scale and pane width at
+    /// which the transcript cut off messages: a wide table reply, and the last
+    /// word of a message with inline code.
+    func seedAssistantLayoutWorkspace() throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
+        let settings: [String: Any] = [
+            "ui_scale": 1.1,
+            "assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "panel_width": 536,
+            ],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 3, "settings": settings, "profiles": [], "tabs": [], "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    /// A message with inline code shows its last word. A reply with a wide
+    /// table uses the transcript width, the transcript scrolls to the end of
+    /// the table, and the wheel scrolls past the table. The table check runs
+    /// with the Connections sidebar shown and hidden.
+    func testAssistantLayout() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        if find("Search conversations") != nil {
+            try press("Toggle conversation list")
+            try waitGone("Search conversations", timeout: 5)
+        }
+        try checkInlineCodeMessage()
+        // Earlier messages make the transcript long enough to scroll.
+        try fill("Assistant message", "Show many lines")
+        try press("Send")
+        _ = try wait("Line 40", timeout: 20)
+        try fill("Assistant message", "Show a wide table")
+        try press("Send")
+        _ = try wait("Assistant: Ran a synthetic wide table query", timeout: 20)
+        try checkWideTableReply("assistant-wide-table")
+        key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
+        try waitGone("New Connection", timeout: 5)
+        try checkWideTableReply("assistant-wide-table-no-sidebar")
+        print("PASS: Assistant messages with inline code show every line, and wide table replies use the transcript width, show the whole table, and scroll")
+    }
+    /// At this width the message fits on one line. If the text breaks before
+    /// the last word, the bubble keeps its one-line height and hides the
+    /// second line, and the message extends below the bubble. Left of the
+    /// text, the bottom of the message must have the bubble color of its top.
+    func checkInlineCodeMessage() throws {
+        try fill("Assistant message", "How many tables are in `sandbox_vbazhan` schema?")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let message = try wait("You: How many tables are in", timeout: 5)
+        let (origin, extent) = try elementBounds(message)
+        try snapshot("assistant-inline-code-message")
+        let path = "\(artifacts)/assistant-inline-code-message-edge.png"
+        let rect = "\(Int(origin.x) + 1),\(Int(origin.y)),1,\(Int(extent.height))"
+        _ = try command(["screencapture", "-x", "-R", rect, path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data),
+              let top = bitmap.colorAt(x: 0, y: 2)?.usingColorSpace(.deviceRGB),
+              let bottom = bitmap.colorAt(x: 0, y: bitmap.pixelsHigh - 3)?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the message edge capture")
+        }
+        let difference = max(abs(top.redComponent - bottom.redComponent),
+                             abs(top.greenComponent - bottom.greenComponent),
+                             abs(top.blueComponent - bottom.blueComponent))
+        try require(difference < 0.02, "The message with inline code extends below its bubble")
+        try checkMessageInsets(message)
+    }
+    /// The transcript and the composer share one horizontal inset. The reply
+    /// text starts at the left edge of the composer, and the user bubble ends
+    /// at its right edge. A reply bubble without a visible surface adds its
+    /// padding on the left only.
+    func checkMessageInsets(_ message: AXUIElement) throws {
+        let reply = try wait("Assistant: **I can help with this query", timeout: 5)
+        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (replyOrigin, _) = try elementBounds(reply)
+        try require(abs(replyOrigin.x - composerOrigin.x) <= 1,
+                    "The assistant reply starts \(replyOrigin.x - composerOrigin.x) points right of the composer")
+
+        // Scan a row through the user bubble from the transcript background
+        // on its left, and find the last point that has another color.
+        let (origin, extent) = try elementBounds(message)
+        let left = Int(composerOrigin.x) + 2
+        let width = Int(composerOrigin.x + composerSize.width) + 6 - left
+        let path = "\(artifacts)/assistant-message-insets.png"
+        _ = try command(["screencapture", "-x", "-R", "\(left),\(Int(origin.y + extent.height / 2)),\(width),1", path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data),
+              let background = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the message inset capture")
+        }
+        let scale = CGFloat(bitmap.pixelsWide) / CGFloat(width)
+        let bubbleEnd = (0..<bitmap.pixelsWide).last { x in
+            guard let color = bitmap.colorAt(x: x, y: 0)?.usingColorSpace(.deviceRGB) else { return false }
+            return max(abs(color.redComponent - background.redComponent),
+                       abs(color.greenComponent - background.greenComponent),
+                       abs(color.blueComponent - background.blueComponent)) > 0.02
+        }
+        guard let bubbleEnd else { throw Failure("Could not find the user bubble in the inset capture") }
+        let bubbleRight = CGFloat(left) + CGFloat(bubbleEnd + 1) / scale
+        let composerRight = composerOrigin.x + composerSize.width
+        try require(abs(bubbleRight - composerRight) <= 1,
+                    "The user bubble ends \(composerRight - bubbleRight) points left of the composer")
+    }
+    func checkWideTableReply(_ name: String) throws {
+        // The tooltip has the same text, so look for the button only.
+        func jumpButtonVisible() -> Bool { find("Jump to latest", role: kAXButtonRole) != nil }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        if jumpButtonVisible() { try press("Jump to latest") }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try require(!jumpButtonVisible(), "The transcript did not scroll to the latest message")
+        let reply = try wait("Assistant: Ran a synthetic wide table query", timeout: 5)
+        let composer = try waitInput("Assistant message")
+        let (origin, extent) = try elementBounds(reply)
+        let (composerOrigin, composerSize) = try elementBounds(composer)
+        try snapshot(name)
+
+        // At the end of the transcript, the whole reply is above the composer.
+        // A transcript that cannot scroll that far cuts off the table.
+        try require(origin.y + extent.height <= composerOrigin.y, "The transcript cut off the bottom of the assistant table")
+        try require(extent.width >= composerSize.width * 0.9, "The assistant reply did not use the full transcript width")
+
+        // The wheel over the table scrolls the transcript in both directions.
+        // A negative distance scrolls down at the same point.
+        try scrollUpAbove(composer, by: 300)
+        var deadline = Date(timeIntervalSinceNow: 5)
+        while !jumpButtonVisible() {
+            try require(Date() < deadline, "The wheel over the assistant table did not scroll the transcript up")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        for _ in 0..<3 { try scrollUpAbove(composer, by: -1200) }
+        deadline = Date(timeIntervalSinceNow: 5)
+        while jumpButtonVisible() {
+            try require(Date() < deadline, "The wheel over the assistant table did not scroll the transcript to the end")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+    }
+    func openAssistantRunModeConfirmation() throws {
+        let send = try wait("Send · Ask", role: kAXButtonRole)
+        let (sendOrigin, sendSize) = try elementBounds(send)
+        // GPUI Kit exposes the split button's caret as an unnamed AX button.
+        // Select the adjacent caret by its bounds, then choose its named item.
+        let caret = elements().first { element in
+            guard attribute(element, kAXRoleAttribute) as? String == kAXButtonRole,
+                  strings(element).isEmpty,
+                  let (origin, size) = try? elementBounds(element) else { return false }
+            return abs(origin.y - sendOrigin.y) < 2
+                && origin.x >= sendOrigin.x + sendSize.width - 2
+                && size.width > 0 && size.width < 60
+        }
+        guard let caret else { throw Failure("Assistant mode caret was not found") }
+        try click(caret)
+        try activate(try waitExact("Run automatically", timeout: 10, role: kAXMenuItemRole))
+        _ = try waitExact("Run automatically", timeout: 10, role: kAXButtonRole)
+    }
+    func setAssistantRunMode() throws {
+        try openAssistantRunModeConfirmation()
+        try press("Cancel")
+        _ = try wait("Send · Ask", timeout: 10, role: kAXButtonRole)
+        try openAssistantRunModeConfirmation()
+        try press("Run automatically")
+        _ = try wait("Send · Run", timeout: 10, role: kAXButtonRole)
+    }
+    func testAssistantQueries() throws {
+        try fill("SQL Editor", "SELECT 1 AS assistant_value")
+        key(38, flags: .maskCommand) // Reopen the existing conversation.
+        _ = try wait("Send · Ask", timeout: 20)
+        try fill("Assistant message", "Run selected SQL with approval")
+        try press("Send")
+        _ = try wait("Assistant query approval:", timeout: 20)
+        let cancel = try waitExact("Cancel assistant turn", timeout: 5, role: kAXButtonRole)
+        try require(find("Send", role: kAXButtonRole) == nil, "Send remained visible during the assistant turn")
+        let (cancelPosition, _) = try elementBounds(cancel)
+        let (composerPosition, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        try require(cancelPosition.y >= composerPosition.y + composerSize.height, "Cancel was not below the message field")
+        let runButtons = elements().filter {
+            attribute($0, kAXRoleAttribute) as? String == kAXButtonRole && strings($0).contains("Run")
+        }
+        try require(runButtons.count == 2, "Expected toolbar Run and assistant approval Run")
+        try activate(runButtons[1])
+        _ = try wait("I ran the query.", timeout: 90)
+        _ = try wait("Send", timeout: 5, role: kAXButtonRole)
+        _ = try wait("1", role: kAXCellRole)
+
+        try setAssistantRunMode()
+        try fill("SQL Editor", "SELECT 2 AS assistant_value")
+        try fill("Assistant message", "Run selected SQL automatically")
+        try press("Send")
+        _ = try wait("2", role: kAXCellRole)
+        try require(find("Assistant query approval:") == nil, "Automatic mode requested approval")
+        try press("Toggle Assistant")
+        try waitGone("Toggle conversation list")
+        print("PASS: Assistant approval and automatic execution use the selected query tab")
     }
     func test() throws {
         try start()
         try testAbout()
         try testSettings()
+        try testAssistant()
         try press("New Connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
@@ -716,8 +1483,10 @@ final class Driver {
         try waitGone("Qrow E2E copy")
 
         try press("Qrow E2E")
+        try testAssistantQueries()
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected", role: kAXCellRole)
+        try testEditorHighlight()
         try snapshot("connected")
 
         // Create a second disposable profile for the connection-switch test.
@@ -1135,12 +1904,59 @@ do {
                 try driver.start()
                 try driver.testAbout()
                 try driver.testSettings()
+            } else if CommandLine.arguments.contains("--assistant-only") {
+                try driver.start()
+                try driver.testAssistant()
+            } else if CommandLine.arguments.contains("--assistant-append-only") {
+                try driver.seedAssistantLayoutWorkspace()
+                try driver.start()
+                try driver.testAssistantAppend()
+            } else if CommandLine.arguments.contains("--assistant-titles-only") {
+                try driver.seedAssistantLayoutWorkspace()
+                try driver.start()
+                try driver.testAssistantConversationTitles()
+            } else if CommandLine.arguments.contains("--assistant-statement-only") {
+                try driver.seedAssistantStatementWorkspace()
+                try driver.start()
+                try driver.testAssistantStatementRun()
+            } else if CommandLine.arguments.contains("--assistant-retarget-only") {
+                try driver.seedAssistantRetargetWorkspace()
+                try driver.start()
+                try driver.testAssistantRetargetAfterRename()
+            } else if CommandLine.arguments.contains("--assistant-font-only") {
+                try driver.start()
+                try driver.testAssistant(fontOnly: true)
+            } else if CommandLine.arguments.contains("--assistant-layout-only") {
+                try driver.seedAssistantLayoutWorkspace()
+                try driver.start()
+                try driver.testAssistantLayout()
+            } else if CommandLine.arguments.contains("--editor-highlight-only") {
+                try driver.start()
+                try driver.testEditorHighlight()
             } else {
                 try driver.test()
             }
             driver.stop()
         }
         catch { if driver.app != nil { try? driver.snapshot("failure") }; driver.stop(); throw error }
+        if CommandLine.arguments.contains("--assistant-font-only") {
+            let restartDriver = Driver(name: "qrow-assistant-restart")
+            do {
+                try restartDriver.start()
+                try restartDriver.testAssistantRestart()
+                restartDriver.stop()
+            } catch {
+                if restartDriver.app != nil { try? restartDriver.snapshot("failure-assistant-restart") }
+                restartDriver.stop()
+                throw error
+            }
+        }
+        if CommandLine.arguments.contains("--editor-highlight-only")
+            || CommandLine.arguments.contains("--assistant-layout-only")
+            || CommandLine.arguments.contains("--assistant-append-only")
+            || CommandLine.arguments.contains("--assistant-titles-only")
+            || CommandLine.arguments.contains("--assistant-statement-only")
+            || CommandLine.arguments.contains("--assistant-retarget-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

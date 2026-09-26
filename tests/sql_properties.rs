@@ -17,6 +17,14 @@ proptest! {
         prop_assert_eq!(offset, source.len());
         // Validation must also be total for malformed and incomplete editor text.
         let _ = sql::validate_single(&source);
+        let mut previous_end = 0;
+        for range in sql::statement_ranges(&source) {
+            prop_assert!(range.start >= previous_end);
+            prop_assert!(range.end > range.start);
+            let statement = source.get(range.clone()).expect("statement range is on UTF-8 boundaries");
+            prop_assert!(sql::validate_single(statement).is_ok());
+            previous_end = range.end;
+        }
     }
 
     #[test]

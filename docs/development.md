@@ -95,6 +95,15 @@ Hooks export snapshots into temporary directories and share a build cache under
 `target/hook-checks`. They do not stash, restage, or modify working files.
 They do not package the application.
 
+The macOS end-to-end run uses a synthetic Codex app server to check assistant
+opt-in, the docked pane, a chat turn, appended SQL, Undo, query approval,
+statement targeting, tab changes during a turn, automatic query execution,
+the result rows that Qrow returns to Codex, and generated conversation titles.
+It does not use a Codex account.
+
+The release profile favors size so the optional assistant stays within the
+macOS package budget. Run `core/performance` after a release-profile change.
+
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Markdown changes outside the
 script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
