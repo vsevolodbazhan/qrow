@@ -1996,7 +1996,9 @@ impl Qrow {
                                     entry.text.clone(),
                                 )
                                 .style(TextViewStyle::default().table(table_style))
-                                .text_sm()
+                                // Inline code uses GPUI Kit's measured inline-flow path.
+                                // Use the base body size for both rich and plain paragraphs.
+                                .text_base()
                                 .line_height(relative(1.625))
                                 .min_w_0()
                                 .max_w_full()
@@ -2020,7 +2022,7 @@ impl Qrow {
                                     MessageContent::new().bubble(
                                         Bubble::new()
                                             .with_variant(variant)
-                                            .content(BubbleContent::new().when(
+                                            .content(BubbleContent::new().text_base().when(
                                                 entry.speaker == Speaker::User,
                                                 |content| content.pt_1().pb_3(),
                                             ))
