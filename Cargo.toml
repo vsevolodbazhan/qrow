@@ -34,7 +34,10 @@ security-framework = "3"
 proptest = "=1.11.0"
 
 [patch.crates-io]
-# GPUI Base 0.6.6 stops the active-line paint at the editor's right padding.
+# GPUI Base 0.6.6 with two Qrow fixes: the active-line paint covers the editor's
+# right padding, and inline code lines keep one line when they fit. See
+# vendor/gpui-base/QROW-PATCH.md. Remove this patch when a GPUI Kit release
+# includes both fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
 [profile.release]
