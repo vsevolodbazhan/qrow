@@ -1195,7 +1195,7 @@ final class Driver {
         _ = try wait("I formatted the SQL.", timeout: 20)
         try waitInputValue(
             "SQL Editor",
-            "SELECT 0;\n\nSELECT 1;\n\nselect\n    state,\n    COUNT(*) as bookings,\n    MAX(booked_at) as last_booked_at\nfrom integrations.bookings\ngroup by state"
+            "SELECT 0;\n\nSELECT 1;\n\nselect\n    state,\n    count(*) as bookings,\n    max(booked_at) as last_booked_at\nfrom integrations.bookings\ngroup by state"
         )
         try waitGone("Assistant is working", timeout: 5)
         try snapshot("assistant-formatted-edit")

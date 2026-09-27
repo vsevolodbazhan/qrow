@@ -209,8 +209,344 @@ pub fn format_statement(sql: &str, style: SqlStyle) -> Option<String> {
         ..FormatOptions::default()
     };
     let formatted = sqlformat::format(sql, &QueryParams::None, &options);
-    let formatted = formatted.trim();
-    (formatted != sql && same_tokens(sql, formatted)).then(|| formatted.to_owned())
+    let formatted = case_other_keywords(formatted.trim(), style.keyword_case);
+    (formatted != sql && same_tokens(sql, &formatted)).then_some(formatted)
+}
+
+/// Spark built-in functions, and `OVER`, that Qrow writes in the keyword case
+/// before `(`. Spark finds built-in functions without regard to case. The list
+/// keeps a table or a CTE name before `(` as written.
+const FUNCTIONS: &[&str] = &[
+    "abs",
+    "acos",
+    "add_months",
+    "aggregate",
+    "any",
+    "any_value",
+    "approx_count_distinct",
+    "approx_percentile",
+    "array",
+    "array_contains",
+    "array_distinct",
+    "array_except",
+    "array_join",
+    "array_max",
+    "array_min",
+    "array_position",
+    "array_remove",
+    "array_sort",
+    "array_union",
+    "arrays_zip",
+    "ascii",
+    "asin",
+    "atan",
+    "avg",
+    "base64",
+    "bit_and",
+    "bit_or",
+    "bool_and",
+    "bool_or",
+    "bround",
+    "cardinality",
+    "cast",
+    "cbrt",
+    "ceil",
+    "ceiling",
+    "char_length",
+    "coalesce",
+    "collect_list",
+    "collect_set",
+    "concat",
+    "concat_ws",
+    "contains",
+    "corr",
+    "cos",
+    "count",
+    "count_if",
+    "covar_pop",
+    "covar_samp",
+    "cume_dist",
+    "current_date",
+    "current_timestamp",
+    "date",
+    "date_add",
+    "date_diff",
+    "date_format",
+    "date_part",
+    "date_sub",
+    "date_trunc",
+    "dateadd",
+    "datediff",
+    "day",
+    "dayofmonth",
+    "dayofweek",
+    "dayofyear",
+    "decode",
+    "degrees",
+    "dense_rank",
+    "element_at",
+    "endswith",
+    "every",
+    "exists",
+    "exp",
+    "explode",
+    "explode_outer",
+    "extract",
+    "filter",
+    "first",
+    "first_value",
+    "flatten",
+    "floor",
+    "forall",
+    "format_number",
+    "format_string",
+    "from_json",
+    "from_unixtime",
+    "from_utc_timestamp",
+    "get_json_object",
+    "greatest",
+    "hash",
+    "hex",
+    "hour",
+    "if",
+    "ifnull",
+    "initcap",
+    "inline",
+    "instr",
+    "isnan",
+    "isnotnull",
+    "isnull",
+    "json_tuple",
+    "lag",
+    "last",
+    "last_day",
+    "last_value",
+    "lead",
+    "least",
+    "left",
+    "len",
+    "length",
+    "ln",
+    "locate",
+    "log",
+    "log10",
+    "log2",
+    "lower",
+    "lpad",
+    "ltrim",
+    "make_date",
+    "make_timestamp",
+    "map",
+    "map_from_arrays",
+    "map_keys",
+    "map_values",
+    "max",
+    "max_by",
+    "md5",
+    "mean",
+    "median",
+    "min",
+    "min_by",
+    "minute",
+    "mod",
+    "month",
+    "months_between",
+    "named_struct",
+    "next_day",
+    "now",
+    "nth_value",
+    "ntile",
+    "nullif",
+    "nvl",
+    "nvl2",
+    "over",
+    "percent_rank",
+    "percentile",
+    "percentile_approx",
+    "posexplode",
+    "position",
+    "pow",
+    "power",
+    "quarter",
+    "radians",
+    "rand",
+    "rank",
+    "regexp_extract",
+    "regexp_extract_all",
+    "regexp_like",
+    "regexp_replace",
+    "repeat",
+    "replace",
+    "reverse",
+    "right",
+    "round",
+    "row_number",
+    "rpad",
+    "rtrim",
+    "second",
+    "sequence",
+    "sha1",
+    "sha2",
+    "shuffle",
+    "sign",
+    "sin",
+    "size",
+    "slice",
+    "sort_array",
+    "split",
+    "split_part",
+    "sqrt",
+    "stack",
+    "startswith",
+    "std",
+    "stddev",
+    "stddev_pop",
+    "stddev_samp",
+    "struct",
+    "substr",
+    "substring",
+    "substring_index",
+    "sum",
+    "tan",
+    "timestamp",
+    "to_date",
+    "to_json",
+    "to_timestamp",
+    "to_unix_timestamp",
+    "to_utc_timestamp",
+    "transform",
+    "translate",
+    "trim",
+    "trunc",
+    "try_add",
+    "try_avg",
+    "try_cast",
+    "try_divide",
+    "try_element_at",
+    "try_sum",
+    "try_to_number",
+    "ucase",
+    "unbase64",
+    "unhex",
+    "unix_timestamp",
+    "upper",
+    "uuid",
+    "var_pop",
+    "var_samp",
+    "variance",
+    "weekday",
+    "weekofyear",
+    "xxhash64",
+    "year",
+    "zip_with",
+];
+
+/// Type names that Qrow writes in the keyword case in `CAST(... AS type)`.
+const TYPES: &[&str] = &[
+    "array",
+    "bigint",
+    "binary",
+    "boolean",
+    "byte",
+    "char",
+    "date",
+    "dec",
+    "decimal",
+    "double",
+    "float",
+    "int",
+    "integer",
+    "interval",
+    "long",
+    "map",
+    "numeric",
+    "real",
+    "short",
+    "smallint",
+    "string",
+    "struct",
+    "timestamp",
+    "timestamp_ltz",
+    "timestamp_ntz",
+    "tinyint",
+    "varchar",
+];
+
+/// Prefixes of typed literals, such as `DATE '2026-09-26'`.
+const LITERAL_PREFIXES: &[&str] = &[
+    "date",
+    "interval",
+    "timestamp",
+    "timestamp_ltz",
+    "timestamp_ntz",
+];
+
+/// Writes in `case` the keywords that sqlformat keeps as written: built-in
+/// function names, cast types, typed literal prefixes, and `NULLS FIRST` or
+/// `NULLS LAST`. Words next to `.` keep their case.
+fn case_other_keywords(sql: &str, case: KeywordCase) -> String {
+    let words: Vec<_> = tokens(sql)
+        .into_iter()
+        .filter(|(range, _)| !sql[range.clone()].trim().is_empty())
+        .collect();
+    let text = |i: usize| words.get(i).map_or("", |(range, _)| &sql[range.clone()]);
+    let is_word = |i: usize| {
+        words
+            .get(i)
+            .is_some_and(|(_, kind)| matches!(kind, Kind::Plain | Kind::Keyword))
+            && text(i).starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+    };
+    let mut result = sql.to_owned();
+    // For each open parenthesis: whether it belongs to a cast, and whether
+    // the cast has reached its type.
+    let mut parens: Vec<(bool, bool)> = vec![];
+    for i in 0..words.len() {
+        let word = text(i).to_ascii_lowercase();
+        match word.as_str() {
+            "(" => {
+                let cast = i > 0
+                    && matches!(
+                        text(i - 1).to_ascii_lowercase().as_str(),
+                        "cast" | "try_cast"
+                    );
+                parens.push((cast, false));
+                continue;
+            }
+            ")" => {
+                parens.pop();
+                continue;
+            }
+            _ => {}
+        }
+        if !is_word(i) || text(i + 1) == "." || i > 0 && text(i - 1) == "." {
+            continue;
+        }
+        let in_cast_type = parens.last().is_some_and(|&(cast, typed)| cast && typed);
+        let keyword = text(i + 1) == "(" && FUNCTIONS.contains(&word.as_str())
+            || words
+                .get(i + 1)
+                .is_some_and(|(_, kind)| *kind == Kind::String)
+                && LITERAL_PREFIXES.contains(&word.as_str())
+            || in_cast_type && TYPES.contains(&word.as_str())
+            || word == "nulls"
+                && matches!(text(i + 1).to_ascii_lowercase().as_str(), "first" | "last")
+            || matches!(word.as_str(), "first" | "last")
+                && text(i.wrapping_sub(1)).eq_ignore_ascii_case("nulls");
+        if word == "as"
+            && let Some((true, typed)) = parens.last_mut()
+        {
+            *typed = true;
+        }
+        if keyword {
+            let range = words[i].0.clone();
+            let cased = match case {
+                KeywordCase::Uppercase => word.to_ascii_uppercase(),
+                KeywordCase::Lowercase => word,
+            };
+            result.replace_range(range, &cased);
+        }
+    }
+    result
 }
 
 struct Significant<'a> {
@@ -337,7 +673,7 @@ LIMIT 10;"
         assert_eq!(
             format_statement(sql, upper).unwrap(),
             "\
-SELECT t.Select, count(*) AS n
+SELECT t.Select, COUNT(*) AS n
 FROM db.Events t
 WHERE
     t.state = 'paid'
@@ -353,7 +689,7 @@ GROUP BY t.Select"
         assert_eq!(
             format_statement(sql, lower).unwrap(),
             "\
-select T.SELECT, COUNT(*) as N
+select T.SELECT, count(*) as N
 from DB.EVENTS T
 where
   T.STATE = 'PAID'
@@ -391,6 +727,53 @@ LIMIT 10;"
             assert!(line.trim_end().ends_with("-- only paid"), "{formatted}");
         }
         assert!(formatted.contains("AND booked_at >="), "{formatted}");
+    }
+
+    #[test]
+    fn functions_types_and_literals_follow_keyword_case() {
+        let lower = SqlStyle {
+            keyword_case: KeywordCase::Lowercase,
+            indent_spaces: 2,
+        };
+        let sql = "select COUNT(distinct search_id) as searches from avia.searches where pdate >= DATE '2026-09-26' and pdate < DATE '2026-09-28';";
+        assert_eq!(
+            format_statement(sql, lower).unwrap(),
+            "\
+select count(distinct search_id) as searches
+from avia.searches
+where pdate >= date '2026-09-26' and pdate < date '2026-09-28';"
+        );
+        let sql = "select max(x), CAST(y AS Decimal(10, 2)), row_number() over (order by b nulls last) as rn, interval '1' day from t order by 1 nulls first";
+        let formatted = format_statement(sql, SqlStyle::default()).unwrap();
+        for expected in [
+            "MAX(x)",
+            "CAST(y AS DECIMAL(10, 2))",
+            "ROW_NUMBER() OVER",
+            "NULLS LAST",
+            "INTERVAL '1' DAY",
+            "NULLS FIRST",
+        ] {
+            assert!(formatted.contains(expected), "{expected} in {formatted}");
+        }
+    }
+
+    #[test]
+    fn names_keep_their_case() {
+        // A qualified name, a table before `(`, an alias named like a type,
+        // and a column named like a function without `(`.
+        let sql = "INSERT INTO bookings(Count, Date) SELECT t.Count(x), (SELECT d AS Date) AS Date, Sum FROM db.Max t WHERE t.Date = 1 AND flag";
+        let formatted = format_statement(sql, SqlStyle::default()).unwrap();
+        for expected in [
+            "bookings(Count, Date)",
+            "t.Count(x)",
+            "d AS Date",
+            "AS Date,",
+            "Sum",
+            "db.Max t",
+            "t.Date = 1",
+        ] {
+            assert!(formatted.contains(expected), "{expected} in {formatted}");
+        }
     }
 
     #[test]

@@ -96,13 +96,13 @@ to a new query and to a statement that the assistant writes again completely. A
 shorter statement keeps the layout that the assistant wrote. In formatted SQL, a
 clause that fits in 60 characters stays on the line of its keyword. A longer
 clause, for example `WHERE` with its conditions, puts each item on a new
-indented line. Qrow changes only spaces, line breaks, and the case of reserved
-keywords such as `SELECT` and `AND`. It does not change names such as `t.Date`.
-Some keywords, for example `DATE` before a date literal, keep their case. Qrow
-keeps a statement as written when a change can have an effect on the statement,
-for example near a `${var}` substitution. It also keeps commands such as `SET`
-and `ADD JAR` as written. When the assistant changes only part of a statement,
-Qrow keeps the layout of that statement.
+indented line. Qrow changes only spaces, line breaks, and the case of keywords
+such as `SELECT` and `AND`, built-in functions such as `COUNT`, type names in
+`CAST`, and `DATE` before a date literal. It does not change names such as
+`t.Date` or a table name. Qrow keeps a statement as written when a change can
+have an effect on the statement, for example near a `${var}` substitution. It
+also keeps commands such as `SET` and `ADD JAR` as written. When the assistant
+changes only part of a statement, Qrow keeps the layout of that statement.
 
 If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab
