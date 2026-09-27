@@ -64,7 +64,9 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
     AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
     return (point, extent)
 }
-func fitWindowToMainDisplay(_ app: AXUIElement) throws {
+/// Shrinks the Qrow window to fit the main display. With `grow`, the window
+/// also fills the main display.
+func fitWindowToMainDisplay(_ app: AXUIElement, grow: Bool = false) throws {
     _ = NSApplication.shared
     guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
           let screen = NSScreen.screens.first else {
@@ -83,9 +85,11 @@ func fitWindowToMainDisplay(_ app: AXUIElement) throws {
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
     let currentFrame = CGRect(origin: position, size: extent)
-    guard !safeFrame.contains(currentFrame) || extent.width > width else { return }
+    guard grow || !safeFrame.contains(currentFrame) || extent.width > width else { return }
 
-    var fittedSize = CGSize(width: min(extent.width, width), height: min(extent.height, height))
+    var fittedSize = grow
+        ? CGSize(width: width, height: height)
+        : CGSize(width: min(extent.width, width), height: min(extent.height, height))
     guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
         throw Failure("Could not create the Qrow window size")
     }
@@ -1111,6 +1115,11 @@ final class Driver {
         _ = try waitExact("Open conversation: \(generated)", timeout: 10)
         try require(find("\(generated) ·") == nil, "The thread list showed a Codex thread ID")
         try snapshot("assistant-duplicate-titles")
+        // A narrow pane swaps the list for the selected conversation.
+        try click(waitExact("Open conversation: \(generated)", timeout: 10))
+        try waitGone("Search conversations")
+        _ = try wait("Assistant message")
+        try press("Toggle conversation list")
 
         try openConversationMenu(generated)
         try pressMenuItem("Rename…")
@@ -1248,6 +1257,62 @@ final class Driver {
         ])
         try data.write(to: workspace)
     }
+    /// Writes the layout workspace and starts the synthetic Codex server without an account.
+    func seedAssistantSignInWorkspace() throws {
+        try seedAssistantLayoutWorkspace()
+        let state = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex")
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        try Data().write(to: state.appendingPathComponent("signed-out"))
+    }
+    /// The sign-in screen replaces the transcript. A failed sign-in shows the
+    /// Codex error until Codex has an account, and then the conversation opens.
+    func testAssistantSignIn() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Sign in with ChatGPT…", timeout: 20, role: kAXButtonRole)
+        try snapshot("assistant-sign-in")
+        try press("Sign in with ChatGPT…")
+        _ = try wait("Couldn't sign in. ", timeout: 10)
+        _ = try wait("port 1455 is in use", timeout: 5)
+        try snapshot("assistant-sign-in-error")
+
+        let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex/sign-in-elsewhere")
+        try Data().write(to: marker)
+        try waitGone("Couldn't sign in. ", timeout: 10)
+        try waitGone("Sign in with ChatGPT…", timeout: 5)
+        try fill("Assistant message", "Hello after sign-in")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        print("PASS: Assistant sign-in shows its error until Codex has an account, then opens the conversation")
+    }
+    /// A wide pane keeps a reopened thread list open when you select a
+    /// conversation in it.
+    func testAssistantThreadList() throws {
+        try fitWindowToMainDisplay(app, grow: true)
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
+        try waitGone("New Connection")
+        _ = try wait("Search conversations")
+        try require(find("Back to conversation") == nil, "The assistant pane is narrow. Use a larger main display")
+        for (index, message) in ["Count sandbox schemas now", "Count sandbox schemas again"].enumerated() {
+            if index > 0 { try press("New Conversation") }
+            try fill("Assistant message", message)
+            try press("Send")
+            _ = try wait("I can help with this query", timeout: 20)
+        }
+        let generated = "Title: Count sandbox schemas"
+        try waitSavedConversations([(generated, "codex"), (generated, "codex")])
+        try press("Toggle conversation list")
+        try waitGone("Search conversations")
+        try press("Toggle conversation list")
+        _ = try wait("Search conversations")
+        try click(waitExact("Open conversation: \(generated)", timeout: 10))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try require(find("Search conversations") != nil, "Selecting a conversation closed the list on a wide pane")
+        _ = try wait("Assistant message")
+        try snapshot("assistant-thread-list-after-selection")
+        print("PASS: A wide Assistant pane keeps a reopened conversation list open after a selection")
+    }
     func testAssistantRetargetAfterRename() throws {
         try waitInputValue("SQL Editor", "SELECT 1;")
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
@@ -1273,7 +1338,7 @@ final class Driver {
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, and the last
     /// word of a message with inline code.
-    func seedAssistantLayoutWorkspace() throws {
+    func seedAssistantLayoutWorkspace(panelWidth: Double = 536) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
         let settings: [String: Any] = [
@@ -1282,7 +1347,7 @@ final class Driver {
                 "enabled": true,
                 "data_sharing_notice_version": 1,
                 "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
-                "panel_width": 536,
+                "panel_width": panelWidth,
             ],
         ]
         let data = try JSONSerialization.data(withJSONObject: [
@@ -2000,6 +2065,14 @@ do {
                 try driver.seedAssistantRetargetWorkspace()
                 try driver.start()
                 try driver.testAssistantRetargetAfterRename()
+            } else if CommandLine.arguments.contains("--assistant-thread-list-only") {
+                try driver.seedAssistantLayoutWorkspace(panelWidth: 900)
+                try driver.start()
+                try driver.testAssistantThreadList()
+            } else if CommandLine.arguments.contains("--assistant-sign-in-only") {
+                try driver.seedAssistantSignInWorkspace()
+                try driver.start()
+                try driver.testAssistantSignIn()
             } else if CommandLine.arguments.contains("--assistant-font-only") {
                 try driver.start()
                 try driver.testAssistant(fontOnly: true)
@@ -2033,7 +2106,9 @@ do {
             || CommandLine.arguments.contains("--assistant-append-only")
             || CommandLine.arguments.contains("--assistant-titles-only")
             || CommandLine.arguments.contains("--assistant-statement-only")
-            || CommandLine.arguments.contains("--assistant-retarget-only") { exit(0) }
+            || CommandLine.arguments.contains("--assistant-retarget-only")
+            || CommandLine.arguments.contains("--assistant-sign-in-only")
+            || CommandLine.arguments.contains("--assistant-thread-list-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {
             try windowDriver.start()

@@ -1,8 +1,8 @@
 use super::{
     AccountKind, AccountStatus, AssistantEvent, AssistantHarness, Conversation,
-    ConversationHistory, ConversationPage, HarnessSnapshot, HistoryTurn, Model, ReasoningEffort,
-    ServiceTier, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
-    history_item_text,
+    ConversationHistory, ConversationPage, HarnessSnapshot, HistoryTurn, LoginStart, Model,
+    ReasoningEffort, ServiceTier, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn,
+    TurnRequest, history_item_text,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -888,7 +888,7 @@ impl AssistantHarness for CodexHarness {
         })
     }
 
-    fn begin_login(&mut self) -> Result<String> {
+    fn begin_login(&mut self) -> Result<LoginStart> {
         let response: Value = self.request("account/login/start", json!({"type":"chatgpt"}))?;
         let url = response
             .get("authUrl")
@@ -898,7 +898,20 @@ impl AssistantHarness for CodexHarness {
             url.starts_with("https://") || url.starts_with("http://127.0.0.1:"),
             "Codex returned an unsafe sign-in URL"
         );
-        Ok(url.to_owned())
+        let login_id = response
+            .get("loginId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("Codex did not return a sign-in ID"))?;
+        Ok(LoginStart {
+            login_id: login_id.to_owned(),
+            url: url.to_owned(),
+        })
+    }
+
+    fn cancel_login(&mut self, login_id: &str) -> Result<()> {
+        // Codex answers "notFound" if the sign-in already ended. Either way it is over.
+        let _: Value = self.request("account/login/cancel", json!({ "loginId": login_id }))?;
+        Ok(())
     }
 
     fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation> {
@@ -1604,6 +1617,47 @@ done
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0]["id"], 1);
         assert_eq!(pending[0]["method"], "item/tool/call");
+    }
+
+    #[test]
+    fn browser_sign_in_returns_its_login_id_and_cancels_by_id() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        write_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+    printf '%s\n' "$line" >> requests.jsonl
+    id=$(printf '%s' "$line" | sed -E 's/.*"id":([0-9]+).*/\1/')
+    case "$line" in
+        *'"method":"initialize"'*)
+            printf '%s\n' '{"id":1,"result":{}}'
+            ;;
+        *'"method":"account/login/start"'*)
+            printf '{"id":%s,"result":{"type":"chatgpt","loginId":"login-1","authUrl":"https://auth.example.invalid/sign-in"}}\n' "$id"
+            ;;
+        *'"method":"account/login/cancel"'*)
+            printf '{"id":%s,"result":{"status":"canceled"}}\n' "$id"
+            ;;
+    esac
+done
+"#,
+        );
+        let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
+
+        let login = harness.begin_login().unwrap();
+        harness.cancel_login(&login.login_id).unwrap();
+
+        assert_eq!(
+            login,
+            LoginStart {
+                login_id: "login-1".into(),
+                url: "https://auth.example.invalid/sign-in".into(),
+            }
+        );
+        let requests = fs::read_to_string(directory.path().join("requests.jsonl")).unwrap();
+        assert!(requests.contains(r#""params":{"type":"chatgpt"}"#));
+        assert!(requests.contains(r#""params":{"loginId":"login-1"}"#));
     }
 
     #[test]

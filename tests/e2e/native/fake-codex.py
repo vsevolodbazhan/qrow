@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+import threading
 import time
 
 # Like Codex, save a thread only after its first turn. The state directory
@@ -14,6 +15,8 @@ counter_path = os.path.join(state_dir, "thread-counter")
 live_threads = set()
 # Qrow asks for a conversation title in an ephemeral thread that Codex never saves.
 title_threads = set()
+# The driver creates this file to start without an account.
+signed_out_path = os.path.join(state_dir, "signed-out")
 
 
 def has_rollout(thread):
@@ -79,8 +82,22 @@ def wide_table():
     )
 
 
+send_lock = threading.Lock()
+
+
 def send(message):
-    print(json.dumps(message, separators=(",", ":")), flush=True)
+    with send_lock:
+        print(json.dumps(message, separators=(",", ":")), flush=True)
+
+
+def sign_in_elsewhere():
+    # Like a sign-in in another Codex client after a failed sign-in in Qrow.
+    marker = os.path.join(state_dir, "sign-in-elsewhere")
+    deadline = time.monotonic() + 30
+    while not os.path.exists(marker) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    os.remove(signed_out_path)
+    send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
 
 
 for line in sys.stdin:
@@ -91,15 +108,20 @@ for line in sys.stdin:
         time.sleep(5)  # Keep the startup controls visible through the UI checks.
         send({"id": request_id, "result": {}})
     elif method == "account/read":
+        signed_out = os.path.exists(signed_out_path)
         send(
             {
                 "id": request_id,
                 "result": {
-                    "account": {"type": "chatgpt", "planType": "plus"},
+                    "account": None if signed_out else {"type": "chatgpt", "planType": "plus"},
                     "requiresOpenaiAuth": True,
                 },
             }
         )
+    elif method == "account/login/start":
+        # A sign-in URL would open the browser, so the sign-in fails before that.
+        send({"id": request_id, "error": {"code": -32603, "message": "Login server error: port 1455 is in use"}})
+        threading.Thread(target=sign_in_elsewhere, daemon=True).start()
     elif method == "model/list":
         send(
             {

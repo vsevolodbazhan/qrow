@@ -122,7 +122,9 @@ read-only. Select **Run automatically** only if you accept this risk.
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Older saved conversations without an activity time show **Earlier**. On a
-narrow pane, select **Toggle conversation list** to open the list. Search the
+narrow pane, select **Toggle conversation list** to open the list. When you
+select a conversation there, the pane shows that conversation. On a wide pane,
+the list stays open. Search the
 list by title. Select **New
 Conversation** in the pane header to start a separate conversation.
 After the first reply, Qrow sends recent messages from the conversation to
@@ -192,10 +194,14 @@ tooltip shows the error. Select **Reconnect** to try again.
 Qrow does not send the draft for you. A database query that already started can
 finish while Codex is disconnected.
 
-If Codex is signed out, select **Sign in with ChatGPT**. Codex opens its sign-in
-page in your browser. If Codex uses an API key, Codex applies API-key billing.
-Manage sign-out in Codex, because its account is shared with other Codex
-clients.
+If Codex is signed out, the assistant pane shows **Sign in to Codex** in place
+of the conversation. Select **Sign in with ChatGPT…**. Codex opens its sign-in
+page in your browser. Qrow shows that sign-in continues in the browser. Select
+**Reopen page** if you closed the page. Select **Cancel** to stop the sign-in.
+If the sign-in fails, Qrow shows the Codex error below the button until you
+sign in. If you sign in with another Codex client, the pane opens the
+conversation. If Codex uses an API key, Codex applies API-key billing. Manage
+sign-out in Codex, because its account is shared with other Codex clients.
 
 The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. A conversation can remain if

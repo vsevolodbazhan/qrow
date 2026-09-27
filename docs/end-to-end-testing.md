@@ -85,7 +85,7 @@ Keychain credentials. The driver restores the previous clipboard contents
 after text entry.
 
 The full native suite also checks assistant fonts, appended SQL, statement
-selection, tab changes, titles, and layout. It runs each check with a separate
+selection, tab changes, titles, layout, sign-in, and the wide thread list. It runs each check with a separate
 temporary workspace and the same isolated package.
 
 To check the Assistant font picker without a server fixture, use an isolated
@@ -168,7 +168,9 @@ target/e2e-tools/native-driver --assistant-titles-only
 The driver submits an empty name in the rename dialog and checks that the
 dialog stays open. It renames a conversation and makes a new title from the
 pane header. It starts a second conversation with the same generated title and
-checks that the thread list does not show thread IDs. Then it uses the thread
+checks that the thread list does not show thread IDs. It selects a
+conversation in the list and checks that the narrow pane shows the
+conversation. Then it uses the thread
 list context menu to cancel a rename, rename a conversation, make a new title,
 and delete a conversation. The driver reads the saved workspace to check each
 title and title source.
@@ -184,6 +186,31 @@ The driver renames another tab and selects it during a turn. The assistant
 reads SQL and requests a run with a tab ID that is not in the open tabs. The
 check confirms that the query approval card names the selected tab and shows
 its SQL. The driver cancels the request before it connects.
+
+To check the thread list on a wide pane, use the same package steps and a new,
+empty workspace directory. Run:
+
+```sh
+target/e2e-tools/native-driver --assistant-thread-list-only
+```
+
+The driver starts two conversations, closes and opens the thread list, and
+selects a conversation. The check confirms that the list stays open. This check
+needs a main display that fits a wide assistant pane.
+
+To check the assistant sign-in screen, use the same package steps and a new,
+empty workspace directory. Run:
+
+```sh
+target/e2e-tools/native-driver --assistant-sign-in-only
+```
+
+The synthetic Codex server starts without an account. The driver selects
+**Sign in with ChatGPT…**, and the synthetic server returns an error before it
+supplies a sign-in page. Thus the check does not open a browser. The check
+confirms that the error stays visible until Codex reports an account. Then the
+sign-in screen closes and the driver sends a message. The waiting state and
+**Cancel** need a real Codex sign-in page, and the check does not cover them.
 
 ## Inspect failures
 

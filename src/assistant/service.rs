@@ -5,8 +5,8 @@
 
 use super::{
     AssistantEvent, AssistantHarness, CodexHarness, Conversation, ConversationHistory,
-    ConversationPage, HarnessSnapshot, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn,
-    TurnRequest,
+    ConversationPage, HarnessSnapshot, LoginStart, TitleRequest, ToolCall, ToolDefinition,
+    ToolResult, Turn, TurnRequest,
 };
 use std::{
     path::PathBuf,
@@ -28,6 +28,7 @@ const TOOL_ANSWER_POLL: Duration = Duration::from_millis(5);
 #[derive(Debug)]
 pub enum Command {
     Login,
+    CancelLogin(String),
     Refresh,
     Create(Vec<ToolDefinition>),
     Resume(String),
@@ -62,6 +63,7 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Operation {
     Login,
+    CancelLogin,
     Refresh,
     Create,
     Resume,
@@ -80,6 +82,7 @@ impl Command {
     fn operation(&self) -> Operation {
         match self {
             Self::Login => Operation::Login,
+            Self::CancelLogin(_) => Operation::CancelLogin,
             Self::Refresh => Operation::Refresh,
             Self::Create(_) => Operation::Create,
             Self::Resume(_) => Operation::Resume,
@@ -98,7 +101,9 @@ impl Command {
 
     fn identifier(&self) -> Option<String> {
         match self {
-            Self::Resume(id) | Self::Read(id) | Self::Delete(id) => Some(id.clone()),
+            Self::Resume(id) | Self::Read(id) | Self::Delete(id) | Self::CancelLogin(id) => {
+                Some(id.clone())
+            }
             Self::ReadOlder { thread_id, .. }
             | Self::Rename { thread_id, .. }
             | Self::Steer { thread_id, .. }
@@ -115,7 +120,8 @@ impl Command {
 pub enum Event {
     Ready(HarnessSnapshot),
     Snapshot(HarnessSnapshot),
-    LoginUrl(String),
+    LoginStarted(LoginStart),
+    LoginCancelled(String),
     Created(Conversation),
     Resumed(Conversation),
     History(ConversationHistory),
@@ -386,7 +392,10 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
     let operation = command.operation();
     let id = command.identifier();
     let result = match command {
-        Command::Login => harness.begin_login().map(Event::LoginUrl),
+        Command::Login => harness.begin_login().map(Event::LoginStarted),
+        Command::CancelLogin(id) => harness
+            .cancel_login(&id)
+            .map(|()| Event::LoginCancelled(id)),
         Command::Refresh => harness.snapshot().map(Event::Snapshot),
         Command::Create(tools) => harness.create_conversation(&tools).map(Event::Created),
         Command::Resume(id) => harness.resume_conversation(&id).map(Event::Resumed),

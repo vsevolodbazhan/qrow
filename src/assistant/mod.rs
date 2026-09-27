@@ -121,6 +121,14 @@ impl Model {
     }
 }
 
+/// A browser sign-in that Codex started. Codex reports the result later in
+/// `account/login/completed` with the same login ID.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoginStart {
+    pub login_id: String,
+    pub url: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HarnessSnapshot {
     account: AccountStatus,
@@ -139,7 +147,10 @@ impl HarnessSnapshot {
 
 pub trait AssistantHarness: Send {
     fn snapshot(&mut self) -> Result<HarnessSnapshot>;
-    fn begin_login(&mut self) -> Result<String> {
+    fn begin_login(&mut self) -> Result<LoginStart> {
+        anyhow::bail!("ChatGPT sign-in is not supported by this harness")
+    }
+    fn cancel_login(&mut self, _login_id: &str) -> Result<()> {
         anyhow::bail!("ChatGPT sign-in is not supported by this harness")
     }
     fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation>;

@@ -6,6 +6,10 @@ use gpui_kit::component::{
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{ButtonRounded, DropdownButton},
     collapsible::Collapsible,
+    empty::{
+        Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant,
+        EmptyTitle,
+    },
     h_flex,
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
@@ -69,6 +73,15 @@ fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
     override_visibility.unwrap_or(!narrow)
 }
 
+/// A narrow pane swaps the opened list for the selected conversation. A wide
+/// pane keeps the list next to it.
+fn thread_list_after_selection(override_visibility: Option<bool>) -> Option<bool> {
+    match override_visibility {
+        Some(true) => None,
+        other => other,
+    }
+}
+
 fn reasoning_effort_label(id: &str) -> String {
     match id {
         "xhigh" => "Extra High".into(),
@@ -108,9 +121,63 @@ pub(super) enum Status {
     Disconnected(String),
 }
 
+/// Progress of a browser sign-in. Codex owns the account and the sign-in page.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) enum SignIn {
+    #[default]
+    Idle,
+    /// Qrow asked Codex for the sign-in page.
+    Starting,
+    /// The sign-in page is open in the browser.
+    Waiting {
+        login_id: String,
+        url: String,
+    },
+    Failed(String),
+}
+
+impl SignIn {
+    /// Applies `account/login/completed`. A failure applies only to the sign-in
+    /// on screen, because Codex also reports a sign-in that you cancelled or
+    /// replaced.
+    fn complete(&mut self, login_id: Option<&str>, success: bool, error: Option<&str>) {
+        if success {
+            *self = Self::Idle;
+        } else if let Self::Waiting {
+            login_id: current, ..
+        } = self
+            && login_id.is_none_or(|id| id == current)
+        {
+            *self = Self::Failed(error.unwrap_or("Codex did not give a reason.").to_owned());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[::core::prelude::v1::test]
+    fn sign_in_failures_apply_only_to_the_sign_in_on_screen() {
+        let waiting = SignIn::Waiting {
+            login_id: "login-2".into(),
+            url: "https://example.invalid".into(),
+        };
+        let mut sign_in = waiting.clone();
+        sign_in.complete(Some("login-1"), false, Some("Login cancelled"));
+        assert_eq!(sign_in, waiting);
+        sign_in.complete(Some("login-2"), false, Some("Login cancelled"));
+        assert_eq!(sign_in, SignIn::Failed("Login cancelled".into()));
+
+        // A sign-in that you cancelled in Qrow reports a failure later.
+        let mut sign_in = SignIn::Idle;
+        sign_in.complete(Some("login-2"), false, Some("Login cancelled"));
+        assert_eq!(sign_in, SignIn::Idle);
+
+        let mut sign_in = SignIn::Failed("Login cancelled".into());
+        sign_in.complete(None, true, None);
+        assert_eq!(sign_in, SignIn::Idle);
+    }
 
     #[::core::prelude::v1::test]
     fn tool_cards_keep_the_tool_name_and_show_the_state_separately() {
@@ -208,6 +275,15 @@ mod tests {
         assert!(show_thread_list(false, None));
         assert!(show_thread_list(true, Some(true)));
         assert!(!show_thread_list(false, Some(false)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn selecting_a_thread_closes_the_list_only_on_narrow_panes() {
+        for narrow in [true, false] {
+            let after = thread_list_after_selection(Some(true));
+            assert_eq!(show_thread_list(narrow, after), !narrow);
+        }
+        assert_eq!(thread_list_after_selection(None), None);
     }
 
     #[::core::prelude::v1::test]
@@ -522,6 +598,7 @@ pub(super) struct AssistantPanelState {
     pub resizing: Option<(Point<Pixels>, Pixels)>,
     pub unread: bool,
     pub notice: Option<String>,
+    pub sign_in: SignIn,
     pub previous_focus: Option<FocusHandle>,
     pub rename_form: Option<ConversationEditor>,
     pub pending_rename: Option<(String, String)>,
@@ -657,6 +734,7 @@ impl AssistantPanelState {
             resizing: None,
             unread: false,
             notice: None,
+            sign_in: SignIn::Idle,
             previous_focus: None,
             rename_form: None,
             pending_rename: None,
@@ -1056,9 +1134,8 @@ impl Qrow {
         self.assistant_panel.pending_reply_thread = None;
         self.assistant_command(AssistantCommand::Resume(id.to_owned()), cx);
         self.sync_assistant_selectors(window, cx);
-        if self.assistant_panel.thread_list_override == Some(true) {
-            self.assistant_panel.thread_list_override = Some(false);
-        }
+        self.assistant_panel.thread_list_override =
+            thread_list_after_selection(self.assistant_panel.thread_list_override);
         self.scroll_assistant_to_bottom(window, cx);
         self.changed(cx);
     }
@@ -1182,6 +1259,7 @@ impl Qrow {
             Ok(service) => {
                 self.assistant_panel.service = Some(service);
                 self.assistant_panel.status = Status::Starting;
+                self.assistant_panel.sign_in = SignIn::Idle;
                 // A new Codex process has no title requests from the old one.
                 self.assistant_panel.regenerating_titles.clear();
                 self.assistant_panel.title_history_reads.clear();
@@ -1261,6 +1339,109 @@ impl Qrow {
                             window.close_dialog(cx);
                         })))
         });
+    }
+
+    fn begin_assistant_sign_in(&mut self, cx: &mut Context<Self>) {
+        if self.assistant_command(AssistantCommand::Login, cx) {
+            self.assistant_panel.sign_in = SignIn::Starting;
+            cx.notify();
+        }
+    }
+
+    fn cancel_assistant_sign_in(&mut self, cx: &mut Context<Self>) {
+        if let SignIn::Waiting { login_id, .. } = std::mem::take(&mut self.assistant_panel.sign_in)
+        {
+            self.assistant_command(AssistantCommand::CancelLogin(login_id), cx);
+        }
+        cx.notify();
+    }
+
+    /// Replaces the transcript while Codex has no account.
+    fn assistant_sign_in(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let sign_in = &self.assistant_panel.sign_in;
+        Empty::new()
+            .size_full()
+            .border_0()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(Icon::new(AssetIconName::Sparkles)),
+                    )
+                    .title(EmptyTitle::new().child("Sign in to Codex"))
+                    .description(EmptyDescription::new().child(
+                        "The assistant uses your Codex account. Sign in with ChatGPT to use your plan.",
+                    )),
+            )
+            .content(match sign_in {
+                SignIn::Waiting { url, .. } => {
+                    let url = url.clone();
+                    EmptyContent::new()
+                        .child(
+                            h_flex()
+                                .id("assistant-sign-in-waiting")
+                                .role(Role::Status)
+                                .aria_label("Continue sign-in in your browser")
+                                .gap_2()
+                                .text_color(muted)
+                                .child(Spinner::new().small().color(muted))
+                                .child("Continue sign-in in your browser"),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("assistant-sign-in-reopen")
+                                        .label("Reopen page")
+                                        .tooltip("Open the Codex sign-in page again")
+                                        .on_click(move |_, _, cx| cx.open_url(&url)),
+                                )
+                                .child(
+                                    Button::new("assistant-sign-in-cancel")
+                                        .label("Cancel")
+                                        .accessibility_label("Cancel sign-in")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.cancel_assistant_sign_in(cx)
+                                        })),
+                                ),
+                        )
+                }
+                SignIn::Idle | SignIn::Starting | SignIn::Failed(_) => EmptyContent::new()
+                    .child(
+                        Button::new("assistant-sign-in")
+                            .label("Sign in with ChatGPT…")
+                            .loading(*sign_in == SignIn::Starting)
+                            .disabled(*sign_in == SignIn::Starting)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.begin_assistant_sign_in(cx)
+                            })),
+                    )
+                    .when_some(
+                        match sign_in {
+                            SignIn::Failed(error) => Some(error.clone()),
+                            _ => None,
+                        },
+                        |content, error| {
+                            content.child(
+                                v_flex()
+                                    .id("assistant-sign-in-error")
+                                    .role(Role::Alert)
+                                    .aria_label(format!("Couldn't sign in. {error}"))
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_color(
+                                                cx.theme().semantic_tokens().colors.destructive,
+                                            )
+                                            .child("Couldn't sign in. Try again."),
+                                    )
+                                    .child(div().text_xs().text_color(muted).child(error)),
+                            )
+                        },
+                    ),
+            })
     }
 
     pub(super) fn assistant_command(
@@ -1556,6 +1737,9 @@ impl Qrow {
         } else {
             Status::SignInRequired
         };
+        if matches!(self.assistant_panel.status, Status::Ready) {
+            self.assistant_panel.sign_in = SignIn::Idle;
+        }
         self.assistant_panel.snapshot = Some(snapshot);
         self.sync_assistant_selectors(window, cx);
         if initial {
@@ -1824,25 +2008,30 @@ impl Qrow {
             }
             AssistantServiceEvent::Harness(AssistantEvent::Other { method, params }) => {
                 if method == "account/login/completed" {
-                    if params.get("success").and_then(Value::as_bool) == Some(true) {
+                    let success = params.get("success").and_then(Value::as_bool) == Some(true);
+                    self.assistant_panel.sign_in.complete(
+                        params.get("loginId").and_then(Value::as_str),
+                        success,
+                        params.get("error").and_then(Value::as_str),
+                    );
+                    if success {
                         self.assistant_command(AssistantCommand::Refresh, cx);
-                    } else {
-                        self.assistant_panel.notice = Some(
-                            params
-                                .get("error")
-                                .and_then(Value::as_str)
-                                .unwrap_or("Sign-in failed. Try again.")
-                                .to_owned(),
-                        );
                     }
                 } else if method == "account/updated" {
                     self.assistant_command(AssistantCommand::Refresh, cx);
                 }
             }
-            AssistantServiceEvent::LoginUrl(url) => {
-                cx.open_url(&url);
-                self.assistant_panel.notice =
-                    Some("Complete sign-in in your browser, then return to Qrow.".into());
+            AssistantServiceEvent::LoginStarted(login) => {
+                if self.assistant_panel.sign_in == SignIn::Starting {
+                    cx.open_url(&login.url);
+                    self.assistant_panel.sign_in = SignIn::Waiting {
+                        login_id: login.login_id,
+                        url: login.url,
+                    };
+                } else {
+                    // The sign-in stopped before Codex answered.
+                    self.assistant_command(AssistantCommand::CancelLogin(login.login_id), cx);
+                }
             }
             AssistantServiceEvent::Renamed(id) => {
                 if let Some((pending_id, title)) = self.assistant_panel.pending_rename.take()
@@ -1889,6 +2078,7 @@ impl Qrow {
             }
             AssistantServiceEvent::Disconnected(error) => {
                 self.assistant_panel.creating_conversation = false;
+                self.assistant_panel.sign_in = SignIn::Idle;
                 self.assistant_panel.status = Status::Disconnected(error);
                 self.assistant_panel.service = None;
                 self.assistant_panel.active_turn = None;
@@ -1922,6 +2112,14 @@ impl Qrow {
                     if self.assistant.selected_thread.as_ref() != Some(thread) {
                         return;
                     }
+                }
+                if operation == Operation::Login {
+                    self.assistant_panel.sign_in = SignIn::Failed(error);
+                    return;
+                }
+                if operation == Operation::CancelLogin {
+                    // Qrow no longer shows the sign-in. It ends when Codex stops.
+                    return;
                 }
                 if operation == Operation::Rename {
                     self.assistant_panel.pending_rename = None;
@@ -2254,6 +2452,7 @@ impl Qrow {
             _ => None,
         };
         let disconnected = disconnected_error.is_some();
+        let signed_out = matches!(self.assistant_panel.status, Status::SignInRequired);
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
         // Codex owes a reply from the send until the turn ends. A query that
         // waits for approval waits for you instead.
@@ -2434,18 +2633,6 @@ impl Qrow {
                             })),
                     )
             )
-            .when(
-                matches!(self.assistant_panel.status, Status::SignInRequired),
-                |panel| {
-                    panel.child(
-                        Button::new("assistant-sign-in")
-                            .label("Sign in with ChatGPT")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.assistant_command(AssistantCommand::Login, cx);
-                            })),
-                    )
-                },
-            )
             .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
                 panel.child(
                     div()
@@ -2456,7 +2643,14 @@ impl Qrow {
                         .child(notice.clone()),
                 )
             })
-            .child(
+            .when(signed_out, |panel| panel.child(
+                div()
+                    .id("assistant-sign-in")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(self.assistant_sign_in(cx))))
+            .when(!signed_out, |panel| panel.child(
                 div().relative().flex_1().min_h_0().child(v_flex()
                     .id("assistant-transcript")
                     .size_full()
@@ -2579,7 +2773,7 @@ impl Qrow {
                             })),
                     )
                 },
-            ))
+            )))
             .when_some(
                 self.assistant_panel
                     .pending_query
