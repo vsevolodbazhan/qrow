@@ -12,6 +12,10 @@ Qrow changes these files:
   which are wider than kerned text, and broke the line. A chat bubble sized for
   one line then hid the last word. `src/text/inline.rs` adds a kerned test font
   for the regression test.
+- `src/text/inline_flow.rs`: the line wrapper measures bold and italic text in
+  its own face. Before, the wrapper measured it in the regular body face, which
+  is narrower. A line with bold text then became wider than the column, and
+  the column clipped its end.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

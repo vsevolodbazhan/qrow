@@ -82,6 +82,19 @@ def wide_table():
     )
 
 
+def bold_reply():
+    # The first paragraph matches a reply that the transcript cut off at its
+    # right edge. Inline code makes Markdown lay out a paragraph as an inline
+    # flow. There, every line of the bold paragraph overflows if the line
+    # wrapper measures bold text in the regular face.
+    sentence = "Bold words wrap inside the transcript so that no letter is hidden at the right edge."
+    return (
+        "There were **44,266,382 distinct searches** in `avia.searches` for the last seven "
+        "complete days, September 20–26, 2026.\n\n"
+        f"`pdate` **{' '.join([sentence] * 4)}**"
+    )
+
+
 send_lock = threading.Lock()
 
 
@@ -395,6 +408,8 @@ for line in sys.stdin:
                 if message.startswith("Show many lines")
                 else wide_table()
                 if message.startswith("Show a wide table")
+                else bold_reply()
+                if message.startswith("Show a bold reply")
                 else (
                     "**I can help with this query.**\n\n"
                     "Use `SELECT 1` to check the selected tab.\n\n"

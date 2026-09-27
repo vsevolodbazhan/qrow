@@ -1336,8 +1336,8 @@ final class Driver {
         print("PASS: Assistant targets the selected tab after a rename and invalid tab ID")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
-    /// which the transcript cut off messages: a wide table reply, and the last
-    /// word of a message with inline code.
+    /// which the transcript cut off messages: a wide table reply, the last
+    /// word of a message with inline code, and the end of bold text lines.
     func seedAssistantLayoutWorkspace(panelWidth: Double = 536) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
@@ -1355,10 +1355,11 @@ final class Driver {
         ])
         try data.write(to: workspace)
     }
-    /// A message with inline code shows its last word. A reply with a wide
-    /// table uses the transcript width, the transcript scrolls to the end of
-    /// the table, and the wheel scrolls past the table. The table check runs
-    /// with the Connections sidebar shown and hidden.
+    /// A message with inline code shows its last word. Lines with bold text
+    /// stay inside the reply. A reply with a wide table uses the transcript
+    /// width, the transcript scrolls to the end of the table, and the wheel
+    /// scrolls past the table. The table check runs with the Connections
+    /// sidebar shown and hidden.
     func testAssistantLayout() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Assistant model: Synthetic Model", timeout: 20)
@@ -1367,6 +1368,7 @@ final class Driver {
             try waitGone("Search conversations", timeout: 5)
         }
         try checkInlineCodeMessage()
+        try checkBoldReply()
         // Earlier messages make the transcript long enough to scroll.
         try fill("Assistant message", "Show many lines")
         try press("Send")
@@ -1378,7 +1380,7 @@ final class Driver {
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
         try waitGone("New Connection", timeout: 5)
         try checkWideTableReply("assistant-wide-table-no-sidebar")
-        print("PASS: Assistant messages with inline code show every line, and wide table replies use the transcript width, show the whole table, and scroll")
+        print("PASS: Assistant messages with inline code show every line, bold text wraps inside the reply, and wide table replies use the transcript width, show the whole table, and scroll")
     }
     /// At this width the message fits on one line. If the text breaks before
     /// the last word, the bubble keeps its one-line height and hides the
@@ -1406,6 +1408,39 @@ final class Driver {
                              abs(top.blueComponent - bottom.blueComponent))
         try require(difference < 0.02, "The message with inline code extends below its bubble")
         try checkMessageInsets(message)
+    }
+    /// A line that is wider than the reply is clipped at the reply's right
+    /// edge, so glyphs touch that edge. A line that wraps correctly ends
+    /// before it. The reply is drawn on the transcript background.
+    func checkBoldReply() throws {
+        try fill("Assistant message", "Show a bold reply")
+        try press("Send")
+        let reply = try wait("Assistant: There were **44,266,382 distinct searches**", timeout: 20)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let (origin, extent) = try elementBounds(reply)
+        let (composerOrigin, _) = try elementBounds(try waitInput("Assistant message"))
+        try snapshot("assistant-bold-reply")
+        let bottom = min(origin.y + extent.height, composerOrigin.y)
+        try require(bottom - origin.y > 100, "The bold reply is not on screen")
+        let path = "\(artifacts)/assistant-bold-reply-edge.png"
+        let rect = "\(Int(origin.x - 4)),\(Int(origin.y)),\(Int(extent.width) + 4),\(Int(bottom - origin.y))"
+        _ = try command(["screencapture", "-x", "-R", rect, path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data),
+              let background = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the bold reply capture")
+        }
+        let scale = CGFloat(bitmap.pixelsWide) / (CGFloat(Int(extent.width)) + 4)
+        let edge = Int(scale * 2)
+        let inked = (bitmap.pixelsWide - edge..<bitmap.pixelsWide).contains { x in
+            (0..<bitmap.pixelsHigh).contains { y in
+                guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                return max(abs(color.redComponent - background.redComponent),
+                           abs(color.greenComponent - background.greenComponent),
+                           abs(color.blueComponent - background.blueComponent)) > 0.1
+            }
+        }
+        try require(!inked, "Text in the bold reply reaches the right edge of the reply")
     }
     /// The transcript and the composer share one horizontal inset. The reply
     /// text starts at the left edge of the composer, and the user bubble ends

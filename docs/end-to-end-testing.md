@@ -121,6 +121,7 @@ pane width of 536. At this width, messages can be measured at one width and
 drawn at another. The check makes sure that:
 
 - A message with inline code that fits on one line shows its last word.
+- Lines of a reply with bold text end before the right edge of the reply.
 - The assistant reply starts at the left edge of the composer, and the user
   message bubble ends at its right edge.
 - A reply with a wide table uses the full transcript width.

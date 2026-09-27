@@ -1001,9 +1001,11 @@ fn line_ranges(
 
 /// Appends the wrap fragments for `range` of `text`. The line wrapper
 /// measures text fragments in the body font, so a span whose highlight sets
-/// another family is shaped with the same run the renderer uses and enters
-/// the wrapper as measured elements. Oversized spans retain word boundaries;
-/// oversized words can break at grapheme boundaries without splitting Unicode.
+/// another family, weight, or style is shaped with the same run the renderer
+/// uses and enters the wrapper as measured elements. Code spans stay whole when
+/// they fit; oversized code spans and other styled spans retain word
+/// boundaries. Oversized words can break at grapheme boundaries without
+/// splitting Unicode.
 fn push_text_wrap_fragments<'a>(
     fragments: &mut Vec<WrapLineFragment<'a>>,
     text: &'a str,
@@ -1016,7 +1018,10 @@ fn push_text_wrap_fragments<'a>(
     let font_size = text_style.font_size.to_pixels(window.rem_size());
     let mut cursor = range.start;
     for (highlight_range, highlight) in highlights {
-        if highlight.font_family.is_none() {
+        let changes_family = highlight.font_family.is_some();
+        let changes_face =
+            highlight.style.font_weight.is_some() || highlight.style.font_style.is_some();
+        if !changes_family && !changes_face {
             continue;
         }
         let start = highlight_range.start.max(cursor);
@@ -1028,20 +1033,19 @@ fn push_text_wrap_fragments<'a>(
             fragments.push(WrapLineFragment::text(&text[cursor..start]));
         }
         let span = &text[start..end];
-        let measure = |text: &str| {
-            let runs = text_runs(
-                text.len(),
-                text_style,
-                &[(0..text.len(), highlight.clone())],
-            );
+        let measure = |text: &str, styled: bool| {
+            let (highlights, scale) = if styled {
+                (
+                    vec![(0..text.len(), highlight.clone())],
+                    highlight.font_size_scale.unwrap_or(1.),
+                )
+            } else {
+                (Vec::new(), 1.)
+            };
+            let runs = text_runs(text.len(), text_style, &highlights);
             window
                 .text_system()
-                .layout_line(
-                    text,
-                    font_size * highlight.font_size_scale.unwrap_or(1.),
-                    &runs,
-                    None,
-                )
+                .layout_line(text, font_size * scale, &runs, None)
                 .width
         };
         let padding = if highlight.font_size_scale.is_some() {
@@ -1049,21 +1053,54 @@ fn push_text_wrap_fragments<'a>(
         } else {
             Pixels::ZERO
         };
-        let width = measure(span) + padding;
-        if width <= wrap_width {
+        let width = measure(span, true) + padding;
+        if changes_family && width <= wrap_width {
             fragments.push(WrapLineFragment::element(width, span.len()));
-        } else {
+        } else if changes_family {
             for word in span.split_word_bounds() {
-                let width = measure(word) + padding;
+                let width = measure(word, true) + padding;
                 if width <= wrap_width {
                     fragments.push(WrapLineFragment::element(width, word.len()));
                 } else {
                     for grapheme in word.graphemes(true) {
                         fragments.push(WrapLineFragment::element(
-                            measure(grapheme) + padding,
+                            measure(grapheme, true) + padding,
                             grapheme.len(),
                         ));
                     }
+                }
+            }
+        } else {
+            // The wrapper finds break points only at whitespace text, so
+            // whitespace stays text. The wrapper measures it in the body
+            // face; the word before it carries the styled excess, because
+            // the whitespace stays on that word's line when the line breaks.
+            let mut last_element = None;
+            let mut pending = Pixels::ZERO;
+            for word in span.split_word_bounds() {
+                if word.chars().all(char::is_whitespace) {
+                    fragments.push(WrapLineFragment::text(word));
+                    let excess = measure(word, true) - measure(word, false);
+                    match last_element.and_then(|ix| fragments.get_mut(ix)) {
+                        Some(WrapLineFragment::Element { width, .. }) => *width += excess,
+                        _ => pending += excess,
+                    }
+                    continue;
+                }
+                let width = measure(word, true);
+                let parts = if width <= wrap_width {
+                    vec![(width, word.len())]
+                } else {
+                    word.graphemes(true)
+                        .map(|grapheme| (measure(grapheme, true), grapheme.len()))
+                        .collect()
+                };
+                for (width, len) in parts {
+                    last_element = Some(fragments.len());
+                    fragments.push(WrapLineFragment::element(
+                        width + std::mem::take(&mut pending),
+                        len,
+                    ));
                 }
             }
         }
@@ -1461,6 +1498,89 @@ mod tests {
             "the trailing word wraps to a second line: {text_lines:?}"
         );
     }
+    /// Line breaking must see the width of bold text in its own face. With a
+    /// body-face wrapper the bold words below are measured at two thirds of
+    /// their shaped width, the line is kept whole, and the last word paints
+    /// past `wrap_width`.
+    #[test]
+    fn bold_text_near_the_wrap_width_does_not_overflow_the_flow() {
+        use super::super::inline::test_fonts::{BODY, WideMonoTextSystem};
+        use gpui::{AbsoluteLength, Empty, FontWeight, HighlightStyle, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+
+        let font_size = px(10.);
+        let text_style = TextStyle {
+            font_family: SharedString::from(BODY),
+            font_size: AbsoluteLength::Pixels(font_size),
+            ..Default::default()
+        };
+        let text = "see bold words end";
+        let bold = text.find("bold words").unwrap();
+        let bold_highlight = InlineHighlight {
+            style: HighlightStyle {
+                font_weight: Some(FontWeight::BOLD),
+                ..Default::default()
+            },
+            font_family: None,
+            font_size_scale: None,
+        };
+        let items = vec![MeasureItem::Text {
+            text: SharedString::from(text),
+            links: vec![],
+            highlights: vec![(bold..bold + "bold words".len(), bold_highlight)],
+        }];
+        let body_char = WideMonoTextSystem::width_of("x", BODY, font_size);
+        // Bold glyphs are 1.5 times as wide as body glyphs.
+        let bold_width = |text: &str| body_char * 1.5 * text.chars().count() as f32;
+
+        // The first width fits "see bold words " but not "end". The second
+        // width fits "see bold " but not "words", so the bold span must break
+        // at its own space.
+        for (wrap_width, expected_lines) in [
+            (
+                body_char * 5. + bold_width("bold words"),
+                vec!["see bold words", "end"],
+            ),
+            (
+                body_char * 4. + bold_width("bold "),
+                vec!["see bold", "words end"],
+            ),
+        ] {
+            let layout = window.update(|_, window, cx| {
+                layout_flow(&items, &[None], &text_style, Some(wrap_width), window, cx)
+            });
+
+            assert!(
+                layout.size.width <= wrap_width,
+                "flow width {:?} exceeds wrap width {:?}",
+                layout.size.width,
+                wrap_width
+            );
+            let mut lines: Vec<(Pixels, String)> = Vec::new();
+            for fragment in &layout.fragments {
+                if let PositionedFragment::Text {
+                    text,
+                    selection_bounds,
+                    ..
+                } = fragment
+                {
+                    let y = selection_bounds.origin.y;
+                    match lines.last_mut() {
+                        Some((line_y, line)) if *line_y == y => line.push_str(text),
+                        _ => lines.push((y, text.to_string())),
+                    }
+                }
+            }
+            let lines = lines
+                .iter()
+                .map(|(_, line)| line.trim())
+                .collect::<Vec<_>>();
+            assert_eq!(lines, expected_lines, "wrap width {wrap_width:?}");
+        }
+    }
+
     #[test]
     fn long_inline_code_wraps_in_mixed_flow() {
         use super::super::inline::test_fonts::{BODY, MONO, WideMonoTextSystem};

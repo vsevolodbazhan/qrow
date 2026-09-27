@@ -35,10 +35,11 @@ security-framework = "3"
 proptest = "=1.11.0"
 
 [patch.crates-io]
-# GPUI Base 0.6.6 with two Qrow fixes: the active-line paint covers the editor's
-# right padding, and inline code lines keep one line when they fit. See
+# GPUI Base 0.6.6 with three Qrow fixes: the active-line paint covers the
+# editor's right padding, inline code lines keep one line when they fit, and
+# lines with bold or italic text wrap at the column width. See
 # vendor/gpui-base/QROW-PATCH.md. Remove this patch when a GPUI Kit release
-# includes both fixes.
+# includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
 [profile.release]
