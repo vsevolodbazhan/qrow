@@ -517,12 +517,16 @@ impl Qrow {
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
+        // Equal-width columns keep the connection name at the window center.
+        // StatusBar centers its middle region only between the left and right
+        // items, so labels of different widths would move it off center.
         StatusBar::new()
             .flex_shrink_0()
-            .left(
+            .child(
                 div()
                     .id("query-status")
                     .role(Role::Status)
+                    .flex_1()
                     .min_w_0()
                     .truncate()
                     .aria_label(status_label.clone())
@@ -532,17 +536,21 @@ impl Qrow {
                 div()
                     .id("current-connection")
                     .role(Role::Label)
+                    .flex_1()
                     .min_w_0()
                     .truncate()
+                    .text_center()
                     .aria_label(format!("Current connection: {connection_name}"))
                     .child(connection_name.to_owned()),
             )
-            .right(
+            .child(
                 div()
                     .id("workspace-status")
                     .role(Role::Status)
+                    .flex_1()
                     .min_w_0()
                     .truncate()
+                    .text_right()
                     .aria_label(workspace_status)
                     .child(workspace_status),
             )
@@ -775,9 +783,11 @@ impl Render for Qrow {
             )
             .child(
                 TitleBar::new().bg(cx.theme().title_bar).child(
+                    // Balance TitleBar's fixed 80 px traffic-light inset. It
+                    // does not follow the UI scale, so this padding must not.
                     div()
                         .flex_1()
-                        .pr(self.ui_px(80.))
+                        .pr(px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
                         .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
