@@ -1513,8 +1513,13 @@ impl Qrow {
                 latest_error: error,
             }
         });
-        serde_json::to_value(WorkspaceContext::new(connections, tabs, selected_tab))
-            .unwrap_or(json!({"version": 1}))
+        serde_json::to_value(WorkspaceContext::new(
+            self.settings.sql_style(),
+            connections,
+            tabs,
+            selected_tab,
+        ))
+        .unwrap_or(json!({"version": 1}))
     }
 
     pub(super) fn tick_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {

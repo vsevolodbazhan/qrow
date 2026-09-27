@@ -327,6 +327,7 @@ impl Qrow {
             sql: &sql,
             selected_range: (!selected.is_empty()).then_some(selected.clone()),
             busy: tab.busy,
+            sql_style: self.settings.sql_style(),
         };
         let plan = ToolBroker::new(self.assistant_panel.target.clone())
             .plan_edit(
@@ -399,6 +400,7 @@ impl Qrow {
             sql: &sql,
             selected_range: None,
             busy: tab.busy,
+            sql_style: self.settings.sql_style(),
         };
         let plan = ToolBroker::new(self.assistant_panel.target.clone())
             .plan_append(
@@ -451,6 +453,7 @@ impl Qrow {
                 sql: &sql,
                 selected_range: (!selected.is_empty()).then_some(selected),
                 busy: tab.busy,
+                sql_style: self.settings.sql_style(),
             };
             let plan = ToolBroker::new(self.assistant_panel.target.clone())
                 .plan_run(

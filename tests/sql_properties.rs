@@ -17,7 +17,7 @@ proptest! {
         prop_assert_eq!(offset, source.len());
         // Validation must also be total for malformed and incomplete editor text.
         let _ = sql::validate_single(&source);
-        let _ = sql::format_long_line(&format!("SELECT {}", source.replace('\n', " ")));
+        let _ = sql::format_statement(&format!("SELECT {}", source.replace('\n', " ")), sql::SqlStyle::default());
         let mut previous_end = 0;
         for range in sql::statement_ranges(&source) {
             prop_assert!(range.start >= previous_end);
@@ -56,17 +56,21 @@ proptest! {
                 "CASE", "WHEN", "THEN", "END", "日本",
             ]),
             1 => prop::sample::select(vec!["<=>", "::", "->", "${v}", "X'1F'"]),
-        ], any::<bool>()), 20..64),
+        ], prop::sample::select(vec!["", " ", " ", "\n  ", " -- note\n"])), 20..64),
+        lowercase in any::<bool>(),
+        indent_spaces in 1u8..=8,
     ) {
+        let style = sql::SqlStyle {
+            keyword_case: if lowercase { sql::KeywordCase::Lowercase } else { sql::KeywordCase::Uppercase },
+            indent_spaces,
+        };
         let mut source = String::from("SELECT ");
-        for (part, space) in parts {
+        for (part, separator) in parts {
             source.push_str(part);
-            if space {
-                source.push(' ');
-            }
+            source.push_str(separator);
         }
-        if let Some(formatted) = sql::format_long_line(&source) {
-            let squeeze = |text: &str| text.split_whitespace().collect::<String>();
+        if let Some(formatted) = sql::format_statement(&source, style) {
+            let squeeze = |text: &str| text.split_whitespace().collect::<String>().to_ascii_uppercase();
             prop_assert_eq!(squeeze(&formatted), squeeze(&source));
             let quoted = |text: &str| sql::tokens(text).into_iter()
                 .filter(|(_, kind)| matches!(kind, Kind::String | Kind::Identifier | Kind::Comment))

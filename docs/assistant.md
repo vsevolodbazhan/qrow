@@ -84,14 +84,25 @@ before it runs SQL. It cannot read connection passwords. Qrow does not send
 workspace context when you open the pane. It sends context when you send a
 message or when Codex calls a Qrow tool.
 
-Qrow formats a statement from the assistant on more than one line when the
-statement is a single line longer than 80 characters. This applies to a new
-query and to a statement that the assistant writes again completely. Qrow
-changes only spaces and line breaks. It keeps a statement as written when a
-change can have an effect on the statement, for example near a `${var}`
-substitution. It also keeps commands such as `SET` and `ADD JAR` as written.
-When the assistant changes only part of a statement, Qrow keeps the layout of
-that statement.
+Select the SQL style in **Settings… → AI Assistant → SQL style**. **Keyword
+case** is **Uppercase** or **Lowercase**. The default is Uppercase. The indent
+is the Editor **Tab Size**. Qrow sends this style to the assistant with each
+message, and the assistant writes SQL in it. A change applies to the next
+message, also in a conversation that already exists.
+
+Qrow formats a statement from the assistant when the statement is longer than 80
+characters, also when the assistant wrote it on more than one line. This applies
+to a new query and to a statement that the assistant writes again completely. A
+shorter statement keeps the layout that the assistant wrote. In formatted SQL, a
+clause that fits in 60 characters stays on the line of its keyword. A longer
+clause, for example `WHERE` with its conditions, puts each item on a new
+indented line. Qrow changes only spaces, line breaks, and the case of reserved
+keywords such as `SELECT` and `AND`. It does not change names such as `t.Date`.
+Some keywords, for example `DATE` before a date literal, keep their case. Qrow
+keeps a statement as written when a change can have an effect on the statement,
+for example near a `${var}` substitution. It also keeps commands such as `SET`
+and `ADD JAR` as written. When the assistant changes only part of a statement,
+Qrow keeps the layout of that statement.
 
 If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab

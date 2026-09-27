@@ -9,7 +9,9 @@ Open **Qrow → Settings…** to change the appearance. The Appearance page show
 the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
 has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
-to controls and results.
+to controls and results. Editor also has **Tab Size**, the number of spaces for
+each indent level. The default is 2. The Tab key and SQL that Qrow formats for
+the assistant use this size. The editor indents with spaces.
 Editor settings apply to SQL. Logs settings apply to log entries.
 Assistant settings apply to conversation messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the

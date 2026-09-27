@@ -97,7 +97,7 @@ They do not package the application.
 
 The macOS end-to-end run uses a synthetic Codex app server to check assistant
 opt-in, the docked pane, a chat turn, appended SQL, formatting of a long
-appended or edited query, Undo, query approval,
+appended or edited query in the SQL style from Settings, Undo, query approval,
 statement targeting, tab changes during a turn, automatic query execution,
 the result rows that Qrow returns to Codex, and generated conversation titles.
 It does not use a Codex account.

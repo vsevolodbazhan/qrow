@@ -1,7 +1,34 @@
 //! Small SQL lexer for highlighting, single-statement validation, and checked
 //! formatting, not SQL parsing.
+use serde::{Deserialize, Serialize};
 use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;
+
+/// The letter case of SQL keywords in formatted SQL.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeywordCase {
+    #[default]
+    Uppercase,
+    Lowercase,
+}
+
+/// How Qrow lays out SQL that it formats.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct SqlStyle {
+    pub keyword_case: KeywordCase,
+    /// Spaces for each indent level.
+    pub indent_spaces: u8,
+}
+
+impl Default for SqlStyle {
+    fn default() -> Self {
+        Self {
+            keyword_case: KeywordCase::default(),
+            indent_spaces: 2,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -147,29 +174,38 @@ pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Formats a long one-line query statement, or returns `None` to keep it as
-/// written. The result changes only whitespace, and only where Spark SQL
-/// ignores it.
-pub fn format_long_line(sql: &str) -> Option<String> {
+/// Formats a query statement that is longer than 80 characters with single
+/// spaces, or returns `None` to keep it as written. The result changes only
+/// whitespace where Spark SQL ignores it and the letter case of keywords.
+pub fn format_statement(sql: &str, style: SqlStyle) -> Option<String> {
     const MIN_CHARS: usize = 80;
     const FORMATTABLE: [&str; 10] = [
         "SELECT", "WITH", "FROM", "VALUES", "INSERT", "CREATE", "EXPLAIN", "MERGE", "UPDATE",
         "DELETE",
     ];
-    if sql.contains('\n') || sql.chars().count() <= MIN_CHARS {
+    let tokens = significant(sql);
+    let chars: usize = tokens
+        .iter()
+        .map(|t| t.text.chars().count() + usize::from(t.space_before))
+        .sum();
+    if chars <= MIN_CHARS {
         return None;
     }
-    let first = significant(sql)
-        .into_iter()
-        .find(|t| t.kind != Kind::Comment)?;
+    let first = tokens.into_iter().find(|t| t.kind != Kind::Comment)?;
     if !FORMATTABLE.contains(&first.text.to_ascii_uppercase().as_str()) {
         return None;
     }
     let options = FormatOptions {
-        indent: Indent::Spaces(2),
+        indent: Indent::Spaces(style.indent_spaces),
+        // sqlformat changes only reserved keywords, not identifiers such as
+        // `t.Date` or a column named `user`.
+        uppercase: Some(style.keyword_case == KeywordCase::Uppercase),
         // The PostgreSQL dialect keeps subscripts such as `items[0]` together.
         dialect: Dialect::PostgreSql,
         max_inline_top_level: Some(60),
+        // Without this limit, sqlformat 0.5 puts each item of an inline clause,
+        // such as `SELECT a, b`, on a new line without indent.
+        max_inline_arguments: Some(60),
         ..FormatOptions::default()
     };
     let formatted = sqlformat::format(sql, &QueryParams::None, &options);
@@ -205,7 +241,8 @@ fn significant(sql: &str) -> Vec<Significant<'_>> {
 /// Whether `formatted` has the tokens of `original` and changes whitespace only
 /// between tokens that stay separate tokens in Spark SQL. For example, `>=`,
 /// `${var}`, and `X'1F'` must stay together. Delimiters such as `,` and `(`
-/// never join with other symbols.
+/// never join with other symbols. Words can change letter case, except next to
+/// `.`, where they name a field, a column, or a table.
 fn same_tokens(original: &str, formatted: &str) -> bool {
     let (original, formatted) = (significant(original), significant(formatted));
     let starts_word = |t: &Significant| {
@@ -222,8 +259,13 @@ fn same_tokens(original: &str, formatted: &str) -> bool {
             .zip(&formatted)
             .enumerate()
             .all(|(i, (a, b))| {
+                let qualified = [i.checked_sub(1), Some(i + 1)]
+                    .into_iter()
+                    .flatten()
+                    .any(|j| original.get(j).is_some_and(|t| t.text == "."));
                 a.kind == b.kind
-                    && a.text == b.text
+                    && (a.text == b.text
+                        || is_word(a) && !qualified && a.text.eq_ignore_ascii_case(b.text))
                     && (i == 0
                         || a.space_before == b.space_before
                         || !(is_symbol(&original[i - 1]) && is_symbol(a)
@@ -256,28 +298,112 @@ mod tests {
     fn formats_long_one_line_queries() {
         let sql = "SELECT COUNT(*) AS paid_bookings FROM integrations.bookings WHERE state = 'paid' AND CAST(booked_at AS DATE) = DATE '2026-09-26'";
         assert_eq!(
-            format_long_line(sql).unwrap(),
+            format_statement(sql, SqlStyle::default()).unwrap(),
             "SELECT COUNT(*) AS paid_bookings\nFROM integrations.bookings\nWHERE\n  state = 'paid'\n  AND CAST(booked_at AS DATE) = DATE '2026-09-26'"
         );
         let sql = "SELECT items[0], `order  id`, 'a  b', 'it\\'s', x::int, a >= b /*+ keep  this */ FROM t WHERE ok -- note";
-        let formatted = format_long_line(sql).unwrap();
+        let formatted = format_statement(sql, SqlStyle::default()).unwrap();
         assert!(formatted.contains("items[0]") && formatted.ends_with("WHERE ok -- note"));
         assert!(formatted.contains("`order  id`") && formatted.contains("'a  b'"));
         assert!(formatted.contains("'it\\'s'") && formatted.contains("/*+ keep  this */"));
     }
 
     #[test]
-    fn keeps_short_multiline_raw_and_unsafe_statements() {
+    fn inline_clauses_keep_their_items_on_one_line() {
+        let sql = "SELECT gate_name, gate_id, COUNT(*) AS paid_bookings FROM integrations.bookings WHERE state = 'paid' AND CAST(booked_at AS DATE) >= DATE '2026-09-20' AND CAST(booked_at AS DATE) < DATE '2026-09-27' AND (gate_name IS NOT NULL OR gate_id IS NOT NULL) GROUP BY gate_name, gate_id ORDER BY paid_bookings DESC LIMIT 10;";
+        assert_eq!(
+            format_statement(sql, SqlStyle::default()).unwrap(),
+            "\
+SELECT gate_name, gate_id, COUNT(*) AS paid_bookings
+FROM integrations.bookings
+WHERE
+  state = 'paid'
+  AND CAST(booked_at AS DATE) >= DATE '2026-09-20'
+  AND CAST(booked_at AS DATE) < DATE '2026-09-27'
+  AND (gate_name IS NOT NULL OR gate_id IS NOT NULL)
+GROUP BY gate_name, gate_id
+ORDER BY paid_bookings DESC
+LIMIT 10;"
+        );
+    }
+
+    #[test]
+    fn formatting_uses_keyword_case_and_indent_from_style() {
+        let sql = "select t.Select, count(*) as n from db.Events t where t.state = 'paid' and t.Date is not null and t.market in ('de', 'fr') group by t.Select";
+        let upper = SqlStyle {
+            keyword_case: KeywordCase::Uppercase,
+            indent_spaces: 4,
+        };
+        assert_eq!(
+            format_statement(sql, upper).unwrap(),
+            "\
+SELECT t.Select, count(*) AS n
+FROM db.Events t
+WHERE
+    t.state = 'paid'
+    AND t.Date IS NOT NULL
+    AND t.market IN ('de', 'fr')
+GROUP BY t.Select"
+        );
+        let lower = SqlStyle {
+            keyword_case: KeywordCase::Lowercase,
+            indent_spaces: 2,
+        };
+        let sql = "SELECT T.SELECT, COUNT(*) AS N FROM DB.EVENTS T WHERE T.STATE = 'PAID' AND T.DATE IS NOT NULL AND T.MARKET IN ('DE', 'FR') GROUP BY T.SELECT";
+        assert_eq!(
+            format_statement(sql, lower).unwrap(),
+            "\
+select T.SELECT, COUNT(*) as N
+from DB.EVENTS T
+where
+  T.STATE = 'PAID'
+  and T.DATE is not null
+  and T.MARKET in ('DE', 'FR')
+group by T.SELECT"
+        );
+    }
+
+    #[test]
+    fn formats_statements_written_on_several_lines() {
+        let sql = "SELECT gate_id, COUNT(*) AS clicks\nFROM avia.clicks -- all gates\nWHERE CAST(created_at AS DATE) >= DATE '2026-09-26'\n  AND CAST(created_at AS DATE) < DATE '2026-09-28'\n  AND gate_id IS NOT NULL\nGROUP BY gate_id\nORDER BY clicks DESC\nLIMIT 10;";
+        assert_eq!(
+            format_statement(sql, SqlStyle::default()).unwrap(),
+            "\
+SELECT gate_id, COUNT(*) AS clicks
+FROM avia.clicks -- all gates
+WHERE
+  CAST(created_at AS DATE) >= DATE '2026-09-26'
+  AND CAST(created_at AS DATE) < DATE '2026-09-28'
+  AND gate_id IS NOT NULL
+GROUP BY gate_id
+ORDER BY clicks DESC
+LIMIT 10;"
+        );
+        // A short statement keeps the layout that the assistant wrote.
+        assert_eq!(
+            format_statement("SELECT\n  a\nFROM\n  t", SqlStyle::default()),
+            None
+        );
+        // A line comment between conditions must not hide the next condition.
+        let sql = "SELECT a FROM integrations.bookings WHERE state = 'paid' -- only paid\nAND booked_at >= DATE '2026-09-20' AND gate_id IS NOT NULL";
+        let formatted = format_statement(sql, SqlStyle::default()).unwrap();
+        for line in formatted.lines().filter(|line| line.contains("--")) {
+            assert!(line.trim_end().ends_with("-- only paid"), "{formatted}");
+        }
+        assert!(formatted.contains("AND booked_at >="), "{formatted}");
+    }
+
+    #[test]
+    fn keeps_short_raw_and_unsafe_statements() {
         let padding = "a, ".repeat(30);
         for sql in [
             "SELECT 1".to_owned(),
-            format!("SELECT {padding}\nb FROM t"),
             format!("SET spark.sql.shuffle.partitions=10 -- {padding}"),
             format!("ADD JAR /opt/jars/udf-1.0.jar -- {padding}"),
             // Spark substitutes `${var}` before parsing.
             format!("SELECT {padding}b FROM t WHERE dt = ${{hivevar:dt}}"),
         ] {
-            assert_eq!(format_long_line(&sql), None, "{sql}");
+            assert_eq!(format_statement(&sql, SqlStyle::default()), None, "{sql}");
         }
     }
 
@@ -289,22 +415,19 @@ mod tests {
             "SELECT -(1),(2) IN ('a','b')",
             "SELECT - (1), (2) IN ('a', 'b')"
         ));
-        for formatted in [
-            "SELECT a > = b",
-            "SELECT x = -1",
-            "SELECT $ {x}",
-            "SELECT X '1F'",
-            "SELECT 'a b'",
-            "SELECT ab",
+        assert!(same_tokens("select x from t", "SELECT X FROM T"));
+        for (original, formatted) in [
+            ("SELECT a >= b", "SELECT a > = b"),
+            ("SELECT x=-1", "SELECT x = -1"),
+            ("SELECT ${x}", "SELECT $ {x}"),
+            ("SELECT X'1F'", "SELECT X '1F'"),
+            ("SELECT 'a  b'", "SELECT 'a b'"),
+            ("SELECT a b", "SELECT ab"),
+            ("SELECT 'a'", "SELECT 'A'"),
+            ("SELECT t.select", "SELECT t.SELECT"),
+            ("SELECT select.t", "SELECT SELECT.t"),
         ] {
-            let original = formatted
-                .replace("> =", ">=")
-                .replace("x = -1", "x=-1")
-                .replace("$ {", "${")
-                .replace("X '", "X'")
-                .replace("'a b'", "'a  b'")
-                .replace("ab", "a b");
-            assert!(!same_tokens(&original, formatted), "{formatted}");
+            assert!(!same_tokens(original, formatted), "{formatted}");
         }
     }
 

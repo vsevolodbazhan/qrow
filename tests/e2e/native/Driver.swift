@@ -1145,11 +1145,16 @@ final class Driver {
         let tabID = UUID().uuidString.lowercased()
         let data = try JSONSerialization.data(withJSONObject: [
             "version": 3,
-            "settings": ["assistant": [
-                "enabled": true,
-                "data_sharing_notice_version": 1,
-                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
-            ]],
+            "settings": [
+                // A style that differs from the defaults.
+                "editor_tab_size": 4,
+                "assistant": [
+                    "enabled": true,
+                    "data_sharing_notice_version": 1,
+                    "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                    "sql_keyword_case": "lowercase",
+                ],
+            ],
             "profiles": [[
                 "id": profileID, "name": "Synthetic", "host": "example.invalid",
                 "port": 10009, "username": "synthetic", "database": "default",
@@ -1183,16 +1188,41 @@ final class Driver {
         try waitGone("Assistant query approval:", timeout: 5)
         try waitGone("Assistant is working", timeout: 5)
 
-        // Qrow formats a long one-line statement that an edit supplies.
+        // Qrow formats a long statement that an edit supplies, in the saved
+        // keyword case and tab size.
         try fill("Assistant message", "Rewrite the last statement with edit tool")
         try press("Send")
         _ = try wait("I formatted the SQL.", timeout: 20)
         try waitInputValue(
             "SQL Editor",
-            "SELECT 0;\n\nSELECT 1;\n\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state"
+            "SELECT 0;\n\nSELECT 1;\n\nselect\n    state,\n    COUNT(*) as bookings,\n    MAX(booked_at) as last_booked_at\nfrom integrations.bookings\ngroup by state"
         )
         try waitGone("Assistant is working", timeout: 5)
-        print("PASS: Assistant can target the newest and an earlier statement for execution, and a rewritten long statement is formatted")
+        try snapshot("assistant-formatted-edit")
+
+        // A change in Settings applies to the next message of the conversation.
+        try selectApplicationMenuItem("Settings…")
+        try fill("Search...", "tab size")
+        try waitSettingValue("Editor Tab Size", "4")
+        try press("Increase Editor Tab Size")
+        try waitSettingValue("Editor Tab Size", "5")
+        try snapshot("settings-tab-size")
+        try fill("Search...", "keyword")
+        try waitSettingValue("Assistant SQL keyword case", "Lowercase")
+        // Select rows have no AX bounds. Uppercase is the row above Lowercase.
+        try click(try wait("Assistant SQL keyword case", role: kAXPopUpButtonRole))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        key(126) // Up arrow
+        key(36) // Return
+        try waitSettingValue("Assistant SQL keyword case", "Uppercase")
+        try snapshot("settings-sql-style")
+        try press("Save")
+        try waitGone("Editor Tab Size")
+        try fill("Assistant message", "Report the SQL style")
+        try press("Send")
+        _ = try wait("SQL style: uppercase, 5 spaces", timeout: 20)
+        try waitGone("Assistant is working", timeout: 5)
+        print("PASS: Assistant can target the newest and an earlier statement for execution, a rewritten long statement uses the saved SQL style, and Settings changes the style")
     }
     func seedAssistantRetargetWorkspace() throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")

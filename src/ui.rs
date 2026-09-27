@@ -17,7 +17,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogFooter,
-    input::{EditorState, Input, InputEvent, InputState, TextareaState},
+    input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     table::TableState,
 };
@@ -255,6 +255,15 @@ fn installed_fonts(cx: &App) -> Vec<String> {
 
 fn font_available(font: &str, installed: &[String]) -> bool {
     font == SYSTEM_FONT_FAMILY || installed.iter().any(|available| available == font)
+}
+
+/// The SQL editor indents with spaces, so a formatted query and a typed indent
+/// look the same.
+fn editor_tab_size(settings: &Settings) -> TabSize {
+    TabSize {
+        tab_size: usize::from(settings.editor_tab_size),
+        hard_tabs: false,
+    }
 }
 
 fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
@@ -503,6 +512,7 @@ impl Qrow {
             EditorState::new(window, cx)
                 .language("sql")
                 .soft_wrap(false)
+                .tab_size(editor_tab_size(&self.settings))
                 .default_value(saved.sql.clone())
         });
         let subscription = cx.subscribe(&input, move |this, _, event, cx| {
@@ -1385,6 +1395,17 @@ impl Qrow {
     ) {
         self.adjust_ui_scale(-UI_SCALE_STEP, window, cx);
     }
+    fn set_editor_tab_size(&mut self, size: u8, cx: &mut Context<Self>) {
+        if self.settings.editor_tab_size == size {
+            return;
+        }
+        self.settings.editor_tab_size = size;
+        let tab = editor_tab_size(&self.settings);
+        for editor in self.tabs.iter().map(|tab| tab.input.clone()) {
+            editor.update(cx, |editor, cx| editor.set_tab_size(tab, cx));
+        }
+        self.changed(cx);
+    }
     fn set_editor_font(&mut self, font: String, cx: &mut Context<Self>) {
         if font_available(&font, &self.fonts) && self.settings.editor_font_family != font {
             self.settings.editor_font_family = font;
@@ -1417,6 +1438,7 @@ impl Qrow {
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
+        self.set_editor_tab_size(settings.editor_tab_size, cx);
         self.settings.logs_font_family = settings.logs_font_family;
         self.settings.logs_font_size = settings.logs_font_size;
         self.settings.logs_line_height = settings.logs_line_height;

@@ -13,7 +13,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "type": "object", "properties": {"version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"}},
             "required": ["version", "tab_id"], "additionalProperties": false
         })),
-        ("append_selected_tab_sql", "Append one new SQL statement to the selected query tab, preserving existing queries. Use this when writing a new query. The appended statement becomes selected. The result returns the new editor_revision and the statement_range of the appended statement. To run it, call run_selected_tab_query with that revision and without statement_range. Qrow formats a long one-line statement; formatted is then true, and statement_range refers to the formatted text.", json!({
+        ("append_selected_tab_sql", "Append one new SQL statement to the selected query tab, preserving existing queries. Use this when writing a new query. The appended statement becomes selected. The result returns the new editor_revision and the statement_range of the appended statement. To run it, call run_selected_tab_query with that revision and without statement_range. Write the SQL in sql_style from the workspace context: keywords in keyword_case, one clause per line, and indent_spaces spaces for each indent level. Qrow formats a statement longer than 80 characters in this style; formatted is then true, and statement_range refers to the formatted text.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": ["string", "null"], "format": "uuid"},
@@ -22,7 +22,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "required": ["version", "tab_id", "connection_id", "editor_revision", "sql"],
             "additionalProperties": false
         })),
-        ("edit_selected_tab_sql", "Modify existing SQL in the selected query tab at the specified revision. Use this only when the user asks to change existing SQL. Use append_selected_tab_sql for a new query. Set replace_existing to true only when the user asks to replace all SQL. Qrow formats a long one-line statement that a replacement supplies completely; formatted is then true, and later edits must use the returned editor_revision and the new SQL.", json!({
+        ("edit_selected_tab_sql", "Modify existing SQL in the selected query tab at the specified revision. Use this only when the user asks to change existing SQL. Use append_selected_tab_sql for a new query. Set replace_existing to true only when the user asks to replace all SQL. Write replacement SQL in sql_style from the workspace context. Qrow formats a statement longer than 80 characters that a replacement supplies completely; formatted is then true, and later edits must use the returned editor_revision and the new SQL.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": ["string", "null"], "format": "uuid"},

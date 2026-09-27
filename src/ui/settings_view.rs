@@ -11,7 +11,10 @@ use gpui_kit::component::{
     },
     switch::Switch,
 };
-use qrow::model::{ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode};
+use qrow::model::{
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
+};
+use qrow::sql::KeywordCase;
 use std::cell::{Cell, RefCell};
 
 const DIALOG_REMS: f32 = 56.;
@@ -34,6 +37,7 @@ enum NumberSetting {
     Scale,
     EditorFontSize,
     EditorLineHeight,
+    EditorTabSize,
     LogsFontSize,
     LogsLineHeight,
     AssistantFontSize,
@@ -41,10 +45,11 @@ enum NumberSetting {
 }
 
 impl NumberSetting {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Scale,
         Self::EditorFontSize,
         Self::EditorLineHeight,
+        Self::EditorTabSize,
         Self::LogsFontSize,
         Self::LogsLineHeight,
         Self::AssistantFontSize,
@@ -58,6 +63,7 @@ impl NumberSetting {
             Self::Scale => settings.ui_scale * 100.,
             Self::EditorFontSize => settings.editor_font_size,
             Self::EditorLineHeight => settings.editor_line_height,
+            Self::EditorTabSize => f32::from(settings.editor_tab_size),
             Self::LogsFontSize => settings.logs_font_size,
             Self::LogsLineHeight => settings.logs_line_height,
             Self::AssistantFontSize => settings.assistant_font_size,
@@ -79,6 +85,7 @@ impl NumberSetting {
             Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => {
                 (MIN_LINE_HEIGHT, MAX_LINE_HEIGHT, LINE_HEIGHT_STEP)
             }
+            Self::EditorTabSize => (f32::from(MIN_TAB_SIZE), f32::from(MAX_TAB_SIZE), 1.),
         }
     }
 
@@ -103,6 +110,7 @@ impl NumberSetting {
             Self::Scale => "%",
             Self::EditorFontSize | Self::LogsFontSize | Self::AssistantFontSize => "px",
             Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => "x",
+            Self::EditorTabSize => "",
         }
     }
 
@@ -113,6 +121,7 @@ impl NumberSetting {
             Self::Scale => "UI Scale",
             Self::EditorFontSize => "Editor Font Size",
             Self::EditorLineHeight => "Editor Line Height",
+            Self::EditorTabSize => "Editor Tab Size",
             Self::LogsFontSize => "Logs Font Size",
             Self::LogsLineHeight => "Logs Line Height",
             Self::AssistantFontSize => "Assistant Font Size",
@@ -190,6 +199,7 @@ pub(super) struct SettingsForm {
     /// navigation can change a picker's transient state before confirmation.
     fonts: Vec<(FontSetting, SettingSelect, RefCell<String>)>,
     assistant_mode: SettingSelect,
+    assistant_keyword_case: SettingSelect,
     assistant_executable: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
@@ -311,6 +321,37 @@ impl Qrow {
                 }
             },
         ));
+        let keyword_case = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    [KeywordCase::Uppercase, KeywordCase::Lowercase]
+                        .map(|case| keyword_case_label(case).to_owned())
+                        .to_vec(),
+                ),
+                Some(IndexPath::default().row(usize::from(
+                    self.settings.assistant.sql_keyword_case == KeywordCase::Lowercase,
+                ))),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &keyword_case,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event {
+                    let case = if value == keyword_case_label(KeywordCase::Lowercase) {
+                        KeywordCase::Lowercase
+                    } else {
+                        KeywordCase::Uppercase
+                    };
+                    if this.settings.assistant.sql_keyword_case != case {
+                        this.settings.assistant.sql_keyword_case = case;
+                        this.changed(cx);
+                    }
+                }
+            },
+        ));
         let executable = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Automatic")
@@ -341,6 +382,7 @@ impl Qrow {
             numbers,
             fonts,
             assistant_mode: mode,
+            assistant_keyword_case: keyword_case,
             assistant_executable: executable,
             _subscriptions: subscriptions,
         });
@@ -394,6 +436,7 @@ impl Qrow {
                 self.settings.editor_line_height = value;
                 self.changed(cx);
             }
+            NumberSetting::EditorTabSize => self.set_editor_tab_size(value as u8, cx),
             NumberSetting::LogsFontSize if self.settings.logs_font_size != value => {
                 self.settings.logs_font_size = value;
                 self.changed(cx);
@@ -600,6 +643,18 @@ impl Qrow {
                 state.set_selected_value(&selected_mode.to_owned(), window, cx)
             });
         }
+        let keyword_case = keyword_case_label(self.settings.assistant.sql_keyword_case);
+        if form
+            .assistant_keyword_case
+            .read(cx)
+            .selected_value()
+            .map(String::as_str)
+            != Some(keyword_case)
+        {
+            form.assistant_keyword_case.update(cx, |state, cx| {
+                state.set_selected_value(&keyword_case.to_owned(), window, cx)
+            });
+        }
         let rem = window.rem_size();
         // Match the gap the dialog leaves above the footer, which the dialog
         // adds to the smaller gap below the title.
@@ -747,6 +802,11 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
                     )
                     .description("Line spacing, relative to the font size.")
                     .keywords(["editor", "sql", "spacing"]),
+                )
+                .item(
+                    SettingItem::new("Tab Size", number_field(form, NumberSetting::EditorTabSize))
+                        .description("Spaces for each indent level, also in SQL that Qrow formats.")
+                        .keywords(["editor", "sql", "indent", "spaces", "format"]),
                 ),
         )
         .group(
@@ -779,6 +839,7 @@ fn assistant_settings_page(
     enabled: bool,
 ) -> SettingPage {
     let mode = form.assistant_mode.clone();
+    let keyword_case = form.assistant_keyword_case.clone();
     let executable = form.assistant_executable.clone();
     SettingPage::new("AI Assistant")
         .resettable(false)
@@ -800,6 +861,18 @@ fn assistant_settings_page(
             .item(SettingItem::new("Default mode", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
                 control(options, window.rem_size(), Select::new(&mode).w_full().accessibility_label("Default assistant query execution mode"))
             })).description("New conversations copy this mode. Run automatically can change or delete data and schema.")))
+        .group(SettingGroup::new().title("SQL style")
+            .item(SettingItem::new("Keyword case", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
+                control(options, window.rem_size(), Select::new(&keyword_case).w_full().accessibility_label("Assistant SQL keyword case"))
+            })).description("The assistant writes SQL keywords in this case. Qrow also uses it when it formats long SQL from the assistant. Editor Tab Size sets the indent.")
+            .keywords(["sql", "format", "uppercase", "lowercase", "keywords"])))
+}
+
+fn keyword_case_label(case: KeywordCase) -> &'static str {
+    match case {
+        KeywordCase::Uppercase => "Uppercase",
+        KeywordCase::Lowercase => "Lowercase",
+    }
 }
 
 /// Size the control column. A page that keeps the label beside the control

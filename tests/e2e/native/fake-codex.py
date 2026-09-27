@@ -223,9 +223,10 @@ for line in sys.stdin:
             tab = context["selected_tab"]
             pending_edit = turn_id
             if message.startswith("Write a long query"):
-                # Models often write a query on one line. Qrow formats it.
+                # Qrow formats a long query in its own layout, also when the
+                # model wrote it on several lines.
                 query = (
-                    "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at "
+                    "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at\n"
                     "FROM integrations.bookings GROUP BY state;"
                 )
             else:
@@ -281,6 +282,8 @@ for line in sys.stdin:
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             pending_edit = turn_id
+            # The driver seeds lowercase keywords and a tab size of 4.
+            rewrite_style = context["sql_style"]
             last = tab["statement_ranges"][-1]
             send(
                 {
@@ -360,8 +363,13 @@ for line in sys.stdin:
                 }
             )
         else:
+            if message.startswith("Report the SQL style"):
+                context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+                style = context["sql_style"]
             answer = (
-                "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
+                f"SQL style: {style['keyword_case']}, {style['indent_spaces']} spaces"
+                if message.startswith("Report the SQL style")
+                else "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
                 if message.startswith("Show many lines")
                 else wide_table()
                 if message.startswith("Show a wide table")
@@ -457,8 +465,11 @@ for line in sys.stdin:
                 else f"Tool failed: the edited statement was not selected: {result}"
             )
         elif pending_message.startswith("Rewrite the last statement with edit tool"):
+            expected_style = {"keyword_case": "lowercase", "indent_spaces": 4}
             message = (
-                "I formatted the SQL."
+                f"Tool failed: the context has SQL style {rewrite_style}"
+                if rewrite_style != expected_style
+                else "I formatted the SQL."
                 if result.get("formatted") is True
                 else f"Tool failed: the rewritten query was not formatted: {result}"
             )

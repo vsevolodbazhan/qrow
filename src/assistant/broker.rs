@@ -78,6 +78,9 @@ pub struct SelectedTabContext {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WorkspaceContext {
     pub version: u32,
+    /// The user's SQL layout. The assistant writes SQL in it, and Qrow uses it
+    /// when it formats a long statement.
+    pub sql_style: sql::SqlStyle,
     pub connections: Vec<ConnectionContext>,
     pub tabs: Vec<TabSummary>,
     pub selected_tab: Option<SelectedTabContext>,
@@ -93,12 +96,14 @@ pub fn context_statement_ranges(sql: &str) -> (Vec<Range<usize>>, bool) {
 
 impl WorkspaceContext {
     pub fn new(
+        sql_style: sql::SqlStyle,
         connections: Vec<ConnectionContext>,
         tabs: Vec<TabSummary>,
         selected_tab: Option<SelectedTabContext>,
     ) -> Self {
         Self {
             version: TOOL_SCHEMA_VERSION,
+            sql_style,
             connections,
             tabs,
             selected_tab,
@@ -129,6 +134,8 @@ pub struct EditorDocument<'a> {
     pub sql: &'a str,
     pub selected_range: Option<Range<usize>>,
     pub busy: bool,
+    /// The layout for SQL that Qrow formats in this document.
+    pub sql_style: sql::SqlStyle,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -300,7 +307,7 @@ impl ToolBroker {
             previous_empty = (edit.start == edit.end).then_some(edit.start);
         }
         let mut sql = apply_edits(document.sql, &edits);
-        let formatted = format_replaced_statements(&sql, &mut edits);
+        let formatted = format_replaced_statements(&sql, &mut edits, document.sql_style);
         if formatted {
             sql = apply_edits(document.sql, &edits);
         }
@@ -342,7 +349,7 @@ impl ToolBroker {
         }
         sql::validate_single(new_query)
             .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
-        let formatted = sql::format_long_line(new_query);
+        let formatted = sql::format_statement(new_query, document.sql_style);
         let new_query = formatted.as_deref().unwrap_or(new_query);
 
         let mut sql = document.sql.to_owned();
@@ -602,10 +609,14 @@ fn apply_edits(sql: &str, sorted_edits: &[TextEdit]) -> String {
     sql
 }
 
-/// Formats each long one-line statement of `edited` that one replacement
+/// Formats each long statement of `edited` that one replacement
 /// supplies completely, apart from its separator. A statement that keeps text
 /// from before the edit keeps its layout. Returns whether a replacement changed.
-fn format_replaced_statements(edited: &str, sorted_edits: &mut [TextEdit]) -> bool {
+fn format_replaced_statements(
+    edited: &str,
+    sorted_edits: &mut [TextEdit],
+    style: sql::SqlStyle,
+) -> bool {
     let statements: Vec<_> = sql::statement_ranges(edited)
         .into_iter()
         .map(|range| {
@@ -624,7 +635,7 @@ fn format_replaced_statements(edited: &str, sorted_edits: &mut [TextEdit]) -> bo
             .rev()
             .filter(|range| start <= range.start && range.end <= end)
         {
-            if let Some(text) = sql::format_long_line(&edited[range.clone()]) {
+            if let Some(text) = sql::format_statement(&edited[range.clone()], style) {
                 edit.replacement
                     .replace_range(range.start - start..range.end - start, &text);
                 formatted = true;
@@ -667,6 +678,7 @@ mod tests {
             sql,
             selected_range: None,
             busy: false,
+            sql_style: sql::SqlStyle::default(),
         }
     }
 
@@ -795,6 +807,7 @@ mod tests {
             sql: &append.sql,
             selected_range: Some(append.appended_range),
             busy: false,
+            sql_style: sql::SqlStyle::default(),
         };
         let run = ToolBroker::new(Some(target))
             .plan_run(
@@ -892,6 +905,7 @@ mod tests {
             sql: "",
             selected_range: None,
             busy: false,
+            sql_style: sql::SqlStyle::default(),
         };
         let edit = EditRequest {
             version: TOOL_SCHEMA_VERSION,
@@ -932,6 +946,7 @@ mod tests {
     fn context_serialization_contains_only_allow_list_fields() {
         let (tab, connection) = ids();
         let context = WorkspaceContext::new(
+            sql::SqlStyle::default(),
             vec![ConnectionContext {
                 id: connection,
                 name: "Analytics".into(),

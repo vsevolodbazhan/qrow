@@ -1,3 +1,4 @@
+use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -81,6 +82,8 @@ pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
 pub const MIN_LINE_HEIGHT: f32 = 1.;
 pub const MAX_LINE_HEIGHT: f32 = 2.;
 pub const LINE_HEIGHT_STEP: f32 = 0.1;
+pub const MIN_TAB_SIZE: u8 = 1;
+pub const MAX_TAB_SIZE: u8 = 8;
 pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -92,6 +95,8 @@ pub struct Settings {
     pub editor_font_family: String,
     pub editor_font_size: f32,
     pub editor_line_height: f32,
+    /// Spaces for each indent level in the SQL editor.
+    pub editor_tab_size: u8,
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
@@ -110,6 +115,7 @@ impl Default for Settings {
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
             editor_line_height: 1.2,
+            editor_tab_size: 2,
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
@@ -154,6 +160,11 @@ impl Settings {
         self.editor_line_height = self
             .editor_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        if self.editor_tab_size == 0 {
+            self.editor_tab_size = Self::default().editor_tab_size;
+        }
+        self.editor_tab_size = self.editor_tab_size.clamp(MIN_TAB_SIZE, MAX_TAB_SIZE);
 
         self.editor_font_family = self.editor_font_family.trim().into();
         if self.editor_font_family.is_empty() {
@@ -202,6 +213,14 @@ impl Settings {
 
         self.assistant.sanitize();
     }
+
+    /// The layout for SQL that the assistant writes and Qrow formats.
+    pub fn sql_style(&self) -> SqlStyle {
+        SqlStyle {
+            keyword_case: self.assistant.sql_keyword_case,
+            indent_spaces: self.editor_tab_size,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -224,6 +243,7 @@ pub struct AssistantSettings {
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
+    pub sql_keyword_case: KeywordCase,
 }
 
 impl Default for AssistantSettings {
@@ -237,6 +257,7 @@ impl Default for AssistantSettings {
             model: None,
             reasoning_effort: None,
             service_tier: None,
+            sql_keyword_case: KeywordCase::default(),
         }
     }
 }
@@ -759,6 +780,7 @@ mod tests {
             editor_font_family: "   ".into(),
             editor_font_size: f32::NAN,
             editor_line_height: f32::NAN,
+            editor_tab_size: 0,
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,
@@ -777,6 +799,7 @@ mod tests {
         settings.logs_line_height = 2.1;
         settings.assistant_font_size = 33.;
         settings.assistant_line_height = 2.1;
+        settings.editor_tab_size = 9;
         settings.sanitize();
         assert_eq!(settings.ui_scale, 1.46);
         assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
@@ -785,6 +808,7 @@ mod tests {
         assert_eq!(settings.logs_line_height, MAX_LINE_HEIGHT);
         assert_eq!(settings.assistant_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.assistant_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.editor_tab_size, MAX_TAB_SIZE);
         let encoded = serde_json::to_string(&settings).unwrap();
         let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
         restored.sanitize();
@@ -860,6 +884,10 @@ mod tests {
             restored.default_execution_mode,
             AssistantExecutionMode::AskBeforeRunning
         );
+        assert_eq!(restored.sql_keyword_case, KeywordCase::Uppercase);
+        let lowercase: AssistantSettings =
+            serde_json::from_str(r#"{"sql_keyword_case":"lowercase"}"#).unwrap();
+        assert_eq!(lowercase.sql_keyword_case, KeywordCase::Lowercase);
 
         let mut settings = AssistantSettings {
             enabled: true,
