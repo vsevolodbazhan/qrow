@@ -176,6 +176,9 @@ pub struct EditPlan {
     pub tab_id: Uuid,
     pub expected_revision: u64,
     pub sql: String,
+    /// The applied edits in document order, with formatted replacements.
+    pub edits: Vec<TextEdit>,
+    pub formatted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -183,6 +186,7 @@ pub struct AppendPlan {
     pub tab_id: Uuid,
     pub sql: String,
     pub appended_range: Range<usize>,
+    pub formatted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -275,7 +279,7 @@ impl ToolBroker {
                 "Edit content is too large.",
             ));
         }
-        let mut edits: Vec<_> = request.edits.iter().collect();
+        let mut edits = request.edits.clone();
         edits.sort_by_key(|edit| (edit.start, edit.end));
         let mut previous_end = 0;
         let mut previous_empty = None;
@@ -295,9 +299,10 @@ impl ToolBroker {
             previous_end = edit.end;
             previous_empty = (edit.start == edit.end).then_some(edit.start);
         }
-        let mut sql = document.sql.to_owned();
-        for edit in edits.into_iter().rev() {
-            sql.replace_range(edit.start..edit.end, &edit.replacement);
+        let mut sql = apply_edits(document.sql, &edits);
+        let formatted = format_replaced_statements(&sql, &mut edits);
+        if formatted {
+            sql = apply_edits(document.sql, &edits);
         }
         if sql.len() > MAX_SQL_BYTES {
             return Err(ToolError::new(
@@ -309,6 +314,8 @@ impl ToolBroker {
             tab_id: document.tab_id,
             expected_revision: document.revision,
             sql,
+            edits,
+            formatted,
         })
     }
 
@@ -335,6 +342,8 @@ impl ToolBroker {
         }
         sql::validate_single(new_query)
             .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
+        let formatted = sql::format_long_line(new_query);
+        let new_query = formatted.as_deref().unwrap_or(new_query);
 
         let mut sql = document.sql.to_owned();
         let last_token = sql::tokens(document.sql)
@@ -368,6 +377,7 @@ impl ToolBroker {
             tab_id: document.tab_id,
             appended_range: start..sql.len(),
             sql,
+            formatted: formatted.is_some(),
         })
     }
 
@@ -584,6 +594,46 @@ fn encoded_len_with_limit(value: &impl Serialize, limit: usize) -> Option<usize>
         .map(|()| counter.length)
 }
 
+fn apply_edits(sql: &str, sorted_edits: &[TextEdit]) -> String {
+    let mut sql = sql.to_owned();
+    for edit in sorted_edits.iter().rev() {
+        sql.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    sql
+}
+
+/// Formats each long one-line statement of `edited` that one replacement
+/// supplies completely, apart from its separator. A statement that keeps text
+/// from before the edit keeps its layout. Returns whether a replacement changed.
+fn format_replaced_statements(edited: &str, sorted_edits: &mut [TextEdit]) -> bool {
+    let statements: Vec<_> = sql::statement_ranges(edited)
+        .into_iter()
+        .map(|range| {
+            let body = edited[range.clone()].trim_end_matches(';').trim_end();
+            range.start..range.start + body.len()
+        })
+        .collect();
+    let mut formatted = false;
+    let mut shift = 0_isize;
+    for edit in sorted_edits {
+        let start = edit.start.saturating_add_signed(shift);
+        let end = start + edit.replacement.len();
+        shift += edit.replacement.len() as isize - (edit.end - edit.start) as isize;
+        for range in statements
+            .iter()
+            .rev()
+            .filter(|range| start <= range.start && range.end <= end)
+        {
+            if let Some(text) = sql::format_long_line(&edited[range.clone()]) {
+                edit.replacement
+                    .replace_range(range.start - start..range.end - start, &text);
+                formatted = true;
+            }
+        }
+    }
+    formatted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +720,35 @@ mod tests {
     }
 
     #[test]
+    fn append_formats_long_one_line_statement() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let long = "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at FROM integrations.bookings GROUP BY state;";
+        let plan = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, long),
+                &document(tab, connection, "SELECT 1"),
+            )
+            .unwrap();
+        assert!(plan.formatted);
+        assert_eq!(
+            &plan.sql[plan.appended_range],
+            "SELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state;"
+        );
+
+        let short = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, "SELECT 2"),
+                &document(tab, connection, ""),
+            )
+            .unwrap();
+        assert!(!short.formatted);
+        assert_eq!(short.sql, "SELECT 2");
+    }
+
+    #[test]
     fn append_rejects_multiple_statements_and_stale_revision() {
         let (tab, connection) = ids();
         let broker = ToolBroker::new(Some(target(tab, connection)));
@@ -731,6 +810,69 @@ mod tests {
             )
             .unwrap();
         assert_eq!(run.sql, "SELECT 2");
+    }
+
+    #[test]
+    fn edit_formats_only_statements_that_a_replacement_supplies() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        let long = "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at FROM integrations.bookings GROUP BY state";
+        let formatted = "SELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state";
+        let edit = |start, end, replacement: &str| TextEdit {
+            start,
+            end,
+            replacement: replacement.into(),
+        };
+
+        // A rewrite of the second statement and a new statement at the end.
+        let before = "SELECT 1;\n\nSELECT 2;";
+        let plan = broker
+            .plan_edit(
+                call(),
+                &edit_request(
+                    tab,
+                    connection,
+                    vec![
+                        edit(before.len(), before.len(), &format!("\n\n{long};")),
+                        // The separator stays from before the edit.
+                        edit(11, 19, long),
+                    ],
+                ),
+                &document(tab, connection, before),
+            )
+            .unwrap();
+        assert!(plan.formatted);
+        assert_eq!(
+            plan.sql,
+            format!("SELECT 1;\n\n{formatted};\n\n{formatted};")
+        );
+        assert_eq!(apply_edits(before, &plan.edits), plan.sql);
+        assert_eq!(plan.edits[0].replacement, formatted);
+
+        // A replacement with several statements formats each long statement.
+        let mut request = edit_request(
+            tab,
+            connection,
+            vec![edit(0, 8, &format!("SELECT 0; {long}"))],
+        );
+        request.replace_existing = true;
+        let plan = broker
+            .plan_edit(call(), &request, &document(tab, connection, "SELECT 1"))
+            .unwrap();
+        assert_eq!(plan.sql, format!("SELECT 0; {formatted}"));
+
+        // A partial change keeps the layout of a statement that the user wrote.
+        let before = format!("{long} LIMIT 10");
+        let at = before.len() - 2;
+        let plan = broker
+            .plan_edit(
+                call(),
+                &edit_request(tab, connection, vec![edit(at, before.len(), "20")]),
+                &document(tab, connection, &before),
+            )
+            .unwrap();
+        assert!(!plan.formatted);
+        assert_eq!(plan.sql, format!("{long} LIMIT 20"));
     }
 
     #[test]

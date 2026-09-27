@@ -218,11 +218,18 @@ for line in sys.stdin:
         if message.startswith("Disconnect Codex"):
             # Stop during the turn, like a Codex crash.
             sys.exit(0)
-        if message.startswith(("Write SELECT 1", "Write SELECT 2")):
+        if message.startswith(("Write SELECT 1", "Write SELECT 2", "Write a long query")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             pending_edit = turn_id
-            query = "SELECT 1" if message.startswith("Write SELECT 1") else "SELECT 2"
+            if message.startswith("Write a long query"):
+                # Models often write a query on one line. Qrow formats it.
+                query = (
+                    "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at "
+                    "FROM integrations.bookings GROUP BY state;"
+                )
+            else:
+                query = "SELECT 1" if message.startswith("Write SELECT 1") else "SELECT 2"
             send(
                 {
                     "id": 9000 + turn_number,
@@ -265,6 +272,38 @@ for line in sys.stdin:
                                 "start": end,
                                 "end": end,
                                 "replacement": "\n\nSELECT 1;\n\nSELECT 2",
+                            }],
+                        },
+                    },
+                }
+            )
+        elif message.startswith("Rewrite the last statement with edit tool"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            pending_edit = turn_id
+            last = tab["statement_ranges"][-1]
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "callId": f"edit-{turn_number}",
+                        "tool": "edit_selected_tab_sql",
+                        "arguments": {
+                            "version": 1,
+                            "tab_id": tab["id"],
+                            "connection_id": tab["connection_id"],
+                            "editor_revision": tab["editor_revision"],
+                            "edits": [{
+                                "start": last["start"],
+                                "end": last["end"],
+                                # Models often write a query on one line. Qrow formats it.
+                                "replacement": (
+                                    "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS "
+                                    "last_booked_at FROM integrations.bookings GROUP BY state"
+                                ),
                             }],
                         },
                     },
@@ -416,6 +455,18 @@ for line in sys.stdin:
                 "I updated the SQL."
                 if result.get("selected_range") == {"start": 22, "end": 30}
                 else f"Tool failed: the edited statement was not selected: {result}"
+            )
+        elif pending_message.startswith("Rewrite the last statement with edit tool"):
+            message = (
+                "I formatted the SQL."
+                if result.get("formatted") is True
+                else f"Tool failed: the rewritten query was not formatted: {result}"
+            )
+        elif pending_message.startswith("Write a long query"):
+            message = (
+                "I formatted the SQL."
+                if result.get("formatted") is True and result.get("statement_range") is not None
+                else f"Tool failed: the long query was not formatted: {result}"
             )
         elif result.get("statement_range") is not None:
             message = "I updated the SQL."

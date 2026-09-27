@@ -17,6 +17,7 @@ proptest! {
         prop_assert_eq!(offset, source.len());
         // Validation must also be total for malformed and incomplete editor text.
         let _ = sql::validate_single(&source);
+        let _ = sql::format_long_line(&format!("SELECT {}", source.replace('\n', " ")));
         let mut previous_end = 0;
         for range in sql::statement_ranges(&source) {
             prop_assert!(range.start >= previous_end);
@@ -44,5 +45,34 @@ proptest! {
         prop_assert!(sql::validate_single(&comment).is_err());
         let query = format!("{comment} SELECT 1; {comment}");
         prop_assert!(sql::validate_single(&query).is_ok());
+    }
+
+    #[test]
+    fn formatting_changes_only_whitespace(
+        parts in prop::collection::vec((prop_oneof![
+            12 => prop::sample::select(vec![
+                "a", "b.c", "`x  y`", "'s  t'", "'it\\'s'", "\"q\"", "1.5", "-", ">=", "(", ")",
+                "[0]", ",", "/* c  d */", "AND", "OR", "FROM", "WHERE", "GROUP BY", "JOIN", "ON",
+                "CASE", "WHEN", "THEN", "END", "日本",
+            ]),
+            1 => prop::sample::select(vec!["<=>", "::", "->", "${v}", "X'1F'"]),
+        ], any::<bool>()), 20..64),
+    ) {
+        let mut source = String::from("SELECT ");
+        for (part, space) in parts {
+            source.push_str(part);
+            if space {
+                source.push(' ');
+            }
+        }
+        if let Some(formatted) = sql::format_long_line(&source) {
+            let squeeze = |text: &str| text.split_whitespace().collect::<String>();
+            prop_assert_eq!(squeeze(&formatted), squeeze(&source));
+            let quoted = |text: &str| sql::tokens(text).into_iter()
+                .filter(|(_, kind)| matches!(kind, Kind::String | Kind::Identifier | Kind::Comment))
+                .map(|(range, _)| text[range].to_owned())
+                .collect::<Vec<_>>();
+            prop_assert_eq!(quoted(&formatted), quoted(&source));
+        }
     }
 }

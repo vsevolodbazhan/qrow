@@ -1,4 +1,6 @@
-//! Small SQL lexer for highlighting and single-statement validation, not SQL parsing.
+//! Small SQL lexer for highlighting, single-statement validation, and checked
+//! formatting, not SQL parsing.
+use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -145,6 +147,90 @@ pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Formats a long one-line query statement, or returns `None` to keep it as
+/// written. The result changes only whitespace, and only where Spark SQL
+/// ignores it.
+pub fn format_long_line(sql: &str) -> Option<String> {
+    const MIN_CHARS: usize = 80;
+    const FORMATTABLE: [&str; 10] = [
+        "SELECT", "WITH", "FROM", "VALUES", "INSERT", "CREATE", "EXPLAIN", "MERGE", "UPDATE",
+        "DELETE",
+    ];
+    if sql.contains('\n') || sql.chars().count() <= MIN_CHARS {
+        return None;
+    }
+    let first = significant(sql)
+        .into_iter()
+        .find(|t| t.kind != Kind::Comment)?;
+    if !FORMATTABLE.contains(&first.text.to_ascii_uppercase().as_str()) {
+        return None;
+    }
+    let options = FormatOptions {
+        indent: Indent::Spaces(2),
+        // The PostgreSQL dialect keeps subscripts such as `items[0]` together.
+        dialect: Dialect::PostgreSql,
+        max_inline_top_level: Some(60),
+        ..FormatOptions::default()
+    };
+    let formatted = sqlformat::format(sql, &QueryParams::None, &options);
+    let formatted = formatted.trim();
+    (formatted != sql && same_tokens(sql, formatted)).then(|| formatted.to_owned())
+}
+
+struct Significant<'a> {
+    kind: Kind,
+    text: &'a str,
+    space_before: bool,
+}
+
+fn significant(sql: &str) -> Vec<Significant<'_>> {
+    let mut result = vec![];
+    let mut space_before = false;
+    for (range, kind) in tokens(sql) {
+        let text = &sql[range];
+        if text.trim().is_empty() {
+            space_before = true;
+        } else {
+            result.push(Significant {
+                kind,
+                text,
+                space_before,
+            });
+            space_before = false;
+        }
+    }
+    result
+}
+
+/// Whether `formatted` has the tokens of `original` and changes whitespace only
+/// between tokens that stay separate tokens in Spark SQL. For example, `>=`,
+/// `${var}`, and `X'1F'` must stay together. Delimiters such as `,` and `(`
+/// never join with other symbols.
+fn same_tokens(original: &str, formatted: &str) -> bool {
+    let (original, formatted) = (significant(original), significant(formatted));
+    let starts_word = |t: &Significant| {
+        t.text
+            .starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    };
+    let is_symbol = |t: &Significant| {
+        t.kind == Kind::Plain && !starts_word(t) && !t.text.starts_with(|c| ",()[]".contains(c))
+    };
+    let is_word = |t: &Significant| matches!(t.kind, Kind::Plain | Kind::Keyword) && starts_word(t);
+    original.len() == formatted.len()
+        && original
+            .iter()
+            .zip(&formatted)
+            .enumerate()
+            .all(|(i, (a, b))| {
+                a.kind == b.kind
+                    && a.text == b.text
+                    && (i == 0
+                        || a.space_before == b.space_before
+                        || !(is_symbol(&original[i - 1]) && is_symbol(a)
+                            || is_word(&original[i - 1]) && a.kind == Kind::String))
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +249,62 @@ mod tests {
         let sql = "select '日\\本', 列 from 表";
         for (range, _) in tokens(sql) {
             let _ = &sql[range];
+        }
+    }
+
+    #[test]
+    fn formats_long_one_line_queries() {
+        let sql = "SELECT COUNT(*) AS paid_bookings FROM integrations.bookings WHERE state = 'paid' AND CAST(booked_at AS DATE) = DATE '2026-09-26'";
+        assert_eq!(
+            format_long_line(sql).unwrap(),
+            "SELECT COUNT(*) AS paid_bookings\nFROM integrations.bookings\nWHERE\n  state = 'paid'\n  AND CAST(booked_at AS DATE) = DATE '2026-09-26'"
+        );
+        let sql = "SELECT items[0], `order  id`, 'a  b', 'it\\'s', x::int, a >= b /*+ keep  this */ FROM t WHERE ok -- note";
+        let formatted = format_long_line(sql).unwrap();
+        assert!(formatted.contains("items[0]") && formatted.ends_with("WHERE ok -- note"));
+        assert!(formatted.contains("`order  id`") && formatted.contains("'a  b'"));
+        assert!(formatted.contains("'it\\'s'") && formatted.contains("/*+ keep  this */"));
+    }
+
+    #[test]
+    fn keeps_short_multiline_raw_and_unsafe_statements() {
+        let padding = "a, ".repeat(30);
+        for sql in [
+            "SELECT 1".to_owned(),
+            format!("SELECT {padding}\nb FROM t"),
+            format!("SET spark.sql.shuffle.partitions=10 -- {padding}"),
+            format!("ADD JAR /opt/jars/udf-1.0.jar -- {padding}"),
+            // Spark substitutes `${var}` before parsing.
+            format!("SELECT {padding}b FROM t WHERE dt = ${{hivevar:dt}}"),
+        ] {
+            assert_eq!(format_long_line(&sql), None, "{sql}");
+        }
+    }
+
+    #[test]
+    fn token_check_rejects_joined_or_split_tokens() {
+        assert!(same_tokens("SELECT a >= b", "SELECT\n  a >= b"));
+        assert!(same_tokens("SELECT f(a)", "SELECT f (a)"));
+        assert!(same_tokens(
+            "SELECT -(1),(2) IN ('a','b')",
+            "SELECT - (1), (2) IN ('a', 'b')"
+        ));
+        for formatted in [
+            "SELECT a > = b",
+            "SELECT x = -1",
+            "SELECT $ {x}",
+            "SELECT X '1F'",
+            "SELECT 'a b'",
+            "SELECT ab",
+        ] {
+            let original = formatted
+                .replace("> =", ">=")
+                .replace("x = -1", "x=-1")
+                .replace("$ {", "${")
+                .replace("X '", "X'")
+                .replace("'a b'", "'a  b'")
+                .replace("ab", "a b");
+            assert!(!same_tokens(&original, formatted), "{formatted}");
         }
     }
 

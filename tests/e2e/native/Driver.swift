@@ -1004,6 +1004,16 @@ final class Driver {
         // A generated title stays after later replies.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
+        // Qrow formats a long one-line query when the assistant appends it.
+        try fill("Assistant message", "Write a long query into this tab")
+        try press("Send")
+        _ = try wait("I formatted the SQL.", timeout: 20)
+        try waitInputValue(
+            "SQL Editor",
+            "SELECT 1;\n\nSELECT 2;\n\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state;"
+        )
+        try waitGone("Assistant is working", timeout: 5)
+        try snapshot("assistant-formatted-append")
         try setAssistantRunMode()
         // Reconnect replaces Send and Cancel in the composer while Codex is disconnected.
         try fill("Assistant message", "Disconnect Codex")
@@ -1026,7 +1036,7 @@ final class Driver {
         } while true
         _ = try wait("I can help with this query", timeout: 20)
         try waitGone("Assistant is working", timeout: 5)
-        print("PASS: Assistant appends a new SQL query, preserves the first query, titles the conversation, and reconnects from the composer")
+        print("PASS: Assistant appends a new SQL query, preserves the first query, formats a long query, titles the conversation, and reconnects from the composer")
     }
     /// Waits until the saved workspace has these conversation titles and
     /// title sources, in any order.
@@ -1170,7 +1180,19 @@ final class Driver {
         try press("Send")
         _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 0;", timeout: 20)
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
-        print("PASS: Assistant can target the newest and an earlier statement for execution")
+        try waitGone("Assistant query approval:", timeout: 5)
+        try waitGone("Assistant is working", timeout: 5)
+
+        // Qrow formats a long one-line statement that an edit supplies.
+        try fill("Assistant message", "Rewrite the last statement with edit tool")
+        try press("Send")
+        _ = try wait("I formatted the SQL.", timeout: 20)
+        try waitInputValue(
+            "SQL Editor",
+            "SELECT 0;\n\nSELECT 1;\n\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state"
+        )
+        try waitGone("Assistant is working", timeout: 5)
+        print("PASS: Assistant can target the newest and an earlier statement for execution, and a rewritten long statement is formatted")
     }
     func seedAssistantRetargetWorkspace() throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")

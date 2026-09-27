@@ -78,10 +78,20 @@ If an assistant tool uses an ID that is not in the open tabs, Qrow uses the
 selected tab and returns its ID. Qrow rejects an ID for a different open tab
 when the tool must act on the selected tab.
 Ask the assistant to change existing SQL when you want an edit or replacement.
+
 The assistant can write SQL before you select a connection. Select a connection
 before it runs SQL. It cannot read connection passwords. Qrow does not send
 workspace context when you open the pane. It sends context when you send a
 message or when Codex calls a Qrow tool.
+
+Qrow formats a statement from the assistant on more than one line when the
+statement is a single line longer than 80 characters. This applies to a new
+query and to a statement that the assistant writes again completely. Qrow
+changes only spaces and line breaks. It keeps a statement as written when a
+change can have an effect on the statement, for example near a `${var}`
+substitution. It also keeps commands such as `SET` and `ADD JAR` as written.
+When the assistant changes only part of a statement, Qrow keeps the layout of
+that statement.
 
 If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab

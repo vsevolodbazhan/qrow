@@ -342,7 +342,7 @@ impl Qrow {
                 content: json!({"version": 1, "error": error}),
             })?;
         let editor = tab.input.clone();
-        let appended_range = args
+        let appended_range = plan
             .edits
             .iter()
             .any(|edit| {
@@ -355,7 +355,7 @@ impl Qrow {
             .filter(|range| range.start >= sql.len());
         let mapped = appended_range
             .clone()
-            .or_else(|| remap_selection(selected, &args.edits));
+            .or_else(|| remap_selection(selected, &plan.edits));
         self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
         self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
         editor.update(cx, |editor, cx| {
@@ -377,7 +377,7 @@ impl Qrow {
         // A run without statement_range uses this selection, so the model does not read it back.
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
-                "sql_bytes": plan.sql.len(),
+                "sql_bytes": plan.sql.len(), "formatted": plan.formatted,
                 "selected_range": (!selected.is_empty()).then_some(selected)}),
         ))
     }
@@ -427,7 +427,8 @@ impl Qrow {
         self.changed(cx);
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
-                "sql_bytes": plan.sql.len(), "statement_range": plan.appended_range}),
+                "sql_bytes": plan.sql.len(), "statement_range": plan.appended_range,
+                "formatted": plan.formatted}),
         ))
     }
 
