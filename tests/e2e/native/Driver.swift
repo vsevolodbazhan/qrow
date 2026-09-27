@@ -974,11 +974,14 @@ final class Driver {
         _ = try wait("Jump to latest", timeout: 5)
         try fill("Assistant message", "Return to the latest message")
         try press("Send")
-        _ = try wait("Assistant is thinking", timeout: 5)
-        try snapshot("assistant-thinking")
-        try waitGone("Assistant is working", timeout: 5)
+        // The synthetic Codex server holds this turn open for 8 seconds. While
+        // the indicator animates in a debug build, one accessibility tree scan
+        // can take several seconds.
+        _ = try wait("Assistant is working", timeout: 8)
+        try snapshot("assistant-working")
+        try waitGone("Assistant is working", timeout: 20)
+        _ = try wait("I can help with this query", timeout: 5)
         try waitGone("Jump to latest", timeout: 5)
-        try waitGone("Assistant is thinking", timeout: 5)
         try press("Toggle Assistant")
         try waitGone("Toggle conversation list")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
@@ -1002,7 +1005,28 @@ final class Driver {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
         try setAssistantRunMode()
-        print("PASS: Assistant appends a new SQL query, preserves the first query, and titles the conversation")
+        // Reconnect replaces Send and Cancel in the composer while Codex is disconnected.
+        try fill("Assistant message", "Disconnect Codex")
+        try press("Send")
+        _ = try wait("Reconnect to Codex", timeout: 10, role: kAXButtonRole)
+        try require(find("Send · Run") == nil, "Send stayed visible after Codex disconnected")
+        try require(find("Cancel assistant turn") == nil, "Cancel stayed visible after Codex disconnected")
+        try snapshot("assistant-disconnected")
+        try press("Reconnect to Codex")
+        try waitGone("Reconnect to Codex", timeout: 5)
+        _ = try wait("Send · Run", timeout: 5, role: kAXButtonRole)
+        try fill("Assistant message", "Reply after reconnect")
+        // The model label stays from the previous session, and GPUI Kit reports
+        // Send as enabled while Codex starts. Retry until Qrow accepts the message.
+        let deadline = clock.now.advanced(by: .seconds(20))
+        repeat {
+            try press("Send")
+            if (try? waitInputValue("Assistant message", "", timeout: 0.5)) != nil { break }
+            try require(clock.now < deadline, "Qrow did not send a message after Reconnect")
+        } while true
+        _ = try wait("I can help with this query", timeout: 20)
+        try waitGone("Assistant is working", timeout: 5)
+        print("PASS: Assistant appends a new SQL query, preserves the first query, titles the conversation, and reconnects from the composer")
     }
     /// Waits until the saved workspace has these conversation titles and
     /// title sources, in any order.
@@ -1368,6 +1392,7 @@ final class Driver {
         try fill("Assistant message", "Run selected SQL with approval")
         try press("Send")
         _ = try wait("Assistant query approval:", timeout: 20)
+        try require(find("Assistant is working") == nil, "Working stayed visible while the query waited for approval")
         let cancel = try waitExact("Cancel assistant turn", timeout: 5, role: kAXButtonRole)
         try require(find("Send", role: kAXButtonRole) == nil, "Send remained visible during the assistant turn")
         let (cancelPosition, _) = try elementBounds(cancel)

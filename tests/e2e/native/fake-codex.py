@@ -213,7 +213,11 @@ for line in sys.stdin:
             }
         )
         if message.startswith("Return to the latest message"):
-            time.sleep(1)
+            # Keep the turn open long enough to observe the working indicator.
+            time.sleep(8)
+        if message.startswith("Disconnect Codex"):
+            # Stop during the turn, like a Codex crash.
+            sys.exit(0)
         if message.startswith(("Write SELECT 1", "Write SELECT 2")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]

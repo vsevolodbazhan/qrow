@@ -2244,7 +2244,22 @@ impl Qrow {
         let show_threads = show_thread_list(narrow, self.assistant_panel.thread_list_override);
         let action_size = self.ui_px(28.);
         let controls_ready = matches!(self.assistant_panel.status, Status::Ready);
+        let disconnected_error = match &self.assistant_panel.status {
+            Status::Disconnected(error) => Some(error.clone()),
+            _ => None,
+        };
+        let disconnected = disconnected_error.is_some();
         let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
+        // Codex owes a reply from the send until the turn ends. A query that
+        // waits for approval waits for you instead.
+        let waiting_for_agent = (self.assistant_panel.pending_reply_thread.as_deref()
+            == Some(selected)
+            || self.assistant_panel.active_turn.is_some())
+            && !self
+                .assistant_panel
+                .pending_query
+                .as_ref()
+                .is_some_and(|pending| !pending.approved);
         let entries = self.assistant_panel.transcripts.get(selected);
         let mode_is_run = self.assistant.conversations.iter().any(|conversation| {
             conversation.thread_id == selected
@@ -2414,28 +2429,6 @@ impl Qrow {
                             })),
                     )
             )
-            .when(matches!(self.assistant_panel.status, Status::Disconnected(_)), |panel| panel.child(
-                h_flex()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_1()
-                    .justify_end()
-                    .child(
-                        Button::new("assistant-reconnect")
-                            .small()
-                            .label("Reconnect")
-                            .when_some(
-                                match &self.assistant_panel.status {
-                                    Status::Disconnected(error) => Some(error.clone()),
-                                    _ => None,
-                                },
-                                |button, error| button.tooltip(error),
-                            )
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.reconnect_assistant(cx)),
-                            ),
-                    ),
-            ))
             .when(
                 matches!(self.assistant_panel.status, Status::SignInRequired),
                 |panel| {
@@ -2543,9 +2536,7 @@ impl Qrow {
                                 .into_any_element()
                             }),
                     )
-                    .when(
-                        self.assistant_panel.pending_reply_thread.as_deref() == Some(selected),
-                        |transcript| {
+                    .when(waiting_for_agent, |transcript| {
                             transcript.child(
                                 Message::new()
                                     .flex_shrink_0()
@@ -2553,18 +2544,17 @@ impl Qrow {
                                     .content(MessageContent::new().bubble(
                                         Bubble::new().with_variant(BubbleVariant::Ghost).child(
                                             div()
-                                                .id("assistant-thinking")
+                                                .id("assistant-working")
                                                 .role(Role::Status)
-                                                .aria_label("Assistant is thinking")
+                                                .aria_label("Assistant is working")
                                                 .child(
-                                                    ShimmerText::new("Thinking…")
+                                                    ShimmerText::new("Working…")
                                                         .text_color(cx.theme().muted_foreground),
                                                 ),
                                         ),
                                     )),
                             )
-                        },
-                    ))
+                    }))
             .when(
                 entries.is_some_and(|entries| !entries.is_empty())
                     && !self.assistant_transcript_near_bottom(),
@@ -2742,7 +2732,16 @@ impl Qrow {
                                             })),
                             )
                             .child(div().flex_1())
-                            .when(self.assistant_panel.active_turn.is_some(), |row| row.child(
+                            .when_some(disconnected_error, |row, error| row.child(
+                                Button::new("assistant-reconnect")
+                                    .small()
+                                    .icon(AssetIconName::RotateCw)
+                                    .label("Reconnect")
+                                    .accessibility_label("Reconnect to Codex")
+                                    .tooltip(error)
+                                    .on_click(cx.listener(|this, _, _, cx| this.reconnect_assistant(cx))),
+                            ))
+                            .when(!disconnected && self.assistant_panel.active_turn.is_some(), |row| row.child(
                                 Button::new("assistant-stop")
                                     .small()
                                     .label("Cancel")
@@ -2750,7 +2749,7 @@ impl Qrow {
                                     .tooltip("Cancel the current assistant turn")
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
                             ))
-                            .when(self.assistant_panel.active_turn.is_none(), |row| row.child(
+                            .when(!disconnected && self.assistant_panel.active_turn.is_none(), |row| row.child(
                                 DropdownButton::new("assistant-send-mode")
                                     .primary()
                                     .small()

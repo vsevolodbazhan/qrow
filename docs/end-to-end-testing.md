@@ -140,7 +140,9 @@ target/e2e-tools/native-driver --assistant-append-only
 The check asks for two queries. It verifies that the second query follows the
 first query in the same tab. It also checks that the conversation gets a
 generated title after the first reply, that Qrow saves the title, and that the
-second reply does not change it.
+second reply does not change it. Then the synthetic Codex server stops during a
+turn. The check makes sure that **Reconnect** replaces **Send** and **Cancel**,
+and that a message after the reconnection gets a reply.
 
 To check how the assistant runs one statement from a tab with several queries,
 use the package steps in the assistant font check above. Use a new, empty

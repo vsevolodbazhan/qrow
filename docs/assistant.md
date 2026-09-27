@@ -31,9 +31,10 @@ You can draft a message while Codex starts. The model, reasoning, service tier,
 and Send controls stay disabled until Codex is ready. The pane does not show
 routine status text above the message field.
 
-After you send a message, a shimmering **Thinking…** reply appears in the
-conversation. The reply replaces it when Codex starts to answer. Qrow removes
-the placeholder if the turn ends or fails without a reply.
+While Codex works on a reply, a shimmering **Working…** line shows at the end of
+the conversation. It shows from the time that you send a message until the
+turn ends or fails. It also shows while Codex writes text or uses tools. It does
+not show while a query waits for your approval.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
@@ -165,7 +166,8 @@ The tab strip shows **Done** next to the assistant toggle if a hidden turn
 finishes. Reopen the pane to clear that state.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
-The **Reconnect** tooltip shows the error. Select **Reconnect** to try again.
+**Reconnect** replaces **Send** and **Cancel** below the message field. Its
+tooltip shows the error. Select **Reconnect** to try again.
 Qrow does not send the draft for you. A database query that already started can
 finish while Codex is disconnected.
 
