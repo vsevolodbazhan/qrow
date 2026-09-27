@@ -1369,6 +1369,7 @@ final class Driver {
         }
         try checkInlineCodeMessage()
         try checkBoldReply()
+        try checkComposerPadding()
         // Earlier messages make the transcript long enough to scroll.
         try fill("Assistant message", "Show many lines")
         try press("Send")
@@ -1441,6 +1442,39 @@ final class Driver {
             }
         }
         try require(!inked, "Text in the bold reply reaches the right edge of the reply")
+    }
+    /// The composer has the same space above the message field as below the
+    /// Send button. Scan a column in the right padding of the composer, from
+    /// the border above it to the status bar below it.
+    func checkComposerPadding() throws {
+        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (sendOrigin, sendSize) = try elementBounds(try waitAny(["Send · Ask", "Send · Run"]))
+        let top = Int(composerOrigin.y) - 24
+        let height = Int(sendOrigin.y + sendSize.height) + 24 - top
+        let path = "\(artifacts)/assistant-composer-padding.png"
+        _ = try command(["screencapture", "-x", "-R", "\(Int(composerOrigin.x + composerSize.width) + 4),\(top),1,\(height)", path])
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data) else {
+            throw Failure("Could not read the composer padding capture")
+        }
+        let scale = CGFloat(bitmap.pixelsHigh) / CGFloat(height)
+        func row(_ y: CGFloat) -> Int { Int(((y - CGFloat(top)) * scale).rounded()) }
+        guard let background = bitmap.colorAt(x: 0, y: row(composerOrigin.y + 4))?.usingColorSpace(.deviceRGB) else {
+            throw Failure("Could not read the composer background")
+        }
+        func differs(_ y: Int) -> Bool {
+            guard let color = bitmap.colorAt(x: 0, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+            return max(abs(color.redComponent - background.redComponent),
+                       abs(color.greenComponent - background.greenComponent),
+                       abs(color.blueComponent - background.blueComponent)) > 0.02
+        }
+        guard let border = (0..<row(composerOrigin.y)).last(where: differs),
+              let bottom = (row(sendOrigin.y + sendSize.height)..<bitmap.pixelsHigh).first(where: differs) else {
+            throw Failure("Could not find the composer edges in the padding capture")
+        }
+        let above = (CGFloat(row(composerOrigin.y) - border - 1)) / scale
+        let below = (CGFloat(bottom - row(sendOrigin.y + sendSize.height))) / scale
+        try require(abs(above - below) <= 1, "The composer has \(above) points above the message field and \(below) points below Send")
     }
     /// The transcript and the composer share one horizontal inset. The reply
     /// text starts at the left edge of the composer, and the user bubble ends

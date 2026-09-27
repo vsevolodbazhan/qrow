@@ -124,6 +124,7 @@ drawn at another. The check makes sure that:
 - Lines of a reply with bold text end before the right edge of the reply.
 - The assistant reply starts at the left edge of the composer, and the user
   message bubble ends at its right edge.
+- The space above the message field is equal to the space below **Send**.
 - A reply with a wide table uses the full transcript width.
 - The transcript scrolls to the end of the table.
 - The mouse wheel scrolls the transcript over the table.

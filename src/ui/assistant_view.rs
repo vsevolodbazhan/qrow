@@ -2860,7 +2860,6 @@ impl Qrow {
                         h_flex().min_w_0().gap_1()
                             .child(
                                 h_flex()
-                                    .h(action_size)
                                     .min_w_0()
                                     .gap_1()
                                     .child(
