@@ -4,12 +4,11 @@ use crate::themes;
 use gpui_kit::component::{
     IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
+    label::Label,
     select::{SearchableVec, Select, SelectEvent, SelectState},
-    setting::{
-        RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
-        Settings as SettingsPanel,
-    },
+    setting::{RenderOptions, SettingGroup, SettingItem, SettingPage, Settings as SettingsPanel},
     switch::Switch,
+    v_flex,
 };
 use qrow::model::{
     ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
@@ -510,11 +509,11 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
-            alert.title("Enable AI assistant?")
+            alert.title("Enable the assistant?")
                 .description("Qrow sends selected SQL and allowed connection and tab details to Codex only when you send a message. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
                 .footer(DialogFooter::new().justify_end()
                     .child(Button::new("cancel-enable-assistant").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
-                    .child(Button::new("confirm-enable-assistant").primary().label("Enable assistant")
+                    .child(Button::new("confirm-enable-assistant").primary().label("Enable")
                         .on_click(move |_, window, cx| {
                             let _ = confirm.update(cx, |this, cx| {
                                 this.settings.assistant.data_sharing_notice_version = ASSISTANT_DATA_SHARING_NOTICE_VERSION;
@@ -672,8 +671,8 @@ impl Qrow {
                     .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
                     .sidebar_width(rem * SIDEBAR_REMS)
                     .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
-                    .page(settings_page(form))
-                    .page(assistant_settings_page(
+                    .page(appearance_page(form))
+                    .page(assistant_page(
                         form,
                         cx.weak_entity(),
                         self.settings.assistant.enabled,
@@ -726,8 +725,8 @@ impl Qrow {
     }
 }
 
-/// Appearance settings for the interface, editor, logs, and assistant messages.
-fn settings_page(form: &SettingsForm) -> SettingPage {
+/// Appearance settings for the interface, assistant messages, editor, and logs.
+fn appearance_page(form: &SettingsForm) -> SettingPage {
     SettingPage::new("Appearance")
         .default_open(true)
         // The footer resets all appearance settings, so this page does not
@@ -736,136 +735,147 @@ fn settings_page(form: &SettingsForm) -> SettingPage {
         .group(
             SettingGroup::new()
                 .title("Interface")
-                .item(
-                    SettingItem::new("Theme", theme_field(form))
-                        .description("Choose the application colors, or follow the system.")
-                        .keywords(["appearance", "colors", "system"]),
-                )
-                .item(
-                    SettingItem::new("Scale", number_field(form, NumberSetting::Scale))
-                        .description("Resizes the whole interface.")
-                        .keywords(["zoom", "interface", "ui"]),
-                )
-                .item(
-                    SettingItem::new("Font Family", font_field(form, FontSetting::Ui))
-                        .description(
-                            "Used everywhere except the Editor, Logs, and assistant messages.",
-                        )
-                        .keywords(["interface", "ui", "typeface"]),
-                ),
+                .item(setting_item(
+                    "Theme",
+                    "Sets the colors of the application. The system theme follows the light or dark appearance of macOS.",
+                    &["appearance", "colors", "dark", "light"],
+                    theme_field(form),
+                ))
+                .item(setting_item(
+                    "Scale",
+                    "Changes the size of all text and controls. You can also press ⌘+ or ⌘− at any time.",
+                    &["zoom", "interface", "ui"],
+                    number_field(form, NumberSetting::Scale),
+                ))
+                .item(setting_item(
+                    "Font Family",
+                    "Sets the font of controls, labels, and result tables. The editor, logs, and assistant messages use their own fonts.",
+                    &["interface", "ui", "typeface"],
+                    font_field(form, FontSetting::Ui),
+                )),
         )
         .group(
             SettingGroup::new()
                 .title("Assistant")
-                .item(
-                    SettingItem::new("Font Family", font_field(form, FontSetting::Assistant))
-                        .description("Font for conversation messages.")
-                        .keywords(["assistant", "messages", "typeface"]),
-                )
-                .item(
-                    SettingItem::new(
-                        "Font Size",
-                        number_field(form, NumberSetting::AssistantFontSize),
-                    )
-                    .description("Base size, before Scale.")
-                    .keywords(["assistant", "messages"]),
-                )
-                .item(
-                    SettingItem::new(
-                        "Line Height",
-                        number_field(form, NumberSetting::AssistantLineHeight),
-                    )
-                    .description("Line spacing, relative to the font size.")
-                    .keywords(["assistant", "messages", "spacing"]),
-                ),
+                .item(setting_item(
+                    "Font Family",
+                    "Sets the font of messages in assistant conversations. The message field and tool cards keep their fonts.",
+                    &["assistant", "messages", "typeface"],
+                    font_field(form, FontSetting::Assistant),
+                ))
+                .item(setting_item(
+                    "Font Size",
+                    "Sets the size of message text, in pixels. The interface scale multiplies this size.",
+                    &["assistant", "messages"],
+                    number_field(form, NumberSetting::AssistantFontSize),
+                ))
+                .item(setting_item(
+                    "Line Height",
+                    "Sets the space between the lines of a message, as a multiple of the font size.",
+                    &["assistant", "messages", "spacing"],
+                    number_field(form, NumberSetting::AssistantLineHeight),
+                )),
         )
         .group(
             SettingGroup::new()
                 .title("Editor")
-                .item(
-                    SettingItem::new("Font Family", font_field(form, FontSetting::Editor))
-                        .description("Font for the SQL text.")
-                        .keywords(["editor", "sql", "typeface"]),
-                )
-                .item(
-                    SettingItem::new(
-                        "Font Size",
-                        number_field(form, NumberSetting::EditorFontSize),
-                    )
-                    .description("Base size, before Scale.")
-                    .keywords(["editor", "sql"]),
-                )
-                .item(
-                    SettingItem::new(
-                        "Line Height",
-                        number_field(form, NumberSetting::EditorLineHeight),
-                    )
-                    .description("Line spacing, relative to the font size.")
-                    .keywords(["editor", "sql", "spacing"]),
-                )
-                .item(
-                    SettingItem::new("Tab Size", number_field(form, NumberSetting::EditorTabSize))
-                        .description("Spaces for each indent level, also in SQL that Qrow formats.")
-                        .keywords(["editor", "sql", "indent", "spaces", "format"]),
-                ),
+                .item(setting_item(
+                    "Font Family",
+                    "Sets the font of SQL in the editor. A monospace font keeps indents and columns aligned.",
+                    &["editor", "sql", "typeface"],
+                    font_field(form, FontSetting::Editor),
+                ))
+                .item(setting_item(
+                    "Font Size",
+                    "Sets the size of SQL text, in pixels. The interface scale multiplies this size.",
+                    &["editor", "sql"],
+                    number_field(form, NumberSetting::EditorFontSize),
+                ))
+                .item(setting_item(
+                    "Line Height",
+                    "Sets the space between the lines of SQL, as a multiple of the font size.",
+                    &["editor", "sql", "spacing"],
+                    number_field(form, NumberSetting::EditorLineHeight),
+                ))
+                .item(setting_item(
+                    "Tab Size",
+                    "Sets the number of spaces for each indent level. The Tab key and SQL that Qrow formats both use this size.",
+                    &["editor", "sql", "indent", "spaces", "format"],
+                    number_field(form, NumberSetting::EditorTabSize),
+                ))
+                .item(setting_item(
+                    "SQL Keyword Case",
+                    "Sets the case of SQL keywords, built-in functions, and type names. For now, this setting applies only to SQL that the assistant writes.",
+                    &["editor", "sql", "style", "format", "uppercase", "lowercase", "assistant"],
+                    select_field(&form.assistant_keyword_case, "SQL Keyword Case"),
+                )),
         )
         .group(
             SettingGroup::new()
                 .title("Logs")
-                .item(
-                    SettingItem::new("Font Family", font_field(form, FontSetting::Logs))
-                        .description("Font for the log entries.")
-                        .keywords(["logs", "typeface"]),
-                )
-                .item(
-                    SettingItem::new("Font Size", number_field(form, NumberSetting::LogsFontSize))
-                        .description("Base size, before Scale.")
-                        .keywords(["logs"]),
-                )
-                .item(
-                    SettingItem::new(
-                        "Line Height",
-                        number_field(form, NumberSetting::LogsLineHeight),
-                    )
-                    .description("Line spacing, relative to the font size.")
-                    .keywords(["logs", "spacing"]),
-                ),
+                .item(setting_item(
+                    "Font Family",
+                    "Sets the font of log entries.",
+                    &["logs", "typeface"],
+                    font_field(form, FontSetting::Logs),
+                ))
+                .item(setting_item(
+                    "Font Size",
+                    "Sets the size of log text, in pixels. The interface scale multiplies this size.",
+                    &["logs"],
+                    number_field(form, NumberSetting::LogsFontSize),
+                ))
+                .item(setting_item(
+                    "Line Height",
+                    "Sets the space between the lines of log entries, as a multiple of the font size.",
+                    &["logs", "spacing"],
+                    number_field(form, NumberSetting::LogsLineHeight),
+                )),
         )
 }
 
-fn assistant_settings_page(
-    form: &SettingsForm,
-    owner: WeakEntity<Qrow>,
-    enabled: bool,
-) -> SettingPage {
-    let mode = form.assistant_mode.clone();
-    let keyword_case = form.assistant_keyword_case.clone();
+fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -> SettingPage {
     let executable = form.assistant_executable.clone();
-    SettingPage::new("AI Assistant")
+    SettingPage::new("Assistant")
         .resettable(false)
-        .group(SettingGroup::new().title("Codex")
-            .item(SettingItem::new("Enable assistant", SettingField::render({
-                move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-                    let owner = owner.clone();
-                    control(options, window.rem_size(), Switch::new("enable-assistant")
-                        .checked(enabled).accessibility_label("Enable AI assistant")
-                        .on_click(move |next, window, cx| {
-                            let _ = owner.update(cx, |this, cx| this.set_assistant_enabled(*next, window, cx));
-                        }))
-                }
-            })).description("Optional. Qrow starts Codex only when you open the assistant pane."))
-            .item(SettingItem::new("Codex executable", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-                control(options, window.rem_size(), Input::new(&executable).w_full().aria_label("Codex executable"))
-            })).description("Leave blank for automatic discovery. Install Codex separately.")))
-        .group(SettingGroup::new().title("Query execution")
-            .item(SettingItem::new("Default mode", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-                control(options, window.rem_size(), Select::new(&mode).w_full().accessibility_label("Default assistant query execution mode"))
-            })).description("New conversations copy this mode. Run automatically can change or delete data and schema.")))
-        .group(SettingGroup::new().title("SQL style")
-            .item(SettingItem::new("Keyword case", SettingField::render(move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-                control(options, window.rem_size(), Select::new(&keyword_case).w_full().accessibility_label("Assistant SQL keyword case"))
-            })).description("The assistant writes SQL keywords in this case. Qrow also uses it when it formats long SQL from the assistant. Editor Tab Size sets the indent.")
-            .keywords(["sql", "format", "uppercase", "lowercase", "keywords"])))
+        .group(
+            SettingGroup::new()
+                .title("General")
+                .item(setting_item(
+                    "Enabled",
+                    "Shows the assistant button in the tab bar, and ⌘J opens the assistant pane.",
+                    &["assistant", "enable", "codex", "ai"],
+                    move |_: &mut Window, _: &mut App| {
+                        let owner = owner.clone();
+                        Switch::new("enable-assistant")
+                            .checked(enabled)
+                            .accessibility_label("Enable Assistant")
+                            .on_click(move |next, window, cx| {
+                                let _ = owner.update(cx, |this, cx| {
+                                    this.set_assistant_enabled(*next, window, cx)
+                                });
+                            })
+                    },
+                ))
+                .item(setting_item(
+                    "Query Execution",
+                    "Sets how new conversations run the queries that the assistant writes. Queries that run automatically can change or delete data and schema. To change one conversation, use the menu next to the send button.",
+                    &["assistant", "run", "approval", "mode", "automatically"],
+                    select_field(&form.assistant_mode, "Assistant Query Execution"),
+                )),
+        )
+        .group(
+            SettingGroup::new().title("Codex").item(setting_item(
+                "Executable",
+                "Leave the field empty to search your PATH and the usual Homebrew folders. Qrow does not include Codex, so install it separately.",
+                &["assistant", "codex", "path", "binary"],
+                move |_: &mut Window, _: &mut App| {
+                    Input::new(&executable)
+                        .w_full()
+                        .aria_label("Codex Executable")
+                },
+            )),
+        )
 }
 
 fn keyword_case_label(case: KeywordCase) -> &'static str {
@@ -875,56 +885,82 @@ fn keyword_case_label(case: KeywordCase) -> &'static str {
     }
 }
 
-/// Size the control column. A page that keeps the label beside the control
-/// aligns every control on one width; a stacked page fills the row.
-fn control(options: &RenderOptions, rem: Pixels, element: impl IntoElement) -> Div {
-    div()
-        .map(|this| match options.layout() {
-            Axis::Horizontal => this.w(rem * CONTROL_REMS).flex_shrink_0(),
-            Axis::Vertical => this.w_full(),
-        })
-        .child(element)
-}
-
-fn number_field(form: &SettingsForm, setting: NumberSetting) -> SettingField<SharedString> {
-    let input = form.number(setting).clone();
-    SettingField::render(
+/// One setting: the title and description at the left and the control at the
+/// right, or the control below them on a stacked page. A page that keeps the
+/// label beside the control aligns every control on one width.
+///
+/// Kit's own item row does not let the label column shrink. GPUI measures the
+/// minimum width of text as one unwrapped line, so a long description holds
+/// the column wide and pushes the control past the page edge. Here the column
+/// shrinks, and the description wraps instead. Search matches the title and
+/// description through the keywords, as it does for Kit's row.
+fn setting_item<E: IntoElement>(
+    title: &'static str,
+    description: &'static str,
+    keywords: &[&'static str],
+    field: impl Fn(&mut Window, &mut App) -> E + 'static,
+) -> SettingItem {
+    SettingItem::render(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
-            control(
-                options,
-                window.rem_size(),
-                setting_stepper(&input, setting.unit(), setting.label(), window, cx),
-            )
-        },
-    )
-}
-
-fn font_field(form: &SettingsForm, setting: FontSetting) -> SettingField<SharedString> {
-    let select = form.font(setting).clone();
-    SettingField::render(
-        move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-            control(
-                options,
-                window.rem_size(),
-                Select::new(&select)
+            let rem = window.rem_size();
+            let label = v_flex().child(Label::new(title).text_sm()).child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(description),
+            );
+            let control = div().child(field(window, cx));
+            match options.layout() {
+                Axis::Horizontal => h_flex()
                     .w_full()
-                    .accessibility_label(setting.label()),
-            )
+                    .justify_between()
+                    .gap_3()
+                    .child(label.flex_1().min_w_0().max_w_3_5())
+                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0()),
+                Axis::Vertical => v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(label.w_full())
+                    .child(control.w_full()),
+            }
         },
+    )
+    .keywords(
+        [title, description]
+            .into_iter()
+            .chain(keywords.iter().copied()),
     )
 }
 
-fn theme_field(form: &SettingsForm) -> SettingField<SharedString> {
-    let select = form.theme.clone();
-    SettingField::render(
-        move |options: &RenderOptions, window: &mut Window, _: &mut App| {
-            control(
-                options,
-                window.rem_size(),
-                Select::new(&select).w_full().accessibility_label("Theme"),
-            )
-        },
-    )
+fn number_field(
+    form: &SettingsForm,
+    setting: NumberSetting,
+) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
+    let input = form.number(setting).clone();
+    move |window: &mut Window, cx: &mut App| {
+        setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+    }
+}
+
+fn font_field(
+    form: &SettingsForm,
+    setting: FontSetting,
+) -> impl Fn(&mut Window, &mut App) -> Select<SearchableVec<String>> + 'static {
+    select_field(form.font(setting), setting.label())
+}
+
+fn theme_field(
+    form: &SettingsForm,
+) -> impl Fn(&mut Window, &mut App) -> Select<SearchableVec<String>> + 'static {
+    select_field(&form.theme, "Theme")
+}
+
+fn select_field(
+    select: &SettingSelect,
+    label: &'static str,
+) -> impl Fn(&mut Window, &mut App) -> Select<SearchableVec<String>> + 'static {
+    let select = select.clone();
+    move |_: &mut Window, _: &mut App| Select::new(&select).w_full().accessibility_label(label)
 }
 
 /// Retain Kit's spinbutton behavior while grouping the value and unit in one

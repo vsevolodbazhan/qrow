@@ -9,20 +9,22 @@ Install the Codex command-line program separately. Sign in to Codex with
 ChatGPT to use your subscription. Qrow does not include Codex or store its
 credentials.
 
-Open **Qrow → Settings… → AI Assistant**. Enable the assistant and read the data
-sharing notice. If Qrow cannot find `codex` on your `PATH`, enter the full path
-to the Codex executable. The assistant is off by default. Qrow does not start
+Open **Qrow → Settings… → Assistant**. In **General**, turn on **Enabled** and
+read the data sharing notice. Qrow looks for `codex` on your `PATH` and in the
+usual Homebrew folders. If Qrow cannot find it, enter the full path in
+**Codex → Executable**. The assistant is off by default. Qrow does not start
 Codex until you open the assistant pane.
 
-Select the default query mode in Settings. A new conversation starts with this
-mode. Each conversation keeps its own mode after you change it. The two modes
-are **Ask before running** and **Run automatically**.
+Select the default query mode in **General → Query Execution**. A new
+conversation starts with this mode. Each conversation keeps its own mode after
+you change it. The two modes are **Ask before running** and **Run
+automatically**.
 
 ## Work with SQL
 
-Select a query tab. Select **Toggle Assistant** in the tab strip or press
-**⌘J**. Write a message and press **Enter** or **⌘Enter** to send it. Press
-**Shift-Enter** to start a new line. While Codex works, the Send button becomes
+Select a query tab. Select **Toggle Assistant** in the tab strip or in the
+**View** menu, or press **⌘J**. Write a message and press **Enter** or
+**⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
 **Cancel**. Type a follow-up and press **Enter** to steer the current turn.
 **Cancel** interrupts the Codex turn. It does not cancel a database query that
 already started. The Send button returns when the turn ends.
@@ -84,11 +86,12 @@ before it runs SQL. It cannot read connection passwords. Qrow does not send
 workspace context when you open the pane. It sends context when you send a
 message or when Codex calls a Qrow tool.
 
-Select the SQL style in **Settings… → AI Assistant → SQL style**. **Keyword
-case** is **Uppercase** or **Lowercase**. The default is Uppercase. The indent
-is the Editor **Tab Size**. Qrow sends this style to the assistant with each
-message, and the assistant writes SQL in it. A change applies to the next
-message, also in a conversation that already exists.
+Select the keyword case in **Settings… → Appearance → Editor → SQL Keyword
+Case**. It is **Uppercase** or **Lowercase**. The default is Uppercase. The
+indent is the Editor **Tab Size**. Qrow sends this style to the assistant with
+each message, and the assistant writes SQL in it. A change applies to the next
+message, also in a conversation that already exists. The keyword case does not
+change SQL that you write.
 
 Qrow formats a statement from the assistant when the statement is longer than 80
 characters, also when the assistant wrote it on more than one line. This applies
@@ -122,7 +125,7 @@ read-only. Select **Run automatically** only if you accept this risk.
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Older saved conversations without an activity time show **Earlier**. On a
-narrow pane, select **Toggle conversation list** to open the list. When you
+narrow pane, select **Toggle Conversation List** to open the list. When you
 select a conversation there, the pane shows that conversation. On a wide pane,
 the list stays open. Search the
 list by title. Select **New
@@ -132,7 +135,7 @@ Codex in a separate, unsaved request. Codex returns a short title. Qrow shows
 this title in the pane header and in the thread list. This request uses the
 selected model. It does not include workspace context. If Codex cannot make a
 title, Qrow shows **New conversation** and tries again after the next reply.
-Open **Conversation actions** in the pane header to rename the current
+Open **Conversation Actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
 conversation in the thread list, right-click it. You cannot use them on a
 conversation while Codex works on it. Two conversations can have the same title.
@@ -155,7 +158,7 @@ the Codex history, you can try to open it again. You can also delete the entry
 from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
 conversation text from its workspace.
 Select **Load older messages** to read earlier conversation text. Select **Jump
-to latest** to return to the newest message.
+to Latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a
 new reply. New text in that reply follows the bottom while you stay near it.
 

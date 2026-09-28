@@ -137,7 +137,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         menus.push(Menu {
             disabled: false,
             name: "View".into(),
-            items: vec![MenuItem::action("AI Assistant", ToggleAssistant)],
+            items: vec![MenuItem::action("Toggle Assistant", ToggleAssistant)],
         });
     }
     cx.set_menus(menus);
@@ -1439,6 +1439,7 @@ impl Qrow {
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
         self.set_editor_tab_size(settings.editor_tab_size, cx);
+        self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
         self.settings.logs_font_family = settings.logs_font_family;
         self.settings.logs_font_size = settings.logs_font_size;
         self.settings.logs_line_height = settings.logs_line_height;

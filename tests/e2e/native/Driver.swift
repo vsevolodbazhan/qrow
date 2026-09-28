@@ -246,9 +246,9 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Timed out waiting for \(label)")
     }
-    func waitGone(_ label: String, timeout: Double = 10) throws {
+    func waitGone(_ label: String, timeout: Double = 10, role: String? = nil) throws {
         let deadline = clock.now.advanced(by: .seconds(timeout))
-        while find(label) != nil {
+        while find(label, role: role) != nil {
             try require(clock.now < deadline, "Old UI state remained visible: \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
@@ -727,14 +727,14 @@ final class Driver {
     }
     func testAssistantRestart() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        if find("Assistant message") == nil {
-            try press("Back to conversation")
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        if find("Assistant Message") == nil {
+            try press("Back to Conversation")
         }
         // The previous process left an unsent conversation open.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try require(find("Codex cannot find this conversation") == nil, "An unsent conversation was restored after restart")
-        try fill("Assistant message", "Explain `SELECT 1` after restart")
+        try fill("Assistant Message", "Explain `SELECT 1` after restart")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         try snapshot("assistant-after-restart")
@@ -775,10 +775,28 @@ final class Driver {
         } while clock.now < valueDeadline
         throw Failure("\(label) did not select \(family)")
     }
+    /// Controls on a settings page share one left edge. A long description
+    /// wraps and does not push its control past the edge of the page.
+    func requireAlignedSetting(_ label: String, with reference: String) throws {
+        let (expected, _) = try elementBounds(wait(reference, role: kAXPopUpButtonRole))
+        let (actual, _) = try elementBounds(wait(label, role: kAXPopUpButtonRole))
+        try require(
+            abs(actual.x - expected.x) <= 1,
+            "\(label) starts at x \(actual.x), not at the \(reference) edge \(expected.x)"
+        )
+    }
     func testSettings() throws {
         try selectApplicationMenuItem("Settings…")
         // Assistant typography is a section within Appearance.
         try waitSettingValue("Theme", "System")
+        try waitSettingValue("UI Scale", "100")
+        // At 110%, the description of the interface font is wider than its
+        // column. It must wrap, and the picker must stay on the page.
+        try press("Increase UI Scale")
+        try waitSettingValue("UI Scale", "110")
+        try requireAlignedSetting("UI Font Family", with: "Theme")
+        try snapshot("settings-scaled")
+        try press("Decrease UI Scale")
         try waitSettingValue("UI Scale", "100")
         try selectFont("UI Font Family", "Menlo")
         try selectFont("UI Font Family", "System Font")
@@ -803,6 +821,18 @@ final class Driver {
         try press("Increase Editor Font Size")
         try waitSettingValue("Editor Font Size", "14")
         try selectFont("Editor Font Family", "System Font")
+        // SQL Keyword Case is an Editor setting with a long description.
+        try requireAlignedSetting("SQL Keyword Case", with: "Editor Font Family")
+        // The search shows the setting at the top of the page, so the pointer
+        // can reach it.
+        try fill("Search...", "keyword")
+        try waitSettingValue("SQL Keyword Case", "Uppercase")
+        // Select rows have no AX bounds. Lowercase is the row below Uppercase.
+        try click(try wait("SQL Keyword Case", role: kAXPopUpButtonRole))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+        key(125) // Down arrow
+        key(36) // Return
+        try waitSettingValue("SQL Keyword Case", "Lowercase")
         try fill("Search...", "logs")
         try waitSettingValue("Logs Font Size", "13")
         try selectFont("Logs Font Family", "System Font")
@@ -812,9 +842,10 @@ final class Driver {
         try waitSettingValue("Assistant Font Size", "14")
         try fill("Search...", "editor")
         try waitSettingValue("Editor Font Size", "13")
+        try waitSettingValue("SQL Keyword Case", "Uppercase")
         try press("Save")
         try waitGone("UI Scale")
-        print("PASS: Settings applies all font pickers, changes sizes, and restores defaults")
+        print("PASS: Settings aligns controls beside long descriptions, applies all font pickers, changes sizes and keyword case, and restores defaults")
     }
     func verifyAssistantFontSwitch() throws {
         for (choice, stored, screenshot) in [("System Font", ".SystemUIFont", "assistant-system-font"),
@@ -838,33 +869,33 @@ final class Driver {
             let (search, _) = try elementBounds(waitInput("Search..."))
             clickPoint(CGPoint(x: search.x + 42, y: search.y + 196))
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-            if find("Codex executable") != nil { break }
+            if find("Codex Executable") != nil { break }
         }
-        _ = try wait("Codex executable", timeout: 5)
-        try fill("Codex executable", FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh")
-        try press("Enable AI assistant")
-        try press("Enable assistant")
+        _ = try wait("Codex Executable", timeout: 5)
+        try fill("Codex Executable", FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh")
+        try press("Enable Assistant")
+        try activate(try waitExact("Enable", timeout: 10, role: kAXButtonRole))
         for _ in 0..<3 {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
             try press("Save")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
-            if find("Codex executable") == nil { break }
+            if find("Codex Executable") == nil { break }
         }
-        try waitGone("Codex executable", timeout: 5)
+        try waitGone("Codex Executable", timeout: 5)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Toggle Assistant")
         try require(find("New Connection") != nil, "Opening the assistant hid the Connections sidebar")
         if fontOnly {
-            _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-            if find("Search conversations") == nil {
-                try press("Toggle conversation list")
+            _ = try wait("Model: Synthetic Model", timeout: 20)
+            if find("Search Conversations") == nil {
+                try press("Toggle Conversation List")
             }
-            let search = try wait("Search conversations")
+            let search = try wait("Search Conversations")
             let headerControl: AXUIElement
-            if let toggle = find("Toggle conversation list") {
+            if let toggle = find("Toggle Conversation List") {
                 headerControl = toggle
             } else {
-                headerControl = try wait("Back to conversation")
+                headerControl = try wait("Back to Conversation")
             }
             let (searchPosition, searchSize) = try elementBounds(search)
             let (togglePosition, toggleSize) = try elementBounds(headerControl)
@@ -873,25 +904,25 @@ final class Driver {
             let toggleCenter = togglePosition.y + toggleSize.height / 2
             try require(abs(searchCenter - toggleCenter) <= 2, "Conversation search input is not aligned with the header")
             try snapshot("assistant-conversation-search-spacing")
-            if find("Assistant message") == nil {
-                try press("Back to conversation")
+            if find("Assistant Message") == nil {
+                try press("Back to Conversation")
             }
-            try fill("Assistant message", "Explain `SELECT 1` in one sentence")
+            try fill("Assistant Message", "Explain `SELECT 1` in one sentence")
             try press("Send")
             _ = try wait("I can help with this query", timeout: 20)
             try snapshot("assistant-before-font-change")
             try verifyAssistantFontSwitch()
-            try click(wait("Conversation actions", role: kAXButtonRole))
+            try click(wait("Conversation Actions", role: kAXButtonRole))
             try pressMenuItem("Delete…")
             try press("Delete")
             try waitStaleConversationRemoved()
             print("PASS: Assistant fonts persist and a missing Codex conversation can be deleted")
             return
         }
-        let startingModel = try wait("Assistant model unavailable", timeout: 5, role: kAXButtonRole)
+        let startingModel = try wait("Model: waiting for Codex", timeout: 5, role: kAXButtonRole)
         try click(startingModel)
         try require(find("Synthetic Model") == nil, "Model picker opened while Codex started")
-        for label in ["Assistant reasoning unavailable", "Assistant service tier unavailable", "Send · Ask"] {
+        for label in ["Reasoning: waiting for Codex", "Service tier: waiting for Codex", "Send · Ask"] {
             let control = try wait(label, timeout: 5, role: kAXButtonRole)
             try click(control)
             try require(find("Run automatically") == nil, "\(label) opened while Codex started")
@@ -899,30 +930,30 @@ final class Driver {
         try require(find("Starting Codex") == nil, "Startup status appeared above the message field")
         _ = try wait("Toggle Assistant")
         _ = try wait("New Conversation")
-        _ = try wait("Toggle conversation list")
-        _ = try wait("Conversation actions")
-        let listInitiallyVisible = find("Search conversations") != nil
-        try press("Toggle conversation list")
+        _ = try wait("Toggle Conversation List")
+        _ = try wait("Conversation Actions")
+        let listInitiallyVisible = find("Search Conversations") != nil
+        try press("Toggle Conversation List")
         if listInitiallyVisible {
-            try waitGone("Search conversations")
-            try press("Toggle conversation list")
+            try waitGone("Search Conversations")
+            try press("Toggle Conversation List")
         } else {
-            _ = try wait("Search conversations")
-            try press("Back to conversation")
+            _ = try wait("Search Conversations")
+            try press("Back to Conversation")
         }
-        let readyModel = try wait("Assistant model: Synthetic Model", timeout: 20)
+        let readyModel = try wait("Model: Synthetic Model", timeout: 20)
         try require(attribute(readyModel, kAXEnabledAttribute) as? Bool != false, "Model stayed disabled after Codex started")
         _ = try wait("Send · Ask", role: kAXButtonRole)
-        try fill("Assistant message", "Keep this draft")
+        try fill("Assistant Message", "Keep this draft")
         try press("Run")
-        let draft = attribute(try waitInput("Assistant message"), kAXValueAttribute) as? String
+        let draft = attribute(try waitInput("Assistant Message"), kAXValueAttribute) as? String
         try require(draft == "Keep this draft", "Toolbar Run sent the assistant draft")
-        try fill("Assistant message", "Help me understand how `SELECT 1` behaves in the currently selected query tab and explain its result")
+        try fill("Assistant Message", "Help me understand how `SELECT 1` behaves in the currently selected query tab and explain its result")
         key(36, flags: .maskCommand) // Cmd+Enter sends only in the composer.
         _ = try wait("I can help with this query", timeout: 20)
         try snapshot("assistant-markdown")
         try verifyAssistantFontSwitch()
-        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try fill("Assistant Message", "Write SELECT 1 into this tab")
         try press("Send")
         _ = try wait("I updated the SQL.", timeout: 20)
         try waitInputValue("SQL Editor", "SELECT 1")
@@ -931,7 +962,7 @@ final class Driver {
         try require(find("Arguments:") == nil, "The tool call opened expanded")
         try require(find("Tab: Query 1") == nil, "The collapsed tool call showed its tab")
         let (_, toolSize) = try elementBounds(toolCard)
-        let (_, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (_, composerSize) = try elementBounds(try waitInput("Assistant Message"))
         try require(toolSize.width >= composerSize.width * 0.9, "The tool call card did not use the full transcript width")
         try snapshot("assistant")
         try activate(toolCard)
@@ -954,29 +985,29 @@ final class Driver {
         try waitInputValue("SQL Editor", "SELECT 1")
         key(6, flags: .maskCommand) // The assistant edit is one Undo step.
         try waitInputValue("SQL Editor", "")
-        try fill("Assistant message", "Write SELECT 1 into this tab")
+        try fill("Assistant Message", "Write SELECT 1 into this tab")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1")
         try waitGone("Assistant is working", timeout: 5)
-        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try fill("Assistant Message", "Write SELECT 2 into this tab")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
-        try fill("Assistant message", "Show many lines")
+        try fill("Assistant Message", "Show many lines")
         try press("Send")
         _ = try wait("Line 40", timeout: 20)
-        try scrollUpAbove(waitInput("Assistant message"))
-        _ = try wait("Jump to latest", timeout: 5)
+        try scrollUpAbove(waitInput("Assistant Message"))
+        _ = try wait("Jump to Latest", timeout: 5)
         try snapshot("assistant-scrolled")
-        try press("Jump to latest")
-        try waitGone("Jump to latest", timeout: 5)
+        try press("Jump to Latest")
+        try waitGone("Jump to Latest", timeout: 5)
         // Revisit the wrapped user message after the transcript has been scrolled.
-        for _ in 0..<4 { try scrollUpAbove(waitInput("Assistant message")) }
+        for _ in 0..<4 { try scrollUpAbove(waitInput("Assistant Message")) }
         try snapshot("assistant-wrapped-after-scroll")
-        try press("Jump to latest")
-        try waitGone("Jump to latest", timeout: 5)
-        try scrollUpAbove(waitInput("Assistant message"))
-        _ = try wait("Jump to latest", timeout: 5)
-        try fill("Assistant message", "Return to the latest message")
+        try press("Jump to Latest")
+        try waitGone("Jump to Latest", timeout: 5)
+        try scrollUpAbove(waitInput("Assistant Message"))
+        _ = try wait("Jump to Latest", timeout: 5)
+        try fill("Assistant Message", "Return to the latest message")
         try press("Send")
         // The synthetic Codex server holds this turn open for 8 seconds. While
         // the indicator animates in a debug build, one accessibility tree scan
@@ -985,15 +1016,15 @@ final class Driver {
         try snapshot("assistant-working")
         try waitGone("Assistant is working", timeout: 20)
         _ = try wait("I can help with this query", timeout: 5)
-        try waitGone("Jump to latest", timeout: 5)
+        try waitGone("Jump to Latest", timeout: 5)
         try press("Toggle Assistant")
-        try waitGone("Toggle conversation list")
+        try waitGone("Toggle Conversation List")
         print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
     }
     func testAssistantAppend() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        try fill("Assistant message", "Write SELECT 1 into this tab")
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try fill("Assistant Message", "Write SELECT 1 into this tab")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1")
         try waitGone("Assistant is working", timeout: 5)
@@ -1001,7 +1032,7 @@ final class Driver {
         // does not expose the header text, so read the saved workspace.
         try waitSavedConversationTitle("Title: Write SELECT 1")
         try snapshot("assistant-generated-title")
-        try fill("Assistant message", "Write SELECT 2 into this tab")
+        try fill("Assistant Message", "Write SELECT 2 into this tab")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1;\n\nSELECT 2")
         try waitGone("Assistant is working", timeout: 5)
@@ -1009,7 +1040,7 @@ final class Driver {
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
         // Qrow formats a long one-line query when the assistant appends it.
-        try fill("Assistant message", "Write a long query into this tab")
+        try fill("Assistant Message", "Write a long query into this tab")
         try press("Send")
         _ = try wait("I formatted the SQL.", timeout: 20)
         try waitInputValue(
@@ -1020,22 +1051,22 @@ final class Driver {
         try snapshot("assistant-formatted-append")
         try setAssistantRunMode()
         // Reconnect replaces Send and Cancel in the composer while Codex is disconnected.
-        try fill("Assistant message", "Disconnect Codex")
+        try fill("Assistant Message", "Disconnect Codex")
         try press("Send")
         _ = try wait("Reconnect to Codex", timeout: 10, role: kAXButtonRole)
         try require(find("Send · Run") == nil, "Send stayed visible after Codex disconnected")
-        try require(find("Cancel assistant turn") == nil, "Cancel stayed visible after Codex disconnected")
+        try require(find("Cancel Assistant Turn") == nil, "Cancel stayed visible after Codex disconnected")
         try snapshot("assistant-disconnected")
         try press("Reconnect to Codex")
         try waitGone("Reconnect to Codex", timeout: 5)
         _ = try wait("Send · Run", timeout: 5, role: kAXButtonRole)
-        try fill("Assistant message", "Reply after reconnect")
+        try fill("Assistant Message", "Reply after reconnect")
         // The model label stays from the previous session, and GPUI Kit reports
         // Send as enabled while Codex starts. Retry until Qrow accepts the message.
         let deadline = clock.now.advanced(by: .seconds(20))
         repeat {
             try press("Send")
-            if (try? waitInputValue("Assistant message", "", timeout: 0.5)) != nil { break }
+            if (try? waitInputValue("Assistant Message", "", timeout: 0.5)) != nil { break }
             try require(clock.now < deadline, "Qrow did not send a message after Reconnect")
         } while true
         _ = try wait("I can help with this query", timeout: 20)
@@ -1062,24 +1093,24 @@ final class Driver {
         throw Failure("Saved conversations \(saved) did not match \(expected)")
     }
     func openConversationMenu(_ title: String) throws {
-        try contextMenu("Open conversation: \(title)", exact: true)
+        try contextMenu(title, exact: true, role: kAXButtonRole)
     }
     /// The conversation header menu and the thread list context menu rename,
     /// regenerate titles, and delete conversations. Both renames use the
     /// query tab rename dialog. Duplicate titles do not show Codex thread IDs.
     func testAssistantConversationTitles() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        if find("Assistant message") == nil {
-            try press("Back to conversation")
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        if find("Assistant Message") == nil {
+            try press("Back to Conversation")
         }
         let generated = "Title: Count sandbox schemas"
-        try fill("Assistant message", "Count sandbox schemas now")
+        try fill("Assistant Message", "Count sandbox schemas now")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         try waitSavedConversations([(generated, "codex")])
 
-        try click(wait("Conversation actions", role: kAXButtonRole))
+        try click(wait("Conversation Actions", role: kAXButtonRole))
         try pressMenuItem("Rename…")
         let nameField = try wait("Conversation Name", role: kAXTextFieldRole)
         try require(
@@ -1098,28 +1129,28 @@ final class Driver {
         try press("Rename")
         try waitGone("Conversation Name", timeout: 5)
         try waitSavedConversations([("Custom title", "user")])
-        try click(wait("Conversation actions", role: kAXButtonRole))
+        try click(wait("Conversation Actions", role: kAXButtonRole))
         _ = try wait("Regenerate Title", timeout: 5)
         try snapshot("assistant-header-menu")
         try pressMenuItem("Regenerate Title")
         try waitSavedConversations([(generated, "codex")])
 
         try press("New Conversation")
-        try fill("Assistant message", "Count sandbox schemas again")
+        try fill("Assistant Message", "Count sandbox schemas again")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         try waitSavedConversations([(generated, "codex"), (generated, "codex")])
-        if find("Search conversations") == nil {
-            try press("Toggle conversation list")
+        if find("Search Conversations") == nil {
+            try press("Toggle Conversation List")
         }
-        _ = try waitExact("Open conversation: \(generated)", timeout: 10)
+        _ = try waitExact(generated, timeout: 10, role: kAXButtonRole)
         try require(find("\(generated) ·") == nil, "The thread list showed a Codex thread ID")
         try snapshot("assistant-duplicate-titles")
         // A narrow pane swaps the list for the selected conversation.
-        try click(waitExact("Open conversation: \(generated)", timeout: 10))
-        try waitGone("Search conversations")
-        _ = try wait("Assistant message")
-        try press("Toggle conversation list")
+        try click(waitExact(generated, timeout: 10, role: kAXButtonRole))
+        try waitGone("Search Conversations")
+        _ = try wait("Assistant Message")
+        try press("Toggle Conversation List")
 
         try openConversationMenu(generated)
         try pressMenuItem("Rename…")
@@ -1132,7 +1163,7 @@ final class Driver {
         try fill("Conversation Name", "Listed title")
         try press("Rename")
         try waitGone("Conversation Name", timeout: 5)
-        _ = try waitExact("Open conversation: Listed title", timeout: 10)
+        _ = try waitExact("Listed title", timeout: 10, role: kAXButtonRole)
         try waitSavedConversations([(generated, "codex"), ("Listed title", "user")])
         try snapshot("assistant-list-renamed")
         try openConversationMenu("Listed title")
@@ -1140,7 +1171,7 @@ final class Driver {
         try snapshot("assistant-list-menu")
         try pressMenuItem("Regenerate Title")
         try waitSavedConversations([(generated, "codex"), (generated, "codex")])
-        try waitGone("Open conversation: Listed title", timeout: 10)
+        try waitGone("Listed title", timeout: 10, role: kAXButtonRole)
         try openConversationMenu(generated)
         try pressMenuItem("Delete…")
         try press("Delete")
@@ -1177,29 +1208,29 @@ final class Driver {
     func testAssistantStatementRun() throws {
         try waitInputValue("SQL Editor", "SELECT 0;")
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        try fill("Assistant message", "Append two SQL statements with edit tool")
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try fill("Assistant Message", "Append two SQL statements with edit tool")
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 0;\n\nSELECT 1;\n\nSELECT 2")
         try waitGone("Assistant is working", timeout: 5)
 
-        try fill("Assistant message", "Run selected SQL without range")
+        try fill("Assistant Message", "Run selected SQL without range")
         try press("Send")
-        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 2", timeout: 20)
+        _ = try wait("Run in Query 1 · Synthetic? SELECT 2", timeout: 20)
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
-        try waitGone("Assistant query approval:", timeout: 5)
+        try waitGone("Run in ", timeout: 5)
         try waitGone("Assistant is working", timeout: 5)
 
-        try fill("Assistant message", "Run first SQL by range")
+        try fill("Assistant Message", "Run first SQL by range")
         try press("Send")
-        _ = try wait("Assistant query approval: Query 1, Synthetic. SELECT 0;", timeout: 20)
+        _ = try wait("Run in Query 1 · Synthetic? SELECT 0;", timeout: 20)
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
-        try waitGone("Assistant query approval:", timeout: 5)
+        try waitGone("Run in ", timeout: 5)
         try waitGone("Assistant is working", timeout: 5)
 
         // Qrow formats a long statement that an edit supplies, in the saved
         // keyword case and tab size.
-        try fill("Assistant message", "Rewrite the last statement with edit tool")
+        try fill("Assistant Message", "Rewrite the last statement with edit tool")
         try press("Send")
         _ = try wait("I formatted the SQL.", timeout: 20)
         try waitInputValue(
@@ -1217,17 +1248,17 @@ final class Driver {
         try waitSettingValue("Editor Tab Size", "5")
         try snapshot("settings-tab-size")
         try fill("Search...", "keyword")
-        try waitSettingValue("Assistant SQL keyword case", "Lowercase")
+        try waitSettingValue("SQL Keyword Case", "Lowercase")
         // Select rows have no AX bounds. Uppercase is the row above Lowercase.
-        try click(try wait("Assistant SQL keyword case", role: kAXPopUpButtonRole))
+        try click(try wait("SQL Keyword Case", role: kAXPopUpButtonRole))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
         key(126) // Up arrow
         key(36) // Return
-        try waitSettingValue("Assistant SQL keyword case", "Uppercase")
+        try waitSettingValue("SQL Keyword Case", "Uppercase")
         try snapshot("settings-sql-style")
         try press("Save")
         try waitGone("Editor Tab Size")
-        try fill("Assistant message", "Report the SQL style")
+        try fill("Assistant Message", "Report the SQL style")
         try press("Send")
         _ = try wait("SQL style: uppercase, 5 spaces", timeout: 20)
         try waitGone("Assistant is working", timeout: 5)
@@ -1279,7 +1310,7 @@ final class Driver {
         try Data().write(to: marker)
         try waitGone("Couldn't sign in. ", timeout: 10)
         try waitGone("Sign in with ChatGPT…", timeout: 5)
-        try fill("Assistant message", "Hello after sign-in")
+        try fill("Assistant Message", "Hello after sign-in")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         print("PASS: Assistant sign-in shows its error until Codex has an account, then opens the conversation")
@@ -1289,35 +1320,35 @@ final class Driver {
     func testAssistantThreadList() throws {
         try fitWindowToMainDisplay(app, grow: true)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
+        _ = try wait("Model: Synthetic Model", timeout: 20)
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
         try waitGone("New Connection")
-        _ = try wait("Search conversations")
-        try require(find("Back to conversation") == nil, "The assistant pane is narrow. Use a larger main display")
+        _ = try wait("Search Conversations")
+        try require(find("Back to Conversation") == nil, "The assistant pane is narrow. Use a larger main display")
         for (index, message) in ["Count sandbox schemas now", "Count sandbox schemas again"].enumerated() {
             if index > 0 { try press("New Conversation") }
-            try fill("Assistant message", message)
+            try fill("Assistant Message", message)
             try press("Send")
             _ = try wait("I can help with this query", timeout: 20)
         }
         let generated = "Title: Count sandbox schemas"
         try waitSavedConversations([(generated, "codex"), (generated, "codex")])
-        try press("Toggle conversation list")
-        try waitGone("Search conversations")
-        try press("Toggle conversation list")
-        _ = try wait("Search conversations")
-        try click(waitExact("Open conversation: \(generated)", timeout: 10))
+        try press("Toggle Conversation List")
+        try waitGone("Search Conversations")
+        try press("Toggle Conversation List")
+        _ = try wait("Search Conversations")
+        try click(waitExact(generated, timeout: 10, role: kAXButtonRole))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
-        try require(find("Search conversations") != nil, "Selecting a conversation closed the list on a wide pane")
-        _ = try wait("Assistant message")
+        try require(find("Search Conversations") != nil, "Selecting a conversation closed the list on a wide pane")
+        _ = try wait("Assistant Message")
         try snapshot("assistant-thread-list-after-selection")
         print("PASS: A wide Assistant pane keeps a reopened conversation list open after a selection")
     }
     func testAssistantRetargetAfterRename() throws {
         try waitInputValue("SQL Editor", "SELECT 1;")
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        try fill("Assistant message", "Run tab selected after rename")
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try fill("Assistant Message", "Run tab selected after rename")
         try press("Send")
 
         try contextMenu("Query 2", exact: true)
@@ -1331,7 +1362,7 @@ final class Driver {
         let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex/retarget-ready")
         try Data().write(to: marker)
 
-        _ = try wait("Assistant query approval: Default, Synthetic. SELECT 99;", timeout: 20)
+        _ = try wait("Run in Default · Synthetic? SELECT 99;", timeout: 20)
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
         print("PASS: Assistant targets the selected tab after a rename and invalid tab ID")
     }
@@ -1362,19 +1393,19 @@ final class Driver {
     /// sidebar shown and hidden.
     func testAssistantLayout() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
-        _ = try wait("Assistant model: Synthetic Model", timeout: 20)
-        if find("Search conversations") != nil {
-            try press("Toggle conversation list")
-            try waitGone("Search conversations", timeout: 5)
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        if find("Search Conversations") != nil {
+            try press("Toggle Conversation List")
+            try waitGone("Search Conversations", timeout: 5)
         }
         try checkInlineCodeMessage()
         try checkBoldReply()
         try checkComposerPadding()
         // Earlier messages make the transcript long enough to scroll.
-        try fill("Assistant message", "Show many lines")
+        try fill("Assistant Message", "Show many lines")
         try press("Send")
         _ = try wait("Line 40", timeout: 20)
-        try fill("Assistant message", "Show a wide table")
+        try fill("Assistant Message", "Show a wide table")
         try press("Send")
         _ = try wait("Assistant: Ran a synthetic wide table query", timeout: 20)
         try checkWideTableReply("assistant-wide-table")
@@ -1388,7 +1419,7 @@ final class Driver {
     /// second line, and the message extends below the bubble. Left of the
     /// text, the bottom of the message must have the bubble color of its top.
     func checkInlineCodeMessage() throws {
-        try fill("Assistant message", "How many tables are in `sandbox_vbazhan` schema?")
+        try fill("Assistant Message", "How many tables are in `sandbox_vbazhan` schema?")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
@@ -1414,12 +1445,12 @@ final class Driver {
     /// edge, so glyphs touch that edge. A line that wraps correctly ends
     /// before it. The reply is drawn on the transcript background.
     func checkBoldReply() throws {
-        try fill("Assistant message", "Show a bold reply")
+        try fill("Assistant Message", "Show a bold reply")
         try press("Send")
         let reply = try wait("Assistant: There were **44,266,382 distinct searches**", timeout: 20)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         let (origin, extent) = try elementBounds(reply)
-        let (composerOrigin, _) = try elementBounds(try waitInput("Assistant message"))
+        let (composerOrigin, _) = try elementBounds(try waitInput("Assistant Message"))
         try snapshot("assistant-bold-reply")
         let bottom = min(origin.y + extent.height, composerOrigin.y)
         try require(bottom - origin.y > 100, "The bold reply is not on screen")
@@ -1447,7 +1478,7 @@ final class Driver {
     /// Send button. Scan a column in the right padding of the composer, from
     /// the border above it to the status bar below it.
     func checkComposerPadding() throws {
-        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant Message"))
         let (sendOrigin, sendSize) = try elementBounds(try waitAny(["Send · Ask", "Send · Run"]))
         let top = Int(composerOrigin.y) - 24
         let height = Int(sendOrigin.y + sendSize.height) + 24 - top
@@ -1482,7 +1513,7 @@ final class Driver {
     /// padding on the left only.
     func checkMessageInsets(_ message: AXUIElement) throws {
         let reply = try wait("Assistant: **I can help with this query", timeout: 5)
-        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant Message"))
         let (replyOrigin, _) = try elementBounds(reply)
         try require(abs(replyOrigin.x - composerOrigin.x) <= 1,
                     "The assistant reply starts \(replyOrigin.x - composerOrigin.x) points right of the composer")
@@ -1514,13 +1545,13 @@ final class Driver {
     }
     func checkWideTableReply(_ name: String) throws {
         // The tooltip has the same text, so look for the button only.
-        func jumpButtonVisible() -> Bool { find("Jump to latest", role: kAXButtonRole) != nil }
+        func jumpButtonVisible() -> Bool { find("Jump to Latest", role: kAXButtonRole) != nil }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
-        if jumpButtonVisible() { try press("Jump to latest") }
+        if jumpButtonVisible() { try press("Jump to Latest") }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         try require(!jumpButtonVisible(), "The transcript did not scroll to the latest message")
         let reply = try wait("Assistant: Ran a synthetic wide table query", timeout: 5)
-        let composer = try waitInput("Assistant message")
+        let composer = try waitInput("Assistant Message")
         let (origin, extent) = try elementBounds(reply)
         let (composerOrigin, composerSize) = try elementBounds(composer)
         try snapshot(name)
@@ -1575,14 +1606,14 @@ final class Driver {
         try fill("SQL Editor", "SELECT 1 AS assistant_value")
         key(38, flags: .maskCommand) // Reopen the existing conversation.
         _ = try wait("Send · Ask", timeout: 20)
-        try fill("Assistant message", "Run selected SQL with approval")
+        try fill("Assistant Message", "Run selected SQL with approval")
         try press("Send")
-        _ = try wait("Assistant query approval:", timeout: 20)
+        _ = try wait("Run in ", timeout: 20)
         try require(find("Assistant is working") == nil, "Working stayed visible while the query waited for approval")
-        let cancel = try waitExact("Cancel assistant turn", timeout: 5, role: kAXButtonRole)
+        let cancel = try waitExact("Cancel Assistant Turn", timeout: 5, role: kAXButtonRole)
         try require(find("Send", role: kAXButtonRole) == nil, "Send remained visible during the assistant turn")
         let (cancelPosition, _) = try elementBounds(cancel)
-        let (composerPosition, composerSize) = try elementBounds(try waitInput("Assistant message"))
+        let (composerPosition, composerSize) = try elementBounds(try waitInput("Assistant Message"))
         try require(cancelPosition.y >= composerPosition.y + composerSize.height, "Cancel was not below the message field")
         let runButtons = elements().filter {
             attribute($0, kAXRoleAttribute) as? String == kAXButtonRole && strings($0).contains("Run")
@@ -1595,12 +1626,12 @@ final class Driver {
 
         try setAssistantRunMode()
         try fill("SQL Editor", "SELECT 2 AS assistant_value")
-        try fill("Assistant message", "Run selected SQL automatically")
+        try fill("Assistant Message", "Run selected SQL automatically")
         try press("Send")
         _ = try wait("2", role: kAXCellRole)
-        try require(find("Assistant query approval:") == nil, "Automatic mode requested approval")
+        try require(find("Run in ") == nil, "Automatic mode requested approval")
         try press("Toggle Assistant")
-        try waitGone("Toggle conversation list")
+        try waitGone("Toggle Conversation List")
         print("PASS: Assistant approval and automatic execution use the selected query tab")
     }
     func test() throws {

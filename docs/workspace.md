@@ -11,7 +11,9 @@ has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
 **Font Family**, **Font Size**, and **Line Height**. The interface font applies
 to controls and results. Editor also has **Tab Size**, the number of spaces for
 each indent level. The default is 2. The Tab key and SQL that Qrow formats for
-the assistant use this size. The editor indents with spaces.
+the assistant use this size. The editor indents with spaces. **SQL Keyword
+Case** is the last Editor setting. At the moment, it applies only to SQL that
+the [assistant](assistant.md) writes.
 Editor settings apply to SQL. Logs settings apply to log entries.
 Assistant settings apply to conversation messages. Code in messages keeps
 its code font. Line height is relative to the font size. Scale multiplies the
@@ -23,13 +25,19 @@ The theme defaults to **System**. System follows the macOS appearance and uses
 GPUI Kit's default light or dark theme. The selector also includes One Dark and
 the themes bundled from GPUI Kit. A selected theme takes effect immediately.
 
+The Assistant page has the **General** and **Codex** sections. See
+[AI assistant](assistant.md#set-up-the-assistant) for these settings.
+
 Select a page or section in the list at the left. Use the search box above the
 list to show only settings that match a word in their name or description.
+Each setting shows a description below its name. A long description wraps, and
+the controls stay aligned at the right.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
-restores the defaults of all appearance settings, including the System theme and
-the system interface font. If a saved font or theme is unavailable, Qrow uses a
-default and reports the substitution.
+restores the defaults of all appearance settings, including the System theme,
+the system interface font, and SQL Keyword Case. It does not change the
+Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
+reports the substitution.
 
 Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the

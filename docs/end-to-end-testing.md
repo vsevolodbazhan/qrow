@@ -289,6 +289,14 @@ The native scenario starts with the application menu. It selects **About Qrow**,
 checks the version line and the copyright, closes the dialog with Escape, and
 opens the dialog again. This check does not use a server.
 
+Then the scenario opens **Settings…**. At a scale of 110%, the description of
+the interface font is wider than its column. The check makes sure that the
+font picker starts at the left edge of the theme picker. It does the same check
+for **SQL Keyword Case** in the Editor section. It changes fonts, sizes, and the
+keyword case, and checks that **Restore defaults** resets them. To run only the
+About and Settings checks, use the package steps in the assistant font check
+above and run `target/e2e-tools/native-driver --dialogs-only`.
+
 The native scenario checks connection-form error alerts. It rejects a missing
 username, a new connection with a duplicate name, and a rename to a duplicate
 name. Each error keeps the form open for correction.

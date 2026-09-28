@@ -358,24 +358,27 @@ impl Qrow {
                             ),
                     )
                     .when(self.settings.assistant.enabled, |bar| {
+                        let unread = self.assistant_panel.unread && !self.assistant_panel.open;
                         let toggle =
                             Button::new("toggle-assistant")
                                 .ghost()
                                 .small()
                                 .icon(AssetIconName::Sparkles)
                                 .selected(self.assistant_panel.open)
-                                .accessibility_label("Toggle Assistant")
-                                .tooltip(
-                                    if self.assistant_panel.unread && !self.assistant_panel.open {
-                                        "Assistant response ready · ⌘J"
-                                    } else {
-                                        "Toggle Assistant · ⌘J"
-                                    },
-                                )
+                                .accessibility_label(if unread {
+                                    "Toggle Assistant, reply ready"
+                                } else {
+                                    "Toggle Assistant"
+                                })
+                                .tooltip(if unread {
+                                    "Assistant reply ready · ⌘J"
+                                } else {
+                                    "Toggle Assistant · ⌘J"
+                                })
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
-                        let toggle = if self.assistant_panel.unread && !self.assistant_panel.open {
+                        let toggle = if unread {
                             toggle.label("Done")
                         } else {
                             toggle.w(self.ui_px(28.)).h(self.ui_px(28.))

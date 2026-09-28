@@ -1395,13 +1395,13 @@ impl Qrow {
                                 .child(
                                     Button::new("assistant-sign-in-reopen")
                                         .label("Reopen page")
-                                        .tooltip("Open the Codex sign-in page again")
+                                        .tooltip("Reopen Sign-In Page")
                                         .on_click(move |_, _, cx| cx.open_url(&url)),
                                 )
                                 .child(
                                     Button::new("assistant-sign-in-cancel")
                                         .label("Cancel")
-                                        .accessibility_label("Cancel sign-in")
+                                        .accessibility_label("Cancel Sign-In")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.cancel_assistant_sign_in(cx)
                                         })),
@@ -2356,8 +2356,8 @@ impl Qrow {
                                 .ghost()
                                 .small()
                                 .icon(IconName::ArrowLeft)
-                                .accessibility_label("Back to conversation")
-                                .tooltip("Back to conversation")
+                                .accessibility_label("Back to Conversation")
+                                .tooltip("Back to Conversation")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.assistant_panel.thread_list_override = Some(false);
                                     cx.notify();
@@ -2369,7 +2369,7 @@ impl Qrow {
                             .small()
                             .flex_1()
                             .min_w_0()
-                            .aria_label("Search conversations"),
+                            .aria_label("Search Conversations"),
                     ),
             )
             .child(
@@ -2404,7 +2404,7 @@ impl Qrow {
                                     .w_full()
                                     .h_full()
                                     .justify_start()
-                                    .accessibility_label(format!("Open conversation: {label}"))
+                                    .accessibility_label(label.clone())
                                     .child(
                                         v_flex()
                                             .w_full()
@@ -2500,6 +2500,15 @@ impl Qrow {
             .selected_value()
             .cloned()
             .unwrap_or_default();
+        // Names a composer control with its value. Codex supplies the values,
+        // so the controls wait for Codex before they show one.
+        let control_label = |name: &str, value: &str| {
+            if controls_ready && model.is_some() {
+                format!("{name}: {value}")
+            } else {
+                format!("{name}: waiting for Codex")
+            }
+        };
         let model_width = assistant_select_width(&model_label);
         let reasoning_width = assistant_select_width(&reasoning_label);
         let tier_width = assistant_select_width(&tier_label);
@@ -2609,8 +2618,8 @@ impl Qrow {
                             .w(action_size)
                             .h(action_size)
                             .icon(IconName::Ellipsis)
-                            .accessibility_label("Conversation actions")
-                            .tooltip("Conversation actions")
+                            .accessibility_label("Conversation Actions")
+                            .tooltip("Conversation Actions")
                             .disabled(self.assistant.selected_thread.is_none() || self.assistant_panel.active_turn.is_some())
                             .dropdown_menu({
                                 let menu = self.conversation_menu(selected, cx);
@@ -2625,8 +2634,8 @@ impl Qrow {
                             .h(action_size)
                             .flex_shrink_0()
                             .icon(IconName::Menu)
-                            .accessibility_label("Toggle conversation list")
-                            .tooltip("Toggle conversation list")
+                            .accessibility_label("Toggle Conversation List")
+                            .tooltip("Toggle Conversation List")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.assistant_panel.thread_list_override = Some(!show_threads);
                                 cx.notify();
@@ -2765,8 +2774,8 @@ impl Qrow {
                             .bottom_2()
                             .right_3()
                             .icon(IconName::ArrowDown)
-                            .accessibility_label("Jump to latest")
-                            .tooltip("Jump to latest")
+                            .accessibility_label("Jump to Latest")
+                            .tooltip("Jump to Latest")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.assistant_panel.scroll.scroll_to_bottom();
                                 cx.notify();
@@ -2791,7 +2800,7 @@ impl Qrow {
                             .id("assistant-query-approval")
                             .role(Role::Alert)
                             .aria_label(format!(
-                                "Assistant query approval: {tab_title}, {connection}. {}",
+                                "Run in {tab_title} · {connection}? {}",
                                 pending.sql
                             ))
                             .p_3()
@@ -2854,7 +2863,7 @@ impl Qrow {
                             Textarea::new(&self.assistant_panel.composer)
                                 .h_20()
                                 .w_full()
-                                .aria_label("Assistant message")),
+                                .aria_label("Assistant Message")),
                     )
                     .child(
                         h_flex().min_w_0().gap_1()
@@ -2866,8 +2875,8 @@ impl Qrow {
                                         Button::new("assistant-model")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::Cpu)
-                                            .accessibility_label(if model.is_some() { format!("Assistant model: {model_label}") } else { "Assistant model unavailable".into() })
-                                            .tooltip(if controls_ready { format!("Model: {model_label}") } else { "Model unavailable until Codex is ready".into() })
+                                            .accessibility_label(control_label("Model", &model_label))
+                                            .tooltip(control_label("Model", &model_label))
                                             .disabled(!controls_ready || model.is_none())
                                             .when(model.is_some() && show_model_label, |button| button.label(model_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
@@ -2888,8 +2897,8 @@ impl Qrow {
                                         Button::new("assistant-reasoning")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::Asterisk)
-                                            .accessibility_label(if model.is_some() { format!("Assistant reasoning: {reasoning_label}") } else { "Assistant reasoning unavailable".into() })
-                                            .tooltip(if controls_ready { format!("Reasoning: {reasoning_label}") } else { "Reasoning unavailable until Codex is ready".into() })
+                                            .accessibility_label(control_label("Reasoning", &reasoning_label))
+                                            .tooltip(control_label("Reasoning", &reasoning_label))
                                             .disabled(!controls_ready || !model.is_some_and(|model| !model.reasoning_efforts().is_empty()))
                                             .when(model.is_some() && show_reasoning_label, |button| button.label(reasoning_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
@@ -2910,8 +2919,8 @@ impl Qrow {
                                         Button::new("assistant-tier")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::BatteryCharging)
-                                            .accessibility_label(if model.is_some() { format!("Assistant service tier: {tier_label}") } else { "Assistant service tier unavailable".into() })
-                                            .tooltip(if controls_ready { format!("Service tier: {tier_label}") } else { "Service tier unavailable until Codex is ready".into() })
+                                            .accessibility_label(control_label("Service tier", &tier_label))
+                                            .tooltip(control_label("Service tier", &tier_label))
                                             .disabled(!controls_ready || !model.is_some_and(|model| !model.service_tiers().is_empty()))
                                             .when(model.is_some() && show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
@@ -2943,8 +2952,8 @@ impl Qrow {
                                 Button::new("assistant-stop")
                                     .small()
                                     .label("Cancel")
-                                    .accessibility_label("Cancel assistant turn")
-                                    .tooltip("Cancel the current assistant turn")
+                                    .accessibility_label("Cancel Assistant Turn")
+                                    .tooltip("Cancel Assistant Turn")
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(!disconnected && self.assistant_panel.active_turn.is_none(), |row| row.child(
@@ -2959,9 +2968,9 @@ impl Qrow {
                                             .icon(AssetIconName::Send)
                                             .label(if mode_is_run { "Send · Run" } else { "Send · Ask" })
                                             .tooltip(if mode_is_run {
-                                                "Send message · run assistant queries automatically"
+                                                "Send Message · Run automatically"
                                             } else {
-                                                "Send message · ask before running assistant queries"
+                                                "Send Message · Ask before running"
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.send_assistant(window, cx)
