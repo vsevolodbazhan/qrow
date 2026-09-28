@@ -1685,7 +1685,10 @@ done
         harness.request_timeout = Duration::from_millis(100);
 
         let first_error = harness.snapshot().unwrap_err();
-        assert!(first_error.to_string().contains("did not respond"), "{first_error}");
+        assert!(
+            first_error.to_string().contains("did not respond"),
+            "{first_error}"
+        );
         harness.request_timeout = Duration::from_secs(2);
         let snapshot = harness.snapshot().unwrap();
 
