@@ -1,12 +1,19 @@
+use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
+pub const WORKSPACE_VERSION: u32 = 4;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_TAB_TITLE: usize = 60;
+pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 1;
+pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
+pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
+pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
 pub const SYSTEM_THEME: &str = "System";
 
 fn title_with_suffix(title: &str, suffix: &str) -> String {
@@ -67,6 +74,16 @@ where
     }
 }
 
+/// Fit a conversation title to a tab and keep it unique within its connection.
+pub fn conversation_tab_title<F>(title: &str, is_taken: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let title: String = title.trim().chars().take(MAX_TAB_TITLE).collect();
+    let title = title.trim_end();
+    (!title.is_empty()).then(|| unique_tab_title(title, is_taken))
+}
+
 pub const MIN_UI_SCALE: f32 = 0.75;
 pub const MAX_UI_SCALE: f32 = 1.50;
 pub const UI_SCALE_STEP: f32 = 0.10;
@@ -75,6 +92,9 @@ pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
 pub const MIN_LINE_HEIGHT: f32 = 1.;
 pub const MAX_LINE_HEIGHT: f32 = 2.;
 pub const LINE_HEIGHT_STEP: f32 = 0.1;
+pub const MIN_TAB_SIZE: u8 = 1;
+pub const MAX_TAB_SIZE: u8 = 8;
+pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -85,9 +105,15 @@ pub struct Settings {
     pub editor_font_family: String,
     pub editor_font_size: f32,
     pub editor_line_height: f32,
+    /// Spaces for each indent level in the SQL editor.
+    pub editor_tab_size: u8,
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
+    pub assistant_font_family: String,
+    pub assistant_font_size: f32,
+    pub assistant_line_height: f32,
+    pub assistant: AssistantSettings,
 }
 
 impl Default for Settings {
@@ -95,13 +121,18 @@ impl Default for Settings {
         Self {
             theme: SYSTEM_THEME.into(),
             ui_scale: 1.,
-            ui_font_family: ".SystemUIFont".into(),
+            ui_font_family: SYSTEM_FONT_FAMILY.into(),
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
             editor_line_height: 1.2,
+            editor_tab_size: 2,
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
+            assistant_font_family: SYSTEM_FONT_FAMILY.into(),
+            assistant_font_size: 14.,
+            assistant_line_height: 1.6,
+            assistant: AssistantSettings::default(),
         }
     }
 }
@@ -140,6 +171,11 @@ impl Settings {
             .editor_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
 
+        if self.editor_tab_size == 0 {
+            self.editor_tab_size = Self::default().editor_tab_size;
+        }
+        self.editor_tab_size = self.editor_tab_size.clamp(MIN_TAB_SIZE, MAX_TAB_SIZE);
+
         self.editor_font_family = self.editor_font_family.trim().into();
         if self.editor_font_family.is_empty() {
             self.editor_font_family = Self::default().editor_font_family;
@@ -165,6 +201,102 @@ impl Settings {
         self.logs_line_height = self
             .logs_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant_font_family = self.assistant_font_family.trim().into();
+        if self.assistant_font_family.is_empty() {
+            self.assistant_font_family = Self::default().assistant_font_family;
+        }
+        if !self.assistant_font_size.is_finite() {
+            self.assistant_font_size = Self::default().assistant_font_size;
+        }
+        self.assistant_font_size = self
+            .assistant_font_size
+            .round()
+            .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
+        if !self.assistant_line_height.is_finite() {
+            self.assistant_line_height = Self::default().assistant_line_height;
+        }
+        self.assistant_line_height = (self.assistant_line_height * 10.).round() / 10.;
+        self.assistant_line_height = self
+            .assistant_line_height
+            .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant.sanitize();
+    }
+
+    /// The layout for SQL that the assistant writes and Qrow formats.
+    pub fn sql_style(&self) -> SqlStyle {
+        SqlStyle {
+            keyword_case: self.assistant.sql_keyword_case,
+            indent_spaces: self.editor_tab_size,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantExecutionMode {
+    #[default]
+    AskBeforeRunning,
+    RunAutomatically,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    pub data_sharing_notice_version: u32,
+    pub default_execution_mode: AssistantExecutionMode,
+    pub codex_executable: Option<String>,
+    pub panel_width: f32,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub sql_keyword_case: KeywordCase,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            data_sharing_notice_version: 0,
+            default_execution_mode: AssistantExecutionMode::AskBeforeRunning,
+            codex_executable: None,
+            panel_width: DEFAULT_ASSISTANT_PANEL_WIDTH,
+            model: None,
+            reasoning_effort: None,
+            service_tier: None,
+            sql_keyword_case: KeywordCase::default(),
+        }
+    }
+}
+
+impl AssistantSettings {
+    pub fn sanitize(&mut self) {
+        if self.data_sharing_notice_version != ASSISTANT_DATA_SHARING_NOTICE_VERSION {
+            self.enabled = false;
+            self.data_sharing_notice_version = 0;
+        }
+        if !self.panel_width.is_finite() {
+            self.panel_width = DEFAULT_ASSISTANT_PANEL_WIDTH;
+        }
+        self.panel_width = self
+            .panel_width
+            .clamp(MIN_ASSISTANT_PANEL_WIDTH, MAX_ASSISTANT_PANEL_WIDTH);
+        sanitize_optional_string(&mut self.codex_executable);
+        sanitize_optional_string(&mut self.model);
+        sanitize_optional_string(&mut self.reasoning_effort);
+        sanitize_optional_string(&mut self.service_tier);
+    }
+}
+
+fn sanitize_optional_string(value: &mut Option<String>) {
+    if let Some(text) = value {
+        *text = text.trim().to_owned();
+        if text.is_empty() {
+            *value = None;
+        }
     }
 }
 
@@ -287,6 +419,153 @@ impl SavedTab {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantTitleSource {
+    #[default]
+    Temporary,
+    Codex,
+    User,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct AssistantConversation {
+    pub thread_id: String,
+    pub title: String,
+    pub title_source: AssistantTitleSource,
+    /// A tab opened by New Conversation follows its conversation title.
+    #[serde(default)]
+    pub title_follows_conversation: bool,
+    pub last_activity: u64,
+    pub execution_mode: AssistantExecutionMode,
+    /// The query tab of the conversation. The tab supplies the connection.
+    #[serde(default)]
+    pub tab_id: Option<Uuid>,
+    /// The connection for the next tab of a conversation whose tab closed.
+    #[serde(default)]
+    pub detached_profile: Option<Uuid>,
+}
+
+impl AssistantConversation {
+    pub fn new(thread_id: impl Into<String>, execution_mode: AssistantExecutionMode) -> Self {
+        Self {
+            thread_id: thread_id.into(),
+            title: "New conversation".into(),
+            title_source: AssistantTitleSource::Temporary,
+            title_follows_conversation: false,
+            last_activity: 0,
+            execution_mode,
+            tab_id: None,
+            detached_profile: None,
+        }
+    }
+
+    fn sanitize(&mut self) {
+        self.thread_id = self.thread_id.trim().to_owned();
+        self.title = self.title.trim().to_owned();
+        if self.title.is_empty() {
+            self.title = "New conversation".into();
+            self.title_source = AssistantTitleSource::Temporary;
+        }
+        self.title = self
+            .title
+            .chars()
+            .take(MAX_ASSISTANT_CONVERSATION_TITLE)
+            .collect();
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantWorkspace {
+    pub conversations: Vec<AssistantConversation>,
+    /// The conversation that a version 3 workspace showed. Loading moves it
+    /// to the active tab. Qrow does not save it.
+    #[serde(rename = "selected_thread", skip_serializing)]
+    legacy_selected_thread: Option<String>,
+}
+
+impl AssistantWorkspace {
+    pub fn sanitize(&mut self) {
+        let mut thread_ids = BTreeSet::new();
+        self.conversations.retain_mut(|conversation| {
+            conversation.sanitize();
+            !conversation.thread_id.is_empty() && thread_ids.insert(conversation.thread_id.clone())
+        });
+    }
+
+    pub fn conversation(&self, thread_id: &str) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    pub fn conversation_mut(&mut self, thread_id: &str) -> Option<&mut AssistantConversation> {
+        self.conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    /// The conversation that owns a query tab.
+    pub fn conversation_for_tab(&self, tab_id: Uuid) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.tab_id == Some(tab_id))
+    }
+
+    /// Detach the conversation of a closed tab. It keeps the connection for
+    /// its next tab.
+    pub fn detach_tab(&mut self, tab_id: Uuid, profile: Option<Uuid>) {
+        for conversation in &mut self.conversations {
+            if conversation.tab_id == Some(tab_id) {
+                conversation.tab_id = None;
+                conversation.detached_profile = profile;
+            }
+        }
+    }
+
+    /// Give each tab at most one conversation, and detach conversations whose
+    /// tab is missing. The most recent conversation keeps a shared tab. A
+    /// detached conversation keeps the connection of its last tab.
+    fn link_tabs(&mut self, tabs: &[SavedTab], profiles: &[Profile]) {
+        let mut order: Vec<usize> = (0..self.conversations.len()).collect();
+        order.sort_by_key(|&index| std::cmp::Reverse(self.conversations[index].last_activity));
+        let mut claimed = BTreeSet::new();
+        for index in order {
+            let conversation = &mut self.conversations[index];
+            let Some(tab_id) = conversation.tab_id else {
+                continue;
+            };
+            let tab = tabs.iter().find(|tab| tab.id == tab_id);
+            if tab.is_some() && claimed.insert(tab_id) {
+                conversation.detached_profile = None;
+                continue;
+            }
+            conversation.tab_id = None;
+            if let Some(tab) = tab {
+                conversation.detached_profile = tab.profile;
+            }
+        }
+        for conversation in &mut self.conversations {
+            if conversation
+                .detached_profile
+                .is_some_and(|id| !profiles.iter().any(|profile| profile.id == id))
+            {
+                conversation.detached_profile = None;
+            }
+        }
+    }
+
+    /// Remove conversations without a turn. Codex keeps them only in the
+    /// memory of its current process, so another process cannot resume them.
+    pub fn remove_unstarted(&mut self, unstarted: &BTreeSet<String>) {
+        self.conversations
+            .retain(|conversation| !unstarted.contains(&conversation.thread_id));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
     pub version: u32,
@@ -297,6 +576,8 @@ pub struct Workspace {
     pub active_tab: usize,
     #[serde(default)]
     pub active_tabs: BTreeMap<Uuid, Uuid>,
+    #[serde(default)]
+    pub assistant: AssistantWorkspace,
 }
 
 impl Workspace {
@@ -304,6 +585,7 @@ impl Workspace {
     /// still use one list in storage, but every tab is normalized to an owned
     /// connection and each connection gets an active tab.
     pub fn normalize(&mut self) {
+        let conversations_without_tabs = self.version < 4;
         let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
         let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
         let fallback = fallback.or_else(|| self.profiles.first().map(|p| p.id));
@@ -367,19 +649,41 @@ impl Workspace {
             tab.title = unique_tab_title(&title, |candidate| used.contains(candidate));
             used.insert(tab.title.clone());
         }
-        self.version = 2;
+        self.assistant.sanitize();
+        let selected = self
+            .assistant
+            .legacy_selected_thread
+            .take()
+            .map(|thread| thread.trim().to_owned());
+        if conversations_without_tabs {
+            // Earlier conversations used the selected tab. The conversation
+            // that was open keeps the active tab. The others are detached
+            // under the connection that was active.
+            let tab = self.tabs.get(self.active_tab);
+            let profile = tab.and_then(|tab| tab.profile);
+            for conversation in &mut self.assistant.conversations {
+                conversation.detached_profile = profile;
+                conversation.tab_id = None;
+                if selected.as_deref() == Some(conversation.thread_id.as_str()) {
+                    conversation.tab_id = tab.map(|tab| tab.id);
+                }
+            }
+        }
+        self.assistant.link_tabs(&self.tabs, &self.profiles);
+        self.version = WORKSPACE_VERSION;
     }
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: WORKSPACE_VERSION,
             settings: Settings::default(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,
             active_tabs: BTreeMap::new(),
+            assistant: AssistantWorkspace::default(),
         }
     }
 }
@@ -483,7 +787,7 @@ mod tests {
             ..Workspace::default()
         };
         workspace.normalize();
-        assert_eq!(workspace.version, 2);
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
         assert_eq!(workspace.tabs[0].profile, Some(first.id));
         assert!(
             workspace
@@ -508,6 +812,16 @@ mod tests {
 
         let long = copied_tab_title(&"x".repeat(MAX_TAB_TITLE), |_| false);
         assert_eq!(long, format!("{} (Copy)", "x".repeat(MAX_TAB_TITLE - 7)));
+    }
+
+    #[test]
+    fn conversation_titles_fit_tabs_and_keep_connection_names_unique() {
+        let long = "航".repeat(MAX_ASSISTANT_CONVERSATION_TITLE);
+        let first = conversation_tab_title(&long, |_| false).unwrap();
+        assert_eq!(first.chars().count(), MAX_TAB_TITLE);
+        let second = conversation_tab_title(&long, |title| title == first).unwrap();
+        assert_eq!(second, format!("{} (Copy)", "航".repeat(MAX_TAB_TITLE - 7)));
+        assert_eq!(conversation_tab_title("  ", |_| false), None);
     }
 
     #[test]
@@ -537,7 +851,7 @@ mod tests {
         let mut other_connection = SavedTab::new(1, Some(second_id));
         other_connection.title = "Shared".into();
         let mut workspace = Workspace {
-            version: 2,
+            version: WORKSPACE_VERSION,
             profiles: vec![first, second],
             tabs: vec![first_tab, duplicate, other_connection],
             active_tab: 0,
@@ -564,9 +878,14 @@ mod tests {
             editor_font_family: "   ".into(),
             editor_font_size: f32::NAN,
             editor_line_height: f32::NAN,
+            editor_tab_size: 0,
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,
+            assistant_font_family: "   ".into(),
+            assistant_font_size: f32::NAN,
+            assistant_line_height: f32::NAN,
+            assistant: AssistantSettings::default(),
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
@@ -576,12 +895,18 @@ mod tests {
         settings.editor_line_height = 2.1;
         settings.logs_font_size = 33.;
         settings.logs_line_height = 2.1;
+        settings.assistant_font_size = 33.;
+        settings.assistant_line_height = 2.1;
+        settings.editor_tab_size = 9;
         settings.sanitize();
         assert_eq!(settings.ui_scale, 1.46);
         assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.editor_line_height, MAX_LINE_HEIGHT);
         assert_eq!(settings.logs_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.logs_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.assistant_font_size, MAX_EDITOR_FONT_SIZE);
+        assert_eq!(settings.assistant_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.editor_tab_size, MAX_TAB_SIZE);
         let encoded = serde_json::to_string(&settings).unwrap();
         let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
         restored.sanitize();
@@ -615,6 +940,18 @@ mod tests {
             Settings::default().logs_line_height
         );
         assert_eq!(settings.ui_scale, 1.2);
+        assert_eq!(
+            settings.assistant_font_family,
+            Settings::default().assistant_font_family
+        );
+        assert_eq!(
+            settings.assistant_font_size,
+            Settings::default().assistant_font_size
+        );
+        assert_eq!(
+            settings.assistant_line_height,
+            Settings::default().assistant_line_height
+        );
 
         settings.ui_font_family = " Helvetica ".into();
         settings.sanitize();
@@ -634,5 +971,207 @@ mod tests {
         assert_eq!(settings.editor_font_size, 16.);
         let saved = serde_json::to_value(&settings).unwrap();
         assert!(saved.get("ui_font_size").is_none());
+    }
+
+    #[test]
+    fn assistant_settings_restore_safe_defaults_and_sanitize_values() {
+        let restored: AssistantSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored, AssistantSettings::default());
+        assert!(!restored.enabled);
+        assert_eq!(
+            restored.default_execution_mode,
+            AssistantExecutionMode::AskBeforeRunning
+        );
+        assert_eq!(restored.sql_keyword_case, KeywordCase::Uppercase);
+        let lowercase: AssistantSettings =
+            serde_json::from_str(r#"{"sql_keyword_case":"lowercase"}"#).unwrap();
+        assert_eq!(lowercase.sql_keyword_case, KeywordCase::Lowercase);
+
+        let mut settings = AssistantSettings {
+            enabled: true,
+            panel_width: f32::NAN,
+            codex_executable: Some("   ".into()),
+            model: Some(" gpt-test ".into()),
+            reasoning_effort: Some(" high ".into()),
+            service_tier: Some(" fast ".into()),
+            ..AssistantSettings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.panel_width, DEFAULT_ASSISTANT_PANEL_WIDTH);
+        assert!(!settings.enabled);
+        assert_eq!(settings.data_sharing_notice_version, 0);
+        assert_eq!(settings.codex_executable, None);
+        assert_eq!(settings.model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(settings.service_tier.as_deref(), Some("fast"));
+
+        settings.panel_width = MAX_ASSISTANT_PANEL_WIDTH + 1.;
+        settings.enabled = true;
+        settings.data_sharing_notice_version = ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+        settings.sanitize();
+        assert_eq!(settings.panel_width, MAX_ASSISTANT_PANEL_WIDTH);
+        assert!(settings.enabled);
+    }
+
+    #[test]
+    fn assistant_workspace_removes_invalid_threads() {
+        let mut first =
+            AssistantConversation::new(" thread-1 ", AssistantExecutionMode::RunAutomatically);
+        first.title = format!("  {}  ", "x".repeat(MAX_ASSISTANT_CONVERSATION_TITLE + 5));
+        let mut duplicate =
+            AssistantConversation::new("thread-1", AssistantExecutionMode::AskBeforeRunning);
+        duplicate.title = "Duplicate".into();
+        let blank = AssistantConversation::new("   ", AssistantExecutionMode::AskBeforeRunning);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![first, duplicate, blank],
+            ..AssistantWorkspace::default()
+        };
+
+        assistant.sanitize();
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "thread-1");
+        assert_eq!(
+            assistant.conversations[0].title.chars().count(),
+            MAX_ASSISTANT_CONVERSATION_TITLE
+        );
+        assert_eq!(
+            assistant.conversations[0].execution_mode,
+            AssistantExecutionMode::RunAutomatically
+        );
+    }
+
+    #[test]
+    fn normalize_gives_each_tab_one_conversation_and_detaches_missing_tabs() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let conversation = |id: &str, tab: Option<Uuid>, activity: u64| {
+            let mut conversation =
+                AssistantConversation::new(id, AssistantExecutionMode::AskBeforeRunning);
+            conversation.tab_id = tab;
+            conversation.last_activity = activity;
+            conversation
+        };
+        let mut linked = conversation("linked", Some(second_tab.id), 1);
+        linked.detached_profile = Some(first.id);
+        let mut missing = conversation("missing", Some(Uuid::new_v4()), 1);
+        missing.detached_profile = Some(first.id);
+        let mut gone_profile = conversation("gone-profile", None, 1);
+        gone_profile.detached_profile = Some(Uuid::new_v4());
+        let mut workspace = Workspace {
+            version: WORKSPACE_VERSION,
+            profiles: vec![first.clone(), second],
+            tabs: vec![first_tab.clone(), second_tab.clone()],
+            assistant: AssistantWorkspace {
+                conversations: vec![
+                    conversation("older", Some(first_tab.id), 1),
+                    conversation("newer", Some(first_tab.id), 2),
+                    linked,
+                    missing,
+                    gone_profile,
+                ],
+                ..AssistantWorkspace::default()
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let find = |id: &str| {
+            workspace
+                .assistant
+                .conversations
+                .iter()
+                .find(|conversation| conversation.thread_id == id)
+                .unwrap()
+        };
+        assert_eq!(find("newer").tab_id, Some(first_tab.id));
+        assert_eq!(find("older").tab_id, None);
+        assert_eq!(find("older").detached_profile, Some(first.id));
+        assert_eq!(find("linked").tab_id, Some(second_tab.id));
+        assert_eq!(find("linked").detached_profile, None);
+        assert_eq!(find("missing").tab_id, None);
+        assert_eq!(find("missing").detached_profile, Some(first.id));
+        assert_eq!(find("gone-profile").detached_profile, None);
+    }
+
+    #[test]
+    fn version_three_selected_conversation_keeps_the_active_tab() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let mut open = AssistantConversation::new("open", AssistantExecutionMode::AskBeforeRunning);
+        open.tab_id = Some(first_tab.id);
+        let other = AssistantConversation::new("other", AssistantExecutionMode::AskBeforeRunning);
+        let mut workspace = Workspace {
+            version: 3,
+            profiles: vec![first, second.clone()],
+            tabs: vec![first_tab, second_tab.clone()],
+            active_tab: 1,
+            assistant: AssistantWorkspace {
+                conversations: vec![open, other],
+                legacy_selected_thread: Some(" open ".into()),
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let open = workspace.assistant.conversation("open").unwrap();
+        let other = workspace.assistant.conversation("other").unwrap();
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
+        assert_eq!(open.tab_id, Some(second_tab.id));
+        assert_eq!(open.detached_profile, None);
+        assert_eq!(other.tab_id, None);
+        assert_eq!(other.detached_profile, Some(second.id));
+        assert_eq!(workspace.assistant.legacy_selected_thread, None);
+        let saved = serde_json::to_value(&workspace.assistant).unwrap();
+        assert!(saved.get("selected_thread").is_none());
+    }
+
+    #[test]
+    fn closing_a_tab_detaches_its_conversation() {
+        let profile = Uuid::new_v4();
+        let tab = Uuid::new_v4();
+        let mut conversation =
+            AssistantConversation::new("thread", AssistantExecutionMode::AskBeforeRunning);
+        conversation.tab_id = Some(tab);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![conversation],
+            ..AssistantWorkspace::default()
+        };
+        assert_eq!(
+            assistant
+                .conversation_for_tab(tab)
+                .map(|c| c.thread_id.as_str()),
+            Some("thread")
+        );
+
+        assistant.detach_tab(tab, Some(profile));
+
+        assert!(assistant.conversation_for_tab(tab).is_none());
+        let conversation = assistant.conversation("thread").unwrap();
+        assert_eq!(conversation.tab_id, None);
+        assert_eq!(conversation.detached_profile, Some(profile));
+    }
+
+    #[test]
+    fn assistant_workspace_removes_unstarted_threads() {
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![
+                AssistantConversation::new("used", AssistantExecutionMode::AskBeforeRunning),
+                AssistantConversation::new("new", AssistantExecutionMode::AskBeforeRunning),
+            ],
+            ..AssistantWorkspace::default()
+        };
+        let unstarted = BTreeSet::from(["new".to_owned()]);
+
+        assistant.remove_unstarted(&unstarted);
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "used");
     }
 }
