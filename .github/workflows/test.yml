@@ -227,7 +227,7 @@ jobs:
           fi
       - name: Save completed native E2E dependency cache
         if: >
-          always() && !cancelled() &&
+          always() &&
           steps.native-e2e-cache.outputs.cache-hit != 'true' &&
           steps.native-e2e-cache-state.outputs.complete == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -236,7 +236,7 @@ jobs:
           key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
       - name: Save native E2E download progress
         if: >
-          always() && !cancelled() &&
+          always() &&
           steps.native-e2e-cache-state.outputs.present == 'true' &&
           steps.native-e2e-cache-state.outputs.complete != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

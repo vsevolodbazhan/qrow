@@ -139,7 +139,7 @@ jobs:
       - resolve-target
       - test-e2e-backend
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - name: checkout-target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,7 +195,7 @@ jobs:
           fi
       - name: Save completed native E2E dependency cache
         if: >
-          always() && !cancelled() &&
+          always() &&
           steps.native-e2e-cache.outputs.cache-hit != 'true' &&
           steps.native-e2e-cache-state.outputs.complete == 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -204,7 +204,7 @@ jobs:
           key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
       - name: Save native E2E download progress
         if: >
-          always() && !cancelled() &&
+          always() &&
           steps.native-e2e-cache-state.outputs.present == 'true' &&
           steps.native-e2e-cache-state.outputs.complete != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
