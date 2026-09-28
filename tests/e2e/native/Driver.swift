@@ -1100,15 +1100,32 @@ final class Driver {
         try snapshot("assistant-tool-expanded")
         try activate(try waitExact("Tool call: Append query", timeout: 5))
         try waitGone("Arguments:", timeout: 5)
-        let editor = try waitInput("SQL Editor")
-        let (editorPosition, _) = try elementBounds(editor)
-        clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
-        try require(
-            AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
-            "Could not focus SQL Editor for Undo",
-        )
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-        key(0) // A normal user edit must not merge with the assistant edit.
+        // A normal user edit must not merge with the assistant edit. The
+        // editor can take focus after the typed key arrives, so type again
+        // until the key is in the editor. Otherwise Undo goes to another field.
+        var typed = false
+        for _ in 0..<3 where !typed {
+            let editor = try waitInput("SQL Editor")
+            let (editorPosition, _) = try elementBounds(editor)
+            clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
+            try require(
+                AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+                "Could not focus SQL Editor for Undo",
+            )
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            key(0)
+            let typedDeadline = clock.now.advanced(by: .seconds(2))
+            repeat {
+                if let input = accessibleInput("SQL Editor"),
+                   let value = attribute(input, kAXValueAttribute) as? String, value != "SELECT 1" {
+                    try require(value.filter { $0 == "a" }.count == 1, "SQL Editor received more than one typed key: \(value)")
+                    typed = true
+                    break
+                }
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            } while clock.now < typedDeadline
+        }
+        try require(typed, "SQL Editor did not receive the typed key before Undo")
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         key(6, flags: .maskCommand)
         try waitInputValue("SQL Editor", "SELECT 1")
