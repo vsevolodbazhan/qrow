@@ -50,8 +50,8 @@ optional [assistant pane](assistant.md) width.
 The workspace file contains connection profiles, connection-owned tabs, tab
 names, SQL, the selected connection, the last active tab for each connection,
 and settings. Optional assistant state includes the enabled setting, panel and
-model preferences, Codex thread identifiers, conversation titles, and query
-execution modes. The workspace does not contain assistant messages, tool
+model preferences, Codex thread identifiers, conversation titles, query
+execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
 arguments, tool results, result rows, Logs history, or Codex credentials. Its
 default path is:
 
@@ -67,6 +67,10 @@ Workspace version 3 adds the optional assistant state. Qrow gives version 1
 and version 2 workspaces safe assistant defaults during load. The assistant is
 off by default. The migration preserves connections, tabs, SQL, active-tab
 state, and appearance settings.
+Workspace version 4 links each assistant conversation to a query tab. A
+conversation from an earlier workspace loads without a query tab. It keeps the
+connection that was active. An earlier version of Qrow cannot open a version 4
+workspace.
 
 ## Quit and save
 

@@ -214,7 +214,14 @@ fn version_two_workspaces_get_safe_assistant_defaults() {
 fn populated_assistant_state_round_trips_through_workspace_json() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("workspace.json");
-    let mut workspace = Workspace::default();
+    let profile = Profile::default();
+    let tab = SavedTab::new(1, Some(profile.id));
+    let mut workspace = Workspace {
+        active_tabs: [(profile.id, tab.id)].into(),
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        ..Workspace::default()
+    };
     workspace.settings.assistant.enabled = true;
     workspace.settings.assistant.data_sharing_notice_version =
         ASSISTANT_DATA_SHARING_NOTICE_VERSION;
@@ -225,13 +232,54 @@ fn populated_assistant_state_round_trips_through_workspace_json() {
     conversation.title = "Revenue review".into();
     conversation.title_source = AssistantTitleSource::User;
     conversation.last_activity = 1_800_000_000;
+    conversation.tab_id = Some(workspace.tabs[0].id);
     workspace.assistant.conversations.push(conversation);
+    let mut detached =
+        AssistantConversation::new("thread-2", AssistantExecutionMode::AskBeforeRunning);
+    detached.detached_profile = Some(profile.id);
+    workspace.assistant.conversations.push(detached);
     workspace.assistant.selected_thread = Some("thread-1".into());
     fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
 
     let restored = qrow::storage::load(&path).unwrap();
 
     assert_eq!(restored, workspace);
+}
+
+#[test]
+fn version_three_conversations_migrate_without_a_query_tab() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let profile = Profile::default();
+    let tab = SavedTab::new(1, Some(profile.id));
+    let mut workspace = Workspace {
+        profiles: vec![profile.clone()],
+        tabs: vec![tab],
+        ..Workspace::default()
+    };
+    workspace
+        .assistant
+        .conversations
+        .push(AssistantConversation::new(
+            "thread-1",
+            AssistantExecutionMode::AskBeforeRunning,
+        ));
+    let mut json = serde_json::to_value(&workspace).unwrap();
+    json["version"] = 3.into();
+    let conversation = json["assistant"]["conversations"][0]
+        .as_object_mut()
+        .unwrap();
+    conversation.remove("tab_id");
+    conversation.remove("detached_profile");
+    fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+    let restored = qrow::storage::load(&path).unwrap();
+
+    assert_eq!(restored.version, WORKSPACE_VERSION);
+    let conversation = &restored.assistant.conversations[0];
+    assert_eq!(conversation.thread_id, "thread-1");
+    assert_eq!(conversation.tab_id, None);
+    assert_eq!(conversation.detached_profile, Some(profile.id));
 }
 
 #[test]

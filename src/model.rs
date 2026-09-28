@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 3;
+pub const WORKSPACE_VERSION: u32 = 4;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
@@ -426,6 +426,12 @@ pub struct AssistantConversation {
     pub title_source: AssistantTitleSource,
     pub last_activity: u64,
     pub execution_mode: AssistantExecutionMode,
+    /// The query tab of the conversation. The tab supplies the connection.
+    #[serde(default)]
+    pub tab_id: Option<Uuid>,
+    /// The connection for the next tab of a conversation whose tab closed.
+    #[serde(default)]
+    pub detached_profile: Option<Uuid>,
 }
 
 impl AssistantConversation {
@@ -436,6 +442,8 @@ impl AssistantConversation {
             title_source: AssistantTitleSource::Temporary,
             last_activity: 0,
             execution_mode,
+            tab_id: None,
+            detached_profile: None,
         }
     }
 
@@ -484,6 +492,38 @@ impl AssistantWorkspace {
         }
     }
 
+    /// Give each tab at most one conversation, and detach conversations whose
+    /// tab is missing. The most recent conversation keeps a shared tab. A
+    /// detached conversation keeps the connection of its last tab.
+    fn link_tabs(&mut self, tabs: &[SavedTab], profiles: &[Profile]) {
+        let mut order: Vec<usize> = (0..self.conversations.len()).collect();
+        order.sort_by_key(|&index| std::cmp::Reverse(self.conversations[index].last_activity));
+        let mut claimed = BTreeSet::new();
+        for index in order {
+            let conversation = &mut self.conversations[index];
+            let Some(tab_id) = conversation.tab_id else {
+                continue;
+            };
+            let tab = tabs.iter().find(|tab| tab.id == tab_id);
+            if tab.is_some() && claimed.insert(tab_id) {
+                conversation.detached_profile = None;
+                continue;
+            }
+            conversation.tab_id = None;
+            if let Some(tab) = tab {
+                conversation.detached_profile = tab.profile;
+            }
+        }
+        for conversation in &mut self.conversations {
+            if conversation
+                .detached_profile
+                .is_some_and(|id| !profiles.iter().any(|profile| profile.id == id))
+            {
+                conversation.detached_profile = None;
+            }
+        }
+    }
+
     /// Remove conversations without a turn. Codex keeps them only in the
     /// memory of its current process, so another process cannot resume them.
     pub fn remove_unstarted(&mut self, unstarted: &BTreeSet<String>) {
@@ -518,6 +558,7 @@ impl Workspace {
     /// still use one list in storage, but every tab is normalized to an owned
     /// connection and each connection gets an active tab.
     pub fn normalize(&mut self) {
+        let conversations_without_tabs = self.version < 4;
         let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
         let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
         let fallback = fallback.or_else(|| self.profiles.first().map(|p| p.id));
@@ -582,6 +623,16 @@ impl Workspace {
             used.insert(tab.title.clone());
         }
         self.assistant.sanitize();
+        if conversations_without_tabs {
+            // Earlier conversations used the selected tab. Keep them detached
+            // under the connection that was active.
+            let profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
+            for conversation in &mut self.assistant.conversations {
+                conversation.tab_id = None;
+                conversation.detached_profile = profile;
+            }
+        }
+        self.assistant.link_tabs(&self.tabs, &self.profiles);
         self.version = WORKSPACE_VERSION;
     }
 }
@@ -946,6 +997,95 @@ mod tests {
         assistant.selected_thread = None;
         assistant.sanitize();
         assert_eq!(assistant.selected_thread, None);
+    }
+
+    #[test]
+    fn normalize_gives_each_tab_one_conversation_and_detaches_missing_tabs() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let conversation = |id: &str, tab: Option<Uuid>, activity: u64| {
+            let mut conversation =
+                AssistantConversation::new(id, AssistantExecutionMode::AskBeforeRunning);
+            conversation.tab_id = tab;
+            conversation.last_activity = activity;
+            conversation
+        };
+        let mut linked = conversation("linked", Some(second_tab.id), 1);
+        linked.detached_profile = Some(first.id);
+        let mut missing = conversation("missing", Some(Uuid::new_v4()), 1);
+        missing.detached_profile = Some(first.id);
+        let mut gone_profile = conversation("gone-profile", None, 1);
+        gone_profile.detached_profile = Some(Uuid::new_v4());
+        let mut workspace = Workspace {
+            version: WORKSPACE_VERSION,
+            profiles: vec![first.clone(), second],
+            tabs: vec![first_tab.clone(), second_tab.clone()],
+            assistant: AssistantWorkspace {
+                conversations: vec![
+                    conversation("older", Some(first_tab.id), 1),
+                    conversation("newer", Some(first_tab.id), 2),
+                    linked,
+                    missing,
+                    gone_profile,
+                ],
+                selected_thread: None,
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let find = |id: &str| {
+            workspace
+                .assistant
+                .conversations
+                .iter()
+                .find(|conversation| conversation.thread_id == id)
+                .unwrap()
+        };
+        assert_eq!(find("newer").tab_id, Some(first_tab.id));
+        assert_eq!(find("older").tab_id, None);
+        assert_eq!(find("older").detached_profile, Some(first.id));
+        assert_eq!(find("linked").tab_id, Some(second_tab.id));
+        assert_eq!(find("linked").detached_profile, None);
+        assert_eq!(find("missing").tab_id, None);
+        assert_eq!(find("missing").detached_profile, Some(first.id));
+        assert_eq!(find("gone-profile").detached_profile, None);
+    }
+
+    #[test]
+    fn version_three_conversations_load_detached_under_the_active_connection() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let mut conversation =
+            AssistantConversation::new("thread-1", AssistantExecutionMode::AskBeforeRunning);
+        conversation.tab_id = Some(first_tab.id);
+        let mut workspace = Workspace {
+            version: 3,
+            profiles: vec![first, second.clone()],
+            tabs: vec![first_tab, second_tab],
+            active_tab: 1,
+            assistant: AssistantWorkspace {
+                conversations: vec![conversation],
+                selected_thread: Some("thread-1".into()),
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let conversation = &workspace.assistant.conversations[0];
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
+        assert_eq!(conversation.tab_id, None);
+        assert_eq!(conversation.detached_profile, Some(second.id));
+        assert_eq!(
+            workspace.assistant.selected_thread.as_deref(),
+            Some("thread-1")
+        );
     }
 
     #[test]
