@@ -14,3 +14,4 @@ For build and launch instructions, see the [project README](../README.md).
 | [Architecture](architecture.md) | Understand component responsibilities and data flow. |
 | [Development](development.md) | Set up local checks, use hooks, and maintain dependencies. |
 | [End-to-end testing](end-to-end-testing.md) | Run tests with real servers and the native application. |
+| [Assistant](assistant.md) | Architecture and features of AI-based assistant. |

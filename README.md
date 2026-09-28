@@ -25,14 +25,17 @@ model or the other. I bring in my direction, general coding expertise, and produ
 
 Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built using [GPUI](https://gpui.rs/), which is a UI framework by Zed's creators.
 
-## Optional AI assistant
+## Assistant
 
 Qrow can open an AI assistant beside your query tab. It uses a separately
-installed Codex program and your Codex sign-in. The feature is off by default.
-Enable it in **Qrow → Settings… → Assistant**. Qrow can ask before an assistant
-query runs, or run assistant queries automatically. Each conversation writes SQL
+installed Codex executable and your Codex sign-in, so you can use your OpenAI subscription.
+
+The feature is off by default. Enable it in **Qrow → Settings… → Assistant**. Qrow can ask before an assistant
+query runs, or run assistant queries automatically. 
+
+Each conversation writes SQL
 in its own query tab, so you can work on it together. Several conversations can
-work at the same time. See [AI assistant](docs/assistant.md)
+work at the same time. See [assistant](docs/assistant.md)
 for setup, data sharing, and query safety.
 
 ## Metrics
@@ -55,6 +58,7 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
   no Intel or other-OS build.
 - **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
+- **Codex only**. For now, assistant can only be powered by Codex. Claude support is planned.
 
 ## Installation
 

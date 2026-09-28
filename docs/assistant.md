@@ -1,4 +1,4 @@
-# AI assistant
+# Assistant
 
 The optional AI assistant helps you write and run SQL in Qrow. Each
 conversation has its own query tab. You and the assistant work in the same
