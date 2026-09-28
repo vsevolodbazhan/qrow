@@ -252,6 +252,7 @@ Then it runs these scenarios, each with a new workspace:
 | `assistant-layout-only` | Pixels of assistant messages at a scale of 1.1 and a pane width of 536: a message with inline code keeps one line, bold text wraps inside the reply, the user bubble ends at the right edge of the composer, and the composer has equal space above the field and below **Send**. |
 | `assistant-selection-only` | In One Dark, a selection in a user message changes the color of its bubble and keeps the color of its text. |
 | `editor-highlight-only` | In demo mode, the active line color reaches the right edge of the editor. |
+| `results-text-only` | In demo mode, a result cell shows the letters below the baseline, for example `g` and `p` in `Singapore Airlines`. The route cell of the same row gives the baseline. |
 
 Use an unlocked, logged-in macOS session. The driver takes the focus, so save
 your work in other applications first. Check the automation permissions:

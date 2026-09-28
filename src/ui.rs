@@ -2322,11 +2322,11 @@ impl Qrow {
             data.clear();
             let mut columns: Vec<_> = [
                 ("route", "STRING"),
+                ("carrier", "STRING"),
                 ("departures", "BIGINT"),
                 ("avg_fare", "DOUBLE"),
                 ("currency", "STRING"),
                 ("updated_at", "TIMESTAMP"),
-                ("carrier", "STRING"),
                 ("load_factor", "DOUBLE"),
                 ("cancelled", "BOOLEAN"),
             ]
@@ -2355,15 +2355,15 @@ impl Qrow {
                             ][i % 6]
                                 .into(),
                         ),
+                        if i % 7 == 0 {
+                            None
+                        } else {
+                            Some(["Finnair", "British Airways", "Singapore Airlines"][i % 3].into())
+                        },
                         Some((3821 - i).to_string()),
                         Some(format!("{:.2}", 142.5 + (i % 93) as f64 * 3.2)),
                         Some("USD".into()),
                         Some("2026-09-11 09:41:03".into()),
-                        if i % 7 == 0 {
-                            None
-                        } else {
-                            Some(["AY", "BA", "SQ"][i % 3].into())
-                        },
                         Some(format!("0.{:02}", 70 + i % 29)),
                         Some("false".into()),
                     ];
