@@ -471,8 +471,9 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
+        this.assistant_panel.composer_tab = this.tabs.get(this.active).map(|tab| tab.saved.id);
         if demo {
-            this.seed_demo(cx);
+            this.seed_demo(this.active, cx);
         }
         this.tabs[this.active]
             .input
@@ -622,8 +623,7 @@ impl Qrow {
         }
     }
     fn active_work_description(&self) -> Option<&'static str> {
-        let assistant = self.assistant_panel.pending_reply_thread.is_some()
-            || self.assistant_panel.active_turn.is_some();
+        let assistant = self.assistant_working();
         let query = self.tabs.iter().any(|tab| tab.busy);
         match (assistant, query) {
             (true, true) => {
@@ -1142,6 +1142,7 @@ impl Qrow {
         self.tabs[index]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
+        self.show_tab_conversation(window, cx);
         self.changed(cx);
     }
     fn active_profile(&self) -> Option<Uuid> {
@@ -1182,6 +1183,16 @@ impl Qrow {
         if profile.is_none() {
             return;
         }
+        let index = self.add_tab(profile, window, cx);
+        self.activate(index, window, cx);
+    }
+    /// Adds a blank tab with the next free number of the connection.
+    fn add_tab(
+        &mut self,
+        profile: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
         let number = self
             .tabs
             .iter()
@@ -1197,10 +1208,14 @@ impl Qrow {
             + 1;
         let tab = self.make_tab(SavedTab::new(number, profile), window, cx);
         self.tabs.push(tab);
-        self.activate(self.tabs.len() - 1, window, cx);
+        self.tabs.len() - 1
     }
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dialog_open() || index >= self.tabs.len() || self.tabs[index].busy {
+        if self.dialog_open()
+            || index >= self.tabs.len()
+            || self.tabs[index].busy
+            || self.assistant_tab_busy(self.tabs[index].saved.id)
+        {
             return;
         }
         // The menu names a tab that is about to disappear.
@@ -1209,7 +1224,9 @@ impl Qrow {
             w.shutdown();
         }
         let profile = self.tabs[index].saved.profile;
+        let tab_id = self.tabs[index].saved.id;
         self.tabs.remove(index);
+        self.assistant_tab_removed(tab_id, profile);
         if let Some(profile) = profile
             && !self
                 .tabs
@@ -1266,15 +1283,25 @@ impl Qrow {
         self.run_selected_query(window, cx);
     }
     fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
+        if self.form.is_some() || self.settings_open {
+            return false;
+        }
+        self.run_tab_query(self.active, window, cx)
+    }
+    /// Runs the selected SQL of a tab, or all of its SQL when nothing is
+    /// selected. An assistant conversation runs its tab also while a dialog
+    /// is open.
+    fn run_tab_query(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
         }
         if self.demo {
-            self.seed_demo(cx);
+            self.seed_demo(index, cx);
             cx.notify();
             return true;
         }
-        let tab = &mut self.tabs[self.active];
+        let active = index == self.active;
+        let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
             let selected = s
                 .selected_text_range(false, window, cx)
@@ -1289,7 +1316,7 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
             return false;
@@ -1305,7 +1332,7 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
             return false;
@@ -1316,7 +1343,7 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
             return false;
@@ -1363,7 +1390,10 @@ impl Qrow {
         true
     }
     fn next_page(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+        self.next_tab_page(self.active, cx);
+    }
+    fn next_tab_page(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         let data = tab.table.read(cx).delegate();
         let page = data.pagination.page() + 1;
         if page < data.pagination.pages(data.rows.len()) {
@@ -1391,7 +1421,10 @@ impl Qrow {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        let t = &mut self.tabs[self.active];
+        self.cancel_tab(self.active, cx);
+    }
+    fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
             Self::record_local_activity(
                 t,
@@ -1599,7 +1632,16 @@ impl Qrow {
             return;
         };
         let source_profile = source.saved.profile;
-        let source_busy = source.busy;
+        let source_busy = source.busy || self.assistant_tab_busy(tab);
+        // A tab has at most one conversation.
+        let conversation = self
+            .settings
+            .assistant
+            .enabled
+            .then(|| self.tab_assistant_status(tab).is_none());
+        let start_conversation = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.start_tab_conversation(tab, window, cx)
+        });
         let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_tab_rename(tab, window, cx)
         });
@@ -1647,7 +1689,7 @@ impl Qrow {
                         )
                     })
                 };
-                if destinations.is_empty() || source_busy {
+                let menu = if destinations.is_empty() || source_busy {
                     menu.item(PopupMenuItem::new("Move to Connection…").disabled(true))
                 } else {
                     let weak = weak.clone();
@@ -1666,6 +1708,14 @@ impl Qrow {
                             },
                         )
                     })
+                };
+                match conversation {
+                    Some(available) => menu.separator().item(
+                        PopupMenuItem::new("Start Conversation")
+                            .on_click(start_conversation)
+                            .disabled(!available),
+                    ),
+                    None => menu,
                 }
             },
             window,
@@ -1690,7 +1740,7 @@ impl Qrow {
         {
             return;
         }
-        if move_tab && self.tabs[source_index].busy {
+        if move_tab && (self.tabs[source_index].busy || self.assistant_tab_busy(tab_id)) {
             return;
         }
         let source_profile = self.tabs[source_index].saved.profile;
@@ -1966,7 +2016,7 @@ impl Qrow {
         cx.notify();
     }
     fn confirm_delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.profile_busy(id) {
+        if self.profile_in_use(id) {
             return;
         }
         let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
@@ -2015,7 +2065,7 @@ impl Qrow {
         cx.notify();
     }
     fn delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.profile_busy(id) || !self.profiles.iter().any(|p| p.id == id) {
+        if self.profile_in_use(id) || !self.profiles.iter().any(|p| p.id == id) {
             return;
         }
         let old_active_profile = self.active_profile();
@@ -2042,7 +2092,16 @@ impl Qrow {
                 worker.shutdown();
             }
         }
+        let removed: Vec<_> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.saved.profile == Some(id))
+            .map(|tab| tab.saved.id)
+            .collect();
         self.tabs.retain(|tab| tab.saved.profile != Some(id));
+        for tab in removed {
+            self.assistant_tab_removed(tab, None);
+        }
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
         if self.tabs.is_empty() {
@@ -2085,8 +2144,17 @@ impl Qrow {
             .iter()
             .any(|tab| tab.worker_profile == Some(id) && tab.busy)
     }
-    fn seed_demo(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+    /// A connection cannot be deleted while a query runs or an assistant
+    /// conversation works in one of its tabs.
+    fn profile_in_use(&self, id: Uuid) -> bool {
+        self.profile_busy(id)
+            || self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(id) && self.assistant_tab_busy(tab.saved.id))
+    }
+    fn seed_demo(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         let execution_id = Self::allocate_execution_id(tab);
         let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);

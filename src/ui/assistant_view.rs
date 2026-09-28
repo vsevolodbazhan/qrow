@@ -35,11 +35,14 @@ use qrow::{
         },
         tools,
     },
-    model::{AssistantConversation, AssistantTitleSource, MAX_ASSISTANT_CONVERSATION_TITLE},
+    model::{
+        AssistantConversation, AssistantExecutionMode, AssistantTitleSource,
+        MAX_ASSISTANT_CONVERSATION_TITLE,
+    },
 };
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
     rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
@@ -299,6 +302,63 @@ mod tests {
         assert!(!show_thread_list(false, Some(false)));
     }
 
+    fn pending_query(approved: bool) -> PendingQuery {
+        PendingQuery {
+            call: ToolCall {
+                request_id: json!(1),
+                call_id: "call".into(),
+                thread_id: "thread".into(),
+                turn_id: "turn".into(),
+                name: "run_selected_tab_query".into(),
+                arguments: Value::Null,
+            },
+            tab_id: Uuid::new_v4(),
+            revision: 0,
+            sql: "SELECT 1".into(),
+            approved,
+            started: false,
+            kind: PendingQueryKind::Run,
+            activity_index: None,
+            detached: false,
+            first_row: 0,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn conversation_state_shows_approval_before_work_and_unread_replies() {
+        let mut run = ThreadRun::default();
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Idle);
+        run.unread = Some(Unread::Reply);
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Ready);
+        run.unread = Some(Unread::Error);
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Failed);
+        run.pending_reply = true;
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Working);
+        run.active_turn = Some("turn".into());
+        run.pending_query = Some(pending_query(true));
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Working);
+        run.pending_query = Some(pending_query(false));
+        assert_eq!(ThreadStatus::of(&run), ThreadStatus::Approval);
+        assert!(ThreadStatus::Approval.busy() && ThreadStatus::Working.busy());
+        assert!(!ThreadStatus::Ready.busy() && !ThreadStatus::Failed.busy());
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_assistant_toggle_shows_the_most_urgent_conversation_state() {
+        let urgent = [
+            ThreadStatus::Working,
+            ThreadStatus::Idle,
+            ThreadStatus::Ready,
+            ThreadStatus::Approval,
+            ThreadStatus::Failed,
+        ]
+        .into_iter()
+        .fold(ThreadStatus::Idle, Ord::max);
+        assert_eq!(urgent, ThreadStatus::Approval);
+        assert!(ThreadStatus::Failed > ThreadStatus::Ready);
+        assert!(ThreadStatus::Ready > ThreadStatus::Working);
+    }
+
     #[::core::prelude::v1::test]
     fn selecting_a_thread_closes_the_list_only_on_narrow_panes() {
         for narrow in [true, false] {
@@ -541,6 +601,90 @@ pub(super) enum PendingQueryKind {
     Fetch,
 }
 
+/// A turn end that the user has not seen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Unread {
+    Reply,
+    Error,
+}
+
+/// The live state of one conversation. Several conversations can have a turn
+/// at the same time.
+#[derive(Default)]
+pub(super) struct ThreadRun {
+    pub active_turn: Option<String>,
+    /// Codex owes a reply from the send until the turn ends.
+    pub pending_reply: bool,
+    pub target: Option<ActionTarget>,
+    pub pending_query: Option<PendingQuery>,
+    pub unread: Option<Unread>,
+    pub loading_older: bool,
+}
+
+/// The conversation state that the thread list, the tab strip, and the
+/// assistant toggle show. A higher state is more urgent.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(super) enum ThreadStatus {
+    Idle,
+    Working,
+    Ready,
+    Failed,
+    Approval,
+}
+
+impl ThreadStatus {
+    fn of(run: &ThreadRun) -> Self {
+        if run
+            .pending_query
+            .as_ref()
+            .is_some_and(|pending| !pending.approved)
+        {
+            Self::Approval
+        } else if run.active_turn.is_some() || run.pending_reply {
+            Self::Working
+        } else {
+            match run.unread {
+                Some(Unread::Error) => Self::Failed,
+                Some(Unread::Reply) => Self::Ready,
+                None => Self::Idle,
+            }
+        }
+    }
+
+    /// A conversation in this state keeps its tab open and on its connection.
+    pub fn busy(self) -> bool {
+        matches!(self, Self::Working | Self::Approval)
+    }
+
+    /// Names the state after a tab or conversation name.
+    pub fn accessible_suffix(self) -> &'static str {
+        match self {
+            Self::Idle => "",
+            Self::Working => ", assistant working",
+            Self::Ready => ", assistant reply ready",
+            Self::Failed => ", assistant reply failed",
+            Self::Approval => ", assistant waiting for approval",
+        }
+    }
+}
+
+/// The first message from a tab without a conversation. Qrow sends it when
+/// Codex has created the conversation.
+pub(super) struct FirstMessage {
+    pub tab_id: Uuid,
+    pub text: String,
+    pub mode: AssistantExecutionMode,
+    /// Shows the message until the conversation has it.
+    pub entry: TranscriptEntry,
+}
+
+/// A conversation, or a tab that does not have one yet.
+#[derive(Clone, Debug)]
+enum ModeTarget {
+    Thread(String),
+    Tab(Uuid),
+}
+
 /// The open rename dialog for one conversation.
 pub(super) struct ConversationEditor {
     thread_id: String,
@@ -611,15 +755,19 @@ pub(super) struct AssistantPanelState {
     pub transcripts: BTreeMap<String, Vec<TranscriptEntry>>,
     pub older_cursors: BTreeMap<String, String>,
     pub loaded_cursors: BTreeMap<String, BTreeSet<String>>,
-    pub loading_older: bool,
-    pub active_turn: Option<String>,
-    pub pending_reply_thread: Option<String>,
-    pub target: Option<ActionTarget>,
-    pub pending_query: Option<PendingQuery>,
+    pub runs: BTreeMap<String, ThreadRun>,
+    /// Conversations that the current Codex process has loaded.
+    pub loaded_threads: BTreeSet<String>,
+    /// First messages in the order of their `Create` commands.
+    pub first_messages: VecDeque<FirstMessage>,
+    /// Unsent messages of tabs that the composer does not show.
+    pub drafts: BTreeMap<Uuid, String>,
+    /// The tab whose draft the composer shows.
+    pub composer_tab: Option<Uuid>,
+    /// Query modes of tabs that do not have a conversation yet.
+    pub draft_modes: BTreeMap<Uuid, AssistantExecutionMode>,
     pub scroll: ScrollHandle,
     pub resizing: Option<(Point<Pixels>, Pixels)>,
-    pub unread: bool,
-    pub unread_error: bool,
     pub notice: Option<AssistantNotice>,
     pub sign_in: SignIn,
     pub previous_focus: Option<FocusHandle>,
@@ -630,7 +778,6 @@ pub(super) struct AssistantPanelState {
     pub regenerating_titles: BTreeSet<String>,
     /// Conversations that wait for their history before Qrow requests a title.
     pub title_history_reads: BTreeSet<String>,
-    pub creating_conversation: bool,
     /// Conversations without a turn. Qrow does not save them.
     pub unstarted_threads: BTreeSet<String>,
 }
@@ -681,20 +828,8 @@ impl AssistantPanelState {
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
                     if let SelectEvent::Confirm(Some(label)) = event {
-                        let automatic = this
-                            .assistant
-                            .selected_thread
-                            .as_ref()
-                            .and_then(|id| {
-                                this.assistant
-                                    .conversations
-                                    .iter()
-                                    .find(|conversation| &conversation.thread_id == id)
-                            })
-                            .is_some_and(|conversation| {
-                                conversation.execution_mode
-                                    == qrow::model::AssistantExecutionMode::RunAutomatically
-                            });
+                        let automatic =
+                            this.displayed_mode() == AssistantExecutionMode::RunAutomatically;
                         if (label == "Run") != automatic {
                             this.toggle_assistant_mode(window, cx);
                             this.sync_assistant_selectors(window, cx);
@@ -748,15 +883,14 @@ impl AssistantPanelState {
             transcripts: BTreeMap::new(),
             older_cursors: BTreeMap::new(),
             loaded_cursors: BTreeMap::new(),
-            loading_older: false,
-            active_turn: None,
-            pending_reply_thread: None,
-            target: None,
-            pending_query: None,
+            runs: BTreeMap::new(),
+            loaded_threads: BTreeSet::new(),
+            first_messages: VecDeque::new(),
+            drafts: BTreeMap::new(),
+            composer_tab: None,
+            draft_modes: BTreeMap::new(),
             scroll: ScrollHandle::new(),
             resizing: None,
-            unread: false,
-            unread_error: false,
             notice: None,
             sign_in: SignIn::Idle,
             previous_focus: None,
@@ -764,7 +898,6 @@ impl AssistantPanelState {
             pending_rename: None,
             regenerating_titles: BTreeSet::new(),
             title_history_reads: BTreeSet::new(),
-            creating_conversation: false,
             unstarted_threads: BTreeSet::new(),
         }
     }
@@ -812,8 +945,245 @@ fn discover_codex(configured: Option<&str>) -> Result<PathBuf, String> {
 }
 
 impl Qrow {
+    pub(super) fn active_tab_id(&self) -> Option<Uuid> {
+        self.tabs.get(self.active).map(|tab| tab.saved.id)
+    }
+
+    /// The conversation of the active tab. The pane shows it.
+    pub(super) fn displayed_thread(&self) -> Option<String> {
+        self.active_tab_id()
+            .and_then(|tab| self.assistant.conversation_for_tab(tab))
+            .map(|conversation| conversation.thread_id.clone())
+    }
+
+    /// The index of a conversation's query tab.
+    pub(super) fn thread_tab_index(&self, thread_id: &str) -> Option<usize> {
+        let tab = self.assistant.conversation(thread_id)?.tab_id?;
+        self.tabs
+            .iter()
+            .position(|candidate| candidate.saved.id == tab)
+    }
+
+    pub(super) fn thread_run(&self, thread_id: &str) -> Option<&ThreadRun> {
+        self.assistant_panel.runs.get(thread_id)
+    }
+
+    pub(super) fn thread_run_mut(&mut self, thread_id: &str) -> &mut ThreadRun {
+        self.assistant_panel
+            .runs
+            .entry(thread_id.to_owned())
+            .or_default()
+    }
+
+    pub(super) fn thread_status(&self, thread_id: &str) -> ThreadStatus {
+        self.thread_run(thread_id)
+            .map_or(ThreadStatus::Idle, ThreadStatus::of)
+    }
+
+    /// The assistant state of a query tab, or `None` for a tab without a
+    /// conversation.
+    pub(super) fn tab_assistant_status(&self, tab_id: Uuid) -> Option<ThreadStatus> {
+        if self
+            .assistant_panel
+            .first_messages
+            .iter()
+            .any(|first| first.tab_id == tab_id)
+        {
+            return Some(ThreadStatus::Working);
+        }
+        self.assistant
+            .conversation_for_tab(tab_id)
+            .map(|conversation| self.thread_status(&conversation.thread_id))
+    }
+
+    /// A tab whose conversation works or waits for approval cannot close or
+    /// move.
+    pub(super) fn assistant_tab_busy(&self, tab_id: Uuid) -> bool {
+        self.tab_assistant_status(tab_id)
+            .is_some_and(ThreadStatus::busy)
+    }
+
+    /// Whether a conversation has a turn that quitting would stop.
+    pub(super) fn assistant_working(&self) -> bool {
+        !self.assistant_panel.first_messages.is_empty()
+            || self
+                .assistant_panel
+                .runs
+                .values()
+                .any(|run| run.active_turn.is_some() || run.pending_reply)
+    }
+
+    /// The most urgent state of all conversations, for the assistant toggle.
+    pub(super) fn assistant_status(&self) -> ThreadStatus {
+        let first = if self.assistant_panel.first_messages.is_empty() {
+            ThreadStatus::Idle
+        } else {
+            ThreadStatus::Working
+        };
+        self.assistant_panel
+            .runs
+            .values()
+            .map(ThreadStatus::of)
+            .fold(first, Ord::max)
+    }
+
+    fn mode_target(&self) -> Option<ModeTarget> {
+        self.displayed_thread()
+            .map(ModeTarget::Thread)
+            .or_else(|| self.active_tab_id().map(ModeTarget::Tab))
+    }
+
+    /// The query mode of the displayed conversation. A tab without a
+    /// conversation uses the mode for its first message.
+    pub(super) fn displayed_mode(&self) -> AssistantExecutionMode {
+        match self.mode_target() {
+            Some(ModeTarget::Thread(thread)) => self
+                .assistant
+                .conversation(&thread)
+                .map(|conversation| conversation.execution_mode)
+                .unwrap_or_default(),
+            Some(ModeTarget::Tab(tab)) => self
+                .assistant_panel
+                .draft_modes
+                .get(&tab)
+                .copied()
+                .unwrap_or(self.settings.assistant.default_execution_mode),
+            None => self.settings.assistant.default_execution_mode,
+        }
+    }
+
+    fn set_mode(
+        &mut self,
+        target: &ModeTarget,
+        mode: AssistantExecutionMode,
+        cx: &mut Context<Self>,
+    ) {
+        match target {
+            ModeTarget::Thread(thread) => {
+                if let Some(conversation) = self.assistant.conversation_mut(thread) {
+                    conversation.execution_mode = mode;
+                    self.changed(cx);
+                }
+            }
+            ModeTarget::Tab(tab) => {
+                self.assistant_panel.draft_modes.insert(*tab, mode);
+                cx.notify();
+            }
+        }
+    }
+
+    /// Shows the conversation of the active tab after a tab change. The
+    /// composer keeps an unsent message with its tab.
+    pub(super) fn show_tab_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab_id();
+        if self.assistant_panel.composer_tab != tab {
+            if let Some(previous) = self
+                .assistant_panel
+                .composer_tab
+                .filter(|previous| self.tabs.iter().any(|tab| tab.saved.id == *previous))
+            {
+                let text = self.assistant_panel.composer.read(cx).value().to_string();
+                if text.is_empty() {
+                    self.assistant_panel.drafts.remove(&previous);
+                } else {
+                    self.assistant_panel.drafts.insert(previous, text);
+                }
+            }
+            let draft = tab
+                .and_then(|tab| self.assistant_panel.drafts.remove(&tab))
+                .unwrap_or_default();
+            self.assistant_panel
+                .composer
+                .update(cx, |composer, cx| composer.set_value(draft, window, cx));
+            self.assistant_panel.composer_tab = tab;
+            self.scroll_assistant_to_bottom(window, cx);
+        }
+        if let Some(thread) = self.displayed_thread() {
+            if self.assistant_panel.open {
+                self.thread_run_mut(&thread).unread = None;
+            }
+            self.load_assistant_thread(&thread, cx);
+        }
+        self.sync_assistant_selectors(window, cx);
+    }
+
+    /// Asks Codex to load a conversation that the current process has not
+    /// loaded. Codex sends a waiting tool call again when a loaded
+    /// conversation resumes, so Qrow resumes each conversation once.
+    fn load_assistant_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        if matches!(self.assistant_panel.status, Status::Ready)
+            && !self.assistant_panel.loaded_threads.contains(thread_id)
+            && self.assistant_command(AssistantCommand::Resume(thread_id.to_owned()), cx)
+        {
+            self.assistant_panel
+                .loaded_threads
+                .insert(thread_id.to_owned());
+        }
+    }
+
+    /// Detaches the conversation of a removed tab and drops the tab's draft.
+    pub(super) fn assistant_tab_removed(&mut self, tab_id: Uuid, profile: Option<Uuid>) {
+        let profile =
+            profile.filter(|id| self.profiles.iter().any(|candidate| candidate.id == *id));
+        // You closed the tab, so its unseen reply does not wait for you.
+        if let Some(thread) = self
+            .assistant
+            .conversation_for_tab(tab_id)
+            .map(|conversation| conversation.thread_id.clone())
+        {
+            self.thread_run_mut(&thread).unread = None;
+        }
+        self.assistant.detach_tab(tab_id, profile);
+        self.assistant_panel.drafts.remove(&tab_id);
+        self.assistant_panel.draft_modes.remove(&tab_id);
+    }
+
+    /// Ends the live state of all conversations after Codex stops. A first
+    /// message returns to the draft of its tab.
+    pub(super) fn reset_assistant_runs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for run in self.assistant_panel.runs.values_mut() {
+            run.active_turn = None;
+            run.pending_reply = false;
+            run.target = None;
+            run.pending_query = None;
+            run.loading_older = false;
+        }
+        self.assistant_panel.loaded_threads.clear();
+        while let Some(first) = self.assistant_panel.first_messages.pop_front() {
+            self.restore_first_message(first, window, cx);
+        }
+    }
+
+    fn restore_first_message(
+        &mut self,
+        first: FirstMessage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.assistant_panel.composer_tab == Some(first.tab_id) {
+            let current = self.assistant_panel.composer.read(cx).value().to_string();
+            let text = if current.is_empty() {
+                first.text
+            } else {
+                format!("{}\n{current}", first.text)
+            };
+            self.assistant_panel
+                .composer
+                .update(cx, |composer, cx| composer.set_value(text, window, cx));
+        } else {
+            let text = match self.assistant_panel.drafts.remove(&first.tab_id) {
+                Some(draft) if !draft.is_empty() => format!("{}\n{draft}", first.text),
+                _ => first.text,
+            };
+            self.assistant_panel.drafts.insert(first.tab_id, text);
+        }
+        self.assistant_panel
+            .draft_modes
+            .insert(first.tab_id, first.mode);
+    }
+
     fn load_older_assistant_messages(&mut self, cx: &mut Context<Self>) {
-        let Some(thread_id) = self.assistant.selected_thread.clone() else {
+        let Some(thread_id) = self.displayed_thread() else {
             return;
         };
         let Some(cursor) = self.assistant_panel.older_cursors.get(&thread_id).cloned() else {
@@ -833,10 +1203,9 @@ impl Qrow {
             cx.notify();
             return;
         }
-        if self.assistant_panel.loading_older
-            || self.assistant_panel.active_turn.is_some()
-            || self.assistant_panel.pending_query.is_some()
-        {
+        if self.thread_run(&thread_id).is_some_and(|run| {
+            run.loading_older || run.active_turn.is_some() || run.pending_query.is_some()
+        }) {
             return;
         }
         if self.assistant_command(
@@ -848,18 +1217,52 @@ impl Qrow {
         ) {
             self.assistant_panel
                 .loaded_cursors
-                .entry(thread_id)
+                .entry(thread_id.clone())
                 .or_default()
                 .insert(cursor);
-            self.assistant_panel.loading_older = true;
+            self.thread_run_mut(&thread_id).loading_older = true;
             cx.notify();
         }
     }
-    fn create_assistant_conversation(&mut self, cx: &mut Context<Self>) {
-        if !self.assistant_panel.creating_conversation
-            && self.assistant_command(AssistantCommand::Create(tools::definitions()), cx)
-        {
-            self.assistant_panel.creating_conversation = true;
+
+    /// Opens a new query tab for a new conversation. Codex creates the
+    /// conversation when you send the first message.
+    fn create_assistant_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.dialog_open() {
+            return;
+        }
+        let index = self.add_tab(self.active_profile(), window, cx);
+        self.activate(index, window, cx);
+        self.focus_assistant_composer(window, cx);
+    }
+
+    /// Selects a tab without a conversation and opens the pane for it. The
+    /// first message starts the conversation in this tab.
+    pub(super) fn start_tab_conversation(
+        &mut self,
+        tab_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.dialog_open() || self.tab_assistant_status(tab_id).is_some() {
+            return;
+        }
+        let Some(index) = self.tabs.iter().position(|tab| tab.saved.id == tab_id) else {
+            return;
+        };
+        self.activate(index, window, cx);
+        if self.assistant_panel.open {
+            self.focus_assistant_composer(window, cx);
+        } else {
+            self.toggle_assistant(window, cx);
+        }
+    }
+
+    fn focus_assistant_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.assistant_panel.open {
+            self.assistant_panel
+                .composer
+                .update(cx, |composer, cx| composer.focus(window, cx));
         }
     }
     fn assistant_transcript_near_bottom(&self) -> bool {
@@ -1010,8 +1413,7 @@ impl Qrow {
     /// Builds the actions of the pane header menu and the thread list context
     /// menu.
     fn conversation_menu(&self, thread_id: &str, cx: &mut Context<Self>) -> ConversationMenu {
-        let busy = self.assistant_panel.active_turn.is_some()
-            && self.assistant.selected_thread.as_deref() == Some(thread_id);
+        let busy = self.thread_status(thread_id).busy();
         let id = thread_id.to_owned();
         ConversationMenu {
             busy,
@@ -1035,19 +1437,7 @@ impl Qrow {
     }
 
     fn sync_assistant_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mode_index = self
-            .assistant
-            .selected_thread
-            .as_ref()
-            .and_then(|id| {
-                self.assistant
-                    .conversations
-                    .iter()
-                    .find(|conversation| &conversation.thread_id == id)
-            })
-            .is_some_and(|conversation| {
-                conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
-            });
+        let mode_index = self.displayed_mode() == AssistantExecutionMode::RunAutomatically;
         self.assistant_panel.mode_select.update(cx, |state, cx| {
             state.set_selected_value(
                 &if mode_index {
@@ -1171,17 +1561,41 @@ impl Qrow {
         });
     }
 
+    /// Shows a conversation. Qrow selects its tab and connection. A
+    /// conversation whose tab closed opens in a new tab under its last
+    /// connection.
     fn select_assistant_thread(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
-        if self.assistant_panel.active_turn.is_some() {
+        if self.dialog_open() {
             return;
         }
-        self.assistant.selected_thread = Some(id.to_owned());
-        self.assistant_panel.pending_reply_thread = None;
-        self.assistant_command(AssistantCommand::Resume(id.to_owned()), cx);
-        self.sync_assistant_selectors(window, cx);
+        let Some(conversation) = self.assistant.conversation(id) else {
+            return;
+        };
+        let index = match self.thread_tab_index(id) {
+            Some(index) => index,
+            None => {
+                let profile = conversation
+                    .detached_profile
+                    .filter(|profile| {
+                        self.profiles
+                            .iter()
+                            .any(|candidate| candidate.id == *profile)
+                    })
+                    .or_else(|| self.active_profile());
+                let index = self.add_tab(profile, window, cx);
+                let tab = self.tabs[index].saved.id;
+                if let Some(conversation) = self.assistant.conversation_mut(id) {
+                    conversation.tab_id = Some(tab);
+                    conversation.detached_profile = None;
+                }
+                index
+            }
+        };
+        self.activate(index, window, cx);
         self.assistant_panel.thread_list_override =
             thread_list_after_selection(self.assistant_panel.thread_list_override);
         self.scroll_assistant_to_bottom(window, cx);
+        self.focus_assistant_composer(window, cx);
         self.changed(cx);
     }
 
@@ -1271,8 +1685,9 @@ impl Qrow {
         self.assistant_panel.open = !self.assistant_panel.open;
         if self.assistant_panel.open {
             self.assistant_panel.previous_focus = window.focused(cx);
-            self.assistant_panel.unread = false;
-            self.assistant_panel.unread_error = false;
+            if let Some(thread) = self.displayed_thread() {
+                self.thread_run_mut(&thread).unread = None;
+            }
             self.start_assistant(cx);
             self.assistant_panel
                 .composer
@@ -1318,55 +1733,45 @@ impl Qrow {
         cx.notify();
     }
 
-    pub(super) fn reconnect_assistant(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reconnect_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.assistant_panel.shutdown();
-        self.assistant_panel.active_turn = None;
-        self.assistant_panel.pending_reply_thread = None;
-        self.assistant_panel.target = None;
-        self.assistant_panel.pending_query = None;
+        self.reset_assistant_runs(window, cx);
         self.start_assistant(cx);
     }
 
     pub(super) fn stop_assistant(&mut self, cx: &mut Context<Self>) {
-        let (Some(thread_id), Some(turn_id)) = (
-            self.assistant.selected_thread.clone(),
-            self.assistant_panel.active_turn.clone(),
-        ) else {
+        let Some(thread_id) = self.displayed_thread() else {
             return;
         };
-        self.assistant_command(AssistantCommand::Interrupt { thread_id, turn_id }, cx);
-        self.assistant_panel.pending_reply_thread = None;
+        let Some(turn_id) = self
+            .thread_run(&thread_id)
+            .and_then(|run| run.active_turn.clone())
+        else {
+            return;
+        };
+        self.assistant_command(
+            AssistantCommand::Interrupt {
+                thread_id: thread_id.clone(),
+                turn_id,
+            },
+            cx,
+        );
+        self.thread_run_mut(&thread_id).pending_reply = false;
         cx.notify();
     }
 
     pub(super) fn toggle_assistant_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread_id) = self.assistant.selected_thread.clone() else {
+        let Some(target) = self.mode_target() else {
             return;
         };
-        let Some(conversation) = self
-            .assistant
-            .conversations
-            .iter()
-            .find(|conversation| conversation.thread_id == thread_id)
-        else {
-            return;
-        };
-        if conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically {
-            if let Some(conversation) = self
-                .assistant
-                .conversations
-                .iter_mut()
-                .find(|conversation| conversation.thread_id == thread_id)
-            {
-                conversation.execution_mode = qrow::model::AssistantExecutionMode::AskBeforeRunning;
-                self.changed(cx);
-            }
+        if self.displayed_mode() == AssistantExecutionMode::RunAutomatically {
+            self.set_mode(&target, AssistantExecutionMode::AskBeforeRunning, cx);
             return;
         }
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
-            let thread_id = thread_id.clone();
+            let target = target.clone();
             alert.title("Run assistant queries automatically?")
                 .description("The assistant can run SQL that changes or deletes data and schema. Qrow cannot confirm that a statement is read-only.")
                 .footer(DialogFooter::new().justify_end()
@@ -1376,11 +1781,8 @@ impl Qrow {
                         .label("Run automatically")
                         .on_click(move |_, window, cx| {
                             let _ = confirm.update(cx, |this, cx| {
-                                if let Some(conversation) = this.assistant.conversations.iter_mut().find(|conversation| conversation.thread_id == thread_id) {
-                                    conversation.execution_mode = qrow::model::AssistantExecutionMode::RunAutomatically;
-                                    this.changed(cx);
-                                    this.sync_assistant_selectors(window, cx);
-                                }
+                                this.set_mode(&target, AssistantExecutionMode::RunAutomatically, cx);
+                                this.sync_assistant_selectors(window, cx);
                             });
                             window.close_dialog(cx);
                         })))
@@ -1414,7 +1816,7 @@ impl Qrow {
                     .media(
                         EmptyMedia::new()
                             .with_variant(EmptyMediaVariant::Icon)
-                            .child(Icon::new(AssetIconName::Sparkles)),
+                            .child(Icon::new(AssetIconName::Bot)),
                     )
                     .title(EmptyTitle::new().child("Sign in to Codex"))
                     .description(EmptyDescription::new().child(
@@ -1576,24 +1978,64 @@ impl Qrow {
         if text.trim().is_empty() {
             return;
         }
-        let Some(thread_id) = self.assistant.selected_thread.clone() else {
+        let Some(tab_id) = self.active_tab_id() else {
             return;
         };
-        let context = self.assistant_context(cx);
-        let mut new_target = self.assistant_target(&thread_id, cx);
-        if let (Some(target), Some(turn_id)) = (&mut new_target, &self.assistant_panel.active_turn)
-        {
+        if let Some(thread_id) = self.displayed_thread() {
+            if !self.send_assistant_message(&thread_id, text, cx) {
+                return;
+            }
+        } else {
+            if self
+                .assistant_panel
+                .first_messages
+                .iter()
+                .any(|first| first.tab_id == tab_id)
+                || !self.assistant_command(AssistantCommand::Create(tools::definitions()), cx)
+            {
+                return;
+            }
+            let mode = self.displayed_mode();
+            self.assistant_panel.draft_modes.remove(&tab_id);
+            self.assistant_panel.first_messages.push_back(FirstMessage {
+                tab_id,
+                entry: TranscriptEntry::new(Speaker::User, text.clone(), None),
+                text,
+                mode,
+            });
+        }
+        self.assistant_panel
+            .composer
+            .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.scroll_assistant_to_bottom(window, cx);
+        cx.notify();
+    }
+
+    /// Starts a turn, or steers the active turn, of a conversation that has a
+    /// query tab. Returns false when Codex did not take the message.
+    fn send_assistant_message(
+        &mut self,
+        thread_id: &str,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let context = self.assistant_context(thread_id, cx);
+        let active_turn = self
+            .thread_run(thread_id)
+            .and_then(|run| run.active_turn.clone());
+        let mut new_target = self.assistant_target(thread_id, cx);
+        if let (Some(target), Some(turn_id)) = (&mut new_target, &active_turn) {
             target.turn_id = turn_id.clone();
         }
-        let command = if let Some(turn_id) = self.assistant_panel.active_turn.clone() {
+        let command = if let Some(turn_id) = active_turn.clone() {
             AssistantCommand::Steer {
-                thread_id: thread_id.clone(),
+                thread_id: thread_id.to_owned(),
                 turn_id,
                 text: format!("{text}{WORKSPACE_CONTEXT_SEPARATOR}{context}"),
             }
         } else {
             AssistantCommand::Start(TurnRequest {
-                thread_id: thread_id.clone(),
+                thread_id: thread_id.to_owned(),
                 text: text.clone(),
                 context,
                 model: self.settings.assistant.model.clone(),
@@ -1602,63 +2044,55 @@ impl Qrow {
             })
         };
         if !self.assistant_command(command, cx) {
-            return;
+            return false;
         }
-        self.assistant_panel.target = new_target;
-        if self
-            .assistant_panel
+        let run = self.thread_run_mut(thread_id);
+        run.target = new_target;
+        run.unread = None;
+        run.pending_reply = true;
+        let replaced = run
             .pending_query
             .as_ref()
             .is_some_and(|pending| !pending.started)
-            && let Some(pending) = self.assistant_panel.pending_query.take()
-        {
+            .then(|| run.pending_query.take())
+            .flatten();
+        if let Some(pending) = replaced {
             self.record_assistant_query_cancelled(
                 &pending,
                 "A new instruction replaced this query request.",
             );
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
-        self.assistant_panel.unstarted_threads.remove(&thread_id);
-        if let Some(conversation) = self
-            .assistant
-            .conversations
-            .iter_mut()
-            .find(|conversation| conversation.thread_id == thread_id)
-        {
+        self.assistant_panel.unstarted_threads.remove(thread_id);
+        if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
             conversation.last_activity = unix_now_seconds();
             self.changed(cx);
         }
-        self.assistant_panel.pending_reply_thread = Some(thread_id.clone());
         self.assistant_panel
             .transcripts
-            .entry(thread_id)
+            .entry(thread_id.to_owned())
             .or_default()
-            .push(TranscriptEntry::new(
-                Speaker::User,
-                text,
-                self.assistant_panel.active_turn.clone(),
-            ));
-        self.assistant_panel
-            .composer
-            .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.scroll_assistant_to_bottom(window, cx);
-        cx.notify();
+            .push(TranscriptEntry::new(Speaker::User, text, active_turn));
+        true
     }
 
+    /// The action target of a conversation: its query tab, the connection of
+    /// that tab, and the selection in it.
     pub(super) fn assistant_target(&self, thread_id: &str, cx: &App) -> Option<ActionTarget> {
-        let tab = self.tabs.get(self.active)?;
-        let connection_id = tab.saved.profile;
+        let tab = &self.tabs[self.thread_tab_index(thread_id)?];
         let selected = tab.input.read(cx).selected_range();
         Some(ActionTarget {
             conversation_id: thread_id.into(),
             turn_id: String::new(),
             tab_id: tab.saved.id,
-            connection_id,
+            connection_id: tab.saved.profile,
             selected_range: (!selected.is_empty()).then_some(selected),
         })
     }
 
-    pub(super) fn assistant_context(&self, cx: &App) -> Value {
+    /// The workspace context of a conversation. `selected_tab` is the
+    /// conversation's query tab, also when you work in another tab.
+    pub(super) fn assistant_context(&self, thread_id: &str, cx: &App) -> Value {
         let connections = self
             .profiles
             .iter()
@@ -1711,7 +2145,9 @@ impl Qrow {
                 },
             })
             .collect::<Vec<_>>();
-        let selected_tab = self.tabs.get(self.active).map(|tab| {
+        let conversation_tab = self.thread_tab_index(thread_id);
+        let selected_tab = conversation_tab.map(|index| {
+            let tab = &self.tabs[index];
             let results = tab.table.read(cx);
             let results = results.delegate();
             let selection = tab.input.read(cx).selected_range();
@@ -1722,7 +2158,7 @@ impl Qrow {
             let sql = tab.input.read(cx).value().to_string();
             let (statement_ranges, statement_ranges_truncated) = context_statement_ranges(&sql);
             SelectedTabContext {
-                tab: tabs[self.active].clone(),
+                tab: tabs[index].clone(),
                 sql,
                 selected_range: (!selection.is_empty()).then_some(selection),
                 statement_ranges,
@@ -1760,8 +2196,7 @@ impl Qrow {
         for event in events {
             self.handle_assistant_event(event, window, cx);
         }
-        self.update_assistant_query_progress(cx);
-        self.complete_assistant_query(cx);
+        self.tick_assistant_queries(cx);
         if changed {
             cx.notify();
         }
@@ -1800,17 +2235,11 @@ impl Qrow {
                 self.changed(cx);
             }
         }
-        if initial && matches!(self.assistant_panel.status, Status::Ready) {
-            if let Some(thread) = self.assistant.selected_thread.clone() {
-                self.assistant_command(AssistantCommand::Resume(thread), cx);
-            } else {
-                self.create_assistant_conversation(cx);
-            }
-        } else if !initial
-            && matches!(self.assistant_panel.status, Status::Ready)
-            && self.assistant.selected_thread.is_none()
-        {
-            self.create_assistant_conversation(cx);
+        if initial {
+            self.assistant_panel.loaded_threads.clear();
+        }
+        if let Some(thread) = self.displayed_thread() {
+            self.load_assistant_thread(&thread, cx);
         }
     }
 
@@ -1828,17 +2257,29 @@ impl Qrow {
                 self.update_assistant_snapshot(snapshot, false, window, cx)
             }
             AssistantServiceEvent::Created(conversation) => {
-                self.assistant_panel.creating_conversation = false;
-                let mut entry = AssistantConversation::new(
-                    conversation.id.clone(),
-                    self.settings.assistant.default_execution_mode,
-                );
+                // Codex creates conversations in the order of the requests.
+                let Some(first) = self.assistant_panel.first_messages.pop_front() else {
+                    return;
+                };
+                let id = conversation.id;
+                self.assistant_panel.loaded_threads.insert(id.clone());
+                self.assistant_panel.unstarted_threads.insert(id.clone());
+                if !self.tabs.iter().any(|tab| tab.saved.id == first.tab_id)
+                    || self.assistant.conversation_for_tab(first.tab_id).is_some()
+                {
+                    // Codex does not keep a conversation without a turn.
+                    return;
+                }
+                let mut entry = AssistantConversation::new(id.clone(), first.mode);
                 entry.last_activity = unix_now_seconds();
+                entry.tab_id = Some(first.tab_id);
                 self.assistant.conversations.push(entry);
-                self.assistant_panel
-                    .unstarted_threads
-                    .insert(conversation.id.clone());
-                self.assistant.selected_thread = Some(conversation.id);
+                if !self.send_assistant_message(&id, first.text.clone(), cx) {
+                    self.restore_first_message(first, window, cx);
+                }
+                if self.displayed_thread().as_deref() == Some(id.as_str()) {
+                    self.scroll_assistant_to_bottom(window, cx);
+                }
                 self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
             }
@@ -1856,7 +2297,7 @@ impl Qrow {
                 } else {
                     self.assistant_panel.older_cursors.remove(&thread);
                 }
-                let selected = self.assistant.selected_thread.as_deref() == Some(thread.as_str());
+                let selected = self.displayed_thread().as_deref() == Some(thread.as_str());
                 let thread_id = thread.clone();
                 let entries = self.assistant_panel.transcripts.entry(thread).or_default();
                 let previous_count = entries.len();
@@ -1874,7 +2315,7 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::HistoryPage(page) => {
-                self.assistant_panel.loading_older = false;
+                self.thread_run_mut(&page.thread_id).loading_older = false;
                 if let Some(cursor) = page.older_cursor {
                     self.assistant_panel
                         .older_cursors
@@ -1919,11 +2360,12 @@ impl Qrow {
                 {
                     entry.turn_id = Some(turn.id.clone());
                 }
-                if self.assistant.selected_thread.as_deref() == Some(&thread_id) {
-                    self.assistant_panel.active_turn = Some(turn.id.clone());
-                    if let Some(target) = &mut self.assistant_panel.target {
-                        target.turn_id = turn.id;
-                    }
+                let run = self.thread_run_mut(&thread_id);
+                run.active_turn = Some(turn.id.clone());
+                if let Some(target) = &mut run.target {
+                    target.turn_id = turn.id;
+                }
+                if self.displayed_thread().as_deref() == Some(thread_id.as_str()) {
                     self.scroll_assistant_to_bottom(window, cx);
                 }
             }
@@ -1932,13 +2374,9 @@ impl Qrow {
                 turn_id,
                 text,
             }) => {
-                let selected =
-                    self.assistant.selected_thread.as_deref() == Some(thread_id.as_str());
-                if !text.is_empty()
-                    && self.assistant_panel.pending_reply_thread.as_deref()
-                        == Some(thread_id.as_str())
-                {
-                    self.assistant_panel.pending_reply_thread = None;
+                let selected = self.displayed_thread().as_deref() == Some(thread_id.as_str());
+                if !text.is_empty() {
+                    self.thread_run_mut(&thread_id).pending_reply = false;
                 }
                 let entries = self
                     .assistant_panel
@@ -1972,44 +2410,45 @@ impl Qrow {
                 turn,
                 error,
             }) => {
-                if self.assistant_panel.pending_reply_thread.as_deref() == Some(thread_id.as_str())
-                {
-                    self.assistant_panel.pending_reply_thread = None;
-                }
-                if self
-                    .assistant_panel
+                let viewed = self.assistant_panel.open
+                    && self.displayed_thread().as_deref() == Some(thread_id.as_str());
+                let run = self.thread_run_mut(&thread_id);
+                run.pending_reply = false;
+                let mut not_run = None;
+                if run
                     .pending_query
                     .as_ref()
-                    .is_some_and(|pending| {
-                        pending.call.thread_id == thread_id && pending.call.turn_id == turn.id
-                    })
+                    .is_some_and(|pending| pending.call.turn_id == turn.id)
                 {
-                    if self
-                        .assistant_panel
+                    if run
                         .pending_query
                         .as_ref()
                         .is_some_and(|pending| pending.started)
                     {
-                        if let Some(pending) = &mut self.assistant_panel.pending_query {
+                        if let Some(pending) = &mut run.pending_query {
                             pending.detached = true;
                         }
-                    } else if let Some(pending) = self.assistant_panel.pending_query.take() {
-                        self.record_assistant_query_cancelled(
-                            &pending,
-                            "The turn ended before the query ran.",
-                        );
+                    } else {
+                        not_run = run.pending_query.take();
                     }
+                }
+                run.active_turn = None;
+                run.target = None;
+                if !viewed {
+                    run.unread = Some(if error.is_some() {
+                        Unread::Error
+                    } else {
+                        Unread::Reply
+                    });
+                }
+                if let Some(pending) = not_run {
+                    self.record_assistant_query_cancelled(
+                        &pending,
+                        "The turn ended before the query ran.",
+                    );
                 }
                 self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
                 self.request_assistant_title(&thread_id, cx);
-                if !self.assistant_panel.open {
-                    self.assistant_panel.unread = true;
-                    self.assistant_panel.unread_error = error.is_some();
-                }
-                if self.assistant.selected_thread.as_deref() == Some(&thread_id) {
-                    self.assistant_panel.active_turn = None;
-                    self.assistant_panel.target = None;
-                }
                 if let Some(position) = self
                     .assistant
                     .conversations
@@ -2098,9 +2537,8 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
-                if self.assistant_panel.pending_reply_thread.as_deref() == Some(id.as_str()) {
-                    self.assistant_panel.pending_reply_thread = None;
-                }
+                self.assistant_panel.runs.remove(&id);
+                self.assistant_panel.loaded_threads.remove(&id);
                 self.assistant_panel.older_cursors.remove(&id);
                 self.assistant_panel.loaded_cursors.remove(&id);
                 self.assistant
@@ -2110,30 +2548,15 @@ impl Qrow {
                 self.assistant_panel.unstarted_threads.remove(&id);
                 self.assistant_panel.regenerating_titles.remove(&id);
                 self.assistant_panel.title_history_reads.remove(&id);
-                if self.assistant.selected_thread.as_deref() == Some(&id) {
-                    self.assistant.selected_thread = self
-                        .assistant
-                        .conversations
-                        .first()
-                        .map(|conversation| conversation.thread_id.clone());
-                    if let Some(next) = self.assistant.selected_thread.clone() {
-                        self.assistant_command(AssistantCommand::Resume(next), cx);
-                    } else {
-                        self.create_assistant_conversation(cx);
-                    }
-                }
+                // The tab stays open without a conversation.
                 self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
             }
             AssistantServiceEvent::Disconnected(error) => {
-                self.assistant_panel.creating_conversation = false;
                 self.assistant_panel.sign_in = SignIn::Idle;
                 self.assistant_panel.status = Status::Disconnected(error);
                 self.assistant_panel.service = None;
-                self.assistant_panel.active_turn = None;
-                self.assistant_panel.pending_reply_thread = None;
-                self.assistant_panel.target = None;
-                self.assistant_panel.pending_query = None;
+                self.reset_assistant_runs(window, cx);
             }
             AssistantServiceEvent::Failed {
                 operation,
@@ -2160,7 +2583,7 @@ impl Qrow {
                         "Could not regenerate the title: {error}"
                     )));
                     // The conversation shows its own error when you open it.
-                    if self.assistant.selected_thread.as_ref() != Some(thread) {
+                    if self.displayed_thread().as_ref() != Some(thread) {
                         return;
                     }
                 }
@@ -2176,10 +2599,25 @@ impl Qrow {
                     self.assistant_panel.pending_rename = None;
                 }
                 if operation == Operation::Create {
-                    self.assistant_panel.creating_conversation = false;
+                    if let Some(first) = self.assistant_panel.first_messages.pop_front() {
+                        self.restore_first_message(first, window, cx);
+                    }
+                    self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                        "Could not start the conversation: {error}"
+                    )));
+                    return;
+                }
+                if operation == Operation::Resume
+                    && let Some(thread) = id.as_ref()
+                {
+                    // Qrow does not try again in this Codex process, so a tab
+                    // change does not add the error again.
+                    self.assistant_panel.loaded_threads.insert(thread.clone());
                 }
                 if operation == Operation::ReadOlder {
-                    self.assistant_panel.loading_older = false;
+                    if let Some(thread) = id.as_ref() {
+                        self.thread_run_mut(thread).loading_older = false;
+                    }
                     if let Some(thread) = id.as_ref()
                         && let Some(cursor) = self.assistant_panel.older_cursors.get(thread)
                         && let Some(loaded) = self.assistant_panel.loaded_cursors.get_mut(thread)
@@ -2190,42 +2628,49 @@ impl Qrow {
                         }
                     }
                 }
-                if matches!(operation, Operation::Start | Operation::Steer)
-                    && id.as_deref() == self.assistant.selected_thread.as_deref()
-                {
-                    self.assistant_panel.active_turn = None;
-                    self.assistant_panel.pending_reply_thread = None;
-                    self.assistant_panel.target = None;
-                    self.assistant_panel.pending_query = None;
+                if let Some(thread) = id.as_ref() {
+                    let run = self.thread_run_mut(thread);
+                    match operation {
+                        Operation::Start => {
+                            run.active_turn = None;
+                            run.pending_reply = false;
+                            run.target = None;
+                            run.pending_query = None;
+                        }
+                        // The active turn continues without the message, and
+                        // it can still wait for a tool answer.
+                        Operation::Steer => run.pending_reply = false,
+                        _ => {}
+                    }
                 }
                 if operation == Operation::Answer {
                     self.assistant_panel.status = Status::Disconnected(error);
                     self.assistant_panel.service = None;
-                    self.assistant_panel.pending_reply_thread = None;
+                    self.reset_assistant_runs(window, cx);
                     return;
                 }
-                if let Some(thread) = id
-                    .filter(|_| {
-                        matches!(
-                            operation,
-                            Operation::Start
-                                | Operation::Steer
-                                | Operation::Resume
-                                | Operation::Read
-                                | Operation::ReadOlder
-                                | Operation::Delete
-                                | Operation::Rename
-                        )
-                    })
-                    .or_else(|| self.assistant.selected_thread.clone())
-                {
+                if let Some(thread) = id.filter(|_| {
+                    matches!(
+                        operation,
+                        Operation::Start
+                            | Operation::Steer
+                            | Operation::Interrupt
+                            | Operation::Resume
+                            | Operation::Read
+                            | Operation::ReadOlder
+                            | Operation::Delete
+                            | Operation::Rename
+                    )
+                }) {
                     self.assistant_panel
                         .transcripts
                         .entry(thread)
                         .or_default()
                         .push(TranscriptEntry::new(Speaker::Error, error, None));
                 } else {
-                    self.assistant_panel.status = Status::Disconnected(error);
+                    // Codex still runs. The error does not belong to one
+                    // conversation.
+                    self.assistant_panel.notice = Some(AssistantNotice::error(error));
                 }
             }
             _ => {}
@@ -2370,6 +2815,54 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// The icon of a conversation state. An idle conversation has no icon.
+    pub(super) fn assistant_status_icon(
+        &self,
+        status: ThreadStatus,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let theme = cx.theme();
+        Some(match status {
+            ThreadStatus::Idle => return None,
+            ThreadStatus::Working => Spinner::new()
+                .xsmall()
+                .color(theme.primary)
+                .into_any_element(),
+            ThreadStatus::Approval => Icon::new(AssetIconName::Bot)
+                .small()
+                .text_color(theme.warning)
+                .into_any_element(),
+            ThreadStatus::Ready => Icon::new(AssetIconName::Bot)
+                .small()
+                .text_color(theme.success)
+                .into_any_element(),
+            ThreadStatus::Failed => Icon::new(AssetIconName::TriangleAlert)
+                .small()
+                .text_color(theme.danger)
+                .into_any_element(),
+        })
+    }
+
+    /// Names the connection of a conversation. A conversation whose tab
+    /// closed names the connection of its next tab.
+    fn conversation_place(&self, conversation: &AssistantConversation) -> String {
+        let (profile, closed) = match conversation
+            .tab_id
+            .and_then(|tab| self.tabs.iter().find(|candidate| candidate.saved.id == tab))
+        {
+            Some(tab) => (tab.saved.profile, false),
+            None => (conversation.detached_profile, true),
+        };
+        let name = profile
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+            .map_or("No connection", |profile| profile.name.as_str());
+        if closed {
+            format!("{name} · Tab closed")
+        } else {
+            name.to_owned()
+        }
+    }
+
     fn assistant_thread_list(
         &self,
         narrow: bool,
@@ -2384,6 +2877,7 @@ impl Qrow {
             .read(cx)
             .value()
             .to_lowercase();
+        let displayed = self.displayed_thread();
         v_flex()
             .w(if narrow { width } else { self.ui_px(230.) })
             .max_w_full()
@@ -2435,19 +2929,25 @@ impl Qrow {
                     .children(
                         conversations
                             .into_iter()
-                            .filter(|conversation| {
-                                conversation.title.to_lowercase().contains(&search)
-                            })
                             .map(|conversation| {
+                                (conversation, self.conversation_place(conversation))
+                            })
+                            .filter(|(conversation, place)| {
+                                conversation.title.to_lowercase().contains(&search)
+                                    || place.to_lowercase().contains(&search)
+                            })
+                            .map(|(conversation, place)| {
                                 let id = conversation.thread_id.clone();
+                                let status = self.thread_status(&id);
                                 let row = h_flex()
                                     .id(SharedString::from(format!("assistant-thread-row-{id}")))
                                     .w_full()
                                     .h(self.ui_px(48.))
                                     .flex_shrink_0();
-                                let selected =
-                                    self.assistant.selected_thread.as_deref() == Some(&id);
+                                let selected = displayed.as_deref() == Some(id.as_str());
                                 let label = conversation.title.clone();
+                                let accessible =
+                                    format!("{label}, {place}{}", status.accessible_suffix());
                                 let menu = self.conversation_menu(&id, cx);
                                 let button = Button::new(format!("assistant-thread-{id}"))
                                     .ghost()
@@ -2455,21 +2955,38 @@ impl Qrow {
                                     .w_full()
                                     .h_full()
                                     .justify_start()
-                                    .accessibility_label(label.clone())
+                                    .accessibility_label(accessible)
                                     .child(
-                                        v_flex()
+                                        h_flex()
                                             .w_full()
                                             .min_w_0()
-                                            .gap_0p5()
-                                            .child(div().min_w_0().truncate().child(label))
+                                            .gap_2()
                                             .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .child(conversation_age(
-                                                        conversation.last_activity,
-                                                        unix_now_seconds(),
-                                                    )),
+                                                v_flex()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .gap_0p5()
+                                                    .child(div().min_w_0().truncate().child(label))
+                                                    .child(
+                                                        div()
+                                                            .min_w_0()
+                                                            .truncate()
+                                                            .text_xs()
+                                                            .text_color(cx.theme().muted_foreground)
+                                                            .child(format!(
+                                                                "{place} · {}",
+                                                                conversation_age(
+                                                                    conversation.last_activity,
+                                                                    unix_now_seconds(),
+                                                                )
+                                                            )),
+                                                    ),
+                                            )
+                                            .when_some(
+                                                self.assistant_status_icon(status, cx),
+                                                |row, icon| {
+                                                    row.child(div().flex_none().child(icon))
+                                                },
                                             ),
                                     )
                                     .selected(selected)
@@ -2504,23 +3021,31 @@ impl Qrow {
         };
         let disconnected = disconnected_error.is_some();
         let signed_out = matches!(self.assistant_panel.status, Status::SignInRequired);
-        let selected = self.assistant.selected_thread.as_deref().unwrap_or("");
+        let displayed = self.displayed_thread();
+        let selected = displayed.as_deref().unwrap_or("");
+        let run = displayed
+            .as_deref()
+            .and_then(|thread| self.thread_run(thread));
+        let active_turn = run.is_some_and(|run| run.active_turn.is_some());
+        let active_tab = self.active_tab_id();
+        let first_message = self
+            .assistant_panel
+            .first_messages
+            .iter()
+            .find(|first| Some(first.tab_id) == active_tab);
+        let pending_approval = run
+            .and_then(|run| run.pending_query.as_ref())
+            .filter(|pending| !pending.approved);
         // Codex owes a reply from the send until the turn ends. A query that
         // waits for approval waits for you instead.
-        let waiting_for_agent = (self.assistant_panel.pending_reply_thread.as_deref()
-            == Some(selected)
-            || self.assistant_panel.active_turn.is_some())
-            && !self
-                .assistant_panel
-                .pending_query
-                .as_ref()
-                .is_some_and(|pending| !pending.approved);
+        let waiting_for_agent = first_message.is_some()
+            || (run.is_some_and(|run| run.pending_reply || run.active_turn.is_some())
+                && pending_approval.is_none());
         let entries = self.assistant_panel.transcripts.get(selected);
-        let mode_is_run = self.assistant.conversations.iter().any(|conversation| {
-            conversation.thread_id == selected
-                && conversation.execution_mode
-                    == qrow::model::AssistantExecutionMode::RunAutomatically
-        });
+        let busy = displayed
+            .as_deref()
+            .is_some_and(|thread| self.thread_status(thread).busy());
+        let mode_is_run = self.displayed_mode() == AssistantExecutionMode::RunAutomatically;
         let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
             self.settings
                 .assistant
@@ -2640,8 +3165,7 @@ impl Qrow {
                             .truncate()
                             .text_base()
                             .font_weight(FontWeight::MEDIUM)
-                            .child(self.assistant.conversations.iter()
-                                .find(|conversation| Some(&conversation.thread_id) == self.assistant.selected_thread.as_ref())
+                            .child(displayed.as_deref().and_then(|thread| self.assistant.conversation(thread))
                                 .map_or_else(|| "New conversation".to_owned(), |conversation| conversation.title.clone())),
                     )
                     .child(
@@ -2654,12 +3178,8 @@ impl Qrow {
                             .icon(IconName::Plus)
                             .accessibility_label("New Conversation")
                             .tooltip("New Conversation")
-                            .disabled(
-                                !matches!(self.assistant_panel.status, Status::Ready)
-                                    || self.assistant_panel.creating_conversation,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.create_assistant_conversation(cx);
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.create_assistant_conversation(window, cx);
                             })),
                     )
                     .child(
@@ -2671,7 +3191,7 @@ impl Qrow {
                             .icon(IconName::Ellipsis)
                             .accessibility_label("Conversation Actions")
                             .tooltip("Conversation Actions")
-                            .disabled(self.assistant.selected_thread.is_none() || self.assistant_panel.active_turn.is_some())
+                            .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
                                 let menu = self.conversation_menu(selected, cx);
                                 move |popup, _, _| menu.build(popup)
@@ -2725,12 +3245,13 @@ impl Qrow {
                     .gap_3()
                     .when(self.assistant_panel.older_cursors.contains_key(selected), |transcript| transcript.child(
                         Button::new("assistant-load-older").ghost().small().label("Load older messages")
-                            .disabled(self.assistant_panel.loading_older || self.assistant_panel.active_turn.is_some() || self.assistant_panel.pending_query.is_some())
+                            .disabled(run.is_some_and(|run| run.loading_older || run.active_turn.is_some() || run.pending_query.is_some()))
                             .on_click(cx.listener(|this, _, _, cx| this.load_older_assistant_messages(cx)))))
                     .children(
                         entries
                             .into_iter()
                             .flatten()
+                            .chain(first_message.map(|first| &first.entry))
                             .enumerate()
                             .map(|(index, entry)| {
                                 if let Some(tool) = &entry.tool {
@@ -2839,10 +3360,7 @@ impl Qrow {
                 },
             )))
             .when_some(
-                self.assistant_panel
-                    .pending_query
-                    .as_ref()
-                    .filter(|pending| !pending.approved),
+                pending_approval,
                 |panel, pending| {
                     let tab = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id);
                     let tab_title = tab.map_or("Query tab", |tab| tab.saved.title.as_str());
@@ -2890,16 +3408,22 @@ impl Qrow {
                                             .primary()
                                             .small()
                                             .label("Run")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.approve_assistant_query(window, cx)
+                                            .on_click(cx.listener({
+                                                let thread = selected.to_owned();
+                                                move |this, _, window, cx| {
+                                                    this.approve_assistant_query(&thread, window, cx)
+                                                }
                                             })),
                                     )
                                     .child(
                                         Button::new("assistant-cancel-query")
                                             .small()
                                             .label("Cancel")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.cancel_assistant_approval(cx)
+                                            .on_click(cx.listener({
+                                                let thread = selected.to_owned();
+                                                move |this, _, _, cx| {
+                                                    this.cancel_assistant_approval(&thread, cx)
+                                                }
                                             })),
                                     ),
                             ),
@@ -3001,9 +3525,9 @@ impl Qrow {
                                     .label("Reconnect")
                                     .accessibility_label("Reconnect to Codex")
                                     .tooltip(error)
-                                    .on_click(cx.listener(|this, _, _, cx| this.reconnect_assistant(cx))),
+                                    .on_click(cx.listener(|this, _, window, cx| this.reconnect_assistant(window, cx))),
                             ))
-                            .when(!disconnected && self.assistant_panel.active_turn.is_some(), |row| row.child(
+                            .when(!disconnected && active_turn, |row| row.child(
                                 Button::new("assistant-stop")
                                     .small()
                                     .label("Cancel")
@@ -3011,13 +3535,11 @@ impl Qrow {
                                     .tooltip("Cancel Assistant Turn")
                                     .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
                             ))
-                            .when(!disconnected && self.assistant_panel.active_turn.is_none(), |row| row.child(
+                            .when(!disconnected && !active_turn, |row| row.child(
                                 DropdownButton::new("assistant-send-mode")
                                     .primary()
                                     .small()
-                                    .disabled(
-                                        !controls_ready || self.assistant.selected_thread.is_none(),
-                                    )
+                                    .disabled(!controls_ready || first_message.is_some())
                                     .button(
                                         Button::new("assistant-send")
                                             .icon(AssetIconName::Send)
@@ -3033,18 +3555,12 @@ impl Qrow {
                                     )
                                     .dropdown_menu({
                                         let ask = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                            if this.assistant.conversations.iter().any(|conversation| {
-                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
-                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::RunAutomatically
-                                            }) {
+                                            if this.displayed_mode() == AssistantExecutionMode::RunAutomatically {
                                                 this.toggle_assistant_mode(window, cx);
                                             }
                                         }));
                                         let run = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
-                                            if this.assistant.conversations.iter().any(|conversation| {
-                                                Some(&conversation.thread_id) == this.assistant.selected_thread.as_ref()
-                                                    && conversation.execution_mode == qrow::model::AssistantExecutionMode::AskBeforeRunning
-                                            }) {
+                                            if this.displayed_mode() == AssistantExecutionMode::AskBeforeRunning {
                                                 this.toggle_assistant_mode(window, cx);
                                             }
                                         }));

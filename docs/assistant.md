@@ -1,7 +1,9 @@
 # AI assistant
 
-The optional AI assistant helps you write and run SQL in Qrow. It shares the
-selected query tab with you. You can edit the SQL while the assistant is open.
+The optional AI assistant helps you write and run SQL in Qrow. Each
+conversation has its own query tab. You and the assistant work in the same
+tab, and you can edit its SQL at any time. Several conversations can work at
+the same time in different tabs.
 
 ## Set up the assistant
 
@@ -25,7 +27,8 @@ automatically**.
 Select a query tab. Select **Toggle Assistant** in the tab strip or in the
 **View** menu, or press **⌘J**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
-**Cancel**. Type a follow-up and press **Enter** to steer the current turn.
+**Cancel**. While Codex starts a new conversation after its first message, you
+cannot send or cancel. Type a follow-up and press **Enter** to steer the current turn.
 **Cancel** interrupts the Codex turn. It does not cancel a database query that
 already started. The Send button returns when the turn ends.
 
@@ -38,8 +41,8 @@ the conversation. It shows from the time that you send a message until the
 turn ends or fails. It also shows while Codex writes text or uses tools. It does
 not show while a query waits for your approval.
 
-See [Pane and connection state](#pane-and-connection-state) for the tab-strip
-status shown when the assistant pane is hidden.
+See [Conversation state](#conversation-state) for the status that the thread
+list, the tabs, and the assistant toggle show.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
@@ -69,11 +72,12 @@ font size, and line height. These settings do not change the message field or
 tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
-query tabs, selected SQL, query status, and requested result rows and Logs.
+query tabs, the SQL of its tab, query status, and requested result rows and
+Logs.
 When an assistant query or row fetch ends, Qrow sends its first downloaded rows
 to Codex with the result: up to 20 rows and 16 KB. Codex then does not need a
 separate request to read them. It
-appends each new query to the selected tab. It keeps existing queries and
+appends each new query to the tab of the conversation. It keeps existing queries and
 selects the new query so it can run that statement alone. If the previous
 query has no final semicolon, Qrow adds one. The assistant starts each query
 that it writes with a short `--` comment that tells what the query does, for
@@ -81,11 +85,9 @@ example `-- Paid bookings by gate`. When the assistant changes a query, it keeps
 the comment correct. Qrow selects only the statement below the comment, so the
 assistant runs the statement without the comment. The assistant can select a
 specific statement in a tab with several queries before it runs that statement.
-If you switch or rename a tab during a turn, the assistant can read the
-workspace again to use the current selected tab. A rename keeps the tab ID.
-If an assistant tool uses an ID that is not in the open tabs, Qrow uses the
-selected tab and returns its ID. Qrow rejects an ID for a different open tab
-when the tool must act on the selected tab.
+A rename keeps the tab ID. If an assistant tool uses an ID that is not in the
+open tabs, Qrow uses the tab of the conversation and returns its ID. Qrow
+rejects an ID for a different open tab when the tool must change or run SQL.
 Ask the assistant to change existing SQL when you want an edit or replacement.
 
 The assistant can write SQL before you select a connection. Select a connection
@@ -126,19 +128,20 @@ to the text sent to Codex. Qrow omits that context from the conversation,
 including messages loaded from Codex history.
 
 In **Ask before running**, Qrow shows the exact SQL, tab, and connection before
-an assistant query starts. Select **Run** or **Cancel**. An SQL edit does not
+an assistant query starts. The request shows in the pane of its conversation.
+Select **Run** or **Cancel**. An SQL edit does not
 need approval. In **Run automatically**, assistant queries start without this
 card. SQL can change or delete data and schema. Qrow cannot prove that SQL is
 read-only. Select **Run automatically** only if you accept this risk.
 
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
-Older saved conversations without an activity time show **Earlier**. On a
-narrow pane, select **Toggle Conversation List** to open the list. When you
-select a conversation there, the pane shows that conversation. On a wide pane,
-the list stays open. Search the
-list by title. Select **New
-Conversation** in the pane header to start a separate conversation.
+Each row shows the conversation title, its connection, the time of its last
+activity, and its [state](#conversation-state). Older saved conversations
+without an activity time show **Earlier**. On a narrow pane, select **Toggle
+Conversation List** to open the list. When you select a conversation there,
+Qrow selects its tab and connection, and the pane shows that conversation. On a
+wide pane, the list stays open. Search the list by title or connection name.
 After the first reply, Qrow sends recent messages from the conversation to
 Codex in a separate, unsaved request. Codex returns a short title. Qrow shows
 this title in the pane header and in the thread list. This request uses the
@@ -146,8 +149,8 @@ selected model. It does not include workspace context. If Codex cannot make a
 title, Qrow shows **New conversation** and tries again after the next reply.
 Open **Conversation Actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
-conversation in the thread list, right-click it. You cannot use them on a
-conversation while Codex works on it. Two conversations can have the same title.
+conversation in the thread list, right-click it. You cannot rename or delete a
+conversation while it works or waits for approval. Two conversations can have the same title.
 **Rename…** opens the same dialog as a query tab rename. Type a title with 1 to
 120 characters and select **Rename** or press **⌘Enter**.
 Automatic title requests do not replace a title that you set. Select
@@ -155,13 +158,12 @@ Automatic title requests do not replace a title that you set. Select
 messages. This title replaces a title that you set. If the conversation is not
 open, Qrow first reads its messages from Codex. If Codex cannot make a title,
 Qrow keeps the current title and shows a notice. When you
-delete a conversation, Qrow asks Codex to remove it. This action does not
-change query tabs, SQL, sessions, Logs, or results. Qrow
+delete a conversation, Qrow asks Codex to remove it. The tab stays open without
+a conversation. This action does not change SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text
 in its own data directory.
-Qrow saves a new conversation after you send its first message. Codex does not
-keep a conversation without messages after Codex stops. If you close Qrow or
-reconnect Codex before you send a message, Qrow starts a new conversation.
+Codex creates a conversation when you send its first message, and Qrow saves
+it then.
 If Codex cannot find a saved conversation, Qrow keeps its entry. If you restore
 the Codex history, you can try to open it again. You can also delete the entry
 from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
@@ -189,6 +191,54 @@ reply. A higher reasoning level makes each step slower. A turn that edits and
 runs a query has several steps. If assistant turns are slow, select a lower
 reasoning level.
 
+## Conversations and query tabs
+
+Each conversation belongs to one query tab. The tab belongs to a connection,
+so the conversation uses the connection of its tab. The pane shows the
+conversation of the selected tab.
+
+- If the selected tab does not have a conversation, the pane shows a new
+  conversation. Your first message starts the conversation in this tab. The
+  assistant can then work with the SQL that is already in the tab.
+- Select **New Conversation** in the pane header to open a new tab under the
+  current connection. The pane shows the new conversation.
+- Right-click a tab and select **Start Conversation** to open the pane for that
+  tab. This item is available only for a tab without a conversation.
+- An unsent message stays with its tab when you select another tab.
+
+A conversation continues to work when you select another tab or connection.
+You can start a turn in each conversation, and the turns work at the same time.
+Each conversation changes and runs SQL only in its own tab. It can read the
+other tabs. Parallel turns use your Codex plan limits faster.
+
+A tab cannot close while its conversation works or waits for approval. When
+you close the tab of a conversation, the conversation stays in the thread
+list, which shows **Tab closed** for it. Select the conversation to open it in
+a new tab under its last connection. Qrow does not keep the SQL of the closed
+tab.
+
+To move a conversation to another connection, right-click its tab and select
+**Move to Connection…**. The next message uses the new connection. You cannot
+move the tab while its conversation works or waits for approval.
+**Duplicate** and **Copy to Connection…** do not copy the conversation.
+
+## Conversation state
+
+Qrow shows the state of each conversation in the thread list and on its tab.
+A tab shows its state before its close button. A tab with a conversation shows
+the assistant icon there. While the conversation works, the tab shows an
+accent-colored spinner, also while the assistant runs the query of the tab. A
+query that you start shows a gray spinner. The **Toggle Assistant** button
+shows the most urgent state of all conversations.
+
+- A spinner means that Codex works on a turn.
+- A warning-colored assistant icon means that a query waits for your approval.
+- A green assistant icon means that a reply is ready.
+- A red alert icon means that a turn ended with an error.
+
+The toggle uses this order of priority: approval, error, reply, work. A ready
+reply or an error stays until you show its conversation with the pane open.
+
 ## Pane and connection state
 
 Opening the pane does not hide the Connections sidebar. In a small window, the
@@ -197,10 +247,6 @@ space.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop Codex or a database query.
-The tab strip uses the assistant icon to show a hidden turn. A green icon means
-that a reply is ready. A warning-colored icon means that a query waits for your
-approval. A spinner means that Codex is working. A red alert icon means that a
-turn ended with an error. Open the assistant pane to clear the reply status.
 
 Assistant notices use an alert in the pane. These notices report an unavailable
 saved option, a title error, or another exceptional condition. Routine status
@@ -210,6 +256,8 @@ If you quit Qrow while Codex is working, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) before it stops the turn.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
+A first message that did not start its conversation goes back to the message
+field of its tab.
 **Reconnect** replaces **Send** and **Cancel** below the message field. Its
 tooltip shows the error. Select **Reconnect** to try again.
 Qrow does not send the draft for you. A database query that already started can

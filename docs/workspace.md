@@ -67,9 +67,10 @@ Workspace version 3 adds the optional assistant state. Qrow gives version 1
 and version 2 workspaces safe assistant defaults during load. The assistant is
 off by default. The migration preserves connections, tabs, SQL, active-tab
 state, and appearance settings.
-Workspace version 4 links each assistant conversation to a query tab. A
-conversation from an earlier workspace loads without a query tab. It keeps the
-connection that was active. An earlier version of Qrow cannot open a version 4
+Workspace version 4 links each assistant conversation to a query tab. When
+Qrow loads an earlier workspace, the conversation that was open gets the active
+tab. The other conversations load without a query tab, under the connection
+that was active. An earlier version of Qrow cannot open a version 4
 workspace.
 
 ## Quit and save

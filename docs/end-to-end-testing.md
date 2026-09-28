@@ -85,7 +85,8 @@ Keychain credentials. The driver restores the previous clipboard contents
 after text entry.
 
 The full native suite also checks assistant fonts, appended SQL, statement
-selection, tab changes, titles, layout, sign-in, and the wide thread list. It runs each check with a separate
+selection, tab changes, titles, layout, sign-in, the wide thread list,
+parallel conversations, and conversation tabs. It runs each check with a separate
 temporary workspace and the same isolated package.
 
 To check the Assistant font picker without a server fixture, use an isolated
@@ -105,7 +106,7 @@ target/e2e-tools/native-driver --assistant-font-only
 This check captures the conversation search row, selects System Font and Menlo,
 reads the saved settings, captures the transcript in each font, and deletes a
 conversation whose Codex history is missing. It then starts Qrow again with the
-same workspace and checks that the unsent conversation does not cause an error.
+same workspace and checks that the tab without a conversation starts a new one.
 Like Codex, the synthetic Codex server saves a conversation only after its first
 message.
 
@@ -200,8 +201,45 @@ target/e2e-tools/native-driver --assistant-retarget-only
 
 The driver renames another tab and selects it during a turn. The assistant
 reads SQL and requests a run with a tab ID that is not in the open tabs. The
-check confirms that the query approval card names the selected tab and shows
-its SQL. The driver cancels the request before it connects.
+check confirms that the request uses the tab of the conversation. The tab shows
+that it waits for approval, and the pane of the selected tab does not show the
+request. The driver selects the conversation tab, checks the approval card, and
+cancels the request before it connects.
+
+To check two conversations that work at the same time, use the same package
+steps and a new, empty workspace directory. Run:
+
+```sh
+target/e2e-tools/native-driver --assistant-parallel-only
+```
+
+The driver writes a workspace with the synthetic connections Alpha and Beta. It
+starts a turn in the tab of each connection. The synthetic Codex server holds
+both turns until the driver releases them. Then each turn appends a query to its
+own tab and requests a run. The server sends each run request two times, as
+Codex does when a client resumes a thread. The check confirms that:
+
+- The thread list, the tabs, and the assistant toggle show each state: working,
+  waiting for approval, and reply ready.
+- Each tab gets only its own query.
+- A conversation selected in the list selects its tab and connection.
+- Qrow answers the repeated request only one time.
+
+To check how a conversation belongs to its tab, use the same package steps and
+a new, empty workspace directory. Run:
+
+```sh
+target/e2e-tools/native-driver --assistant-tab-binding-only
+```
+
+The driver starts a conversation in a tab that has SQL, and checks that the
+assistant reads this SQL. It closes the tab and checks that the thread list
+shows **Tab closed**. It selects the conversation, which opens in a new tab
+under the same connection. It moves this tab to the other connection and checks
+that the conversation moves with it. It checks that **Start Conversation** is
+not available in this tab. Then it deletes the conversation and checks that the
+tab stays. It starts a new conversation in the tab from the tab menu. The driver
+reads the saved workspace for each step.
 
 To check the thread list on a wide pane, use the same package steps and a new,
 empty workspace directory. Run:

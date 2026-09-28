@@ -7,7 +7,7 @@ pub(crate) const APP_ICON: &str = "app-icons/qrow-256.png";
 #[cfg(test)]
 const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
-const SPARKLES_ICON: &str = "icons/sparkles.svg";
+const ASSISTANT_ICONS: [&str; 2] = ["icons/bot.svg", "icons/panel-right.svg"];
 
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
 // the icons after `Send`.
@@ -15,7 +15,6 @@ gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
         TriangleAlert,
-        Sparkles,
         Send,
         Pencil,
         CircleStop,
@@ -76,8 +75,10 @@ mod tests {
     }
 
     #[test]
-    fn assistant_toggle_icon_is_available() {
-        assert!(Assets.load(SPARKLES_ICON).unwrap().is_some());
+    fn assistant_icons_are_available() {
+        for icon in ASSISTANT_ICONS {
+            assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
+        }
     }
 
     #[test]

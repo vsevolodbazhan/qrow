@@ -9,6 +9,7 @@ use super::{
     ToolResult, Turn, TurnRequest,
 };
 use std::{
+    collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -24,6 +25,56 @@ const EVENT_CAPACITY: usize = 1_024;
 const EVENT_POLL: Duration = Duration::from_millis(50);
 /// Codex is silent while it waits for a tool result, so a short poll sends the answer sooner.
 const TOOL_ANSWER_POLL: Duration = Duration::from_millis(5);
+
+/// The tool calls of each thread's current turn. Codex sends a call again
+/// that waits for its answer when a client resumes the thread. Qrow runs each
+/// call once.
+#[derive(Default)]
+struct ToolCallLedger {
+    threads: BTreeMap<String, TurnCalls>,
+}
+
+#[derive(Default)]
+struct TurnCalls {
+    turn_id: String,
+    unanswered: BTreeSet<String>,
+    received: BTreeSet<String>,
+}
+
+impl ToolCallLedger {
+    /// Returns false for a call that Qrow already received in this turn.
+    fn receive(&mut self, call: &ToolCall) -> bool {
+        let calls = self.threads.entry(call.thread_id.clone()).or_default();
+        if calls.turn_id != call.turn_id {
+            *calls = TurnCalls {
+                turn_id: call.turn_id.clone(),
+                ..TurnCalls::default()
+            };
+        }
+        if !calls.received.insert(call.call_id.clone()) {
+            return false;
+        }
+        calls.unanswered.insert(call.call_id.clone());
+        true
+    }
+
+    fn answer(&mut self, call: &ToolCall) {
+        if let Some(calls) = self.threads.get_mut(&call.thread_id) {
+            calls.unanswered.remove(&call.call_id);
+        }
+    }
+
+    /// Codex does not wait for answers after a turn ends.
+    fn end_turn(&mut self, thread_id: &str) {
+        self.threads.remove(thread_id);
+    }
+
+    fn waiting(&self) -> bool {
+        self.threads
+            .values()
+            .any(|calls| !calls.unanswered.is_empty())
+    }
+}
 
 #[derive(Debug)]
 pub enum Command {
@@ -238,7 +289,7 @@ impl Service {
                         return;
                     }
                 }
-                let mut unanswered_tools = 0_usize;
+                let mut tool_calls = ToolCallLedger::default();
                 loop {
                     if thread_stopping.load(Ordering::Acquire) {
                         break;
@@ -246,8 +297,8 @@ impl Service {
                     match command_rx.try_recv() {
                         Ok(Command::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
                         Ok(command) => {
-                            if matches!(command, Command::Answer { .. }) {
-                                unanswered_tools = unanswered_tools.saturating_sub(1);
+                            if let Command::Answer { call, .. } = &command {
+                                tool_calls.answer(call);
                             }
                             let event = execute(&mut harness, command);
                             if !emit(event) {
@@ -256,7 +307,7 @@ impl Service {
                         }
                         Err(mpsc::TryRecvError::Empty) => {}
                     }
-                    let poll = if unanswered_tools > 0 {
+                    let poll = if tool_calls.waiting() {
                         TOOL_ANSWER_POLL
                     } else {
                         EVENT_POLL
@@ -264,9 +315,12 @@ impl Service {
                     match harness.next_event(poll) {
                         Ok(Some(event)) => {
                             match &event {
-                                AssistantEvent::ToolCall(_) => unanswered_tools += 1,
-                                // Codex does not wait for answers after its turn ends.
-                                AssistantEvent::TurnCompleted { .. } => unanswered_tools = 0,
+                                AssistantEvent::ToolCall(call) if !tool_calls.receive(call) => {
+                                    continue;
+                                }
+                                AssistantEvent::TurnCompleted { thread_id, .. } => {
+                                    tool_calls.end_turn(thread_id);
+                                }
                                 _ => {}
                             }
                             if !emit(Event::Harness(event)) {
@@ -450,6 +504,38 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    fn call(thread: &str, turn: &str, id: &str) -> ToolCall {
+        ToolCall {
+            request_id: serde_json::json!(0),
+            call_id: id.into(),
+            thread_id: thread.into(),
+            turn_id: turn.into(),
+            name: "read_tab_sql".into(),
+            arguments: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn replayed_tool_calls_run_once_and_threads_wait_separately() {
+        let mut ledger = ToolCallLedger::default();
+        let first = call("thread-a", "turn-a", "call-1");
+        let other = call("thread-b", "turn-b", "call-1");
+        assert!(ledger.receive(&first));
+        assert!(ledger.receive(&other));
+        // Codex sends a waiting call again after thread/resume.
+        assert!(!ledger.receive(&first));
+        ledger.answer(&first);
+        assert!(!ledger.receive(&first));
+        assert!(ledger.waiting());
+        // The end of one turn does not end the wait of another thread.
+        ledger.end_turn("thread-a");
+        assert!(ledger.waiting());
+        ledger.answer(&other);
+        assert!(!ledger.waiting());
+        // A new turn can use the same call ID again.
+        assert!(ledger.receive(&call("thread-b", "turn-c", "call-1")));
+    }
 
     #[test]
     fn service_launches_off_window_thread_and_routes_commands() {

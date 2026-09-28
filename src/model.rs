@@ -467,7 +467,10 @@ impl AssistantConversation {
 #[serde(default)]
 pub struct AssistantWorkspace {
     pub conversations: Vec<AssistantConversation>,
-    pub selected_thread: Option<String>,
+    /// The conversation that a version 3 workspace showed. Loading moves it
+    /// to the active tab. Qrow does not save it.
+    #[serde(rename = "selected_thread", skip_serializing)]
+    legacy_selected_thread: Option<String>,
 }
 
 impl AssistantWorkspace {
@@ -477,18 +480,35 @@ impl AssistantWorkspace {
             conversation.sanitize();
             !conversation.thread_id.is_empty() && thread_ids.insert(conversation.thread_id.clone())
         });
-        sanitize_optional_string(&mut self.selected_thread);
-        // No selection asks the assistant to start a new conversation.
-        if self.selected_thread.as_ref().is_some_and(|selected| {
-            !self
-                .conversations
-                .iter()
-                .any(|conversation| conversation.thread_id == *selected)
-        }) {
-            self.selected_thread = self
-                .conversations
-                .first()
-                .map(|conversation| conversation.thread_id.clone());
+    }
+
+    pub fn conversation(&self, thread_id: &str) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    pub fn conversation_mut(&mut self, thread_id: &str) -> Option<&mut AssistantConversation> {
+        self.conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    /// The conversation that owns a query tab.
+    pub fn conversation_for_tab(&self, tab_id: Uuid) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.tab_id == Some(tab_id))
+    }
+
+    /// Detach the conversation of a closed tab. It keeps the connection for
+    /// its next tab.
+    pub fn detach_tab(&mut self, tab_id: Uuid, profile: Option<Uuid>) {
+        for conversation in &mut self.conversations {
+            if conversation.tab_id == Some(tab_id) {
+                conversation.tab_id = None;
+                conversation.detached_profile = profile;
+            }
         }
     }
 
@@ -529,13 +549,6 @@ impl AssistantWorkspace {
     pub fn remove_unstarted(&mut self, unstarted: &BTreeSet<String>) {
         self.conversations
             .retain(|conversation| !unstarted.contains(&conversation.thread_id));
-        if self
-            .selected_thread
-            .as_ref()
-            .is_some_and(|selected| unstarted.contains(selected))
-        {
-            self.selected_thread = None;
-        }
     }
 }
 
@@ -623,13 +636,23 @@ impl Workspace {
             used.insert(tab.title.clone());
         }
         self.assistant.sanitize();
+        let selected = self
+            .assistant
+            .legacy_selected_thread
+            .take()
+            .map(|thread| thread.trim().to_owned());
         if conversations_without_tabs {
-            // Earlier conversations used the selected tab. Keep them detached
+            // Earlier conversations used the selected tab. The conversation
+            // that was open keeps the active tab. The others are detached
             // under the connection that was active.
-            let profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
+            let tab = self.tabs.get(self.active_tab);
+            let profile = tab.and_then(|tab| tab.profile);
             for conversation in &mut self.assistant.conversations {
-                conversation.tab_id = None;
                 conversation.detached_profile = profile;
+                conversation.tab_id = None;
+                if selected.as_deref() == Some(conversation.thread_id.as_str()) {
+                    conversation.tab_id = tab.map(|tab| tab.id);
+                }
             }
         }
         self.assistant.link_tabs(&self.tabs, &self.profiles);
@@ -967,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_workspace_removes_invalid_threads_and_repairs_selection() {
+    fn assistant_workspace_removes_invalid_threads() {
         let mut first =
             AssistantConversation::new(" thread-1 ", AssistantExecutionMode::RunAutomatically);
         first.title = format!("  {}  ", "x".repeat(MAX_ASSISTANT_CONVERSATION_TITLE + 5));
@@ -977,7 +1000,7 @@ mod tests {
         let blank = AssistantConversation::new("   ", AssistantExecutionMode::AskBeforeRunning);
         let mut assistant = AssistantWorkspace {
             conversations: vec![first, duplicate, blank],
-            selected_thread: Some("missing".into()),
+            ..AssistantWorkspace::default()
         };
 
         assistant.sanitize();
@@ -988,15 +1011,10 @@ mod tests {
             assistant.conversations[0].title.chars().count(),
             MAX_ASSISTANT_CONVERSATION_TITLE
         );
-        assert_eq!(assistant.selected_thread.as_deref(), Some("thread-1"));
         assert_eq!(
             assistant.conversations[0].execution_mode,
             AssistantExecutionMode::RunAutomatically
         );
-
-        assistant.selected_thread = None;
-        assistant.sanitize();
-        assert_eq!(assistant.selected_thread, None);
     }
 
     #[test]
@@ -1030,7 +1048,7 @@ mod tests {
                     missing,
                     gone_profile,
                 ],
-                selected_thread: None,
+                ..AssistantWorkspace::default()
             },
             ..Workspace::default()
         };
@@ -1056,36 +1074,64 @@ mod tests {
     }
 
     #[test]
-    fn version_three_conversations_load_detached_under_the_active_connection() {
+    fn version_three_selected_conversation_keeps_the_active_tab() {
         let first = Profile::default();
         let second = Profile::default();
         let first_tab = SavedTab::new(1, Some(first.id));
         let second_tab = SavedTab::new(1, Some(second.id));
-        let mut conversation =
-            AssistantConversation::new("thread-1", AssistantExecutionMode::AskBeforeRunning);
-        conversation.tab_id = Some(first_tab.id);
+        let mut open = AssistantConversation::new("open", AssistantExecutionMode::AskBeforeRunning);
+        open.tab_id = Some(first_tab.id);
+        let other = AssistantConversation::new("other", AssistantExecutionMode::AskBeforeRunning);
         let mut workspace = Workspace {
             version: 3,
             profiles: vec![first, second.clone()],
-            tabs: vec![first_tab, second_tab],
+            tabs: vec![first_tab, second_tab.clone()],
             active_tab: 1,
             assistant: AssistantWorkspace {
-                conversations: vec![conversation],
-                selected_thread: Some("thread-1".into()),
+                conversations: vec![open, other],
+                legacy_selected_thread: Some(" open ".into()),
             },
             ..Workspace::default()
         };
 
         workspace.normalize();
 
-        let conversation = &workspace.assistant.conversations[0];
+        let open = workspace.assistant.conversation("open").unwrap();
+        let other = workspace.assistant.conversation("other").unwrap();
         assert_eq!(workspace.version, WORKSPACE_VERSION);
-        assert_eq!(conversation.tab_id, None);
-        assert_eq!(conversation.detached_profile, Some(second.id));
+        assert_eq!(open.tab_id, Some(second_tab.id));
+        assert_eq!(open.detached_profile, None);
+        assert_eq!(other.tab_id, None);
+        assert_eq!(other.detached_profile, Some(second.id));
+        assert_eq!(workspace.assistant.legacy_selected_thread, None);
+        let saved = serde_json::to_value(&workspace.assistant).unwrap();
+        assert!(saved.get("selected_thread").is_none());
+    }
+
+    #[test]
+    fn closing_a_tab_detaches_its_conversation() {
+        let profile = Uuid::new_v4();
+        let tab = Uuid::new_v4();
+        let mut conversation =
+            AssistantConversation::new("thread", AssistantExecutionMode::AskBeforeRunning);
+        conversation.tab_id = Some(tab);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![conversation],
+            ..AssistantWorkspace::default()
+        };
         assert_eq!(
-            workspace.assistant.selected_thread.as_deref(),
-            Some("thread-1")
+            assistant
+                .conversation_for_tab(tab)
+                .map(|c| c.thread_id.as_str()),
+            Some("thread")
         );
+
+        assistant.detach_tab(tab, Some(profile));
+
+        assert!(assistant.conversation_for_tab(tab).is_none());
+        let conversation = assistant.conversation("thread").unwrap();
+        assert_eq!(conversation.tab_id, None);
+        assert_eq!(conversation.detached_profile, Some(profile));
     }
 
     #[test]
@@ -1095,18 +1141,13 @@ mod tests {
                 AssistantConversation::new("used", AssistantExecutionMode::AskBeforeRunning),
                 AssistantConversation::new("new", AssistantExecutionMode::AskBeforeRunning),
             ],
-            selected_thread: Some("new".into()),
+            ..AssistantWorkspace::default()
         };
-        let mut other = assistant.clone();
-        other.selected_thread = Some("used".into());
         let unstarted = BTreeSet::from(["new".to_owned()]);
 
         assistant.remove_unstarted(&unstarted);
-        other.remove_unstarted(&unstarted);
 
         assert_eq!(assistant.conversations.len(), 1);
         assert_eq!(assistant.conversations[0].thread_id, "used");
-        assert_eq!(assistant.selected_thread, None);
-        assert_eq!(other.selected_thread.as_deref(), Some("used"));
     }
 }

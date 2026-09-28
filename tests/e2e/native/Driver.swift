@@ -710,8 +710,7 @@ final class Driver {
                let content = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let assistant = content["assistant"] as? [String: Any],
                let conversations = assistant["conversations"] as? [[String: Any]],
-               // Qrow opens a new conversation but saves it only after its first message.
-               assistant["selected_thread"] is NSNull,
+               // The tab stays open without a conversation.
                conversations.isEmpty { return }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         } while clock.now < deadline
@@ -738,14 +737,14 @@ final class Driver {
         if find("Assistant Message") == nil {
             try press("Back to Conversation")
         }
-        // The previous process left an unsent conversation open.
+        // The previous process deleted the conversation of this tab.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
-        try require(find("Codex cannot find this conversation") == nil, "An unsent conversation was restored after restart")
+        try require(find("Codex cannot find this conversation") == nil, "A deleted conversation was restored after restart")
         try fill("Assistant Message", "Explain `SELECT 1` after restart")
         try press("Send")
         _ = try wait("I can help with this query", timeout: 20)
         try snapshot("assistant-after-restart")
-        print("PASS: An unsent Assistant conversation does not fail after restart")
+        print("PASS: A tab without a conversation starts a new conversation after restart")
     }
     func selectFont(_ label: String, _ family: String) throws {
         var popup = try wait(label, role: kAXPopUpButtonRole)
@@ -1114,8 +1113,10 @@ final class Driver {
         } while clock.now < deadline
         throw Failure("Saved conversations \(saved) did not match \(expected)")
     }
+    /// A thread list row names the conversation and its connection.
+    func conversationRow(_ title: String) -> String { "\(title), " }
     func openConversationMenu(_ title: String) throws {
-        try contextMenu(title, exact: true, role: kAXButtonRole)
+        try contextMenu(conversationRow(title), role: kAXButtonRole)
     }
     /// The conversation header menu and the thread list context menu rename,
     /// regenerate titles, and delete conversations. Both renames use the
@@ -1165,11 +1166,11 @@ final class Driver {
         if find("Search Conversations") == nil {
             try press("Toggle Conversation List")
         }
-        _ = try waitExact(generated, timeout: 10, role: kAXButtonRole)
+        _ = try wait(conversationRow(generated), timeout: 10, role: kAXButtonRole)
         try require(find("\(generated) ·") == nil, "The thread list showed a Codex thread ID")
         try snapshot("assistant-duplicate-titles")
         // A narrow pane swaps the list for the selected conversation.
-        try click(waitExact(generated, timeout: 10, role: kAXButtonRole))
+        try click(wait(conversationRow(generated), timeout: 10, role: kAXButtonRole))
         try waitGone("Search Conversations")
         _ = try wait("Assistant Message")
         try press("Toggle Conversation List")
@@ -1185,7 +1186,7 @@ final class Driver {
         try fill("Conversation Name", "Listed title")
         try press("Rename")
         try waitGone("Conversation Name", timeout: 5)
-        _ = try waitExact("Listed title", timeout: 10, role: kAXButtonRole)
+        _ = try wait(conversationRow("Listed title"), timeout: 10, role: kAXButtonRole)
         try waitSavedConversations([(generated, "codex"), ("Listed title", "user")])
         try snapshot("assistant-list-renamed")
         try openConversationMenu("Listed title")
@@ -1362,13 +1363,16 @@ final class Driver {
         try waitGone("Search Conversations")
         try press("Toggle Conversation List")
         _ = try wait("Search Conversations")
-        try click(waitExact(generated, timeout: 10, role: kAXButtonRole))
+        try click(wait(conversationRow(generated), timeout: 10, role: kAXButtonRole))
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         try require(find("Search Conversations") != nil, "Selecting a conversation closed the list on a wide pane")
         _ = try wait("Assistant Message")
         try snapshot("assistant-thread-list-after-selection")
         print("PASS: A wide Assistant pane keeps a reopened conversation list open after a selection")
     }
+    /// A conversation keeps its query tab when you select and rename another
+    /// tab during a turn. An unknown tab ID in a tool call uses the
+    /// conversation tab.
     func testAssistantRetargetAfterRename() throws {
         try waitInputValue("SQL Editor", "SELECT 1;")
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
@@ -1387,9 +1391,258 @@ final class Driver {
         let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex/retarget-ready")
         try Data().write(to: marker)
 
-        _ = try wait("Run in Default · Synthetic? SELECT 99;", timeout: 20)
+        // The approval waits in the conversation tab. The pane of the
+        // selected tab does not show it.
+        let owner = try wait("Query 1, assistant waiting for approval", timeout: 20, role: kAXRadioButtonRole)
+        _ = try wait("Toggle Assistant, waiting for approval", timeout: 5, role: kAXButtonRole)
+        try require(find("Run in ") == nil, "The approval showed in a tab without the conversation")
+        try snapshot("assistant-retarget-background-approval")
+        try click(owner)
+        _ = try wait("Run in Query 1 · Synthetic? SELECT 1;", timeout: 10)
+        try waitInputValue("SQL Editor", "SELECT 1;")
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
-        print("PASS: Assistant targets the selected tab after a rename and invalid tab ID")
+        print("PASS: Assistant keeps its query tab when you select and rename another tab during a turn")
+    }
+    /// Shows the thread list of a narrow pane. A selection in the list can
+    /// still be closing it, so retry until the list shows.
+    func showConversationList() throws {
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if find("Search Conversations") != nil { return }
+            if let toggle = find("Toggle Conversation List", role: kAXButtonRole) { try activate(toggle) }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        } while clock.now < deadline
+        throw Failure("The conversation list did not open")
+    }
+    /// Shows the conversation of a narrow pane. A selection in the list
+    /// closes the list by itself.
+    func showConversation() throws {
+        let deadline = clock.now.advanced(by: .seconds(10))
+        repeat {
+            if accessibleInput("Assistant Message") != nil { return }
+            if let back = find("Back to Conversation", role: kAXButtonRole) { try activate(back) }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        } while clock.now < deadline
+        throw Failure("The conversation did not show")
+    }
+    func savedWorkspace() -> [String: Any]? {
+        let url = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+    /// Waits until the saved workspace meets a condition.
+    func waitSaved(_ description: String, timeout: Double = 10, _ condition: ([String: Any]) -> Bool) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        repeat {
+            if let workspace = savedWorkspace(), condition(workspace) { return }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        } while clock.now < deadline
+        throw Failure("The saved workspace does not show that \(description): \(savedWorkspace().map { "\($0)" } ?? "none")")
+    }
+    func savedConversations(_ workspace: [String: Any]) -> [[String: Any]] {
+        ((workspace["assistant"] as? [String: Any])?["conversations"] as? [[String: Any]]) ?? []
+    }
+    func savedProfileID(_ workspace: [String: Any], _ name: String) -> String? {
+        ((workspace["profiles"] as? [[String: Any]]) ?? []).first { $0["name"] as? String == name }?["id"] as? String
+    }
+    func savedTabs(_ workspace: [String: Any]) -> [[String: Any]] {
+        (workspace["tabs"] as? [[String: Any]]) ?? []
+    }
+    /// Writes a workspace with the connections Alpha and Beta and one tab for
+    /// each. The narrow pane shows the thread list or a conversation.
+    func seedAssistantConnectionsWorkspace(alphaSQL: String) throws {
+        let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
+        try require(!FileManager.default.fileExists(atPath: workspace.path), "The check needs an empty workspace directory")
+        let profiles = ["Alpha", "Beta"].map { name -> [String: Any] in
+            ["id": UUID().uuidString.lowercased(), "name": name, "host": "example.invalid",
+             "port": 10009, "username": "synthetic", "database": "default", "parameters": [:]]
+        }
+        let tabs = profiles.enumerated().map { index, profile -> [String: Any] in
+            ["id": UUID().uuidString.lowercased(), "title": "Query 1",
+             "sql": index == 0 ? alphaSQL : "", "profile": profile["id"]!]
+        }
+        let data = try JSONSerialization.data(withJSONObject: [
+            "version": 4,
+            "settings": ["assistant": [
+                "enabled": true,
+                "data_sharing_notice_version": 1,
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "panel_width": 536,
+            ]],
+            "profiles": profiles,
+            "tabs": tabs,
+            "active_tab": 0,
+        ])
+        try data.write(to: workspace)
+    }
+    /// Two conversations on two connections work at the same time. Each one
+    /// appends and requests SQL in its own tab while you work in the other.
+    /// The thread list, the tabs, and the assistant toggle show their states.
+    func testAssistantParallel() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try showConversation()
+        try fill("Assistant Message", "Hold parallel Alpha")
+        try press("Send")
+        _ = try wait("Assistant is working", timeout: 10)
+        _ = try wait("Query 1, assistant working", timeout: 5, role: kAXRadioButtonRole)
+        try selectConnection("Beta")
+        // The Beta tab has no conversation, so its pane does not wait.
+        try waitGone("Assistant is working", timeout: 5)
+        try fill("Assistant Message", "Hold parallel Beta")
+        try press("Send")
+        _ = try wait("Assistant is working", timeout: 10)
+        try showConversationList()
+        _ = try wait("Alpha, assistant working", timeout: 10, role: kAXButtonRole)
+        _ = try wait("Beta, assistant working", timeout: 10, role: kAXButtonRole)
+        try snapshot("assistant-parallel-working")
+
+        let state = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("fake-codex")
+        for label in ["Alpha", "Beta"] {
+            try Data().write(to: state.appendingPathComponent("release-\(label)"))
+        }
+        _ = try wait("Alpha, assistant waiting for approval", timeout: 20, role: kAXButtonRole)
+        _ = try wait("Beta, assistant waiting for approval", timeout: 20, role: kAXButtonRole)
+        _ = try wait("Toggle Assistant, waiting for approval", timeout: 5, role: kAXButtonRole)
+        try showConversation()
+        // Each conversation changed only its own tab.
+        try waitInputValue("SQL Editor", "SELECT 22")
+        _ = try wait("Run in Query 1 · Beta? SELECT 22", timeout: 10)
+        try snapshot("assistant-parallel-approval")
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        try waitGone("Run in ", timeout: 5)
+
+        // Select the other conversation before the Beta turn ends. Qrow
+        // selects its tab and connection.
+        try showConversationList()
+        try click(wait("Alpha, assistant waiting for approval", timeout: 5, role: kAXButtonRole))
+        try showConversation()
+        try waitInputValue("SQL Editor", "SELECT 11")
+        _ = try wait("Run in Query 1 · Alpha? SELECT 11", timeout: 10)
+        try showConversationList()
+        _ = try wait("Beta, assistant reply ready", timeout: 15, role: kAXButtonRole)
+        try snapshot("assistant-parallel-reply-ready")
+        try showConversation()
+        try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
+        _ = try wait("Finished Alpha: approval_cancelled", timeout: 15)
+        _ = try wait("Toggle Assistant, reply ready", timeout: 5, role: kAXButtonRole)
+        try showConversationList()
+        try click(wait("Beta, assistant reply ready", timeout: 5, role: kAXButtonRole))
+        try showConversation()
+        _ = try wait("Finished Beta: approval_cancelled", timeout: 10)
+        _ = try waitExact("Toggle Assistant", timeout: 5, role: kAXButtonRole)
+        try require(
+            !FileManager.default.fileExists(atPath: state.appendingPathComponent("duplicate-answer").path),
+            "Qrow answered a replayed tool call twice"
+        )
+        try waitSaved("each conversation owns the tab of its connection") { workspace in
+            let tabs = savedTabs(workspace)
+            func tab(_ name: String) -> [String: Any]? {
+                let profile = savedProfileID(workspace, name)
+                return tabs.first { $0["profile"] as? String == profile }
+            }
+            guard let alpha = tab("Alpha"), let beta = tab("Beta"),
+                  alpha["sql"] as? String == "SELECT 11", beta["sql"] as? String == "SELECT 22" else { return false }
+            let linked = Set(savedConversations(workspace).compactMap { $0["tab_id"] as? String })
+            return linked == Set([alpha["id"] as? String, beta["id"] as? String].compactMap { $0 })
+        }
+        print("PASS: Two Assistant conversations work at the same time in their own tabs, a replayed tool call runs once, and the list, tabs, and toggle show their states")
+    }
+    /// A conversation starts in a tab with SQL, stays in the list when its
+    /// tab closes, opens in a new tab, moves with its tab to another
+    /// connection, and leaves its tab open when you delete it.
+    func testAssistantTabBinding() throws {
+        try waitInputValue("SQL Editor", "SELECT 5;")
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try showConversation()
+        try fill("Assistant Message", "Report the tab SQL")
+        try press("Send")
+        _ = try wait("Tab SQL: SELECT 5;", timeout: 20)
+        try waitGone("Assistant is working", timeout: 5)
+        var firstTab = ""
+        try waitSaved("the conversation owns its first tab") { workspace in
+            let alpha = savedProfileID(workspace, "Alpha")
+            guard let tab = savedTabs(workspace).first(where: { $0["profile"] as? String == alpha }),
+                  let id = tab["id"] as? String,
+                  savedConversations(workspace).first?["tab_id"] as? String == id else { return false }
+            firstTab = id
+            return true
+        }
+
+        try press("Close Query 1")
+        try waitSaved("a closed tab detaches its conversation") { workspace in
+            guard let conversation = savedConversations(workspace).first else { return false }
+            return conversation["tab_id"] is NSNull
+                && conversation["detached_profile"] as? String == savedProfileID(workspace, "Alpha")
+                && !savedTabs(workspace).contains { $0["id"] as? String == firstTab }
+        }
+        try showConversationList()
+        try click(wait("Alpha · Tab closed", timeout: 10, role: kAXButtonRole))
+        try showConversation()
+        _ = try wait("Tab SQL: SELECT 5;", timeout: 10)
+        var reopened = ""
+        try waitSaved("the conversation opens in a new tab under Alpha") { workspace in
+            let alpha = savedProfileID(workspace, "Alpha")
+            guard let id = savedConversations(workspace).first?["tab_id"] as? String,
+                  let tab = savedTabs(workspace).first(where: { $0["id"] as? String == id }),
+                  tab["profile"] as? String == alpha, tab["title"] as? String == "Query 2" else { return false }
+            reopened = id
+            return true
+        }
+        try snapshot("assistant-reopened-tab")
+
+        // Keyboard navigation opens the Move submenu. Beta is its only item.
+        try contextMenu("Query 2", exact: true)
+        _ = try wait("Move to Connection…")
+        for _ in 0..<4 { key(125) }
+        key(124)
+        _ = try wait("Beta", role: kAXMenuItemRole)
+        key(36)
+        try waitGone("Move to Connection…")
+        try waitSaved("the conversation moves with its tab") { workspace in
+            let beta = savedProfileID(workspace, "Beta")
+            return savedConversations(workspace).first?["tab_id"] as? String == reopened
+                && savedTabs(workspace).contains { $0["id"] as? String == reopened && $0["profile"] as? String == beta }
+        }
+        try showConversationList()
+        _ = try wait(", Beta", timeout: 10, role: kAXButtonRole)
+        try showConversation()
+        // A tab with a conversation cannot start another one.
+        try contextMenu("Query 2", exact: true)
+        // GPUI Kit does not publish the disabled state of a menu item. A
+        // disabled item ignores the press, so the menu stays open.
+        try activate(try wait("Start Conversation", timeout: 5, role: kAXMenuItemRole))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        try require(find("Start Conversation", role: kAXMenuItemRole) != nil, "Start Conversation was available in a tab with a conversation")
+        key(53) // Escape closes the menu.
+        try waitGone("Start Conversation", timeout: 5)
+
+        try click(wait("Conversation Actions", role: kAXButtonRole))
+        try pressMenuItem("Delete…")
+        try press("Delete")
+        try waitSaved("the tab stays after its conversation is deleted") { workspace in
+            savedConversations(workspace).isEmpty
+                && savedTabs(workspace).contains { $0["id"] as? String == reopened }
+        }
+
+        // The tab menu starts a conversation in a tab without one.
+        try press("Toggle Assistant")
+        try waitGone("Assistant Message", timeout: 5)
+        try fill("SQL Editor", "SELECT 7;")
+        try contextMenu("Query 2", exact: true)
+        let start = try wait("Start Conversation", timeout: 5, role: kAXMenuItemRole)
+        try snapshot("assistant-tab-menu")
+        try activate(start)
+        try waitGone("Start Conversation", timeout: 5)
+        try showConversation()
+        try fill("Assistant Message", "Report the tab SQL")
+        try press("Send")
+        _ = try wait("Tab SQL: SELECT 7;", timeout: 20)
+        try waitSaved("the tab menu starts a conversation in this tab") { workspace in
+            savedConversations(workspace).first?["tab_id"] as? String == reopened
+        }
+        print("PASS: An Assistant conversation starts in a tab with SQL, survives a closed tab, opens in a new tab, moves with its tab, and leaves its tab when deleted. The tab menu starts a conversation only in a tab without one")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, the last
@@ -1724,6 +1977,9 @@ final class Driver {
         try press("Send")
         _ = try wait("2", role: kAXCellRole)
         try require(find("Run in ") == nil, "Automatic mode requested approval")
+        // A turn that ends after the pane closes marks its tab as unread, and
+        // later checks find the tab by its exact name.
+        try waitGone("Assistant is working", timeout: 20)
         try press("Toggle Assistant")
         try waitGone("Toggle Conversation List")
         print("PASS: Assistant approval and automatic execution use the selected query tab")
@@ -2264,6 +2520,14 @@ do {
                 try driver.seedAssistantRetargetWorkspace()
                 try driver.start()
                 try driver.testAssistantRetargetAfterRename()
+            } else if CommandLine.arguments.contains("--assistant-parallel-only") {
+                try driver.seedAssistantConnectionsWorkspace(alphaSQL: "")
+                try driver.start()
+                try driver.testAssistantParallel()
+            } else if CommandLine.arguments.contains("--assistant-tab-binding-only") {
+                try driver.seedAssistantConnectionsWorkspace(alphaSQL: "SELECT 5;")
+                try driver.start()
+                try driver.testAssistantTabBinding()
             } else if CommandLine.arguments.contains("--assistant-thread-list-only") {
                 try driver.seedAssistantLayoutWorkspace(panelWidth: 900)
                 try driver.start()
@@ -2312,6 +2576,8 @@ do {
             || CommandLine.arguments.contains("--assistant-statement-only")
             || CommandLine.arguments.contains("--assistant-retarget-only")
             || CommandLine.arguments.contains("--assistant-sign-in-only")
+            || CommandLine.arguments.contains("--assistant-parallel-only")
+            || CommandLine.arguments.contains("--assistant-tab-binding-only")
             || CommandLine.arguments.contains("--assistant-thread-list-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")
         do {

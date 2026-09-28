@@ -2,6 +2,7 @@ use super::assistant_view::{
     PendingQuery, PendingQueryKind, ToolActivity, ToolKind, ToolState, TranscriptEntry,
 };
 use super::*;
+use qrow::assistant::broker::ActionTarget;
 use qrow::assistant::{
     ToolCall, ToolResult,
     broker::{
@@ -32,16 +33,18 @@ fn remap_selection(
     Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
 }
 
-fn resolve_selected_tab_id(
+/// Maps an unknown tab ID to the conversation tab. A real ID of another tab
+/// stays, so a read can use it and an action on the conversation tab rejects
+/// it.
+fn resolve_tab_id(
     requested: Uuid,
-    selected: Option<Uuid>,
+    conversation_tab: Option<Uuid>,
     known: impl IntoIterator<Item = Uuid>,
 ) -> Uuid {
-    // Keep a real other-tab ID so selected-tab actions still reject it.
     if known.into_iter().any(|id| id == requested) {
         requested
     } else {
-        selected.unwrap_or(requested)
+        conversation_tab.unwrap_or(requested)
     }
 }
 
@@ -162,13 +165,32 @@ fn version(version: u32) -> Result<(), ToolResult> {
     }
 }
 
+fn tab_closed() -> ToolResult {
+    failure(
+        "tab_closed",
+        "The query tab of this conversation is closed. Wait for a new user instruction.",
+    )
+}
+
 impl Qrow {
-    fn selected_tab_id_for_tool(&self, requested: Uuid) -> Uuid {
-        resolve_selected_tab_id(
+    fn tool_tab_id(&self, call: &ToolCall, requested: Uuid) -> Uuid {
+        resolve_tab_id(
             requested,
-            self.tabs.get(self.active).map(|tab| tab.saved.id),
+            self.thread_tab_index(&call.thread_id)
+                .map(|index| self.tabs[index].saved.id),
             self.tabs.iter().map(|tab| tab.saved.id),
         )
+    }
+
+    /// The index of the query tab that a call can change.
+    fn tool_tab_index(&self, call: &ToolCall) -> Result<usize, ToolResult> {
+        self.thread_tab_index(&call.thread_id)
+            .ok_or_else(tab_closed)
+    }
+
+    fn tool_target(&self, call: &ToolCall) -> Option<ActionTarget> {
+        self.thread_run(&call.thread_id)
+            .and_then(|run| run.target.clone())
     }
 
     pub(super) fn answer_assistant_call(
@@ -196,9 +218,11 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let selected = self.assistant.selected_thread.as_deref();
-        if selected != Some(call.thread_id.as_str())
-            || self.assistant_panel.active_turn.as_deref() != Some(call.turn_id.as_str())
+        if self.assistant.conversation(&call.thread_id).is_none()
+            || self
+                .thread_run(&call.thread_id)
+                .and_then(|run| run.active_turn.as_deref())
+                != Some(call.turn_id.as_str())
         {
             self.answer_assistant_call(
                 call,
@@ -272,21 +296,22 @@ impl Qrow {
     fn tool_workspace(&mut self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let args: VersionInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        let context = self.assistant_context(cx);
-        // This read makes a tab change visible and binds later actions to that tab.
-        self.assistant_panel.target =
-            self.assistant_target(&call.thread_id, cx)
-                .map(|mut target| {
-                    target.turn_id = call.turn_id.clone();
-                    target
-                });
+        let context = self.assistant_context(&call.thread_id, cx);
+        // This read binds later actions to the current state of the tab.
+        let target = self
+            .assistant_target(&call.thread_id, cx)
+            .map(|mut target| {
+                target.turn_id = call.turn_id.clone();
+                target
+            });
+        self.thread_run_mut(&call.thread_id).target = target;
         Ok(success(context))
     }
 
     fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let mut args: TabInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
         let tab = self
             .tabs
             .iter()
@@ -316,8 +341,9 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
         let mut args: EditRequest = parse(call.arguments.clone())?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-        let tab = &self.tabs[self.active];
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
+        let index = self.tool_tab_index(call)?;
+        let tab = &self.tabs[index];
         let sql = tab.input.read(cx).value().to_string();
         let selected = tab.input.read(cx).selected_range();
         let document = EditorDocument {
@@ -329,7 +355,7 @@ impl Qrow {
             busy: tab.busy,
             sql_style: self.settings.sql_style(),
         };
-        let plan = ToolBroker::new(self.assistant_panel.target.clone())
+        let plan = ToolBroker::new(self.tool_target(call))
             .plan_edit(
                 CallIdentity {
                     conversation_id: &call.thread_id,
@@ -357,8 +383,8 @@ impl Qrow {
         let mapped = appended_range
             .clone()
             .or_else(|| remap_selection(selected, &plan.edits));
-        self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
-        self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
+        self.tabs[index].revision = self.tabs[index].revision.saturating_add(1);
+        self.tabs[index].pending_assistant_edit = Some(plan.sql.clone());
         editor.update(cx, |editor, cx| {
             let scroll = editor.scroll_offset();
             editor.replace_all(plan.sql.clone(), window, cx);
@@ -368,11 +394,11 @@ impl Qrow {
             editor.set_scroll_offset(scroll, cx);
         });
         if let Some(range) = appended_range
-            && let Some(target) = &mut self.assistant_panel.target
+            && let Some(target) = &mut self.thread_run_mut(&call.thread_id).target
         {
             target.selected_range = Some(range);
         }
-        let revision = self.tabs[self.active].revision;
+        let revision = self.tabs[index].revision;
         let selected = editor.read(cx).selected_range();
         self.changed(cx);
         // A run without statement_range uses this selection, so the model does not read it back.
@@ -390,8 +416,9 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
         let mut args: AppendRequest = parse(call.arguments.clone())?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-        let tab = &self.tabs[self.active];
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
+        let index = self.tool_tab_index(call)?;
+        let tab = &self.tabs[index];
         let sql = tab.input.read(cx).value().to_string();
         let document = EditorDocument {
             tab_id: tab.saved.id,
@@ -402,7 +429,7 @@ impl Qrow {
             busy: tab.busy,
             sql_style: self.settings.sql_style(),
         };
-        let plan = ToolBroker::new(self.assistant_panel.target.clone())
+        let plan = ToolBroker::new(self.tool_target(call))
             .plan_append(
                 CallIdentity {
                     conversation_id: &call.thread_id,
@@ -416,16 +443,16 @@ impl Qrow {
                 content: json!({"version": 1, "error": error}),
             })?;
         let editor = tab.input.clone();
-        self.tabs[self.active].revision = self.tabs[self.active].revision.saturating_add(1);
-        self.tabs[self.active].pending_assistant_edit = Some(plan.sql.clone());
+        self.tabs[index].revision = self.tabs[index].revision.saturating_add(1);
+        self.tabs[index].pending_assistant_edit = Some(plan.sql.clone());
         editor.update(cx, |editor, cx| {
             editor.replace_all(plan.sql.clone(), window, cx);
             editor.set_selected_range(plan.appended_range.clone(), cx);
         });
-        if let Some(target) = &mut self.assistant_panel.target {
+        if let Some(target) = &mut self.thread_run_mut(&call.thread_id).target {
             target.selected_range = Some(plan.appended_range.clone());
         }
-        let revision = self.tabs[self.active].revision;
+        let revision = self.tabs[index].revision;
         self.changed(cx);
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
@@ -442,8 +469,9 @@ impl Qrow {
     ) -> Option<ToolResult> {
         let result = (|| {
             let mut args: RunRequest = parse(call.arguments.clone())?;
-            args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-            let tab = &self.tabs[self.active];
+            args.tab_id = self.tool_tab_id(call, args.tab_id);
+            let index = self.tool_tab_index(call)?;
+            let tab = &self.tabs[index];
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
             let document = EditorDocument {
@@ -455,7 +483,7 @@ impl Qrow {
                 busy: tab.busy,
                 sql_style: self.settings.sql_style(),
             };
-            let plan = ToolBroker::new(self.assistant_panel.target.clone())
+            let plan = ToolBroker::new(self.tool_target(call))
                 .plan_run(
                     CallIdentity {
                         conversation_id: &call.thread_id,
@@ -468,7 +496,10 @@ impl Qrow {
                     success: false,
                     content: json!({"version": 1, "error": error}),
                 })?;
-            if self.assistant_panel.pending_query.is_some() {
+            if self
+                .thread_run(&call.thread_id)
+                .is_some_and(|run| run.pending_query.is_some())
+            {
                 return Err(failure(
                     "tab_busy",
                     "Another assistant query request is pending.",
@@ -478,7 +509,7 @@ impl Qrow {
                 tab.input.update(cx, |editor, cx| {
                     editor.set_selected_range(range.clone(), cx);
                 });
-                if let Some(target) = &mut self.assistant_panel.target {
+                if let Some(target) = &mut self.thread_run_mut(&call.thread_id).target {
                     target.selected_range = Some(range);
                 }
             }
@@ -489,7 +520,7 @@ impl Qrow {
                 .find(|conversation| conversation.thread_id == call.thread_id)
                 .map(|conversation| conversation.execution_mode)
                 .unwrap_or_default();
-            self.assistant_panel.pending_query = Some(PendingQuery {
+            self.thread_run_mut(&call.thread_id).pending_query = Some(PendingQuery {
                 call: call.clone(),
                 tab_id: plan.tab_id,
                 revision: plan.expected_revision,
@@ -502,22 +533,27 @@ impl Qrow {
                 first_row: 0,
             });
             if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
-                self.begin_assistant_query(window, cx);
+                self.begin_assistant_query(&call.thread_id, window, cx);
             }
             Ok(())
         })();
         result.err()
     }
 
-    pub(super) fn approve_assistant_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(pending) = &mut self.assistant_panel.pending_query {
+    pub(super) fn approve_assistant_query(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.approved = true;
         }
-        self.begin_assistant_query(window, cx);
+        self.begin_assistant_query(thread_id, window, cx);
     }
 
-    pub(super) fn cancel_assistant_approval(&mut self, cx: &mut Context<Self>) {
-        if let Some(pending) = self.assistant_panel.pending_query.take() {
+    pub(super) fn cancel_assistant_approval(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        if let Some(pending) = self.thread_run_mut(thread_id).pending_query.take() {
             self.record_assistant_query_cancelled(&pending, "You cancelled this query request.");
             self.answer_assistant_call(
                 pending.call,
@@ -533,15 +569,29 @@ impl Qrow {
         cx.notify();
     }
 
-    fn begin_assistant_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(pending) = &self.assistant_panel.pending_query else {
+    fn begin_assistant_query(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self
+            .thread_run(thread_id)
+            .and_then(|run| run.pending_query.as_ref())
+        else {
             return;
         };
         if !pending.approved || pending.started {
             return;
         }
-        let valid = self.tabs.get(self.active).is_some_and(|tab| {
-            if tab.saved.id != pending.tab_id || tab.revision != pending.revision || tab.busy {
+        let index = self
+            .tabs
+            .iter()
+            .position(|tab| tab.saved.id == pending.tab_id)
+            .filter(|index| self.thread_tab_index(thread_id) == Some(*index));
+        let valid = index.is_some_and(|index| {
+            let tab = &self.tabs[index];
+            if tab.revision != pending.revision || tab.busy {
                 return false;
             }
             let sql = tab.input.read(cx).value();
@@ -553,8 +603,8 @@ impl Qrow {
             };
             text == pending.sql
         });
-        if !valid {
-            let pending = self.assistant_panel.pending_query.take().unwrap();
+        let (Some(index), true) = (index, valid) else {
+            let pending = self.thread_run_mut(thread_id).pending_query.take().unwrap();
             self.answer_assistant_call(
                 pending.call,
                 false,
@@ -566,34 +616,34 @@ impl Qrow {
                 cx,
             );
             return;
-        }
+        };
         let kind = pending.kind;
-        if let Some(pending) = &mut self.assistant_panel.pending_query {
+        if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.started = true;
         }
         let started = match kind {
-            PendingQueryKind::Run => self.run_selected_query(window, cx),
+            PendingQueryKind::Run => self.run_tab_query(index, window, cx),
             PendingQueryKind::Fetch => {
-                self.next_page(cx);
-                self.tabs[self.active].busy
+                self.next_tab_page(index, cx);
+                self.tabs[index].busy
             }
         };
         if !started {
-            let pending = self.assistant_panel.pending_query.take().unwrap();
+            let pending = self.thread_run_mut(thread_id).pending_query.take().unwrap();
             self.answer_assistant_call(
                 pending.call,
                 false,
                 failure(
                     "query_not_started",
-                    "Qrow could not start this query. Check the selected tab and connection.",
+                    "Qrow could not start this query. Check the query tab and connection.",
                 )
                 .content,
                 cx,
             );
             return;
         }
-        self.record_assistant_query_started(cx);
-        self.complete_assistant_query(cx);
+        self.record_assistant_query_started(thread_id, cx);
+        self.complete_assistant_query(thread_id, cx);
     }
 
     /// Describes an assistant query request as a tool call card.
@@ -634,8 +684,11 @@ impl Qrow {
             .push(entry);
     }
 
-    fn record_assistant_query_started(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.assistant_panel.pending_query.as_ref() else {
+    fn record_assistant_query_started(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(pending) = self
+            .thread_run(thread_id)
+            .and_then(|run| run.pending_query.as_ref())
+        else {
             return;
         };
         let thread = pending.call.thread_id.clone();
@@ -645,14 +698,33 @@ impl Qrow {
         let entries = self.assistant_panel.transcripts.entry(thread).or_default();
         let index = entries.len();
         entries.push(TranscriptEntry::tool(tool, turn).with_detail(detail));
-        if let Some(pending) = &mut self.assistant_panel.pending_query {
+        if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.activity_index = Some(index);
         }
         cx.notify();
     }
 
-    pub(super) fn update_assistant_query_progress(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.assistant_panel.pending_query.as_ref() else {
+    /// Updates the tool card of a running assistant query in each
+    /// conversation, and answers the calls of queries that ended.
+    pub(super) fn tick_assistant_queries(&mut self, cx: &mut Context<Self>) {
+        let threads: Vec<_> = self
+            .assistant_panel
+            .runs
+            .iter()
+            .filter(|(_, run)| run.pending_query.is_some())
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        for thread in threads {
+            self.update_assistant_query_progress(&thread, cx);
+            self.complete_assistant_query(&thread, cx);
+        }
+    }
+
+    fn update_assistant_query_progress(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(pending) = self
+            .thread_run(thread_id)
+            .and_then(|run| run.pending_query.as_ref())
+        else {
             return;
         };
         let Some(index) = pending.activity_index else {
@@ -665,7 +737,7 @@ impl Qrow {
         if let Some(entry) = self
             .assistant_panel
             .transcripts
-            .get_mut(&pending.call.thread_id)
+            .get_mut(thread_id)
             .and_then(|entries| entries.get_mut(index))
             && entry.tool.as_ref().is_some_and(|tool| tool.state != state)
         {
@@ -674,8 +746,11 @@ impl Qrow {
         }
     }
 
-    pub(super) fn complete_assistant_query(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = &self.assistant_panel.pending_query else {
+    fn complete_assistant_query(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        let Some(pending) = self
+            .thread_run(thread_id)
+            .and_then(|run| run.pending_query.as_ref())
+        else {
             return;
         };
         if !pending.started {
@@ -719,7 +794,7 @@ impl Qrow {
             ToolState::Failed
         };
         let status = (!ok).then(|| format!("Status: {}\n", tab.status));
-        let pending = self.assistant_panel.pending_query.take().unwrap();
+        let pending = self.thread_run_mut(thread_id).pending_query.take().unwrap();
         let entry = TranscriptEntry::tool(
             self.assistant_query_tool(&pending, state),
             pending.call.turn_id.clone(),
@@ -758,25 +833,25 @@ impl Qrow {
     ) -> Result<ToolResult, ToolResult> {
         let mut args: TargetInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-        let target =
-            self.assistant_panel.target.as_ref().ok_or_else(|| {
-                failure("no_action_target", "Select a tab and send a new message.")
-            })?;
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
+        let index = self.tool_tab_index(call)?;
+        let target = self
+            .tool_target(call)
+            .ok_or_else(|| failure("no_action_target", "Wait for a new user message."))?;
         if target.conversation_id != call.thread_id
             || target.turn_id != call.turn_id
             || target.tab_id != args.tab_id
             || target.connection_id != Some(args.connection_id)
-            || self.tabs[self.active].saved.id != args.tab_id
+            || self.tabs[index].saved.id != args.tab_id
         {
             return Err(failure(
                 "stale_target",
-                "The selected tab or connection changed.",
+                "The query tab or connection changed.",
             ));
         }
-        let was_running = self.tabs[self.active].busy;
+        let was_running = self.tabs[index].busy;
         if was_running {
-            self.cancel(cx);
+            self.cancel_tab(index, cx);
         }
         Ok(success(
             json!({"version": 1, "tab_id": args.tab_id, "cancellation_requested": was_running}),
@@ -786,7 +861,7 @@ impl Qrow {
     fn tool_status(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let mut args: TabInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
         let tab = self
             .tabs
             .iter()
@@ -806,12 +881,9 @@ impl Qrow {
     fn tool_results(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let mut args: RowsInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-        if self.assistant_panel.target.is_none() {
-            return Err(failure(
-                "no_action_target",
-                "Select a tab and send a new message.",
-            ));
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
+        if self.tool_target(call).is_none() {
+            return Err(failure("no_action_target", "Wait for a new user message."));
         }
         let tab = self
             .tabs
@@ -836,11 +908,12 @@ impl Qrow {
         let result = (|| {
             let mut args: TargetInput = parse(call.arguments.clone())?;
             version(args.version)?;
-            args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-            let target = self.assistant_panel.target.as_ref().ok_or_else(|| {
-                failure("no_action_target", "Select a tab and send a new message.")
-            })?;
-            let tab = &self.tabs[self.active];
+            args.tab_id = self.tool_tab_id(call, args.tab_id);
+            let index = self.tool_tab_index(call)?;
+            let target = self
+                .tool_target(call)
+                .ok_or_else(|| failure("no_action_target", "Wait for a new user message."))?;
+            let tab = &self.tabs[index];
             if target.conversation_id != call.thread_id
                 || target.turn_id != call.turn_id
                 || target.tab_id != args.tab_id
@@ -849,7 +922,7 @@ impl Qrow {
             {
                 return Err(failure(
                     "stale_target",
-                    "The selected tab or connection changed.",
+                    "The query tab or connection changed.",
                 ));
             }
             if tab.busy || !tab.more {
@@ -858,7 +931,10 @@ impl Qrow {
                     "No more downloaded result batch is available.",
                 ));
             }
-            if self.assistant_panel.pending_query.is_some() {
+            if self
+                .thread_run(&call.thread_id)
+                .is_some_and(|run| run.pending_query.is_some())
+            {
                 return Err(failure(
                     "tab_busy",
                     "Another assistant query request is pending.",
@@ -876,13 +952,13 @@ impl Qrow {
                 (data.delegate().pagination.pages(rows), rows)
             };
             worker.more();
-            let tab = &mut self.tabs[self.active];
+            let tab = &mut self.tabs[index];
             tab.pending_page = Some(next_page);
             tab.busy = true;
             tab.cancelling = false;
             tab.started = Some(Instant::now());
             tab.status = "Fetching next batch…".into();
-            self.assistant_panel.pending_query = Some(PendingQuery {
+            let pending = PendingQuery {
                 call: call.clone(),
                 tab_id: tab.saved.id,
                 revision: tab.revision,
@@ -893,8 +969,9 @@ impl Qrow {
                 activity_index: None,
                 detached: false,
                 first_row,
-            });
-            self.record_assistant_query_started(cx);
+            };
+            self.thread_run_mut(&call.thread_id).pending_query = Some(pending);
+            self.record_assistant_query_started(&call.thread_id, cx);
             Ok(())
         })();
         result.err()
@@ -903,12 +980,9 @@ impl Qrow {
     fn tool_logs(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
         let mut args: LogsInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.selected_tab_id_for_tool(args.tab_id);
-        if self.assistant_panel.target.is_none() {
-            return Err(failure(
-                "no_action_target",
-                "Select a tab and send a new message.",
-            ));
+        args.tab_id = self.tool_tab_id(call, args.tab_id);
+        if self.tool_target(call).is_none() {
+            return Err(failure("no_action_target", "Wait for a new user message."));
         }
         let tab = self
             .tabs
@@ -948,22 +1022,22 @@ impl Qrow {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_selected_tab_id;
+    use super::resolve_tab_id;
     use uuid::Uuid;
 
     #[test]
-    fn unknown_tab_id_uses_selected_tab_but_existing_other_tab_remains_distinct() {
-        let selected = Uuid::new_v4();
+    fn unknown_tab_id_uses_conversation_tab_but_existing_other_tab_remains_distinct() {
+        let conversation = Uuid::new_v4();
         let other = Uuid::new_v4();
         let unknown = Uuid::new_v4();
         assert_eq!(
-            resolve_selected_tab_id(unknown, Some(selected), [selected, other]),
-            selected
+            resolve_tab_id(unknown, Some(conversation), [conversation, other]),
+            conversation
         );
         assert_eq!(
-            resolve_selected_tab_id(other, Some(selected), [selected, other]),
+            resolve_tab_id(other, Some(conversation), [conversation, other]),
             other
         );
-        assert_eq!(resolve_selected_tab_id(unknown, None, [selected]), unknown);
+        assert_eq!(resolve_tab_id(unknown, None, [conversation]), unknown);
     }
 }

@@ -91,10 +91,13 @@ blank tab. Closing or moving the last tab creates a blank replacement for the
 source connection.
 
 Right-click a tab to choose **Rename…**, **Duplicate**, **Copy to
-Connection…**, or **Move to Connection…**. Duplicate copies the tab within its
+Connection…**, or **Move to Connection…**. When the assistant is on, the menu
+also has [**Start Conversation**](assistant.md#conversations-and-query-tabs). Duplicate copies the tab within its
 connection. Copy and move show a submenu of destination connections. Choosing
 a destination selects the resulting tab. Move is disabled while the tab is
-busy. Tab names must be unique within a connection. A duplicate or copied tab
+busy or while its assistant conversation works or waits for approval. A move
+keeps the [assistant conversation](assistant.md#conversations-and-query-tabs)
+of the tab. Tab names must be unique within a connection. A duplicate or copied tab
 uses the source name with **(Copy)**; later copies add a number when needed. A
 move keeps the source name when it is available and adds a copy suffix if the
 destination already uses that name.

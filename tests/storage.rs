@@ -238,7 +238,6 @@ fn populated_assistant_state_round_trips_through_workspace_json() {
         AssistantConversation::new("thread-2", AssistantExecutionMode::AskBeforeRunning);
     detached.detached_profile = Some(profile.id);
     workspace.assistant.conversations.push(detached);
-    workspace.assistant.selected_thread = Some("thread-1".into());
     fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
 
     let restored = qrow::storage::load(&path).unwrap();

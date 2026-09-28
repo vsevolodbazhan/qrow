@@ -71,8 +71,9 @@ Right-click a tab and choose **Rename…**. Enter a unique name, or leave the
 field empty to keep the current name. Renaming preserves the SQL, connection,
 and downloaded results.
 
-A busy tab cannot close. Switching connections or tabs does not stop work in
-another tab. See [Connections](connections.md) for session behavior.
+A busy tab cannot close. A tab also cannot close while its [assistant
+conversation](assistant.md#conversations-and-query-tabs) works or waits for
+approval. Switching connections or tabs does not stop work in another tab. See [Connections](connections.md) for session behavior.
 
 ## Cancel work
 

@@ -1,3 +1,4 @@
+use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
@@ -113,6 +114,7 @@ impl Qrow {
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
                         let busy = self.profile_busy(id);
+                        let in_use = self.profile_in_use(id);
                         let unread_error = self
                             .tabs
                             .iter()
@@ -228,7 +230,7 @@ impl Qrow {
                                                 let delete = delete.clone();
                                                 move |event, window, cx| delete(event, window, cx)
                                             })
-                                            .disabled(busy),
+                                            .disabled(in_use),
                                     )
                             })
                     })),
@@ -270,6 +272,13 @@ impl Qrow {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                let assistant = self
+                    .settings
+                    .assistant
+                    .enabled
+                    .then(|| self.tab_assistant_status(id))
+                    .flatten();
+                let assistant_busy = assistant.is_some_and(|status| status.busy());
                 QueryTab::new()
                     // Kit's large tab uses a fixed 36px height internally.
                     // Constrain it to the same scaled height as the bar and its tools.
@@ -287,7 +296,7 @@ impl Qrow {
                     )
                     .label(tab.saved.title.clone())
                     .aria_label(format!(
-                        "{}{}{}",
+                        "{}{}{}{}",
                         tab.saved.title,
                         if tab.busy { ", running" } else { "" },
                         if tab.panel.unread_error {
@@ -295,21 +304,51 @@ impl Qrow {
                         } else {
                             ""
                         },
+                        assistant.map_or("", ThreadStatus::accessible_suffix),
                     ))
+                    // The status area before the close button shows one
+                    // spinner. It uses the accent color while the tab's
+                    // conversation works, also when the assistant runs the
+                    // query of the tab.
                     .suffix(
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when(tab.busy, |el| {
-                                el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+                            .when(tab.busy || assistant == Some(ThreadStatus::Working), |el| {
+                                el.child(Spinner::new().xsmall().color(
+                                    if assistant == Some(ThreadStatus::Working) {
+                                        cx.theme().primary
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    },
+                                ))
                             })
-                            .when(tab.panel.unread_error, |el| {
-                                el.child(
-                                    Icon::new(AssetIconName::TriangleAlert)
-                                        .small()
-                                        .text_color(cx.theme().danger),
-                                )
-                            })
+                            .when_some(
+                                assistant
+                                    .filter(|status| *status != ThreadStatus::Working)
+                                    .map(|status| {
+                                        self.assistant_status_icon(status, cx).unwrap_or_else(
+                                            || {
+                                                Icon::new(AssetIconName::Bot)
+                                                    .small()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .into_any_element()
+                                            },
+                                        )
+                                    })
+                                    .filter(|_| !tab.busy || assistant != Some(ThreadStatus::Idle)),
+                                |el, icon| el.child(icon),
+                            )
+                            .when(
+                                tab.panel.unread_error && assistant != Some(ThreadStatus::Failed),
+                                |el| {
+                                    el.child(
+                                        Icon::new(AssetIconName::TriangleAlert)
+                                            .small()
+                                            .text_color(cx.theme().danger),
+                                    )
+                                },
+                            )
                             .child(
                                 Button::new(SharedString::from(format!(
                                     "close-tab-{}",
@@ -320,7 +359,7 @@ impl Qrow {
                                 .icon(IconName::Close)
                                 .accessibility_label(format!("Close {}", tab.saved.title))
                                 .tooltip("Close Tab · ⌘W")
-                                .disabled(tab.busy)
+                                .disabled(tab.busy || assistant_busy)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         cx.stop_propagation();
@@ -358,16 +397,13 @@ impl Qrow {
                             ),
                     )
                     .when(self.settings.assistant.enabled, |bar| {
-                        let unread = self.assistant_panel.unread && !self.assistant_panel.open;
-                        let waiting_for_approval = self
-                            .assistant_panel
-                            .pending_query
-                            .as_ref()
-                            .is_some_and(|pending| !pending.approved);
-                        let working = (self.assistant_panel.pending_reply_thread.is_some()
-                            || self.assistant_panel.active_turn.is_some())
-                            && !waiting_for_approval;
-                        let failed = unread && self.assistant_panel.unread_error;
+                        // The toggle shows the most urgent state of all
+                        // conversations.
+                        let status = self.assistant_status();
+                        let waiting_for_approval = status == ThreadStatus::Approval;
+                        let failed = status == ThreadStatus::Failed;
+                        let unread = failed || status == ThreadStatus::Ready;
+                        let working = status == ThreadStatus::Working;
                         let (accessibility_label, tooltip) = if failed {
                             (
                                 "Toggle Assistant, reply failed",
@@ -394,7 +430,6 @@ impl Qrow {
                                 .small()
                                 .w(self.ui_px(28.))
                                 .h(self.ui_px(28.))
-                                .selected(self.assistant_panel.open)
                                 .accessibility_label(accessibility_label)
                                 .tooltip(tooltip)
                                 .when(working, |button| {
@@ -409,7 +444,7 @@ impl Qrow {
                                 })
                                 .when(!working && !failed && unread, |button| {
                                     button.icon(
-                                        Icon::new(AssetIconName::Sparkles)
+                                        Icon::new(AssetIconName::Bot)
                                             .small()
                                             .text_color(cx.theme().success),
                                     )
@@ -418,7 +453,7 @@ impl Qrow {
                                     !working && !failed && !unread && waiting_for_approval,
                                     |button| {
                                         button.icon(
-                                            Icon::new(AssetIconName::Sparkles)
+                                            Icon::new(AssetIconName::Bot)
                                                 .small()
                                                 .text_color(cx.theme().warning),
                                         )
@@ -426,7 +461,7 @@ impl Qrow {
                                 )
                                 .when(
                                     !working && !failed && !unread && !waiting_for_approval,
-                                    |button| button.icon(AssetIconName::Sparkles),
+                                    |button| button.icon(AssetIconName::PanelRight),
                                 )
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)

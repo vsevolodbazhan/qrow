@@ -103,6 +103,85 @@ def send(message):
         print(json.dumps(message, separators=(",", ":")), flush=True)
 
 
+# Held turns run in their own threads, like turns of several Codex threads.
+# Each tool call has a handler for its answer.
+call_handlers = {}
+answered_calls = set()
+next_call_id = [20000]
+handlers_lock = threading.Lock()
+
+
+def call_tool(thread, turn, tool, arguments, handler, replay=False):
+    with handlers_lock:
+        next_call_id[0] += 1
+        call_id = next_call_id[0]
+        call_handlers[call_id] = handler
+    call = {
+        "id": call_id,
+        "method": "item/tool/call",
+        "params": {
+            "threadId": thread,
+            "turnId": turn,
+            "callId": f"held-{call_id}",
+            "tool": tool,
+            "arguments": arguments,
+        },
+    }
+    send(call)
+    if replay:
+        # Codex sends a waiting call again when a client resumes its thread.
+        send(call)
+
+
+def finish_turn(thread, turn, text, delay=0):
+    def finish():
+        time.sleep(delay)
+        send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": text}})
+        send(
+            {
+                "method": "turn/completed",
+                "params": {"threadId": thread, "turn": {"id": turn, "status": "completed", "items": []}},
+            }
+        )
+
+    threading.Thread(target=finish, daemon=True).start()
+
+
+def hold_turn(thread, turn, label, tab):
+    """Waits for the driver, appends a query to the conversation tab, and asks to run it."""
+    marker = os.path.join(state_dir, f"release-{label}")
+    deadline = time.monotonic() + 60
+    while not os.path.exists(marker) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    sql = {"Alpha": "SELECT 11", "Beta": "SELECT 22"}[label]
+
+    def appended(success, result):
+        if not success:
+            finish_turn(thread, turn, f"Tool failed: {result}")
+            return
+        arguments = {
+            "version": 1,
+            "tab_id": result["tab_id"],
+            "connection_id": tab["connection_id"],
+            "editor_revision": result["editor_revision"],
+        }
+        call_tool(thread, turn, "run_selected_tab_query", arguments, ran, replay=True)
+
+    def ran(success, result):
+        outcome = "ran" if success else result.get("error", {}).get("code", "failed")
+        # The driver selects another conversation before this turn ends.
+        finish_turn(thread, turn, f"Finished {label}: {outcome}", delay=2)
+
+    arguments = {
+        "version": 1,
+        "tab_id": tab["id"],
+        "connection_id": tab["connection_id"],
+        "editor_revision": tab["editor_revision"],
+        "sql": sql,
+    }
+    call_tool(thread, turn, "append_selected_tab_sql", arguments, appended)
+
+
 def sign_in_elsewhere():
     # Like a sign-in in another Codex client after a failed sign-in in Qrow.
     marker = os.path.join(state_dir, "sign-in-elsewhere")
@@ -117,6 +196,17 @@ for line in sys.stdin:
     request = json.loads(line)
     method = request.get("method")
     request_id = request.get("id")
+    if method is None and request_id in call_handlers:
+        with handlers_lock:
+            if request_id in answered_calls:
+                # Qrow must answer a replayed call only once.
+                open(os.path.join(state_dir, "duplicate-answer"), "w").close()
+                continue
+            answered_calls.add(request_id)
+            handler = call_handlers[request_id]
+        result = request["result"]
+        handler(result["success"], json.loads(result["contentItems"][0]["text"]))
+        continue
     if method == "initialize":
         time.sleep(5)  # Keep the startup controls visible through the UI checks.
         send({"id": request_id, "result": {}})
@@ -247,6 +337,13 @@ for line in sys.stdin:
                 },
             }
         )
+        if message.startswith("Hold parallel "):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            label = message.split()[2]
+            threading.Thread(
+                target=hold_turn, args=(thread_id, turn_id, label, context["selected_tab"]), daemon=True
+            ).start()
+            continue
         if message.startswith("Return to the latest message"):
             # Keep the turn open long enough to observe the working indicator.
             time.sleep(8)
@@ -399,12 +496,14 @@ for line in sys.stdin:
                 }
             )
         else:
-            if message.startswith("Report the SQL style"):
+            if message.startswith(("Report the SQL style", "Report the tab SQL")):
                 context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
                 style = context["sql_style"]
             answer = (
                 f"SQL style: {style['keyword_case']}, {style['indent_spaces']} spaces"
                 if message.startswith("Report the SQL style")
+                else f"Tab SQL: {context['selected_tab']['sql']}"
+                if message.startswith("Report the tab SQL")
                 else "\n\n".join(f"Line {number}: synthetic assistant text" for number in range(1, 41))
                 if message.startswith("Show many lines")
                 else wide_table()
@@ -446,7 +545,9 @@ for line in sys.stdin:
         result = json.loads(text)
         if pending_read_retry:
             pending_read_retry = None
-            assert request["result"]["success"] and result["sql"] == "SELECT 99;"
+            # An unknown tab ID reads the conversation tab, not the tab that the
+            # user selected during the turn.
+            assert request["result"]["success"] and result["sql"] == "SELECT 1;"
             pending_workspace = turn_id
             send(
                 {
