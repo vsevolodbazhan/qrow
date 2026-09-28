@@ -8,7 +8,9 @@ the [end-to-end tests](end-to-end-testing.md) belongs to the server fixture.
 
 | Component | Responsibility |
 | --- | --- |
-| [Application and UI](../src/main.rs) | Initialize GPUI Kit, assets, the SQL language, and the root view. |
+| [Application](../src/main.rs) | Select the user or demo environment and open the window. |
+| [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
+| [UI environment](../src/ui/environment.rs) | Select the workspace file and the password store of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, activity history, and commands. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Activity model](../src/activity.rs) | Group activity entries, apply retention, and define panel transitions. |
@@ -16,11 +18,14 @@ the [end-to-end tests](end-to-end-testing.md) belongs to the server fixture.
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
-| [Storage](../src/storage.rs) | Lock and save the workspace, and access macOS Keychain. |
+| [Storage](../src/storage.rs) | Lock and save the workspace. Define the password store and its macOS Keychain implementation. |
 
-The [core library](../src/lib.rs) builds without the `ui` feature. UI code belongs
-to the application binary. This separation permits headless core tests and keeps
-connector behavior independent of editor controls.
+The [core library](../src/lib.rs) builds without the `ui` feature. The UI
+modules are in the same library behind the `ui` feature, and the application
+binary only opens the window. This separation permits headless core tests and
+keeps connector behavior independent of editor controls. UI integration tests
+use the library to open the real window with a temporary workspace and
+synthetic passwords.
 
 ## Query data flow
 

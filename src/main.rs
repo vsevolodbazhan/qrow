@@ -1,36 +1,23 @@
-mod assets;
-mod themes;
-mod ui;
-
-use gpui_kit::component::{
-    Root, Theme, TitleBar,
-    highlighter::{LanguageConfig, LanguageRegistry},
-};
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
+use qrow::ui::{self, Environment};
 
 fn main() {
-    let demo = std::env::args().any(|arg| arg == "--demo");
+    let environment = if std::env::args().any(|arg| arg == "--demo") {
+        Environment::demo()
+    } else {
+        Environment::user()
+    };
     let started = std::time::Instant::now();
     gpui_kit::application()
-        .with_assets(assets::Assets)
+        .with_assets(ui::Assets)
         .run(move |cx| {
-            gpui_kit::init(cx);
-            themes::init(cx);
-            // Wide result sets need a persistent, discoverable horizontal scrollbar.
-            Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
-
-            LanguageRegistry::singleton().register(
-                "sql",
-                &LanguageConfig::new(
-                    "sql",
-                    tree_sitter_sequel::LANGUAGE.into(),
-                    vec![],
-                    tree_sitter_sequel::HIGHLIGHTS_QUERY,
-                    "",
-                    "",
-                ),
-            );
             ui::init(cx);
+            let title = if environment.is_demo() {
+                "Qrow · Demo"
+            } else {
+                "Qrow"
+            };
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -39,16 +26,15 @@ fn main() {
                         cx,
                     ))),
                     titlebar: Some(TitlebarOptions {
-                        title: Some(if demo { "Qrow · Demo" } else { "Qrow" }.into()),
+                        title: Some(title.into()),
                         ..TitleBar::title_bar_options()
                     }),
                     window_min_size: Some(size(px(850.), px(560.))),
                     ..TitleBar::window_options()
                 },
                 |window, cx| {
-                    let view = cx.new(|cx| ui::Qrow::new(window, cx, demo, started));
-                    let shell = cx.new(|_| ui::WindowView::new(view));
-                    cx.new(|cx| Root::new(shell, window, cx))
+                    let view = cx.new(|cx| ui::Qrow::new(environment, started, window, cx));
+                    cx.new(|cx| ui::root(view, window, cx))
                 },
             )
             .expect("open Qrow window");

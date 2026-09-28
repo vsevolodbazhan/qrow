@@ -1,4 +1,4 @@
-use qrow::model::{ConnectionLifecycle, Profile};
+use crate::model::{ConnectionLifecycle, Profile};
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
     profiles
@@ -41,6 +41,20 @@ use gpui_kit::component::{
 };
 use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*};
 
+/// Element IDs of the connection form inputs, by field index. Index 6 is the
+/// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
+pub(super) const FIELD_IDS: [&str; 10] = [
+    "connection-name",
+    "connection-host",
+    "connection-port",
+    "connection-username",
+    "connection-password",
+    "connection-database",
+    "connection-parameters",
+    "connection-idle-timeout",
+    "connection-keep-alive-interval",
+    "connection-keep-alive-query",
+];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
 
@@ -95,6 +109,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
     let keep = keeps_connected(&form.idle_behavior, cx);
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
+            .id(FIELD_IDS[index])
             .w_full()
             .disabled(saving)
             .aria_label(label)

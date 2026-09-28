@@ -1,5 +1,6 @@
 use super::assistant_view::ThreadStatus;
 use super::*;
+use crate::model::copied_profile_name;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
     Icon, Selectable, TitleBar, h_flex,
@@ -10,7 +11,6 @@ use gpui_kit::component::{
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
-use qrow::model::copied_profile_name;
 use std::rc::Rc;
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
@@ -813,7 +813,7 @@ impl Render for Qrow {
         let assistant_width = self
             .ui_px(self.settings.assistant.panel_width)
             .min(available)
-            .max(self.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH));
+            .max(self.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH));
         v_flex()
             .relative()
             .size_full()
@@ -857,10 +857,10 @@ impl Render for Qrow {
                             px(0.)
                         };
                     let width = (initial + start.x - e.position.x).clamp(
-                        this.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH),
-                        this.ui_px(qrow::model::MAX_ASSISTANT_PANEL_WIDTH)
+                        this.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH),
+                        this.ui_px(crate::model::MAX_ASSISTANT_PANEL_WIDTH)
                             .min(available)
-                            .max(this.ui_px(qrow::model::MIN_ASSISTANT_PANEL_WIDTH)),
+                            .max(this.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH)),
                     );
                     this.settings.assistant.panel_width = f32::from(width) / this.settings.ui_scale;
                     this.changed(cx);
@@ -984,11 +984,11 @@ impl Render for Qrow {
 }
 
 /// Own window overlays outside Qrow so their builders can read its retained state.
-pub(crate) struct WindowView {
+pub struct WindowView {
     content: Entity<Qrow>,
 }
 impl WindowView {
-    pub(crate) fn new(content: Entity<Qrow>) -> Self {
+    pub fn new(content: Entity<Qrow>) -> Self {
         Self { content }
     }
 }

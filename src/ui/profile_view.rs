@@ -75,6 +75,7 @@ impl Qrow {
         let saving = form.saving.is_some();
         let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
+                .id(connection_form::FIELD_IDS[index])
                 .w_full()
                 .disabled(saving)
                 .aria_label(label)

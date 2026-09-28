@@ -2,7 +2,7 @@ use crate::{
     activity::{ActivityEvent, ActivityKind, ExecutionId, Severity},
     connector::{Cancellation, Connector, QueryError, QueryState, Session, hive::HiveConnector},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
-    storage,
+    storage::Credentials,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -59,11 +59,11 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    pub fn new(wake: Arc<dyn Fn() + Send + Sync>, credentials: Arc<dyn Credentials>) -> Self {
         Self::with_connector(
             wake,
             Arc::new(HiveConnector),
-            Arc::new(|profile| storage::password(profile.id)),
+            Arc::new(move |profile| credentials.password(profile.id)),
         )
     }
     pub fn with_connector(

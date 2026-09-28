@@ -2,8 +2,8 @@ use super::assistant_view::{
     PendingQuery, PendingQueryKind, ToolActivity, ToolKind, ToolState, TranscriptEntry,
 };
 use super::*;
-use qrow::assistant::broker::ActionTarget;
-use qrow::assistant::{
+use crate::assistant::broker::ActionTarget;
+use crate::assistant::{
     ToolCall, ToolResult,
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
@@ -18,7 +18,7 @@ use std::ops::Range;
 
 fn remap_selection(
     selection: Range<usize>,
-    edits: &[qrow::assistant::broker::TextEdit],
+    edits: &[crate::assistant::broker::TextEdit],
 ) -> Option<Range<usize>> {
     let mut shift = 0_i64;
     for edit in edits {
@@ -377,7 +377,7 @@ impl Qrow {
                     && edit.end == sql.len()
                     && !edit.replacement.trim().is_empty()
             })
-            .then(|| qrow::sql::last_statement_range(&plan.sql))
+            .then(|| crate::sql::last_statement_range(&plan.sql))
             .flatten()
             .filter(|range| range.start >= sql.len());
         let mapped = appended_range
@@ -532,14 +532,14 @@ impl Qrow {
                 tab_id: plan.tab_id,
                 revision: plan.expected_revision,
                 sql: plan.sql,
-                approved: mode == qrow::model::AssistantExecutionMode::RunAutomatically,
+                approved: mode == crate::model::AssistantExecutionMode::RunAutomatically,
                 started: false,
                 kind: PendingQueryKind::Run,
                 activity_index: None,
                 detached: false,
                 first_row: 0,
             });
-            if mode == qrow::model::AssistantExecutionMode::RunAutomatically {
+            if mode == crate::model::AssistantExecutionMode::RunAutomatically {
                 self.begin_assistant_query(&call.thread_id, window, cx);
             }
             Ok(())

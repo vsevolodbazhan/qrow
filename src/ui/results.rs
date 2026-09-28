@@ -1,3 +1,8 @@
+use crate::{
+    model::{Column as DataColumn, Row},
+    pagination::Pagination,
+    worker::Event,
+};
 use gpui_kit::component::{
     ActiveTheme, Sizable,
     menu::{PopupMenu, PopupMenuItem},
@@ -5,11 +10,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use qrow::{
-    model::{Column as DataColumn, Row},
-    pagination::Pagination,
-    worker::Event,
-};
 
 pub struct Results {
     pub columns: Vec<DataColumn>,

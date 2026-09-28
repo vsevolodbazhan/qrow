@@ -1,8 +1,8 @@
+use crate::model::SYSTEM_THEME;
 #[cfg(test)]
 use gpui_kit::component::ThemeSet;
 use gpui_kit::component::{Theme, ThemeRegistry};
 use gpui_kit::{App, Window};
-use qrow::model::SYSTEM_THEME;
 
 #[cfg(test)]
 pub(crate) const ONE_DARK_THEME: &str = "One Dark";

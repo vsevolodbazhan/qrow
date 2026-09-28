@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use qrow::{
     connector::{Connector, QueryState, hive::HiveConnector},
-    storage,
+    storage::{self, Credentials, Keychain},
 };
 use std::{
     thread,
@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         "Expected exactly one saved profile named {name}"
     );
     let profile = profiles[0];
-    let mut session = HiveConnector.connect(profile, storage::password(profile.id)?)?;
+    let mut session = HiveConnector.connect(profile, Keychain.password(profile.id)?)?;
     let result = (|| -> Result<()> {
         let cancel = session.execute("SELECT 1 AS qrow_connection_test")?;
         let started = Instant::now();
