@@ -309,6 +309,23 @@ pub enum AssistantEvent {
     },
 }
 
+/// Writes an executable test script. Tests start processes in parallel. A
+/// process forked while a test holds a write descriptor for a script inherits
+/// it, and running the script then fails with ETXTBSY. So only a short-lived
+/// child process writes the executable file.
+#[cfg(test)]
+pub(crate) fn write_test_executable(path: &std::path::Path, script: &str) {
+    let source = path.with_extension("source");
+    std::fs::write(&source, script).unwrap();
+    let status = std::process::Command::new("/usr/bin/install")
+        .args(["-m", "700"])
+        .arg(&source)
+        .arg(path)
+        .status()
+        .unwrap();
+    assert!(status.success(), "could not install {}", path.display());
+}
+
 #[cfg(test)]
 mod history_tests {
     use super::*;

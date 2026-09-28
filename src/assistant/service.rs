@@ -503,7 +503,7 @@ fn execute(harness: &mut dyn AssistantHarness, command: Command) -> Event {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::fs;
 
     fn call(thread: &str, turn: &str, id: &str) -> ToolCall {
         ToolCall {
@@ -541,7 +541,7 @@ mod tests {
     fn service_launches_off_window_thread_and_routes_commands() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-codex");
-        fs::write(&executable, r#"#!/bin/sh
+        crate::assistant::write_test_executable(&executable, r#"#!/bin/sh
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$0.log"
   id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
@@ -554,10 +554,7 @@ while IFS= read -r line; do
     *'"method":"thread/delete"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
   esac
 done
-"#).unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&executable, permissions).unwrap();
+"#);
         let mut service = Service::launch(executable.clone(), Arc::new(|| {})).unwrap();
         assert!(matches!(
             service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
@@ -594,7 +591,7 @@ done
     fn demo_cleanup_reports_codex_delete_error() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-codex");
-        fs::write(&executable, r#"#!/bin/sh
+        crate::assistant::write_test_executable(&executable, r#"#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
   case "$line" in
@@ -604,10 +601,7 @@ while IFS= read -r line; do
     *'"method":"thread/delete"'*) printf '{"id":%s,"error":{"code":-1,"message":"synthetic refusal"}}\n' "$id" ;;
   esac
 done
-"#).unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&executable, permissions).unwrap();
+"#);
         let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
         assert!(matches!(
             service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
@@ -623,7 +617,7 @@ done
     fn shutdown_reaps_pipe_holding_descendants_after_leader_exits() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-codex");
-        fs::write(&executable, r#"#!/bin/sh
+        crate::assistant::write_test_executable(&executable, r#"#!/bin/sh
 sleep 30 &
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
@@ -634,10 +628,7 @@ while IFS= read -r line; do
   esac
 done
 exit 0
-"#).unwrap();
-        let mut permissions = fs::metadata(&executable).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&executable, permissions).unwrap();
+"#);
         let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
         assert!(matches!(
             service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
