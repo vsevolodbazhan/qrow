@@ -252,9 +252,8 @@ target/e2e-tools/native-driver --assistant-thread-list-only
 
 The driver starts two conversations, closes and opens the thread list, and
 selects a conversation. The check confirms that the list stays open. It uses a
-90% interface scale, so a main display 1024 points wide fits the wide assistant
-pane. On a smaller display, the check stops after 10 seconds and reports a
-narrow pane.
+90% interface scale, so the test window fits the wide assistant pane. If the
+pane is narrow, the check stops after 10 seconds.
 
 To check the assistant sign-in screen, use the same package steps and a new,
 empty workspace directory. Run:
@@ -339,8 +338,10 @@ The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
 and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
-The driver resizes and centers the Qrow window on the main display if the window
-does not fit. The display must support the app's minimum window size.
+The driver sets the Qrow window to 992 by 652 points, the window size on a
+hosted macOS runner, and centers it near the top of the main display. Local and
+CI runs then show the same layout, including the side on which a submenu opens.
+The main display must fit this window with a 16-point margin on each side.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
 ends when the New Connection control becomes accessible. This does not measure
@@ -394,8 +395,8 @@ competing processes and lock release after a process is killed.
 
 ## Continuous integration
 
-The `test` workflow runs `e2e-backend` after `core-backend` and `e2e-macos`
-after `core-macos`. It runs them for pushes to `main`, manual dispatches, and non-draft pull
+The `test` workflow runs `e2e-backend` after `core-backend`, and `e2e-macos`
+after `core-macos` and `e2e-backend`. It runs them for pushes to `main`, manual dispatches, and non-draft pull
 requests from this repository. It skips fork pull requests. The backend job
 uses the disposable Docker fixture. The macOS job uses the hosted `macos-15`
 runner, Java 17, and the native accessibility driver.

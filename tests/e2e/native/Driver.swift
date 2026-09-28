@@ -64,45 +64,35 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
     AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
     return (point, extent)
 }
-/// Shrinks the Qrow window to fit the main display. With `grow`, the window
-/// also fills the main display.
-func fitWindowToMainDisplay(_ app: AXUIElement, grow: Bool = false) throws {
+/// Every run uses the Qrow window size of a hosted macOS runner, whose main
+/// display is 1024 by 768 points. Local runs then show the same layout, menu
+/// placement, and pane widths as CI runs.
+let testWindowSize = CGSize(width: 992, height: 652)
+/// Sets the Qrow window to `testWindowSize` near the top of the main display.
+func setTestWindowFrame(_ app: AXUIElement) throws {
     _ = NSApplication.shared
     guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
           let screen = NSScreen.screens.first else {
         throw Failure("Qrow window or main display is unavailable")
     }
     let visible = screen.visibleFrame
-    let minimum = CGSize(width: 850, height: 560)
-    let width = min(visible.width - 32, CGFloat(env["QROW_E2E_MAX_WINDOW_WIDTH"].flatMap(Double.init) ?? .infinity))
-    let height = visible.height - 32
     try require(
-        width >= minimum.width && height >= minimum.height,
-        "Main display is too small for the minimum Qrow window"
+        visible.width - 32 >= testWindowSize.width && visible.height - 32 >= testWindowSize.height,
+        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window"
     )
-
-    let (position, extent) = try elementBounds(window)
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
-    let currentFrame = CGRect(origin: position, size: extent)
-    guard grow || !safeFrame.contains(currentFrame) || extent.width > width else { return }
 
-    var fittedSize = grow
-        ? CGSize(width: width, height: height)
-        : CGSize(width: min(extent.width, width), height: min(extent.height, height))
-    guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
+    var size = testWindowSize
+    guard let sizeValue = AXValueCreate(.cgSize, &size) else {
         throw Failure("Could not create the Qrow window size")
     }
     try require(
         AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success,
-        "Could not resize the Qrow window for the main display"
+        "Could not resize the Qrow window for the test"
     )
-
-    var fittedPosition = CGPoint(
-        x: visible.minX + (visible.width - fittedSize.width) / 2,
-        y: top + 16
-    )
-    guard let positionValue = AXValueCreate(.cgPoint, &fittedPosition) else {
+    var position = CGPoint(x: visible.minX + (visible.width - size.width) / 2, y: top + 16)
+    guard let positionValue = AXValueCreate(.cgPoint, &position) else {
         throw Failure("Could not create the Qrow window position")
     }
     try require(
@@ -112,12 +102,15 @@ func fitWindowToMainDisplay(_ app: AXUIElement, grow: Bool = false) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
 
     let (actualPosition, actualSize) = try elementBounds(window)
-    let actualFrame = CGRect(origin: actualPosition, size: actualSize)
     try require(
-        safeFrame.insetBy(dx: -1, dy: -1).contains(actualFrame),
+        abs(actualSize.width - size.width) <= 1 && abs(actualSize.height - size.height) <= 1,
+        "Qrow window is \(actualSize), not the \(size) test window"
+    )
+    try require(
+        safeFrame.insetBy(dx: -1, dy: -1).contains(CGRect(origin: actualPosition, size: actualSize)),
         "Qrow window is outside the main display after repositioning"
     )
-    print("Fitted Qrow window to the main display: \(actualPosition) \(actualSize)")
+    print("Set the Qrow test window: \(actualPosition) \(actualSize)")
 }
 func click(_ element: AXUIElement) throws {
     // Dialog accessibility nodes appear before their opening animation settles.
@@ -309,6 +302,16 @@ final class Driver {
         if AXUIElementPerformAction(element, kAXPressAction as CFString) != .success {
             try click(element)
         }
+    }
+    /// Moves keyboard focus into the open submenu of `parent`. A submenu that
+    /// does not fit on the right opens on the left. Then Left enters it, as in
+    /// native macOS menus, and Right closes it.
+    func enterSubmenu(_ parent: String, showing item: String) throws {
+        let child = try wait(item, role: kAXMenuItemRole)
+        let (childPosition, _) = try elementBounds(child)
+        let (parentPosition, _) = try elementBounds(try wait(parent))
+        key(childPosition.x < parentPosition.x ? 123 : 124)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
     }
     func pressMenuItem(_ label: String) throws {
         // Menu items are transient. Use their accessibility action instead of
@@ -577,7 +580,7 @@ final class Driver {
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
         _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
-        try fitWindowToMainDisplay(app)
+        try setTestWindowFrame(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let sample = try? command(["ps", "-o", "rss=,%cpu=", "-p", "\(self.process.processIdentifier)"]) {
@@ -1429,7 +1432,6 @@ final class Driver {
     /// A wide pane keeps a reopened thread list open when you select a
     /// conversation in it.
     func testAssistantThreadList() throws {
-        try fitWindowToMainDisplay(app, grow: true)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
@@ -1848,8 +1850,7 @@ final class Driver {
         try contextMenu(reopenedTitle, exact: true)
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
-        key(124)
-        _ = try wait("Beta", role: kAXMenuItemRole)
+        try enterSubmenu("Move to Connection…", showing: "Beta")
         key(36)
         try waitGone("Move to Connection…")
         try waitSaved("the conversation moves with its tab") { workspace in
@@ -2352,10 +2353,7 @@ final class Driver {
         try contextMenu("Query 1", exact: true)
         _ = try wait("Copy to Connection…")
         for _ in 0..<3 { key(125) }
-        // The context menu has room to open this submenu to the right in the
-        // native test window.
-        key(124)
-        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        try enterSubmenu("Copy to Connection…", showing: "Qrow E2E copy")
         key(36)
         try waitGone("Copy to Connection…")
         try selectConnection("Qrow E2E copy")
@@ -2377,8 +2375,7 @@ final class Driver {
         try contextMenu("Query 1", exact: true)
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
-        key(124)
-        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        try enterSubmenu("Move to Connection…", showing: "Qrow E2E copy")
         key(36)
         try waitGone("Move to Connection…")
         try selectConnection("Qrow E2E copy")

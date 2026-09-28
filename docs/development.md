@@ -118,16 +118,17 @@ manual dispatches, and pull requests with the
 `converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
 draft pull request, including a `converted_to_draft` event, starts no jobs.
 
-The workflow runs the dependency and script checks first. Then it runs the
-backend and macOS jobs in two parallel branches:
+Each job waits for the less expensive checks that can predict its failure.
+`e2e-backend` does not use the result of `core-macos`, so the two run at the
+same time:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> e2e-backend
-                                  -> core-macos   -> e2e-macos
+core-dependencies -> core-scripts -> core-backend -> core-macos  -> e2e-macos
+                                                  -> e2e-backend -^
 ```
 
-A failed job skips all jobs after it in its branch. A failed
-`core-dependencies` or `core-scripts` job skips all later jobs. Every job checks out the same pull
+`e2e-macos` waits for `core-macos` and `e2e-backend`. A failed job skips all
+jobs that wait for it, directly or through another job. Every job checks out the same pull
 request merge result. Core jobs run for fork pull requests. E2E jobs run for
 pushes, manual dispatches, and pull requests from this repository. They skip
 fork pull requests because they execute repository code in Docker and through

@@ -94,9 +94,10 @@ class AcceptanceTests(unittest.TestCase):
             ("core-dependencies", None),
             ("core-scripts", "core-dependencies"),
             ("core-backend", "core-scripts"),
-            ("core-macos", "core-scripts"),
+            ("core-macos", "core-backend"),
             ("e2e-backend", "core-backend"),
-            ("e2e-macos", "core-macos"),
+            # Backend E2E runs beside core-macos and gates the native UI suite.
+            ("e2e-macos", "[core-macos, e2e-backend]"),
         ]
         for job, dependency in graph:
             with self.subTest(job=job):

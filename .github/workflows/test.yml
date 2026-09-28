@@ -95,7 +95,7 @@ jobs:
 
   core-macos:
     name: core-macos
-    needs: core-scripts
+    needs: core-backend
     if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: macos-15
     timeout-minutes: 30
@@ -161,7 +161,7 @@ jobs:
 
   e2e-macos:
     name: e2e-macos
-    needs: core-macos
+    needs: [core-macos, e2e-backend]
     if: >
       success() &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
