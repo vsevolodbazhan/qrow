@@ -349,8 +349,15 @@ impl ToolBroker {
         }
         sql::validate_single(new_query)
             .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
-        let formatted = sql::format_statement(new_query, document.sql_style);
-        let new_query = formatted.as_deref().unwrap_or(new_query);
+        // A comment that describes the query stays as written above it and
+        // outside the statement range, which is the text that runs.
+        let (comment, statement) = new_query.split_at(
+            sql::statement_ranges(new_query)
+                .first()
+                .map_or(0, |range| range.start),
+        );
+        let formatted = sql::format_statement(statement, document.sql_style);
+        let statement = formatted.as_deref().unwrap_or(statement);
 
         let mut sql = document.sql.to_owned();
         let last_token = sql::tokens(document.sql)
@@ -372,8 +379,9 @@ impl ToolBroker {
                 sql.push('\n');
             }
         }
+        sql.push_str(comment);
         let start = sql.len();
-        sql.push_str(new_query);
+        sql.push_str(statement);
         if sql.len() > MAX_SQL_BYTES {
             return Err(ToolError::new(
                 ToolErrorCode::LimitReached,
@@ -758,6 +766,42 @@ mod tests {
             .unwrap();
         assert!(!short.formatted);
         assert_eq!(short.sql, "SELECT 2");
+    }
+
+    #[test]
+    fn append_keeps_leading_comment_outside_formatting_and_selection() {
+        let (tab, connection) = ids();
+        let broker = ToolBroker::new(Some(target(tab, connection)));
+        // The comment does not count toward the length that starts formatting.
+        let short = "-- Count paid bookings for the last seven days in every market\nSELECT COUNT(*) FROM bookings";
+        let plan = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, short),
+                &document(tab, connection, "SELECT 1"),
+            )
+            .unwrap();
+        assert!(!plan.formatted);
+        assert_eq!(plan.sql, format!("SELECT 1;\n\n{short}"));
+        assert_eq!(
+            &plan.sql[plan.appended_range],
+            "SELECT COUNT(*) FROM bookings"
+        );
+
+        let long = "-- bookings by state\nselect state, count(*) as bookings, max(booked_at) as last_booked_at from integrations.bookings group by state;";
+        let plan = broker
+            .plan_append(
+                call(),
+                &append_request(tab, connection, long),
+                &document(tab, connection, ""),
+            )
+            .unwrap();
+        assert!(plan.formatted);
+        assert_eq!(
+            plan.sql,
+            "-- bookings by state\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state;"
+        );
+        assert!(plan.sql[plan.appended_range].starts_with("SELECT\n"));
     }
 
     #[test]

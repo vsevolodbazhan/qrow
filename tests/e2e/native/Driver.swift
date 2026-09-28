@@ -1060,13 +1060,14 @@ final class Driver {
         // A generated title stays after later replies.
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
         try waitSavedConversationTitle("Title: Write SELECT 1")
-        // Qrow formats a long one-line query when the assistant appends it.
+        // Qrow formats a long query when the assistant appends it. The comment
+        // above the query stays as written and outside the selected statement.
         try fill("Assistant Message", "Write a long query into this tab")
         try press("Send")
         _ = try wait("I formatted the SQL.", timeout: 20)
         try waitInputValue(
             "SQL Editor",
-            "SELECT 1;\n\nSELECT 2;\n\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state;"
+            "SELECT 1;\n\nSELECT 2;\n\n-- Bookings by state\nSELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\nFROM integrations.bookings\nGROUP BY state;"
         )
         try waitGone("Assistant is working", timeout: 5)
         try snapshot("assistant-formatted-append")
@@ -1092,7 +1093,7 @@ final class Driver {
         } while true
         _ = try wait("I can help with this query", timeout: 20)
         try waitGone("Assistant is working", timeout: 5)
-        print("PASS: Assistant appends a new SQL query, preserves the first query, formats a long query, titles the conversation, and reconnects from the composer")
+        print("PASS: Assistant appends a new SQL query, preserves the first query, formats a long query below its comment, titles the conversation, and reconnects from the composer")
     }
     /// Waits until the saved workspace has these conversation titles and
     /// title sources, in any order.

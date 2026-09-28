@@ -75,7 +75,11 @@ to Codex with the result: up to 20 rows and 16 KB. Codex then does not need a
 separate request to read them. It
 appends each new query to the selected tab. It keeps existing queries and
 selects the new query so it can run that statement alone. If the previous
-query has no final semicolon, Qrow adds one. The assistant can select a
+query has no final semicolon, Qrow adds one. The assistant starts each query
+that it writes with a short `--` comment that tells what the query does, for
+example `-- Paid bookings by gate`. When the assistant changes a query, it keeps
+the comment correct. Qrow selects only the statement below the comment, so the
+assistant runs the statement without the comment. The assistant can select a
 specific statement in a tab with several queries before it runs that statement.
 If you switch or rename a tab during a turn, the assistant can read the
 workspace again to use the current selected tab. A rename keeps the tab ID.
@@ -109,6 +113,8 @@ such as `SELECT` and `AND`, built-in functions such as `COUNT`, type names in
 have an effect on the statement, for example near a `${var}` substitution. It
 also keeps commands such as `SET` and `ADD JAR` as written. When the assistant
 changes only part of a statement, Qrow keeps the layout of that statement.
+Qrow does not format the comment above a statement, and the comment is not
+part of the 80 characters.
 
 If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab

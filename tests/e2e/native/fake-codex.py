@@ -259,8 +259,9 @@ for line in sys.stdin:
             pending_edit = turn_id
             if message.startswith("Write a long query"):
                 # Qrow formats a long query in its own layout, also when the
-                # model wrote it on several lines.
+                # model wrote it on several lines. The comment stays as written.
                 query = (
+                    "-- Bookings by state\n"
                     "SELECT state, COUNT(*) AS bookings, MAX(booked_at) AS last_booked_at\n"
                     "FROM integrations.bookings GROUP BY state;"
                 )
@@ -511,10 +512,18 @@ for line in sys.stdin:
                 else f"Tool failed: the rewritten query was not formatted: {result}"
             )
         elif pending_message.startswith("Write a long query"):
+            # The selected range covers the formatted statement, not its comment.
+            statement = (
+                "SELECT\n  state,\n  COUNT(*) AS bookings,\n  MAX(booked_at) AS last_booked_at\n"
+                "FROM integrations.bookings\nGROUP BY state;"
+            )
+            sql_bytes = result.get("sql_bytes", 0)
             message = (
                 "I formatted the SQL."
-                if result.get("formatted") is True and result.get("statement_range") is not None
-                else f"Tool failed: the long query was not formatted: {result}"
+                if result.get("formatted") is True
+                and result.get("statement_range")
+                == {"start": sql_bytes - len(statement), "end": sql_bytes}
+                else f"Tool failed: the long query was not formatted or selected: {result}"
             )
         elif result.get("statement_range") is not None:
             message = "I updated the SQL."
