@@ -1411,8 +1411,10 @@ final class Driver {
         _ = try wait("Model: Synthetic Model", timeout: 20)
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
         try waitGone("New Connection")
-        _ = try wait("Search Conversations")
-        try require(find("Back to Conversation") == nil, "The assistant pane is narrow. Use a larger main display")
+        guard (try? wait("Search Conversations", timeout: 10)) != nil, find("Back to Conversation") == nil else {
+            try require(process.isRunning, "Qrow exited while waiting for Search Conversations")
+            throw Failure("The assistant pane is narrow. Use a larger main display")
+        }
         for (index, message) in ["Count sandbox schemas now", "Count sandbox schemas again"].enumerated() {
             if index > 0 { try press("New Conversation") }
             try fill("Assistant Message", message)
@@ -1874,11 +1876,11 @@ final class Driver {
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, the last
     /// word of a message with inline code, and the end of bold text lines.
-    func seedAssistantLayoutWorkspace(panelWidth: Double = 536, theme: String? = nil) throws {
+    func seedAssistantLayoutWorkspace(panelWidth: Double = 536, uiScale: Double = 1.1, theme: String? = nil) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
         var settings: [String: Any] = [
-            "ui_scale": 1.1,
+            "ui_scale": uiScale,
             "assistant": [
                 "enabled": true,
                 "data_sharing_notice_version": 1,
@@ -2769,7 +2771,8 @@ do {
                 try driver.start()
                 try driver.testAssistantTabBinding()
             } else if CommandLine.arguments.contains("--assistant-thread-list-only") {
-                try driver.seedAssistantLayoutWorkspace(panelWidth: 900)
+                // A 1024-point hosted runner display fits a wide pane only below 1.0 scale.
+                try driver.seedAssistantLayoutWorkspace(panelWidth: 900, uiScale: 0.9)
                 try driver.start()
                 try driver.testAssistantThreadList()
             } else if CommandLine.arguments.contains("--assistant-sign-in-only") {

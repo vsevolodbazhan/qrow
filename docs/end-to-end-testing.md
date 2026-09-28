@@ -251,8 +251,10 @@ target/e2e-tools/native-driver --assistant-thread-list-only
 ```
 
 The driver starts two conversations, closes and opens the thread list, and
-selects a conversation. The check confirms that the list stays open. This check
-needs a main display that fits a wide assistant pane.
+selects a conversation. The check confirms that the list stays open. It uses a
+90% interface scale, so a main display 1024 points wide fits the wide assistant
+pane. On a smaller display, the check stops after 10 seconds and reports a
+narrow pane.
 
 To check the assistant sign-in screen, use the same package steps and a new,
 empty workspace directory. Run:
