@@ -394,8 +394,8 @@ competing processes and lock release after a process is killed.
 
 ## Continuous integration
 
-The `test` workflow runs `e2e-backend` and `e2e-macos` after the core checks
-pass. It runs them for pushes to `main`, manual dispatches, and non-draft pull
+The `test` workflow runs `e2e-backend` after `core-backend` and `e2e-macos`
+after `core-macos`. It runs them for pushes to `main`, manual dispatches, and non-draft pull
 requests from this repository. It skips fork pull requests. The backend job
 uses the disposable Docker fixture. The macOS job uses the hosted `macos-15`
 runner, Java 17, and the native accessibility driver.

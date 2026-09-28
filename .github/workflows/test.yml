@@ -44,7 +44,8 @@ jobs:
 
   core-scripts:
     name: core-scripts
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: core-dependencies
+    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -65,7 +66,8 @@ jobs:
 
   core-backend:
     name: core-backend
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: core-scripts
+    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -93,7 +95,8 @@ jobs:
 
   core-macos:
     name: core-macos
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    needs: core-scripts
+    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -128,7 +131,7 @@ jobs:
 
   e2e-backend:
     name: e2e-backend
-    needs: [core-dependencies, core-scripts, core-backend, core-macos]
+    needs: core-backend
     if: >
       success() &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -158,7 +161,7 @@ jobs:
 
   e2e-macos:
     name: e2e-macos
-    needs: [core-dependencies, core-scripts, core-backend, core-macos]
+    needs: core-macos
     if: >
       success() &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&

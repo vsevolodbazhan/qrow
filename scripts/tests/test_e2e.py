@@ -92,12 +92,11 @@ class AcceptanceTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
         graph = [
             ("core-dependencies", None),
-            ("core-scripts", None),
-            ("core-backend", None),
-            ("core-macos", None),
-            # E2E jobs start only after every core check passes.
-            ("e2e-backend", "[core-dependencies, core-scripts, core-backend, core-macos]"),
-            ("e2e-macos", "[core-dependencies, core-scripts, core-backend, core-macos]"),
+            ("core-scripts", "core-dependencies"),
+            ("core-backend", "core-scripts"),
+            ("core-macos", "core-scripts"),
+            ("e2e-backend", "core-backend"),
+            ("e2e-macos", "core-macos"),
         ]
         for job, dependency in graph:
             with self.subTest(job=job):
