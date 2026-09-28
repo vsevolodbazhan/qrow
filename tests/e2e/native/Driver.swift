@@ -1048,8 +1048,7 @@ final class Driver {
         try press("Send")
         try waitInputValue("SQL Editor", "SELECT 1")
         try waitGone("Assistant is working", timeout: 5)
-        // After the first reply, Codex generates the conversation title. GPUI
-        // does not expose the header text, so read the saved workspace.
+        // The first message starts title generation alongside the reply.
         try waitSavedConversationTitle("Title: Write SELECT 1")
         try snapshot("assistant-generated-title")
         try fill("Assistant Message", "Write SELECT 2 into this tab")
@@ -1403,6 +1402,39 @@ final class Driver {
         try activate(try waitExact("Cancel", timeout: 5, role: kAXButtonRole))
         print("PASS: Assistant keeps its query tab when you select and rename another tab during a turn")
     }
+    /// A tool call that names another open tab still appends to the tab of
+    /// its conversation, even while the other tab is on screen.
+    func testAssistantWrongActionTab() throws {
+        try waitInputValue("SQL Editor", "SELECT 1;")
+        key(38, flags: .maskCommand)
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try showConversation()
+        try fill("Assistant Message", "Write query with another tab ID")
+        try press("Send")
+        try selectConnection("Beta")
+        try waitInputValue("SQL Editor", "")
+        let marker = URL(fileURLWithPath: env["QROW_DATA_DIR"]!)
+            .appendingPathComponent("fake-codex/wrong-tab-ready")
+        try FileManager.default.createDirectory(at: marker.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data().write(to: marker)
+        try waitSaved("a mismatched tool ID writes only to the conversation tab") { workspace in
+            let tabs = savedTabs(workspace)
+            let alpha = savedProfileID(workspace, "Alpha")
+            let beta = savedProfileID(workspace, "Beta")
+            return tabs.contains {
+                $0["profile"] as? String == alpha
+                    && $0["sql"] as? String == "SELECT 1;\n\n-- Tables in dwh_meta\nSHOW TABLES IN dwh_meta"
+            } && tabs.contains {
+                $0["profile"] as? String == beta && $0["sql"] as? String == ""
+            }
+        }
+        try selectConnection("Alpha")
+        _ = try wait("I updated the SQL.", timeout: 20)
+        try require(find("Failed") == nil, "The append tool failed after using the other tab ID")
+        try snapshot("assistant-wrong-action-tab")
+        print("PASS: Assistant appends to its conversation tab when a tool names another open tab and connection")
+    }
     /// Shows the thread list of a narrow pane. A selection in the list can
     /// still be closing it, so retry until the list shows.
     func showConversationList() throws {
@@ -1548,6 +1580,129 @@ final class Driver {
         }
         print("PASS: Two Assistant conversations work at the same time in their own tabs, a replayed tool call runs once, and the list, tabs, and toggle show their states")
     }
+    /// New Conversation names its tab after the generated thread title. A
+    /// failed title keeps the default tab name, and a user tab rename wins.
+    func testAssistantTabTitles() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try showConversation()
+        key(11, flags: .maskCommand) // Keep four tab titles visible for the menu check.
+        try waitGone("New Connection", timeout: 5)
+        let title = "Title: Name sales report"
+        try press("New Conversation")
+        _ = try waitExact("Query 2", timeout: 5, role: kAXRadioButtonRole)
+        try fill("Assistant Message", "Hold title generation")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        let titleState = URL(fileURLWithPath: env["QROW_DATA_DIR"]!)
+            .appendingPathComponent("fake-codex")
+        let pending = titleState.appendingPathComponent("title-generation-pending")
+        let pendingDeadline = clock.now.advanced(by: .seconds(20))
+        while !FileManager.default.fileExists(atPath: pending.path) {
+            try require(clock.now < pendingDeadline, "The synthetic title request did not start")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        _ = try wait("generating title", timeout: 10, role: kAXRadioButtonRole)
+        _ = try wait("Generating title for New conversation", timeout: 5)
+        try snapshot("assistant-title-generating")
+        try showConversationList()
+        _ = try wait("generating title", timeout: 5, role: kAXButtonRole)
+        try snapshot("assistant-list-title-generating")
+        try showConversation()
+        try Data().write(to: titleState.appendingPathComponent("title-generation-release"))
+        _ = try waitExact("Title: Hold title generation", timeout: 20, role: kAXRadioButtonRole)
+        try waitGone("generating title", timeout: 5, role: kAXRadioButtonRole)
+
+        // The title can finish while the first assistant reply is still pending.
+        // The tab and pane header must show the same conversation title.
+        try press("New Conversation")
+        _ = try waitExact("Query 2", timeout: 5, role: kAXRadioButtonRole)
+        try fill("Assistant Message", "Title before first reply")
+        try press("Send")
+        _ = try wait("Assistant is working", timeout: 10)
+        _ = try wait("Title: Title before first", timeout: 20, role: kAXRadioButtonRole)
+        _ = try waitExact("Conversation title: Title: Title before first", timeout: 5)
+        try snapshot("assistant-title-before-reply")
+        try Data().write(to: titleState.appendingPathComponent("first-reply-release"))
+        _ = try wait("I can help with this query", timeout: 20)
+        try press("Close Title: Title before first")
+
+        for expected in [title, "\(title) (Copy)"] {
+            try press("New Conversation")
+            _ = try waitExact("Query 2", timeout: 5, role: kAXRadioButtonRole)
+            try fill("Assistant Message", "Name sales report")
+            try press("Send")
+            _ = try wait("I can help with this query", timeout: 20)
+            _ = try waitExact(expected, timeout: 20, role: kAXRadioButtonRole)
+        }
+        try waitSaved("both generated titles name their own tabs") { workspace in
+            let alpha = savedProfileID(workspace, "Alpha")
+            let tabs = savedTabs(workspace).filter { $0["profile"] as? String == alpha }
+            let names = Set(tabs.compactMap { $0["title"] as? String })
+            let conversations = savedConversations(workspace).filter { $0["title"] as? String == title }
+            return names.contains(title) && names.contains("\(title) (Copy)")
+                && conversations.count == 2
+                && conversations.allSatisfy { $0["title_source"] as? String == "codex" }
+        }
+        try click(wait("Conversation Actions", role: kAXButtonRole))
+        try pressMenuItem("Rename…")
+        try fill("Conversation Name", "Sales summary")
+        try press("Rename")
+        try waitGone("Conversation Name", timeout: 5)
+        _ = try waitExact("Sales summary", timeout: 10, role: kAXRadioButtonRole)
+        try click(wait("Conversation Actions", role: kAXButtonRole))
+        try pressMenuItem("Regenerate Title")
+        _ = try waitExact("\(title) (Copy)", timeout: 20, role: kAXRadioButtonRole)
+
+        try press("New Conversation")
+        _ = try waitExact("Query 2", timeout: 5, role: kAXRadioButtonRole)
+        try fill("Assistant Message", "Fail title generation")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        let failure = URL(fileURLWithPath: env["QROW_DATA_DIR"]!)
+            .appendingPathComponent("fake-codex/title-failure-once")
+        let deadline = clock.now.advanced(by: .seconds(20))
+        while !FileManager.default.fileExists(atPath: failure.path) {
+            try require(clock.now < deadline, "The synthetic title failure did not run")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+        try waitSaved("a failed title keeps the default tab name") { workspace in
+            let alpha = savedProfileID(workspace, "Alpha")
+            guard let tab = savedTabs(workspace).first(where: {
+                $0["profile"] as? String == alpha && $0["title"] as? String == "Query 2"
+            }), let id = tab["id"] as? String else { return false }
+            return savedConversations(workspace).contains {
+                $0["tab_id"] as? String == id
+                    && $0["title_source"] as? String == "temporary"
+            }
+        }
+        try waitGone("generating title", timeout: 5, role: kAXRadioButtonRole)
+        key(38, flags: .maskCommand) // Show the full tab strip for the rename menu.
+        try waitGone("Assistant Message", timeout: 5)
+        try contextMenu("Query 2", exact: true)
+        try pressMenuItem("Rename…")
+        try fill("Tab Name", "My SQL")
+        try press("Rename")
+        try waitGone("Tab Name", timeout: 5)
+        _ = try waitExact("My SQL", timeout: 5, role: kAXRadioButtonRole)
+        try press("Toggle Assistant")
+        _ = try waitInput("Assistant Message")
+        try fill("Assistant Message", "Continue the report")
+        try press("Send")
+        try waitSaved("a later generated title keeps the user tab name") { workspace in
+            let alpha = savedProfileID(workspace, "Alpha")
+            guard let tab = savedTabs(workspace).first(where: {
+                $0["profile"] as? String == alpha && $0["title"] as? String == "My SQL"
+            }), let id = tab["id"] as? String else { return false }
+            return savedConversations(workspace).contains {
+                $0["tab_id"] as? String == id
+                    && $0["title"] as? String == "Title: Fail title generation"
+                    && $0["title_source"] as? String == "codex"
+            }
+        }
+
+        print("PASS: New conversation tabs use short generated titles, keep names unique, retain defaults on title failure, preserve user tab names, and shimmer while titles generate")
+    }
     /// A conversation starts in a tab with SQL, stays in the list when its
     /// tab closes, opens in a new tab, moves with its tab to another
     /// connection, and leaves its tab open when you delete it.
@@ -1560,6 +1715,7 @@ final class Driver {
         try press("Send")
         _ = try wait("Tab SQL: SELECT 5;", timeout: 20)
         try waitGone("Assistant is working", timeout: 5)
+        try waitSavedConversationTitle("Title: Report the tab")
         var firstTab = ""
         try waitSaved("the conversation owns its first tab") { workspace in
             let alpha = savedProfileID(workspace, "Alpha")
@@ -1582,18 +1738,19 @@ final class Driver {
         try showConversation()
         _ = try wait("Tab SQL: SELECT 5;", timeout: 10)
         var reopened = ""
+        let reopenedTitle = "Title: Report the tab"
         try waitSaved("the conversation opens in a new tab under Alpha") { workspace in
             let alpha = savedProfileID(workspace, "Alpha")
             guard let id = savedConversations(workspace).first?["tab_id"] as? String,
                   let tab = savedTabs(workspace).first(where: { $0["id"] as? String == id }),
-                  tab["profile"] as? String == alpha, tab["title"] as? String == "Query 2" else { return false }
+                  tab["profile"] as? String == alpha, tab["title"] as? String == reopenedTitle else { return false }
             reopened = id
             return true
         }
         try snapshot("assistant-reopened-tab")
 
         // Keyboard navigation opens the Move submenu. Beta is its only item.
-        try contextMenu("Query 2", exact: true)
+        try contextMenu(reopenedTitle, exact: true)
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
         key(124)
@@ -1609,7 +1766,7 @@ final class Driver {
         _ = try wait(", Beta", timeout: 10, role: kAXButtonRole)
         try showConversation()
         // A tab with a conversation cannot start another one.
-        try contextMenu("Query 2", exact: true)
+        try contextMenu(reopenedTitle, exact: true)
         // GPUI Kit does not publish the disabled state of a menu item. A
         // disabled item ignores the press, so the menu stays open.
         try activate(try wait("Start Conversation", timeout: 5, role: kAXMenuItemRole))
@@ -1630,7 +1787,7 @@ final class Driver {
         try press("Toggle Assistant")
         try waitGone("Assistant Message", timeout: 5)
         try fill("SQL Editor", "SELECT 7;")
-        try contextMenu("Query 2", exact: true)
+        try contextMenu(reopenedTitle, exact: true)
         let start = try wait("Start Conversation", timeout: 5, role: kAXMenuItemRole)
         try snapshot("assistant-tab-menu")
         try activate(start)
@@ -2520,10 +2677,18 @@ do {
                 try driver.seedAssistantRetargetWorkspace()
                 try driver.start()
                 try driver.testAssistantRetargetAfterRename()
+            } else if CommandLine.arguments.contains("--assistant-wrong-tab-only") {
+                try driver.seedAssistantConnectionsWorkspace(alphaSQL: "SELECT 1;")
+                try driver.start()
+                try driver.testAssistantWrongActionTab()
             } else if CommandLine.arguments.contains("--assistant-parallel-only") {
                 try driver.seedAssistantConnectionsWorkspace(alphaSQL: "")
                 try driver.start()
                 try driver.testAssistantParallel()
+            } else if CommandLine.arguments.contains("--assistant-tab-title-only") {
+                try driver.seedAssistantConnectionsWorkspace(alphaSQL: "")
+                try driver.start()
+                try driver.testAssistantTabTitles()
             } else if CommandLine.arguments.contains("--assistant-tab-binding-only") {
                 try driver.seedAssistantConnectionsWorkspace(alphaSQL: "SELECT 5;")
                 try driver.start()
@@ -2575,8 +2740,10 @@ do {
             || CommandLine.arguments.contains("--assistant-titles-only")
             || CommandLine.arguments.contains("--assistant-statement-only")
             || CommandLine.arguments.contains("--assistant-retarget-only")
+            || CommandLine.arguments.contains("--assistant-wrong-tab-only")
             || CommandLine.arguments.contains("--assistant-sign-in-only")
             || CommandLine.arguments.contains("--assistant-parallel-only")
+            || CommandLine.arguments.contains("--assistant-tab-title-only")
             || CommandLine.arguments.contains("--assistant-tab-binding-only")
             || CommandLine.arguments.contains("--assistant-thread-list-only") { exit(0) }
         let windowDriver = Driver(name: "qrow-window-close")

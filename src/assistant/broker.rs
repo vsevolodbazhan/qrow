@@ -489,16 +489,20 @@ impl ToolBroker {
                 "Select a query tab and send another message.",
             )
         })?;
-        if call.conversation_id != target.conversation_id
-            || call.turn_id != target.turn_id
-            || tab_id != target.tab_id
+        if call.conversation_id != target.conversation_id || call.turn_id != target.turn_id {
+            return Err(ToolError::new(
+                ToolErrorCode::StaleTarget,
+                "This assistant turn is no longer active.",
+            ));
+        }
+        if tab_id != target.tab_id
             || connection_id != target.connection_id
             || document.tab_id != target.tab_id
             || document.connection_id != target.connection_id
         {
             return Err(ToolError::new(
                 ToolErrorCode::StaleTarget,
-                "The selected query tab changed. Send another message to set a new target.",
+                "The query tab or connection of this conversation changed. Read the workspace and retry.",
             ));
         }
         if editor_revision != document.revision {

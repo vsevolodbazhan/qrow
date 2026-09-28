@@ -33,9 +33,8 @@ fn remap_selection(
     Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
 }
 
-/// Maps an unknown tab ID to the conversation tab. A real ID of another tab
-/// stays, so a read can use it and an action on the conversation tab rejects
-/// it.
+/// Maps an unknown tab ID to the conversation tab for read-only tools. A real
+/// ID of another tab stays available for reads.
 fn resolve_tab_id(
     requested: Uuid,
     conversation_tab: Option<Uuid>,
@@ -341,9 +340,10 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
         let mut args: EditRequest = parse(call.arguments.clone())?;
-        args.tab_id = self.tool_tab_id(call, args.tab_id);
         let index = self.tool_tab_index(call)?;
         let tab = &self.tabs[index];
+        args.tab_id = tab.saved.id;
+        args.connection_id = tab.saved.profile;
         let sql = tab.input.read(cx).value().to_string();
         let selected = tab.input.read(cx).selected_range();
         let document = EditorDocument {
@@ -416,9 +416,10 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Result<ToolResult, ToolResult> {
         let mut args: AppendRequest = parse(call.arguments.clone())?;
-        args.tab_id = self.tool_tab_id(call, args.tab_id);
         let index = self.tool_tab_index(call)?;
         let tab = &self.tabs[index];
+        args.tab_id = tab.saved.id;
+        args.connection_id = tab.saved.profile;
         let sql = tab.input.read(cx).value().to_string();
         let document = EditorDocument {
             tab_id: tab.saved.id,
@@ -469,9 +470,15 @@ impl Qrow {
     ) -> Option<ToolResult> {
         let result = (|| {
             let mut args: RunRequest = parse(call.arguments.clone())?;
-            args.tab_id = self.tool_tab_id(call, args.tab_id);
             let index = self.tool_tab_index(call)?;
             let tab = &self.tabs[index];
+            args.tab_id = tab.saved.id;
+            args.connection_id = tab.saved.profile.ok_or_else(|| {
+                failure(
+                    "no_action_target",
+                    "Connect the query tab of this conversation before running SQL.",
+                )
+            })?;
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
             let document = EditorDocument {
@@ -833,8 +840,14 @@ impl Qrow {
     ) -> Result<ToolResult, ToolResult> {
         let mut args: TargetInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        args.tab_id = self.tool_tab_id(call, args.tab_id);
         let index = self.tool_tab_index(call)?;
+        args.tab_id = self.tabs[index].saved.id;
+        args.connection_id = self.tabs[index].saved.profile.ok_or_else(|| {
+            failure(
+                "no_action_target",
+                "The query tab of this conversation has no connection.",
+            )
+        })?;
         let target = self
             .tool_target(call)
             .ok_or_else(|| failure("no_action_target", "Wait for a new user message."))?;
@@ -846,7 +859,7 @@ impl Qrow {
         {
             return Err(failure(
                 "stale_target",
-                "The query tab or connection changed.",
+                "The query tab or connection of this conversation changed. Read the workspace and retry.",
             ));
         }
         let was_running = self.tabs[index].busy;
@@ -908,8 +921,14 @@ impl Qrow {
         let result = (|| {
             let mut args: TargetInput = parse(call.arguments.clone())?;
             version(args.version)?;
-            args.tab_id = self.tool_tab_id(call, args.tab_id);
             let index = self.tool_tab_index(call)?;
+            args.tab_id = self.tabs[index].saved.id;
+            args.connection_id = self.tabs[index].saved.profile.ok_or_else(|| {
+                failure(
+                    "no_action_target",
+                    "The query tab of this conversation has no connection.",
+                )
+            })?;
             let target = self
                 .tool_target(call)
                 .ok_or_else(|| failure("no_action_target", "Wait for a new user message."))?;
@@ -922,7 +941,7 @@ impl Qrow {
             {
                 return Err(failure(
                     "stale_target",
-                    "The query tab or connection changed.",
+                    "The query tab or connection of this conversation changed. Read the workspace and retry.",
                 ));
             }
             if tab.busy || !tab.more {

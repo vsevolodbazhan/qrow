@@ -86,8 +86,10 @@ after text entry.
 
 The full native suite also checks assistant fonts, appended SQL, statement
 selection, tab changes, titles, layout, sign-in, the wide thread list,
-parallel conversations, and conversation tabs. It runs each check with a separate
+parallel conversations, action calls with another tab ID, and conversation tabs. It runs each check with a separate
 temporary workspace and the same isolated package.
+The tab title check covers a generated name before the first reply, a duplicate
+name, a failed title request, and a tab name that you set.
 
 To check the Assistant font picker without a server fixture, use an isolated
 debug package and the synthetic Codex server:

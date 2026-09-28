@@ -267,7 +267,20 @@ for line in sys.stdin:
         params = request["params"]
         title_turn = f"{params['threadId']}-turn"
         send({"id": request_id, "result": {"turn": {"id": title_turn, "status": "inProgress", "items": []}}})
-        reply = {"type": "agentMessage", "text": json.dumps({"title": generated_title(params["input"][0]["text"])})}
+        prompt = params["input"][0]["text"]
+        if "Hold title generation" in prompt:
+            open(os.path.join(state_dir, "title-generation-pending"), "w").close()
+            release = os.path.join(state_dir, "title-generation-release")
+            deadline = time.monotonic() + 60
+            while not os.path.exists(release) and time.monotonic() < deadline:
+                time.sleep(0.05)
+        fail_once = os.path.join(state_dir, "title-failure-once")
+        if "Fail title generation" in prompt and not os.path.exists(fail_once):
+            open(fail_once, "w").close()
+            title_reply = "No title"
+        else:
+            title_reply = json.dumps({"title": generated_title(prompt)})
+        reply = {"type": "agentMessage", "text": title_reply}
         send({"method": "item/completed", "params": {"threadId": params["threadId"], "turnId": title_turn, "item": reply}})
         send(
             {
@@ -344,13 +357,53 @@ for line in sys.stdin:
                 target=hold_turn, args=(thread_id, turn_id, label, context["selected_tab"]), daemon=True
             ).start()
             continue
+        if message.startswith("Title before first reply"):
+            open(os.path.join(state_dir, "first-reply-pending"), "w").close()
+
+            def release_first_reply():
+                marker = os.path.join(state_dir, "first-reply-release")
+                deadline = time.monotonic() + 60
+                while not os.path.exists(marker) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                finish_turn(thread_id, turn_id, "I can help with this query.")
+
+            threading.Thread(target=release_first_reply, daemon=True).start()
+            continue
         if message.startswith("Return to the latest message"):
             # Keep the turn open long enough to observe the working indicator.
             time.sleep(8)
         if message.startswith("Disconnect Codex"):
             # Stop during the turn, like a Codex crash.
             sys.exit(0)
-        if message.startswith(("Write SELECT 1", "Write SELECT 2", "Write a long query")):
+        if message.startswith("Write query with another tab ID"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            other = next(item for item in context["tabs"] if item["id"] != tab["id"])
+            marker = os.path.join(state_dir, "wrong-tab-ready")
+            deadline = time.monotonic() + 15
+            while not os.path.exists(marker) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            pending_edit = turn_id
+            send(
+                {
+                    "id": 9000 + turn_number,
+                    "method": "item/tool/call",
+                    "params": {
+                        "threadId": thread_id,
+                        "turnId": turn_id,
+                        "callId": f"edit-{turn_number}",
+                        "tool": "append_selected_tab_sql",
+                        "arguments": {
+                            "version": 1,
+                            "tab_id": other["id"],
+                            "connection_id": other["connection_id"],
+                            "editor_revision": tab["editor_revision"],
+                            "sql": "-- Tables in dwh_meta\nSHOW TABLES IN dwh_meta",
+                        },
+                    },
+                }
+            )
+        elif message.startswith(("Write SELECT 1", "Write SELECT 2", "Write a long query")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             pending_edit = turn_id

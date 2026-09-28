@@ -74,6 +74,16 @@ where
     }
 }
 
+/// Fit a conversation title to a tab and keep it unique within its connection.
+pub fn conversation_tab_title<F>(title: &str, is_taken: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let title: String = title.trim().chars().take(MAX_TAB_TITLE).collect();
+    let title = title.trim_end();
+    (!title.is_empty()).then(|| unique_tab_title(title, is_taken))
+}
+
 pub const MIN_UI_SCALE: f32 = 0.75;
 pub const MAX_UI_SCALE: f32 = 1.50;
 pub const UI_SCALE_STEP: f32 = 0.10;
@@ -424,6 +434,9 @@ pub struct AssistantConversation {
     pub thread_id: String,
     pub title: String,
     pub title_source: AssistantTitleSource,
+    /// A tab opened by New Conversation follows its conversation title.
+    #[serde(default)]
+    pub title_follows_conversation: bool,
     pub last_activity: u64,
     pub execution_mode: AssistantExecutionMode,
     /// The query tab of the conversation. The tab supplies the connection.
@@ -440,6 +453,7 @@ impl AssistantConversation {
             thread_id: thread_id.into(),
             title: "New conversation".into(),
             title_source: AssistantTitleSource::Temporary,
+            title_follows_conversation: false,
             last_activity: 0,
             execution_mode,
             tab_id: None,
@@ -798,6 +812,16 @@ mod tests {
 
         let long = copied_tab_title(&"x".repeat(MAX_TAB_TITLE), |_| false);
         assert_eq!(long, format!("{} (Copy)", "x".repeat(MAX_TAB_TITLE - 7)));
+    }
+
+    #[test]
+    fn conversation_titles_fit_tabs_and_keep_connection_names_unique() {
+        let long = "航".repeat(MAX_ASSISTANT_CONVERSATION_TITLE);
+        let first = conversation_tab_title(&long, |_| false).unwrap();
+        assert_eq!(first.chars().count(), MAX_TAB_TITLE);
+        let second = conversation_tab_title(&long, |title| title == first).unwrap();
+        assert_eq!(second, format!("{} (Copy)", "航".repeat(MAX_TAB_TITLE - 7)));
+        assert_eq!(conversation_tab_title("  ", |_| false), None);
     }
 
     #[test]

@@ -31,7 +31,7 @@ use qrow::{
         AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
         MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
         SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION,
-        Workspace, copied_tab_title, unique_tab_title,
+        Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -471,7 +471,10 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
-        this.assistant_panel.composer_tab = this.tabs.get(this.active).map(|tab| tab.saved.id);
+        this.assistant_panel.composer_target = this
+            .tabs
+            .get(this.active)
+            .map(|tab| assistant_view::ComposerTarget::Tab(tab.saved.id));
         if demo {
             this.seed_demo(this.active, cx);
         }
@@ -1859,6 +1862,15 @@ impl Qrow {
             && let Some(current) = self.tabs.iter_mut().find(|t| t.saved.id == tab)
         {
             current.saved.title = title;
+            if let Some(conversation) = self
+                .assistant
+                .conversations
+                .iter_mut()
+                .find(|conversation| conversation.tab_id == Some(tab))
+            {
+                conversation.title_follows_conversation = false;
+            }
+            self.assistant_panel.new_conversation_tabs.remove(&tab);
         }
         self.tab_form = None;
         // Programmatic close_dialog does not invoke Dialog::on_close.

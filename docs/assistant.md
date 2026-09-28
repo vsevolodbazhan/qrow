@@ -85,9 +85,11 @@ example `-- Paid bookings by gate`. When the assistant changes a query, it keeps
 the comment correct. Qrow selects only the statement below the comment, so the
 assistant runs the statement without the comment. The assistant can select a
 specific statement in a tab with several queries before it runs that statement.
-A rename keeps the tab ID. If an assistant tool uses an ID that is not in the
-open tabs, Qrow uses the tab of the conversation and returns its ID. Qrow
-rejects an ID for a different open tab when the tool must change or run SQL.
+A rename keeps the tab ID. Read tools can use another open tab. If a read tool
+uses an ID that is not in the open tabs, Qrow uses the tab of the conversation
+and returns its ID. Qrow always changes and runs SQL in the tab of the
+conversation, even if a tool call names another open tab. It checks that the
+tab and connection have not changed during the turn.
 Ask the assistant to change existing SQL when you want an edit or replacement.
 
 The assistant can write SQL before you select a connection. Select a connection
@@ -142,11 +144,21 @@ without an activity time show **Earlier**. On a narrow pane, select **Toggle
 Conversation List** to open the list. When you select a conversation there,
 Qrow selects its tab and connection, and the pane shows that conversation. On a
 wide pane, the list stays open. Search the list by title or connection name.
-After the first reply, Qrow sends recent messages from the conversation to
-Codex in a separate, unsaved request. Codex returns a short title. Qrow shows
-this title in the pane header and in the thread list. This request uses the
-selected model. It does not include workspace context. If Codex cannot make a
-title, Qrow shows **New conversation** and tries again after the next reply.
+When you send the first message, Qrow sends it to Codex in a separate, unsaved
+title request. Codex returns a short title. Qrow shows
+this title in the pane header and in the thread list. If you opened the tab with
+**New Conversation**, its name follows the conversation title until you rename
+the tab. The tab name has a
+limit of 60 characters. If another tab on the same connection has the name,
+Qrow adds a copy suffix. This request uses the selected model. It does not
+include workspace context. If Codex cannot make a title, the tab keeps its
+default name, the conversation shows **New conversation**, and Qrow tries
+again when you send another message. You can continue to work while Qrow makes a title.
+The conversation title shimmers during the request. The tab name also shimmers
+when it follows the conversation title. The shimmer stops when the request
+ends, including when it fails. If you reduce motion in macOS, the titles stay
+still.
+If you rename the tab, Qrow keeps your tab name when the conversation title changes.
 Open **Conversation Actions** in the pane header to rename the current
 conversation, make a new title, or delete it. To use these actions on a
 conversation in the thread list, right-click it. You cannot rename or delete a
@@ -214,8 +226,8 @@ other tabs. Parallel turns use your Codex plan limits faster.
 A tab cannot close while its conversation works or waits for approval. When
 you close the tab of a conversation, the conversation stays in the thread
 list, which shows **Tab closed** for it. Select the conversation to open it in
-a new tab under its last connection. Qrow does not keep the SQL of the closed
-tab.
+a new tab under its last connection. The new tab uses the conversation title
+if one is available. Qrow does not keep the SQL of the closed tab.
 
 To move a conversation to another connection, right-click its tab and select
 **Move to Connection…**. The next message uses the new connection. You cannot

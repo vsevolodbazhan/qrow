@@ -100,7 +100,7 @@ opt-in, the docked pane, a chat turn, appended SQL, formatting of a long
 appended or edited query in the keyword case and tab size from Settings, Undo,
 query approval, statement targeting, tab changes during a turn, automatic query
 execution, the result rows that Qrow returns to Codex, generated
-conversation titles, parallel conversations in their own tabs, and
+conversation titles and tab names, calls that name another open tab, parallel conversations in their own tabs, and
 conversations that stay with their tabs.
 It does not use a Codex account.
 

@@ -4,6 +4,7 @@ use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
     Icon, Selectable, TitleBar, h_flex,
     input::Editor,
+    shimmer::ShimmerText,
     spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
@@ -279,6 +280,13 @@ impl Qrow {
                     .then(|| self.tab_assistant_status(id))
                     .flatten();
                 let assistant_busy = assistant.is_some_and(|status| status.busy());
+                let title_generating =
+                    self.assistant
+                        .conversation_for_tab(id)
+                        .is_some_and(|conversation| {
+                            conversation.title_follows_conversation
+                                && self.assistant_title_generating(&conversation.thread_id)
+                        });
                 QueryTab::new()
                     // Kit's large tab uses a fixed 36px height internally.
                     // Constrain it to the same scaled height as the bar and its tools.
@@ -294,9 +302,19 @@ impl Qrow {
                             });
                         }),
                     )
-                    .label(tab.saved.title.clone())
+                    .label(if title_generating {
+                        String::new()
+                    } else {
+                        tab.saved.title.clone()
+                    })
+                    .when(title_generating, |query_tab| {
+                        query_tab.child(
+                            ShimmerText::new(tab.saved.title.clone())
+                                .id(format!("assistant-tab-title-{id}")),
+                        )
+                    })
                     .aria_label(format!(
-                        "{}{}{}{}",
+                        "{}{}{}{}{}",
                         tab.saved.title,
                         if tab.busy { ", running" } else { "" },
                         if tab.panel.unread_error {
@@ -305,6 +323,11 @@ impl Qrow {
                             ""
                         },
                         assistant.map_or("", ThreadStatus::accessible_suffix),
+                        if title_generating {
+                            ", generating title"
+                        } else {
+                            ""
+                        },
                     ))
                     // The status area before the close button shows one
                     // spinner. It uses the accent color while the tab's
