@@ -135,6 +135,7 @@ impl TableDelegate for Results {
     ) -> impl IntoElement {
         div()
             .id(("column-header", c))
+            .test_support()
             .role(Role::ColumnHeader)
             .flex()
             .items_center()
@@ -172,6 +173,7 @@ impl TableDelegate for Results {
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         div()
             .id(("cell", c))
+            .test_support()
             .role(Role::Cell)
             .aria_label(display.clone())
             .size_full()

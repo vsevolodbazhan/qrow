@@ -987,7 +987,7 @@ final class Driver {
             if find("Codex Executable") != nil { break }
         }
         _ = try wait("Codex Executable", timeout: 5)
-        try fill("Codex Executable", FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh")
+        try fill("Codex Executable", FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh")
         try press("Enable Assistant")
         try activate(try waitExact("Enable", timeout: 10, role: kAXButtonRole))
         for _ in 0..<3 {
@@ -1342,7 +1342,7 @@ final class Driver {
                 "assistant": [
                     "enabled": true,
                     "data_sharing_notice_version": 1,
-                    "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                    "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
                     "sql_keyword_case": "lowercase",
                 ],
             ],
@@ -1424,7 +1424,7 @@ final class Driver {
             "settings": ["assistant": [
                 "enabled": true,
                 "data_sharing_notice_version": 1,
-                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
             ]],
             "profiles": [[
                 "id": profileID, "name": "Synthetic", "host": "example.invalid",
@@ -1625,7 +1625,7 @@ final class Driver {
             "settings": ["assistant": [
                 "enabled": true,
                 "data_sharing_notice_version": 1,
-                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
                 "panel_width": 536,
             ]],
             "profiles": profiles,
@@ -1945,7 +1945,7 @@ final class Driver {
             "assistant": [
                 "enabled": true,
                 "data_sharing_notice_version": 1,
-                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/e2e/native/fake-codex.sh",
+                "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
                 "panel_width": panelWidth,
             ],
         ]
@@ -2681,7 +2681,7 @@ final class Driver {
         let retryToken = "badge-" + UUID().uuidString.lowercased()
         try query("SELECT qrow_block(id, '\(retryToken)', CAST(3000 AS BIGINT)) AS value FROM range(1)")
         var deadline = clock.now.advanced(by: .seconds(30))
-        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(retryToken).started"]) != "1" {
+        while try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(retryToken).started"]) != "1" {
             try require(clock.now < deadline, "Spark executor never started the badge retry")
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -2704,7 +2704,7 @@ final class Driver {
         let secondRetryToken = "badge-" + UUID().uuidString.lowercased()
         try query("SELECT qrow_block(id, '\(secondRetryToken)', CAST(1000 AS BIGINT)) AS value FROM range(1)")
         deadline = clock.now.advanced(by: .seconds(30))
-        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(secondRetryToken).started"]) != "1" {
+        while try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(secondRetryToken).started"]) != "1" {
             try require(clock.now < deadline, "Spark executor never started the second badge retry")
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -2722,7 +2722,7 @@ final class Driver {
         let token = "ui-" + UUID().uuidString.lowercased()
         try query("SELECT qrow_block(id, '\(token)', CAST(60000 AS BIGINT)) FROM range(1)")
         deadline = clock.now.advanced(by: .seconds(150))
-        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).started"]) != "1" {
+        while try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(token).started"]) != "1" {
             try require(clock.now < deadline, "Spark executor never started UI query")
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -2754,17 +2754,17 @@ final class Driver {
         let cancelStarted = clock.now
         try press("Cancel")
         deadline = cancelStarted.advanced(by: .seconds(10))
-        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).interrupted"]) != "1" {
+        while try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(token).interrupted"]) != "1" {
             try require(clock.now < deadline, "UI cancellation did not stop Spark within 10 seconds")
             Thread.sleep(forTimeInterval: 0.1)
         }
-        while try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).ended"]) != "1" {
+        while try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(token).ended"]) != "1" {
             try require(clock.now < deadline, "Spark driver did not confirm terminal task within 10 seconds")
             Thread.sleep(forTimeInterval: 0.1)
         }
         _ = try wait("Cancelled · Partial preview retained", timeout: 2)
         try require(clock.now <= deadline, "UI cancellation exceeded 10 seconds")
-        try require(try command(["python3", "scripts/e2e/run.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
+        try require(try command(["python3", "scripts/e2e/fixture.py", "observe", "count", "\(token).completed"]) == "0", "Cancelled query completed")
         try snapshot("cancelled")
         try query("SELECT 'after-cancel-works' AS result")
         _ = try wait("after-cancel-works")

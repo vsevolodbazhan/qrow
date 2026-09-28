@@ -31,6 +31,15 @@ class KeychainTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             keychain.fixture_profile_ids(profiles)
 
+    def test_cleans_only_the_desktop_directory_of_a_qtest_run(self):
+        target = Path("/repo/target")
+        runs = target / "qtest/runs"
+        self.assertTrue(keychain.isolated_run(runs / "20260929-030413-94883/desktop", target))
+        for path in [runs / "20260929-030413-94883", runs / "latest/desktop", runs / "x/desktop",
+                     runs / "20260929-030413-94883/e2e", target / "e2e/qrow-e2e-abc", Path("/tmp/desktop")]:
+            with self.subTest(path=path):
+                self.assertFalse(keychain.isolated_run(path, target))
+
 
 if __name__ == "__main__":
     unittest.main()

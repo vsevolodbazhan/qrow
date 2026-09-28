@@ -13,6 +13,7 @@ Run from the repository root:
 ./qtest run --changed    # the suites that your changed files affect
 ./qtest list             # suites, groups, and what each one needs
 ./qtest doctor           # missing tools, with the fix for each one
+./qtest fixture up       # keep the test servers running between runs
 ./qtest help TOPIC       # one section of this page
 ```
 
@@ -40,17 +41,18 @@ accept a test filter.
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
-| `backend` | Connector and worker against disposable LDAP, Kyuubi, and Spark in Docker. | Docker |
-| `e2e` | The packaged app, driven through macOS accessibility, against real servers. | macOS desktop, Java 17 or Docker |
+| `backend` * | Connector and worker against the real servers, without the UI. | Docker |
+| `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
+| `desktop` | The packaged app, driven through macOS accessibility, against the real servers. | macOS desktop, Docker or Java 17 |
 
-On Linux, `unit` and `clippy` use only the core library, and `ui` and `e2e`
-are not available.
+On Linux, `unit` and `clippy` use only the core library, and `ui`, `e2e`, and
+`desktop` are not available.
 
-The `backend` and `e2e` suites start disposable servers, and `e2e` takes over
-the desktop. They run only when you select them by name. See
-[End-to-end testing](end-to-end-testing.md) for their servers, evidence, and
-limits. Use `./qtest run e2e --runtime docker` to run the servers in Docker
-instead of local Java processes.
+The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
+Spark servers. `desktop` also takes over the desktop. These suites run only
+when you select them by name. See [Run the servers](#run-the-servers), and see
+[End-to-end testing](end-to-end-testing.md) for the servers, evidence, and
+limits.
 
 ## Groups
 
@@ -81,7 +83,7 @@ Options:
 | `--changed` | Adds the suites that your changed files affect. |
 | `--repeat N` | Runs each selected suite `N` times and stops at the first failure. Use it to find unstable tests. |
 | `--fail-fast` | Skips the remaining suites after a failure. |
-| `--runtime native\|docker` | Selects the server runtime of the `e2e` suite. |
+| `--runtime auto\|docker\|native` | Selects the server runtime. `auto`, the default, uses Docker when its daemon answers, and local Java processes otherwise. |
 | `--json` | Prints only a JSON summary on stdout. |
 | `--quiet` | Does not show command output. The logs keep it. |
 | `-- ARGS` | Gives `ARGS` to cargo-nextest, for example `-- --no-capture`. |
@@ -141,7 +143,39 @@ brew install shellcheck actionlint
 ```
 
 When Docker is installed but its daemon is not running, `backend` and
-`e2e --runtime docker` stop with code 3 and ask you to start Docker.
+`--runtime docker` stop with code 3 and ask you to start Docker.
+
+## Run the servers
+
+The `backend`, `e2e`, and `desktop` suites share one set of disposable
+servers in a run. qtest builds the test programs and the app package first,
+then starts the servers. The servers are ready when the synthetic user `qrow`
+gets an answer to `SELECT 1`. This answer also starts the Spark engine of the
+user, so the first test does not wait for an engine start.
+
+To keep the servers running between runs, start them yourself:
+
+```sh
+./qtest fixture up       # start the servers and keep them running
+./qtest run e2e          # uses the running servers
+./qtest fixture status   # show the runtime, port, and health
+./qtest fixture down     # stop and remove the servers
+```
+
+A run uses the servers of `fixture up` when they answer SQL. Otherwise it
+starts new servers and removes them at the end, also after a failure. Each run
+copies the server logs and evidence to `fixture/` in its artifact directory.
+
+Two runtimes are available:
+
+- `docker` starts the [Compose project](../tests/fixture/compose.yml) with a
+  random loopback port.
+- `native` starts local Java processes from [verified
+  downloads](../tests/fixture/native-downloads.json). It needs a Java 17 JDK
+  in `JAVA_HOME`. Hosted macOS CI runners use it because they have no Docker.
+
+The `backend` suite stops Spark engines and restarts Kyuubi, so it needs the
+Docker runtime. Its tests run one at a time.
 
 ## Write a UI test
 
@@ -157,7 +191,7 @@ Add a test from the template:
 ```
 
 The template fails until you write the test. The
-[test support](../tests/ui/support.rs) gives each test these parts:
+[test support](../tests/support/mod.rs) gives each test these parts:
 
 - `TestApp::launch` opens Qrow with a new temporary workspace and in-memory
   passwords. `TestApp::launch_with` also takes synthetic passwords.
@@ -180,6 +214,38 @@ Follow these rules:
 Real worker threads do real network I/O in these tests. The support code
 allows wake-ups from other threads, so waits use wall time. Reduced motion
 opens dialogs without animation.
+
+## Write an E2E test
+
+E2E tests use the same [test support](../tests/support/mod.rs) as UI tests and
+connect to the real servers. Put them in [`tests/e2e/`](../tests/e2e/), and
+mark each test so that `cargo test` without servers does not run it:
+
+```rust
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let (workspace, credentials) = kyuubi.workspace("SELECT 1 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.update(cx, |window, cx| window.click("run", cx));
+    app.wait_until(cx, "the result", QUERY_TIMEOUT, |window, _| {
+        cell(window, 0, 1).as_deref() == Some("1")
+    });
+}
+```
+
+- `Kyuubi::get()` reads the servers from the environment that qtest sets. It
+  fails when the servers are not there. It does not skip the test.
+- `cell(window, row, column)` and `header(window, column)` read the result
+  table. Column 0 holds the row number.
+- `app.type_sql` replaces the SQL of the active tab through the editor.
+- Tests run at the same time and share the Spark engine of `qrow`. Do not
+  change shared state, like global tables. A test that stops or restarts a
+  server belongs in the `backend` suite.
+
+Add a test from the template with `./qtest new e2e SUITE NAME`. Run one test
+with `./qtest run e2e/query_rows`.
 
 ## Element IDs
 
@@ -212,8 +278,8 @@ The [test workflow](../.github/workflows/test.yml) runs the same suites:
 | `core-scripts` | `scripts` |
 | `core-backend` | `fmt`, `clippy`, `rustdoc`, `unit`, `coverage` on Linux |
 | `core-macos` | `clippy`, `unit`, `ui`, `perf` on macOS, then packaging |
-| `e2e-backend` | `backend` |
-| `e2e-macos` | `e2e` |
+| `e2e-backend` | `backend` with Docker |
+| `e2e-macos` | `e2e` and `desktop` with local Java servers |
 
 In CI, qtest uses the `ci` nextest profile. See
 [Development](development.md#hooks-and-continuous-integration) for workflow
@@ -221,8 +287,8 @@ events and release checks.
 
 ## Limitations
 
-- UI tests send input through GPUI. They do not verify macOS input, the menu
-  bar, the real Keychain, input methods, or rendered pixels. The `e2e` suite
-  covers these parts of the packaged app.
+- UI and E2E tests send input through GPUI. They do not verify macOS input,
+  the menu bar, the real Keychain, input methods, or rendered pixels. The
+  `desktop` suite covers these parts of the packaged app.
+- The servers have room for one Spark engine. Tests connect only as `qrow`.
 - `--repeat` runs complete suites again. It does not run one test in a loop.
-- `./qtest new` supports only UI tests.

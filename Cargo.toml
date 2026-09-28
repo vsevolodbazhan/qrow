@@ -43,6 +43,10 @@ gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
 name = "ui"
 required-features = ["ui"]
 
+[[test]]
+name = "e2e"
+required-features = ["ui"]
+
 [patch.crates-io]
 # GPUI Base 0.6.6 with three Qrow fixes: the active-line paint covers the
 # editor's right padding, inline code lines keep one line when they fit, and

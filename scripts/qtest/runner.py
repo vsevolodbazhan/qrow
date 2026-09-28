@@ -15,6 +15,8 @@ import xml.etree.ElementTree as ElementTree
 import catalog
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/e2e"))
+import fixture  # noqa: E402
 
 # Exit codes are part of the CLI contract; docs/testing.md lists them.
 EXIT_PASSED = 0
@@ -72,10 +74,21 @@ def check_requirement(name, options, thorough=False):
             return None
         return None if _succeeds(["sh", "scripts/e2e/driver.sh", "--preflight"], timeout=600) else fixes[name]
     if name == "fixture-runtime":
-        if options.get("runtime") == "docker":
+        runtime = options.get("runtime", "auto")
+        if options.get("fixture") == "docker":
+            if runtime == "native":
+                return fixes["fixture-docker"]
             return check_requirement("docker", options)
+        if runtime == "docker":
+            return check_requirement("docker", options)
+        if fixture.reusable(runtime) is not None:
+            return None
         java_home = os.environ.get("JAVA_HOME")
-        if java_home and all((Path(java_home) / "bin" / tool).is_file() for tool in ("java", "javac", "jar")):
+        java = java_home and all((Path(java_home) / "bin" / tool).is_file() for tool in ("java", "javac", "jar"))
+        if runtime == "native":
+            return None if java else fixes["java"]
+        # auto: Docker when its daemon answers, else local Java processes.
+        if check_requirement("docker", options) is None or java:
             return None
         return fixes["java"]
     raise ValueError(f"Unknown requirement: {name}")
@@ -255,50 +268,125 @@ def junit_failures(path):
     return failures
 
 
-def run_suite(item, options, extra, run_dir, output):
+def precheck(item, options):
+    """A skipped or missing result, or None when the suite can run."""
     suite = item.suite
-    started = time.monotonic()
     if suite.macos_only and not catalog.MACOS and not item.explicit:
         return SuiteResult(suite.name, "skipped", reason="Requires macOS.")
     missing = []
     for requirement in suite.requires:
-        fix = check_requirement(requirement, options)
+        fix = check_requirement(requirement, dict(options, fixture=suite.fixture))
         if fix:
             missing.append({"requirement": requirement, "fix": fix})
     if missing:
         return SuiteResult(suite.name, "missing", missing=missing,
                            reason="; ".join(entry["fix"] for entry in missing))
+    return None
+
+
+def suite_log(run_dir, suite):
     log = run_dir / "logs" / f"{suite.name}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
+    return log
+
+
+def run_steps(item, steps, options, extra, env, run_dir, output, started, iteration=None):
+    """Run steps in order. Returns a failed result, or None when all passed."""
+    suite = item.suite
+    log = suite_log(run_dir, suite)
+    for step in steps:
+        if item.test_filter and step in suite.steps and step.nextest_filter is None:
+            continue
+        command = render_command(step, options, item.test_filter, extra)
+        code = execute(command, dict(os.environ, **env, **dict(step.env)), step.timeout, log, output)
+        if code == 0:
+            continue
+        result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
+                             failed_step=subprocess.list2cmdline(command))
+        result.reason = "Step timed out." if code is None else f"Step exited with {code}."
+        if iteration:
+            result.reason += f" Iteration {iteration[0]} of {iteration[1]}."
+        if step.nextest_filter is not None:
+            profile = "ci" if os.environ.get("CI") else "default"
+            junit = target_dir() / "nextest" / profile / "junit.xml"
+            if junit.exists():
+                saved = run_dir / "junit" / f"{suite.name}.xml"
+                saved.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(junit, saved)
+                result.failures = junit_failures(saved)
+        return result
+    return None
+
+
+def run_suite(item, options, extra, run_dir, output, env=None):
+    suite = item.suite
+    started = time.monotonic()
+    env = env or {}
+    log = suite_log(run_dir, suite)
     label = f"{suite.name}/{item.test_filter}" if item.test_filter else suite.name
     output.note(f"{label}: {suite.summary} (log: {log})")
     repeat = options.get("repeat", 1)
-    for iteration in range(1, repeat + 1):
-        if repeat > 1:
-            output.note(f"{label}: iteration {iteration} of {repeat}")
-        for step in suite.steps:
-            if item.test_filter and step.nextest_filter is None:
-                continue
-            command = render_command(step, options, item.test_filter, extra)
-            env = dict(os.environ, **dict(step.env))
-            code = execute(command, env, step.timeout, log, output)
-            if code == 0:
-                continue
-            result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
-                                 failed_step=subprocess.list2cmdline(command))
-            result.reason = "Step timed out." if code is None else f"Step exited with {code}."
+    result = None
+    try:
+        for iteration in range(1, repeat + 1):
             if repeat > 1:
-                result.reason += f" Iteration {iteration} of {repeat}."
-            if step.nextest_filter is not None:
-                profile = "ci" if os.environ.get("CI") else "default"
-                junit = target_dir() / "nextest" / profile / "junit.xml"
-                if junit.exists():
-                    saved = run_dir / "junit" / f"{suite.name}.xml"
-                    saved.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(junit, saved)
-                    result.failures = junit_failures(saved)
-            return result
-    return SuiteResult(suite.name, "passed", time.monotonic() - started, str(log))
+                output.note(f"{label}: iteration {iteration} of {repeat}")
+            result = run_steps(item, suite.steps, options, extra, env, run_dir, output, started,
+                               (iteration, repeat) if repeat > 1 else None)
+            if result:
+                break
+    finally:
+        cleanup = run_steps(item, suite.cleanup, options, extra, env, run_dir, output, started)
+    result = result or cleanup
+    return result or SuiteResult(suite.name, "passed", time.monotonic() - started, str(log))
+
+
+class FixtureSession:
+    """One server fixture for all fixture suites of a run.
+
+    It reuses the fixture of `./qtest fixture up` when that fixture answers
+    SQL. Otherwise it starts a disposable fixture and stops it at the end.
+    """
+
+    def __init__(self, options, run_dir, output, needs_docker):
+        self.runtime = "docker" if needs_docker else options.get("runtime", "auto")
+        self.run_dir = run_dir
+        self.output = output
+        self.fixture = None
+        self.owned = False
+        self.state = run_dir / "fixture.json"
+        self.error = None
+
+    def acquire(self):
+        if self.fixture or self.error:
+            return
+        try:
+            reused = fixture.reusable(self.runtime)
+            if reused is not None:
+                self.output.note(f"Using the running {reused.runtime} fixture on port {reused.port}. "
+                                 "Stop it with `./qtest fixture down`.")
+                self.fixture = reused
+            else:
+                self.fixture = fixture.start(self.runtime, self.run_dir / "fixture")
+                self.owned = True
+            fixture.save(self.fixture, self.state)
+        except Exception as error:  # noqa: BLE001 - reported as the suite result
+            self.error = f"The server fixture did not start: {error}"
+
+    def env(self, suite):
+        artifacts = self.run_dir / suite.name
+        artifacts.mkdir(parents=True, exist_ok=True)
+        return {"QROW_E2E_ARTIFACTS": str(artifacts), **self.fixture.env(),
+                "QROW_FIXTURE_STATE": str(self.state)}
+
+    def release(self):
+        if self.fixture is None:
+            return
+        try:
+            self.fixture.collect(self.run_dir / "fixture")
+        finally:
+            if self.owned:
+                self.fixture.stop()
 
 
 def new_run_dir():
@@ -314,14 +402,44 @@ def new_run_dir():
 
 def run(selected, options, extra, output, fail_fast=False):
     run_dir = new_run_dir()
-    results = []
-    for item in selected:
-        if fail_fast and any(result.status in ("failed", "missing") for result in results):
-            results.append(SuiteResult(item.suite.name, "skipped", reason="An earlier suite did not pass."))
-            continue
-        result = run_suite(item, options, extra, run_dir, output)
-        results.append(result)
-        output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
+    results = [None] * len(selected)
+    blocked = [precheck(item, options) for item in selected]
+    served = [index for index, item in enumerate(selected) if item.suite.fixture and blocked[index] is None]
+    session = FixtureSession(options, run_dir, output,
+                             any(selected[index].suite.fixture == "docker" for index in served)) if served else None
+    prepared = False
+    try:
+        for index, item in enumerate(selected):
+            name = item.suite.name
+            if fail_fast and any(result and result.status in ("failed", "missing") for result in results):
+                results[index] = SuiteResult(name, "skipped", reason="An earlier suite did not pass.")
+                continue
+            if item.suite.fixture and blocked[index] is None and not prepared:
+                # Build everything that the fixture suites need before servers use memory.
+                prepared = True
+                for other in served:
+                    suite = selected[other].suite
+                    failure = run_steps(selected[other], suite.prepare, options, extra,
+                                        {"QROW_E2E_ARTIFACTS": str(run_dir / suite.name)},
+                                        run_dir, output, time.monotonic())
+                    if failure:
+                        failure.reason = "Preparation failed. " + failure.reason
+                        blocked[other] = failure
+                if any(blocked[other] is None for other in served):
+                    session.acquire()
+            if blocked[index]:
+                results[index] = blocked[index]
+            elif item.suite.fixture and session.error:
+                results[index] = SuiteResult(name, "failed", reason=session.error)
+            elif item.suite.fixture:
+                results[index] = run_suite(item, options, extra, run_dir, output, session.env(item.suite))
+            else:
+                results[index] = run_suite(item, options, extra, run_dir, output)
+            result = results[index]
+            output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
+    finally:
+        if session:
+            session.release()
     statuses = {result.status for result in results}
     if "failed" in statuses:
         status, code = "failed", EXIT_FAILED

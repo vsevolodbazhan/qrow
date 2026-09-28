@@ -1,6 +1,6 @@
 x-spark: &spark
-  image: qrow-e2e-fixture:${QROW_E2E_PROJECT:?Use scripts/e2e/run.py}
-  build: ./fixture
+  image: qrow-e2e-fixture:${QROW_E2E_PROJECT:?Use ./qtest fixture up or ./qtest run}
+  build: ./server
   init: true
   volumes:
     - evidence:/evidence
@@ -12,7 +12,7 @@ x-spark: &spark
 services:
   ldap:
     build:
-      context: ./fixture
+      context: ./server
       dockerfile: ldap.Dockerfile
     environment:
       LDAP_ORGANISATION: Qrow tests
@@ -40,7 +40,7 @@ services:
   kyuubi:
     <<: *spark
     ports:
-      - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use scripts/e2e/run.py}:10009'
+      - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use ./qtest fixture up or ./qtest run}:10009'
     depends_on:
       ldap:
         condition: service_healthy

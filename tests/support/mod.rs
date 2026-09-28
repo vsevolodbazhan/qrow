@@ -1,8 +1,13 @@
 //! Launches the real Qrow window headlessly with an isolated workspace and
 //! synthetic passwords. Real worker threads do real I/O, so waits use wall time.
+//! The `ui` and `e2e` test binaries share this module; each uses a part of it.
+#![allow(dead_code)]
+
+pub mod fixture;
 use anyhow::Result;
+use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, App, AppContext, TestAppContext, Window, px, size};
+use gpui_kit::{AnyWindowHandle, App, AppContext, ElementId, TestAppContext, Window, px, size};
 use qrow::{
     model::{WORKSPACE_VERSION, Workspace},
     storage::{self, Credentials},
@@ -52,6 +57,31 @@ impl Credentials for MemoryCredentials {
         self.passwords.lock().unwrap().remove(&id);
         Ok(())
     }
+}
+
+/// The observed element `id` inside the scope `scope`, when both exist in the
+/// last frame. `TestWindowExt::within` panics when its scope is absent.
+pub fn find_in(
+    window: &Window,
+    scope: impl Into<ElementId>,
+    id: impl Into<ElementId>,
+) -> Option<ElementSnapshot> {
+    let (scope, id) = (scope.into(), id.into());
+    gpui_kit::base::test_support::snapshots(window)
+        .into_iter()
+        .find(|element| element.path().last() == Some(&id) && element.path().contains(&scope))
+}
+
+/// The label of a result cell. Column 0 holds the row number.
+pub fn cell(window: &Window, row: usize, column: usize) -> Option<String> {
+    find_in(window, ("row", row), ("cell", column)).and_then(|cell| cell.label().map(str::to_owned))
+}
+
+/// The label of a result column header. Column 0 is the row number column.
+pub fn header(window: &Window, column: usize) -> Option<String> {
+    window
+        .try_find(("column-header", column))
+        .and_then(|header| header.label().map(str::to_owned))
 }
 
 pub struct TestApp {
@@ -130,6 +160,22 @@ impl TestApp {
 
     pub fn workspace_path(&self) -> &Path {
         &self.workspace
+    }
+
+    /// Replaces the SQL of the active tab by typing into the editor, and waits
+    /// until Qrow saves it.
+    pub fn type_sql(&self, cx: &mut TestAppContext, sql: &str) {
+        self.update(cx, |window, cx| {
+            window.click("sql-editor", cx);
+            window.press("cmd-a", cx);
+            window.input(sql, cx);
+        });
+        self.wait_until(
+            cx,
+            "the typed SQL to be saved",
+            Duration::from_secs(10),
+            |_, _| self.saved().tabs.iter().any(|tab| tab.sql == sql),
+        );
     }
 
     /// The workspace as Qrow last saved it.

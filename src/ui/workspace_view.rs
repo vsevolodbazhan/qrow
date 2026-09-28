@@ -926,7 +926,11 @@ impl Render for Qrow {
                             .child(self.query_tabs(cx))
                             .child(self.query_toolbar(cx))
                             .child(
+                                // GPUI Kit's Editor has no ID setter; tests find the
+                                // editor through its container.
                                 div()
+                                    .id("sql-editor")
+                                    .test_support()
                                     .h(editor_height)
                                     .flex_shrink_0()
                                     .min_w_0()

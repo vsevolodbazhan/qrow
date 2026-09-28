@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run against a disposable stack created by scripts/e2e/run.py, in a logged-in macOS session.
+# Drive the packaged app in a logged-in macOS session. `./qtest run desktop` gives it disposable servers.
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
@@ -16,8 +16,8 @@ case "${1:-}" in
         ;;
 esac
 mkdir -p target/e2e-tools
-if [ ! -x target/e2e-tools/native-driver ] || [ -n "$(find tests/e2e/native/Driver.swift -newer target/e2e-tools/native-driver -print)" ]; then
-    swiftc -warnings-as-errors tests/e2e/native/Driver.swift -o target/e2e-tools/native-driver
+if [ ! -x target/e2e-tools/native-driver ] || [ -n "$(find tests/desktop/Driver.swift -newer target/e2e-tools/native-driver -print)" ]; then
+    swiftc -warnings-as-errors tests/desktop/Driver.swift -o target/e2e-tools/native-driver
 fi
 if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log 2>&1; then
     cat target/e2e-tools/preflight.log >&2
