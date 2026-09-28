@@ -71,8 +71,9 @@ Right-click a tab and choose **Rename…**. Enter a unique name, or leave the
 field empty to keep the current name. Renaming preserves the SQL, connection,
 and downloaded results.
 
-A busy tab cannot close. Switching connections or tabs does not stop work in
-another tab. See [Connections](connections.md) for session behavior.
+A busy tab cannot close. A tab also cannot close while its [assistant
+conversation](assistant.md#conversations-and-query-tabs) works or waits for
+approval. Switching connections or tabs does not stop work in another tab. See [Connections](connections.md) for session behavior.
 
 ## Cancel work
 
@@ -87,10 +88,11 @@ rows that Qrow has already downloaded.
 Individual network reads have a 120-second timeout. This is not a limit on the
 total query duration. A failed cancellation request is reported as an error.
 
-On application exit, Qrow follows the [workspace save flow](workspace.md#load-and-save-failures)
-and requests cancellation and session cleanup. It waits up to one second for worker shutdown. If the server
-cannot be reached, server idle and session timeouts remain responsible for
-abandoned resources.
+On application exit, Qrow uses the [workspace close
+confirmation](workspace.md#quit-and-save) if a query is active, then requests
+cancellation and session cleanup. It waits up to one second for worker
+shutdown. If the server cannot be reached, server idle and session timeouts
+remain responsible for abandoned resources.
 
 ## Errors and limitations
 
@@ -100,7 +102,8 @@ session settings from earlier SQL statements.
 
 ## Syntax
 
-The editor provides syntax generic SQL syntax highlighting. Autocomplete, schema exploration, and LSPs are not implemented.
+The editor highlights SQL syntax and the full width of the active line.
+Autocomplete, schema exploration, and language server features are not available.
 
 ## Design
 

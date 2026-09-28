@@ -1,4 +1,4 @@
-use crate::model::Workspace;
+use crate::model::{WORKSPACE_VERSION, Workspace};
 use anyhow::{Context, Result};
 use std::{
     fs,
@@ -30,7 +30,7 @@ pub fn load(path: &Path) -> Result<Workspace> {
     let mut workspace: Workspace = serde_json::from_slice(&data)
         .context("Saved workspace is invalid; the original file has been left untouched")?;
     anyhow::ensure!(
-        (1..=2).contains(&workspace.version),
+        (1..=WORKSPACE_VERSION).contains(&workspace.version),
         "Unsupported workspace version {}; the file has been left untouched",
         workspace.version
     );

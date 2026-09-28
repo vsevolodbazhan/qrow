@@ -1,4 +1,6 @@
 mod about_view;
+mod assistant_tools;
+mod assistant_view;
 mod button_pair;
 mod connection_form;
 mod output;
@@ -15,7 +17,7 @@ use gpui_kit::component::{
     ActiveTheme, Disableable, IconName, Sizable, WindowExt,
     button::{Button, ButtonVariant, ButtonVariants},
     dialog::DialogFooter,
-    input::{EditorState, Input, InputEvent, InputState, TextareaState},
+    input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     table::TableState,
 };
@@ -26,9 +28,10 @@ use qrow::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE,
-        MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_THEME, SavedTab,
-        Settings, UI_SCALE_STEP, Workspace, copied_tab_title, unique_tab_title,
+        AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
+        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
+        SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION,
+        Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -47,32 +50,44 @@ actions!(
     qrow,
     [
         RunQuery,
+        SendAssistantMessage,
         NewTab,
         CloseTab,
         ToggleSidebar,
+        ToggleAssistant,
         OpenAbout,
         OpenSettings,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
-        RenameTab,
+        SubmitRename,
         Quit
     ]
 );
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
+        KeyBinding::new(
+            "cmd-enter",
+            SendAssistantMessage,
+            Some("AssistantComposer > Input"),
+        ),
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-=", IncreaseUiScale, None),
         KeyBinding::new("cmd-+", IncreaseUiScale, None),
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
-        KeyBinding::new("cmd-enter", RenameTab, Some("RenameTab")),
+        KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
     ]);
-    cx.set_menus(vec![
+    set_menus(cx, false);
+}
+
+fn set_menus(cx: &mut App, assistant_enabled: bool) {
+    let mut menus = vec![
         Menu {
             disabled: false,
             name: "Qrow".into(),
@@ -117,10 +132,20 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
             ],
         },
-    ]);
+    ];
+    if assistant_enabled {
+        menus.push(Menu {
+            disabled: false,
+            name: "View".into(),
+            items: vec![MenuItem::action("Toggle Assistant", ToggleAssistant)],
+        });
+    }
+    cx.set_menus(menus);
 }
 struct Tab {
     saved: SavedTab,
+    revision: u64,
+    pending_assistant_edit: Option<String>,
     input: Entity<EditorState>,
     table: Entity<TableState<Results>>,
     _subscription: Subscription,
@@ -228,6 +253,19 @@ fn installed_fonts(cx: &App) -> Vec<String> {
     fonts
 }
 
+fn font_available(font: &str, installed: &[String]) -> bool {
+    font == SYSTEM_FONT_FAMILY || installed.iter().any(|available| available == font)
+}
+
+/// The SQL editor indents with spaces, so a formatted query and a typed indent
+/// look the same.
+fn editor_tab_size(settings: &Settings) -> TabSize {
+    TabSize {
+        tab_size: usize::from(settings.editor_tab_size),
+        hard_tabs: false,
+    }
+}
+
 fn apply_ui_theme(settings: &Settings, window: &mut Window, cx: &mut App) {
     let font_size = {
         let theme = gpui_kit::component::Theme::global_mut(cx);
@@ -255,6 +293,8 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 
 pub struct Qrow {
     settings: Settings,
+    assistant: AssistantWorkspace,
+    assistant_panel: assistant_view::AssistantPanelState,
     fonts: Vec<String>,
     settings_open: bool,
     about_open: bool,
@@ -278,6 +318,8 @@ pub struct Qrow {
     _quit: Subscription,
     _appearance: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
+    quit_warning_open: bool,
+    quit_work_confirmed: bool,
     quit_confirmed: bool,
     finished: bool,
     wake: async_channel::Sender<()>,
@@ -321,9 +363,7 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
-        let mut unavailable_font = !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.editor_font_family);
+        let mut unavailable_font = !font_available(&workspace.settings.editor_font_family, &fonts);
         if unavailable_font {
             workspace.settings.editor_font_family = Settings::default().editor_font_family;
             let warning = "The saved editor font is unavailable, so Qrow is using Menlo.";
@@ -334,10 +374,7 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
-        if !fonts
-            .iter()
-            .any(|font| font == &workspace.settings.logs_font_family)
-        {
+        if !font_available(&workspace.settings.logs_font_family, &fonts) {
             workspace.settings.logs_font_family = Settings::default().logs_font_family;
             unavailable_font = true;
             let warning = "The saved Logs font is unavailable, so Qrow is using Menlo.";
@@ -348,9 +385,19 @@ impl Qrow {
                 message = Some(warning.into());
             }
         }
-        if workspace.settings.ui_font_family != Settings::default().ui_font_family
-            && !fonts.contains(&workspace.settings.ui_font_family)
-        {
+        if !font_available(&workspace.settings.assistant_font_family, &fonts) {
+            workspace.settings.assistant_font_family = Settings::default().assistant_font_family;
+            unavailable_font = true;
+            let warning =
+                "The saved assistant font is unavailable, so Qrow is using the system font.";
+            if let Some(message) = &mut message {
+                message.push(' ');
+                message.push_str(warning);
+            } else {
+                message = Some(warning.into());
+            }
+        }
+        if !font_available(&workspace.settings.ui_font_family, &fonts) {
             workspace.settings.ui_font_family = Settings::default().ui_font_family;
             unavailable_font = true;
             let warning =
@@ -363,12 +410,14 @@ impl Qrow {
             }
         }
         let scale = workspace.settings.ui_scale;
+        set_menus(cx, workspace.settings.assistant.enabled);
         themes::apply(&workspace.settings.theme, Some(window), cx);
         apply_ui_theme(&workspace.settings, window, cx);
         let quit = cx.on_app_quit(|this, cx| {
             this.finish(cx);
             async {}
         });
+        let assistant_panel = assistant_view::AssistantPanelState::new(window, cx);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.theme == SYSTEM_THEME {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
@@ -378,6 +427,8 @@ impl Qrow {
         });
         let mut this = Self {
             settings: workspace.settings,
+            assistant: workspace.assistant,
+            assistant_panel,
             fonts,
             settings_open: false,
             about_open: false,
@@ -401,6 +452,8 @@ impl Qrow {
             _quit: quit,
             _appearance: appearance,
             pending_quit: None,
+            quit_warning_open: false,
+            quit_work_confirmed: false,
             quit_confirmed: false,
             finished: false,
             wake,
@@ -418,8 +471,12 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
+        this.assistant_panel.composer_target = this
+            .tabs
+            .get(this.active)
+            .map(|tab| assistant_view::ComposerTarget::Tab(tab.saved.id));
         if demo {
-            this.seed_demo(cx);
+            this.seed_demo(this.active, cx);
         }
         this.tabs[this.active]
             .input
@@ -458,14 +515,22 @@ impl Qrow {
         this
     }
     fn make_tab(&self, saved: SavedTab, window: &mut Window, cx: &mut Context<Self>) -> Tab {
+        let tab_id = saved.id;
         let input = cx.new(|cx| {
             EditorState::new(window, cx)
                 .language("sql")
                 .soft_wrap(false)
+                .tab_size(editor_tab_size(&self.settings))
                 .default_value(saved.sql.clone())
         });
-        let subscription = cx.subscribe(&input, |this, _, event, cx| {
+        let subscription = cx.subscribe(&input, move |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.saved.id == tab_id) {
+                    let current = tab.input.read(cx).value().to_string();
+                    if tab.pending_assistant_edit.take().as_deref() != Some(current.as_str()) {
+                        tab.revision = tab.revision.saturating_add(1);
+                    }
+                }
                 this.changed(cx);
             }
         });
@@ -477,6 +542,8 @@ impl Qrow {
         });
         Tab {
             saved,
+            revision: 0,
+            pending_assistant_edit: None,
             input,
             table,
             _subscription: subscription,
@@ -499,8 +566,13 @@ impl Qrow {
     }
     fn snapshot(&self, cx: &App) -> Workspace {
         Workspace {
-            version: 2,
+            version: WORKSPACE_VERSION,
             settings: self.settings.clone(),
+            assistant: {
+                let mut assistant = self.assistant.clone();
+                assistant.remove_unstarted(&self.assistant_panel.unstarted_threads);
+                assistant
+            },
             profiles: self.profiles.clone(),
             tabs: self
                 .tabs
@@ -520,6 +592,17 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        if self.demo {
+            self.assistant_panel.shutdown_demo(
+                self.assistant
+                    .conversations
+                    .iter()
+                    .map(|conversation| conversation.thread_id.clone())
+                    .collect(),
+            );
+        } else {
+            self.assistant_panel.shutdown();
+        }
         if let Some(mut saver) = self.saver.take() {
             let result = if self.quit_confirmed {
                 saver.stop()
@@ -542,19 +625,94 @@ impl Qrow {
             }
         }
     }
-    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_quit.is_some() || self.quit_confirmed {
+    fn active_work_description(&self) -> Option<&'static str> {
+        let assistant = self.assistant_working();
+        let query = self.tabs.iter().any(|tab| tab.busy);
+        match (assistant, query) {
+            (true, true) => {
+                Some("An Assistant turn and a query are still running. Quit now to stop both?")
+            }
+            (true, false) => Some("The Assistant is still working. Quit now to stop the turn?"),
+            (false, true) => Some("A query is still running. Quit now to stop it?"),
+            (false, false) => None,
+        }
+    }
+
+    fn confirm_quit_while_working(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_warning_open {
             return;
         }
-        if self.demo {
-            self.quit_confirmed = true;
-            cx.quit();
+        let Some(description) = self.active_work_description() else {
+            return;
+        };
+        self.quit_warning_open = true;
+        let keep_working = cx.weak_entity();
+        let quit_anyway = cx.weak_entity();
+        let dismiss = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let keep_working = keep_working.clone();
+            let quit_anyway = quit_anyway.clone();
+            let dismiss = dismiss.clone();
+            alert
+                .title("Work is still running")
+                .description(description)
+                .width(px(560.))
+                .on_close(move |_, _, cx| {
+                    let _ = dismiss.update(cx, |this, cx| {
+                        this.quit_warning_open = false;
+                        cx.notify();
+                    });
+                })
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("keep-working")
+                                .primary()
+                                .label("Keep Working")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = keep_working.update(cx, |this, cx| {
+                                        this.quit_warning_open = false;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("quit-anyway")
+                                .label("Quit Anyway")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = quit_anyway.update(cx, |this, cx| {
+                                        this.quit_warning_open = false;
+                                        this.quit_work_confirmed = true;
+                                        this.request_quit(window, cx);
+                                    });
+                                }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+
+    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_quit.is_some() || self.quit_confirmed || self.quit_warning_open {
             return;
         }
         if self.form.as_ref().is_some_and(|form| form.saving.is_some()) {
             self.message =
                 Some("Wait for the connection to finish saving, then quit again.".into());
             cx.notify();
+            return;
+        }
+        if !self.quit_work_confirmed && self.active_work_description().is_some() {
+            self.confirm_quit_while_working(window, cx);
+            return;
+        }
+        if self.demo {
+            self.quit_confirmed = true;
+            cx.quit();
             return;
         }
         let snapshot = self.snapshot(cx);
@@ -582,12 +740,20 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let retry = weak.clone();
             let discard = weak.clone();
+            let keep_editing = weak.clone();
+            let dismiss = weak.clone();
             alert
                 .title("Could not save workspace")
                 .description(format!(
                     "{error} Your edits are still available in this window."
                 ))
                 .width(px(560.))
+                .on_close(move |_, _, cx| {
+                    let _ = dismiss.update(cx, |this, cx| {
+                        this.quit_work_confirmed = false;
+                        cx.notify();
+                    });
+                })
                 .footer(
                     DialogFooter::new()
                         .justify_end()
@@ -603,8 +769,14 @@ impl Qrow {
                                 }),
                         )
                         .child(Button::new("keep-editing").label("Keep Editing").on_click(
-                            |_, window, cx| {
+                            move |_, window, cx| {
                                 window.close_dialog(cx);
+                                // A failed save cancels the earlier quit decision.
+                                // Ask again if work is still active on the next quit.
+                                let _ = keep_editing.update(cx, |this, cx| {
+                                    this.quit_work_confirmed = false;
+                                    cx.notify();
+                                });
                             },
                         ))
                         .child(
@@ -824,6 +996,7 @@ impl Qrow {
                 }
             }
         }
+        changed |= self.tick_assistant(window, cx);
         if self
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
@@ -972,6 +1145,7 @@ impl Qrow {
         self.tabs[index]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
+        self.show_tab_conversation(window, cx);
         self.changed(cx);
     }
     fn active_profile(&self) -> Option<Uuid> {
@@ -998,7 +1172,11 @@ impl Qrow {
     }
     /// A modal owns the window, so tab and profile commands wait for it.
     fn dialog_open(&self) -> bool {
-        self.form.is_some() || self.settings_open || self.about_open || self.tab_form.is_some()
+        self.form.is_some()
+            || self.settings_open
+            || self.about_open
+            || self.tab_form.is_some()
+            || self.assistant_panel.rename_form.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1008,6 +1186,16 @@ impl Qrow {
         if profile.is_none() {
             return;
         }
+        let index = self.add_tab(profile, window, cx);
+        self.activate(index, window, cx);
+    }
+    /// Adds a blank tab with the next free number of the connection.
+    fn add_tab(
+        &mut self,
+        profile: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> usize {
         let number = self
             .tabs
             .iter()
@@ -1023,10 +1211,14 @@ impl Qrow {
             + 1;
         let tab = self.make_tab(SavedTab::new(number, profile), window, cx);
         self.tabs.push(tab);
-        self.activate(self.tabs.len() - 1, window, cx);
+        self.tabs.len() - 1
     }
     fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dialog_open() || index >= self.tabs.len() || self.tabs[index].busy {
+        if self.dialog_open()
+            || index >= self.tabs.len()
+            || self.tabs[index].busy
+            || self.assistant_tab_busy(self.tabs[index].saved.id)
+        {
             return;
         }
         // The menu names a tab that is about to disappear.
@@ -1035,7 +1227,9 @@ impl Qrow {
             w.shutdown();
         }
         let profile = self.tabs[index].saved.profile;
+        let tab_id = self.tabs[index].saved.id;
         self.tabs.remove(index);
+        self.assistant_tab_removed(tab_id, profile);
         if let Some(profile) = profile
             && !self
                 .tabs
@@ -1089,15 +1283,28 @@ impl Qrow {
         }
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
-        if self.form.is_some() || self.settings_open || self.tabs[self.active].busy {
-            return;
+        self.run_selected_query(window, cx);
+    }
+    fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.form.is_some() || self.settings_open {
+            return false;
+        }
+        self.run_tab_query(self.active, window, cx)
+    }
+    /// Runs the selected SQL of a tab, or all of its SQL when nothing is
+    /// selected. An assistant conversation runs its tab also while a dialog
+    /// is open.
+    fn run_tab_query(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.tabs.get(index).is_none_or(|tab| tab.busy) {
+            return false;
         }
         if self.demo {
-            self.seed_demo(cx);
+            self.seed_demo(index, cx);
             cx.notify();
-            return;
+            return true;
         }
-        let tab = &mut self.tabs[self.active];
+        let active = index == self.active;
+        let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
             let selected = s
                 .selected_text_range(false, window, cx)
@@ -1112,10 +1319,10 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         }
         let Some(profile) = self
             .profiles
@@ -1128,10 +1335,10 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         };
         if let Err(error) = profile.validate() {
             let message = error.to_string();
@@ -1139,10 +1346,10 @@ impl Qrow {
                 tab,
                 ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
             );
-            Self::record_failure(tab, true);
+            Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
             cx.notify();
-            return;
+            return false;
         }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
@@ -1183,9 +1390,13 @@ impl Qrow {
         .with_sql(query);
         Self::record_activity(tab, submission);
         cx.notify();
+        true
     }
     fn next_page(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+        self.next_tab_page(self.active, cx);
+    }
+    fn next_tab_page(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         let data = tab.table.read(cx).delegate();
         let page = data.pagination.page() + 1;
         if page < data.pagination.pages(data.rows.len()) {
@@ -1213,7 +1424,10 @@ impl Qrow {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        let t = &mut self.tabs[self.active];
+        self.cancel_tab(self.active, cx);
+    }
+    fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
             Self::record_local_activity(
                 t,
@@ -1311,26 +1525,37 @@ impl Qrow {
     ) {
         self.adjust_ui_scale(-UI_SCALE_STEP, window, cx);
     }
+    fn set_editor_tab_size(&mut self, size: u8, cx: &mut Context<Self>) {
+        if self.settings.editor_tab_size == size {
+            return;
+        }
+        self.settings.editor_tab_size = size;
+        let tab = editor_tab_size(&self.settings);
+        for editor in self.tabs.iter().map(|tab| tab.input.clone()) {
+            editor.update(cx, |editor, cx| editor.set_tab_size(tab, cx));
+        }
+        self.changed(cx);
+    }
     fn set_editor_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if self.fonts.iter().any(|available| available == &font)
-            && self.settings.editor_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.editor_font_family != font {
             self.settings.editor_font_family = font;
             self.changed(cx);
         }
     }
     fn set_logs_font(&mut self, font: String, cx: &mut Context<Self>) {
-        if self.fonts.iter().any(|available| available == &font)
-            && self.settings.logs_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.logs_font_family != font {
             self.settings.logs_font_family = font;
             self.changed(cx);
         }
     }
+    fn set_assistant_font(&mut self, font: String, cx: &mut Context<Self>) {
+        if font_available(&font, &self.fonts) && self.settings.assistant_font_family != font {
+            self.settings.assistant_font_family = font;
+            self.changed(cx);
+        }
+    }
     fn set_ui_font(&mut self, font: String, window: &mut Window, cx: &mut Context<Self>) {
-        if (font == Settings::default().ui_font_family || self.fonts.contains(&font))
-            && self.settings.ui_font_family != font
-        {
+        if font_available(&font, &self.fonts) && self.settings.ui_font_family != font {
             self.settings.ui_font_family = font;
             apply_ui_theme(&self.settings, window, cx);
             self.changed(cx);
@@ -1343,9 +1568,14 @@ impl Qrow {
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
         self.settings.editor_line_height = settings.editor_line_height;
+        self.set_editor_tab_size(settings.editor_tab_size, cx);
+        self.settings.assistant.sql_keyword_case = settings.assistant.sql_keyword_case;
         self.settings.logs_font_family = settings.logs_font_family;
         self.settings.logs_font_size = settings.logs_font_size;
         self.settings.logs_line_height = settings.logs_line_height;
+        self.settings.assistant_font_family = settings.assistant_font_family;
+        self.settings.assistant_font_size = settings.assistant_font_size;
+        self.settings.assistant_line_height = settings.assistant_line_height;
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
@@ -1405,7 +1635,16 @@ impl Qrow {
             return;
         };
         let source_profile = source.saved.profile;
-        let source_busy = source.busy;
+        let source_busy = source.busy || self.assistant_tab_busy(tab);
+        // A tab has at most one conversation.
+        let conversation = self
+            .settings
+            .assistant
+            .enabled
+            .then(|| self.tab_assistant_status(tab).is_none());
+        let start_conversation = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.start_tab_conversation(tab, window, cx)
+        });
         let rename = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_tab_rename(tab, window, cx)
         });
@@ -1453,7 +1692,7 @@ impl Qrow {
                         )
                     })
                 };
-                if destinations.is_empty() || source_busy {
+                let menu = if destinations.is_empty() || source_busy {
                     menu.item(PopupMenuItem::new("Move to Connection…").disabled(true))
                 } else {
                     let weak = weak.clone();
@@ -1472,6 +1711,14 @@ impl Qrow {
                             },
                         )
                     })
+                };
+                match conversation {
+                    Some(available) => menu.separator().item(
+                        PopupMenuItem::new("Start Conversation")
+                            .on_click(start_conversation)
+                            .disabled(!available),
+                    ),
+                    None => menu,
                 }
             },
             window,
@@ -1496,7 +1743,7 @@ impl Qrow {
         {
             return;
         }
-        if move_tab && self.tabs[source_index].busy {
+        if move_tab && (self.tabs[source_index].busy || self.assistant_tab_busy(tab_id)) {
             return;
         }
         let source_profile = self.tabs[source_index].saved.profile;
@@ -1575,10 +1822,10 @@ impl Qrow {
             title,
             error: None,
         });
-        self.open_tab_rename_dialog(window, cx);
+        self.open_rename_dialog(tab_view::TAB_RENAME, window, cx);
         cx.notify();
     }
-    fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn rename_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = &self.tab_form else {
             return;
         };
@@ -1615,6 +1862,15 @@ impl Qrow {
             && let Some(current) = self.tabs.iter_mut().find(|t| t.saved.id == tab)
         {
             current.saved.title = title;
+            if let Some(conversation) = self
+                .assistant
+                .conversations
+                .iter_mut()
+                .find(|conversation| conversation.tab_id == Some(tab))
+            {
+                conversation.title_follows_conversation = false;
+            }
+            self.assistant_panel.new_conversation_tabs.remove(&tab);
         }
         self.tab_form = None;
         // Programmatic close_dialog does not invoke Dialog::on_close.
@@ -1772,7 +2028,7 @@ impl Qrow {
         cx.notify();
     }
     fn confirm_delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.profile_busy(id) {
+        if self.profile_in_use(id) {
             return;
         }
         let Some(profile) = self.profiles.iter().find(|p| p.id == id) else {
@@ -1821,7 +2077,7 @@ impl Qrow {
         cx.notify();
     }
     fn delete_profile(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-        if self.profile_busy(id) || !self.profiles.iter().any(|p| p.id == id) {
+        if self.profile_in_use(id) || !self.profiles.iter().any(|p| p.id == id) {
             return;
         }
         let old_active_profile = self.active_profile();
@@ -1848,7 +2104,16 @@ impl Qrow {
                 worker.shutdown();
             }
         }
+        let removed: Vec<_> = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.saved.profile == Some(id))
+            .map(|tab| tab.saved.id)
+            .collect();
         self.tabs.retain(|tab| tab.saved.profile != Some(id));
+        for tab in removed {
+            self.assistant_tab_removed(tab, None);
+        }
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
         if self.tabs.is_empty() {
@@ -1891,8 +2156,17 @@ impl Qrow {
             .iter()
             .any(|tab| tab.worker_profile == Some(id) && tab.busy)
     }
-    fn seed_demo(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+    /// A connection cannot be deleted while a query runs or an assistant
+    /// conversation works in one of its tabs.
+    fn profile_in_use(&self, id: Uuid) -> bool {
+        self.profile_busy(id)
+            || self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(id) && self.assistant_tab_busy(tab.saved.id))
+    }
+    fn seed_demo(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         let execution_id = Self::allocate_execution_id(tab);
         let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);
@@ -2010,11 +2284,25 @@ fn demo_workspace() -> Workspace {
     tab.title = "Route overview".into();
     tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
-        version: 2,
+        version: WORKSPACE_VERSION,
         settings: Settings::default(),
+        assistant: AssistantWorkspace::default(),
         profiles: profiles.clone(),
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
         active_tabs: BTreeMap::new(),
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::{SYSTEM_FONT_FAMILY, font_available};
+
+    #[test]
+    fn system_font_is_valid_even_when_not_enumerated() {
+        let installed = vec!["Menlo".into()];
+        assert!(font_available(SYSTEM_FONT_FAMILY, &installed));
+        assert!(font_available("Menlo", &installed));
+        assert!(!font_available("Missing font", &installed));
     }
 }

@@ -5,39 +5,55 @@ to a database until you run SQL.
 
 ## Appearance and layout
 
-Open **Qrow → Settings…** to change the appearance. The dialog shows the
-**Interface**, **Editor**, and **Logs** sections on one page. The Interface
-section has **Theme**, **Scale**, and **Font Family**. The Editor and Logs
-sections have **Font Family**, **Font Size**, and **Line Height**. The interface
-font applies to controls and results. Editor settings apply only to SQL. Logs
-settings apply only to Logs. Line height is relative to the font size. Scale
-multiplies the Editor and Logs font sizes.
+Open **Qrow → Settings…** to change the appearance. The Appearance page shows
+the **Interface**, **Assistant**, **Editor**, and **Logs** sections. Interface
+has **Theme**, **Scale**, and **Font Family**. Editor, Logs, and Assistant have
+**Font Family**, **Font Size**, and **Line Height**. The interface font applies
+to controls and results. Editor also has **Tab Size**, the number of spaces for
+each indent level. The default is 2. The Tab key and SQL that Qrow formats for
+the assistant use this size. The editor indents with spaces. **SQL Keyword
+Case** is the last Editor setting. At the moment, it applies only to SQL that
+the [assistant](assistant.md) writes.
+Editor settings apply to SQL. Logs settings apply to log entries.
+Assistant settings apply to conversation messages. Code in messages keeps
+its code font. Line height is relative to the font size. Scale multiplies the
+Editor, Logs, and Assistant font sizes.
+Each font picker has a **System Font** option. This option uses the macOS
+interface font.
 
 The theme defaults to **System**. System follows the macOS appearance and uses
 GPUI Kit's default light or dark theme. The selector also includes One Dark and
 the themes bundled from GPUI Kit. A selected theme takes effect immediately.
 
-Select a section in the list at the left to move to that section. Use the search
-box above the list to show only the settings that match a word in their name or
-description. The section list needs the pointer. All controls stay on the page,
-so the keyboard reaches each of them without the list.
+The Assistant page has the **General** and **Codex** sections. See
+[AI assistant](assistant.md#set-up-the-assistant) for these settings.
+
+Select a page or section in the list at the left. Use the search box above the
+list to show only settings that match a word in their name or description.
+Each setting shows a description below its name. A long description wraps, and
+the controls stay aligned at the right.
 
 Changes appear immediately and are saved with the workspace. **Restore defaults**
-restores the defaults of all appearance settings, including the System theme and
-the system interface font. If a saved font or theme is unavailable, Qrow uses a
-default and reports the substitution.
+restores the defaults of all appearance settings, including the System theme,
+the system interface font, and SQL Keyword Case. It does not change the
+Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
+reports the substitution.
 
 Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
-These layout positions are not saved in the workspace.
+These two divider positions are not saved in the workspace. Qrow saves the
+optional [assistant pane](assistant.md) width.
 
 ## Saved state
 
 The workspace file contains connection profiles, connection-owned tabs, tab
 names, SQL, the selected connection, the last active tab for each connection,
-and appearance settings. It does not contain
-result rows or Logs history. Its default path is:
+and settings. Optional assistant state includes the enabled setting, panel and
+model preferences, Codex thread identifiers, conversation titles, query
+execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
+arguments, tool results, result rows, Logs history, or Codex credentials. Its
+default path is:
 
 ```text
 ~/Library/Application Support/Qrow/workspace.json
@@ -47,9 +63,26 @@ Passwords remain in [macOS Keychain](connections.md#authentication-and-connectio
 Passwords and result sets are not written to the workspace file. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.
 
+Workspace version 3 adds the optional assistant state. Qrow gives version 1
+and version 2 workspaces safe assistant defaults during load. The assistant is
+off by default. The migration preserves connections, tabs, SQL, active-tab
+state, and appearance settings.
+Workspace version 4 links each assistant conversation to a query tab. When
+Qrow loads an earlier workspace, the conversation that was open gets the active
+tab. The other conversations load without a query tab, under the connection
+that was active. An earlier version of Qrow cannot open a version 4
+workspace.
+
+## Quit and save
+
 Qrow saves after a short editing delay. **Qrow → Quit Qrow**, **⌘Q**, and the
 window close button wait for confirmation that the latest workspace is saved.
 You can continue to edit while a save is in progress. Qrow saves those new edits
+before it exits.
+
+If an Assistant turn or query is active when you quit or close the window, Qrow
+shows **Work is still running**. Select **Keep Working** to leave Qrow open.
+Select **Quit Anyway** to stop the active work. Qrow still saves the workspace
 before it exits.
 
 ## Load and save failures
