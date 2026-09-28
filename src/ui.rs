@@ -318,6 +318,8 @@ pub struct Qrow {
     _quit: Subscription,
     _appearance: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
+    quit_warning_open: bool,
+    quit_work_confirmed: bool,
     quit_confirmed: bool,
     finished: bool,
     wake: async_channel::Sender<()>,
@@ -450,6 +452,8 @@ impl Qrow {
             _quit: quit,
             _appearance: appearance,
             pending_quit: None,
+            quit_warning_open: false,
+            quit_work_confirmed: false,
             quit_confirmed: false,
             finished: false,
             wake,
@@ -617,19 +621,95 @@ impl Qrow {
             }
         }
     }
-    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.pending_quit.is_some() || self.quit_confirmed {
+    fn active_work_description(&self) -> Option<&'static str> {
+        let assistant = self.assistant_panel.pending_reply_thread.is_some()
+            || self.assistant_panel.active_turn.is_some();
+        let query = self.tabs.iter().any(|tab| tab.busy);
+        match (assistant, query) {
+            (true, true) => {
+                Some("An Assistant turn and a query are still running. Quit now to stop both?")
+            }
+            (true, false) => Some("The Assistant is still working. Quit now to stop the turn?"),
+            (false, true) => Some("A query is still running. Quit now to stop it?"),
+            (false, false) => None,
+        }
+    }
+
+    fn confirm_quit_while_working(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.quit_warning_open {
             return;
         }
-        if self.demo {
-            self.quit_confirmed = true;
-            cx.quit();
+        let Some(description) = self.active_work_description() else {
+            return;
+        };
+        self.quit_warning_open = true;
+        let keep_working = cx.weak_entity();
+        let quit_anyway = cx.weak_entity();
+        let dismiss = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let keep_working = keep_working.clone();
+            let quit_anyway = quit_anyway.clone();
+            let dismiss = dismiss.clone();
+            alert
+                .title("Work is still running")
+                .description(description)
+                .width(px(560.))
+                .on_close(move |_, _, cx| {
+                    let _ = dismiss.update(cx, |this, cx| {
+                        this.quit_warning_open = false;
+                        cx.notify();
+                    });
+                })
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("keep-working")
+                                .primary()
+                                .label("Keep Working")
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = keep_working.update(cx, |this, cx| {
+                                        this.quit_warning_open = false;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("quit-anyway")
+                                .label("Quit Anyway")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, window, cx| {
+                                    window.close_dialog(cx);
+                                    let _ = quit_anyway.update(cx, |this, cx| {
+                                        this.quit_warning_open = false;
+                                        this.quit_work_confirmed = true;
+                                        this.request_quit(window, cx);
+                                    });
+                                }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+
+    pub(super) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.pending_quit.is_some() || self.quit_confirmed || self.quit_warning_open {
             return;
         }
         if self.form.as_ref().is_some_and(|form| form.saving.is_some()) {
             self.message =
                 Some("Wait for the connection to finish saving, then quit again.".into());
             cx.notify();
+            return;
+        }
+        if !self.quit_work_confirmed && self.active_work_description().is_some() {
+            self.confirm_quit_while_working(window, cx);
+            return;
+        }
+        if self.demo {
+            self.quit_confirmed = true;
+            cx.quit();
             return;
         }
         let snapshot = self.snapshot(cx);
@@ -657,12 +737,20 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let retry = weak.clone();
             let discard = weak.clone();
+            let keep_editing = weak.clone();
+            let dismiss = weak.clone();
             alert
                 .title("Could not save workspace")
                 .description(format!(
                     "{error} Your edits are still available in this window."
                 ))
                 .width(px(560.))
+                .on_close(move |_, _, cx| {
+                    let _ = dismiss.update(cx, |this, cx| {
+                        this.quit_work_confirmed = false;
+                        cx.notify();
+                    });
+                })
                 .footer(
                     DialogFooter::new()
                         .justify_end()
@@ -678,8 +766,14 @@ impl Qrow {
                                 }),
                         )
                         .child(Button::new("keep-editing").label("Keep Editing").on_click(
-                            |_, window, cx| {
+                            move |_, window, cx| {
                                 window.close_dialog(cx);
+                                // A failed save cancels the earlier quit decision.
+                                // Ask again if work is still active on the next quit.
+                                let _ = keep_editing.update(cx, |this, cx| {
+                                    this.quit_work_confirmed = false;
+                                    cx.notify();
+                                });
                             },
                         ))
                         .child(

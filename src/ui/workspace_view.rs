@@ -359,30 +359,78 @@ impl Qrow {
                     )
                     .when(self.settings.assistant.enabled, |bar| {
                         let unread = self.assistant_panel.unread && !self.assistant_panel.open;
+                        let waiting_for_approval = self
+                            .assistant_panel
+                            .pending_query
+                            .as_ref()
+                            .is_some_and(|pending| !pending.approved);
+                        let working = (self.assistant_panel.pending_reply_thread.is_some()
+                            || self.assistant_panel.active_turn.is_some())
+                            && !waiting_for_approval;
+                        let failed = unread && self.assistant_panel.unread_error;
+                        let (accessibility_label, tooltip) = if failed {
+                            (
+                                "Toggle Assistant, reply failed",
+                                "Assistant reply failed · ⌘J",
+                            )
+                        } else if unread {
+                            (
+                                "Toggle Assistant, reply ready",
+                                "Assistant reply ready · ⌘J",
+                            )
+                        } else if waiting_for_approval {
+                            (
+                                "Toggle Assistant, waiting for approval",
+                                "Assistant waiting for approval · ⌘J",
+                            )
+                        } else if working {
+                            ("Toggle Assistant, working", "Assistant is working · ⌘J")
+                        } else {
+                            ("Toggle Assistant", "Toggle Assistant · ⌘J")
+                        };
                         let toggle =
                             Button::new("toggle-assistant")
                                 .ghost()
                                 .small()
-                                .icon(AssetIconName::Sparkles)
+                                .w(self.ui_px(28.))
+                                .h(self.ui_px(28.))
                                 .selected(self.assistant_panel.open)
-                                .accessibility_label(if unread {
-                                    "Toggle Assistant, reply ready"
-                                } else {
-                                    "Toggle Assistant"
+                                .accessibility_label(accessibility_label)
+                                .tooltip(tooltip)
+                                .when(working, |button| {
+                                    button.icon(Spinner::new().small().color(cx.theme().primary))
                                 })
-                                .tooltip(if unread {
-                                    "Assistant reply ready · ⌘J"
-                                } else {
-                                    "Toggle Assistant · ⌘J"
+                                .when(!working && failed, |button| {
+                                    button.icon(
+                                        Icon::new(AssetIconName::TriangleAlert)
+                                            .small()
+                                            .text_color(cx.theme().danger),
+                                    )
                                 })
+                                .when(!working && !failed && unread, |button| {
+                                    button.icon(
+                                        Icon::new(AssetIconName::Sparkles)
+                                            .small()
+                                            .text_color(cx.theme().success),
+                                    )
+                                })
+                                .when(
+                                    !working && !failed && !unread && waiting_for_approval,
+                                    |button| {
+                                        button.icon(
+                                            Icon::new(AssetIconName::Sparkles)
+                                                .small()
+                                                .text_color(cx.theme().warning),
+                                        )
+                                    },
+                                )
+                                .when(
+                                    !working && !failed && !unread && !waiting_for_approval,
+                                    |button| button.icon(AssetIconName::Sparkles),
+                                )
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
-                        let toggle = if unread {
-                            toggle.label("Done")
-                        } else {
-                            toggle.w(self.ui_px(28.)).h(self.ui_px(28.))
-                        };
                         bar.child(toggle)
                     }),
             )

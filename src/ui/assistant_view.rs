@@ -3,6 +3,7 @@ use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     Icon, Selectable,
+    alert::Alert,
     bubble::{Bubble, BubbleContent, BubbleVariant},
     button::{ButtonRounded, DropdownButton},
     collapsible::Collapsible,
@@ -119,6 +120,27 @@ pub(super) enum Status {
     SignInRequired,
     Ready,
     Disconnected(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum AssistantNotice {
+    Info(String),
+    Warning(String),
+    Error(String),
+}
+
+impl AssistantNotice {
+    fn info(message: impl Into<String>) -> Self {
+        Self::Info(message.into())
+    }
+
+    fn warning(message: impl Into<String>) -> Self {
+        Self::Warning(message.into())
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self::Error(message.into())
+    }
 }
 
 /// Progress of a browser sign-in. Codex owns the account and the sign-in page.
@@ -597,7 +619,8 @@ pub(super) struct AssistantPanelState {
     pub scroll: ScrollHandle,
     pub resizing: Option<(Point<Pixels>, Pixels)>,
     pub unread: bool,
-    pub notice: Option<String>,
+    pub unread_error: bool,
+    pub notice: Option<AssistantNotice>,
     pub sign_in: SignIn,
     pub previous_focus: Option<FocusHandle>,
     pub rename_form: Option<ConversationEditor>,
@@ -733,6 +756,7 @@ impl AssistantPanelState {
             scroll: ScrollHandle::new(),
             resizing: None,
             unread: false,
+            unread_error: false,
             notice: None,
             sign_in: SignIn::Idle,
             previous_focus: None,
@@ -803,8 +827,9 @@ impl Qrow {
             .contains(&cursor)
         {
             self.assistant_panel.older_cursors.remove(&thread_id);
-            self.assistant_panel.notice =
-                Some("Codex repeated a conversation page. Older messages cannot be loaded.".into());
+            self.assistant_panel.notice = Some(AssistantNotice::warning(
+                "Codex repeated a conversation page. Older messages cannot be loaded.",
+            ));
             cx.notify();
             return;
         }
@@ -953,15 +978,32 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             let id = thread_id.clone();
-            alert.title("Delete assistant conversation?")
-                .description("Codex will delete this conversation. Query tabs, SQL, sessions, Logs, and results will not change.")
-                .footer(DialogFooter::new().justify_end()
-                    .child(Button::new("cancel-delete-assistant-conversation").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
-                    .child(Button::new("confirm-delete-assistant-conversation").with_variant(ButtonVariant::Danger).label("Delete")
-                        .on_click(move |_, window, cx| {
-                            let _ = confirm.update(cx, |this, cx| { this.assistant_command(AssistantCommand::Delete(id.clone()), cx); });
-                            window.close_dialog(cx);
-                        })))
+            alert
+                .title("Delete assistant conversation?")
+                .description("Queries, logs, and results will not be lost.")
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("cancel-delete-assistant-conversation")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("confirm-delete-assistant-conversation")
+                                .with_variant(ButtonVariant::Danger)
+                                .label("Delete")
+                                .on_click(move |_, window, cx| {
+                                    let _ = confirm.update(cx, |this, cx| {
+                                        this.assistant_command(
+                                            AssistantCommand::Delete(id.clone()),
+                                            cx,
+                                        );
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
         });
     }
 
@@ -1031,8 +1073,9 @@ impl Qrow {
             self.settings.assistant.model = None;
             self.settings.assistant.reasoning_effort = None;
             self.settings.assistant.service_tier = None;
-            self.assistant_panel.notice =
-                Some("Saved model is unavailable. Codex default model selected.".into());
+            self.assistant_panel.notice = Some(AssistantNotice::info(
+                "Saved model is unavailable. Codex default model selected.",
+            ));
             self.changed(cx);
         }
         let default_model = models
@@ -1072,8 +1115,9 @@ impl Qrow {
             .is_some_and(|id| !efforts.iter().any(|effort| effort.id() == id))
         {
             self.settings.assistant.reasoning_effort = None;
-            self.assistant_panel.notice =
-                Some("Saved reasoning level is unavailable. Codex default is in use.".into());
+            self.assistant_panel.notice = Some(AssistantNotice::info(
+                "Saved reasoning level is unavailable. Codex default is in use.",
+            ));
             self.changed(cx);
         }
         let effort_labels: Vec<_> = efforts
@@ -1106,8 +1150,9 @@ impl Qrow {
             .is_some_and(|id| !tiers.iter().any(|tier| tier.id() == id))
         {
             self.settings.assistant.service_tier = None;
-            self.assistant_panel.notice =
-                Some("Saved service tier is unavailable. Codex default is in use.".into());
+            self.assistant_panel.notice = Some(AssistantNotice::info(
+                "Saved service tier is unavailable. Codex default is in use.",
+            ));
             self.changed(cx);
         }
         let mut tier_labels = vec!["Default".to_owned()];
@@ -1227,6 +1272,7 @@ impl Qrow {
         if self.assistant_panel.open {
             self.assistant_panel.previous_focus = window.focused(cx);
             self.assistant_panel.unread = false;
+            self.assistant_panel.unread_error = false;
             self.start_assistant(cx);
             self.assistant_panel
                 .composer
@@ -1822,8 +1868,9 @@ impl Qrow {
                     && !self.send_assistant_title_request(&thread_id, cx)
                 {
                     self.assistant_panel.regenerating_titles.remove(&thread_id);
-                    self.assistant_panel.notice =
-                        Some("This conversation has no messages for a title.".into());
+                    self.assistant_panel.notice = Some(AssistantNotice::info(
+                        "This conversation has no messages for a title.",
+                    ));
                 }
             }
             AssistantServiceEvent::HistoryPage(page) => {
@@ -1957,6 +2004,7 @@ impl Qrow {
                 self.request_assistant_title(&thread_id, cx);
                 if !self.assistant_panel.open {
                     self.assistant_panel.unread = true;
+                    self.assistant_panel.unread_error = error.is_some();
                 }
                 if self.assistant.selected_thread.as_deref() == Some(&thread_id) {
                     self.assistant_panel.active_turn = None;
@@ -1999,8 +2047,9 @@ impl Qrow {
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
                 if self.assistant_panel.regenerating_titles.remove(&thread_id) {
-                    self.assistant_panel.notice =
-                        Some("Codex did not return a title. Try again.".into());
+                    self.assistant_panel.notice = Some(AssistantNotice::warning(
+                        "Codex did not return a title. Try again.",
+                    ));
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::ToolCall(call)) => {
@@ -2095,8 +2144,9 @@ impl Qrow {
                     if let Some(thread) = id.as_ref()
                         && self.assistant_panel.regenerating_titles.remove(thread)
                     {
-                        self.assistant_panel.notice =
-                            Some(format!("Could not regenerate the title: {error}"));
+                        self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                            "Could not regenerate the title: {error}"
+                        )));
                     }
                     // The temporary title stays. Qrow tries again after the next reply.
                     return;
@@ -2106,8 +2156,9 @@ impl Qrow {
                     && self.assistant_panel.title_history_reads.remove(thread)
                 {
                     self.assistant_panel.regenerating_titles.remove(thread);
-                    self.assistant_panel.notice =
-                        Some(format!("Could not regenerate the title: {error}"));
+                    self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                        "Could not regenerate the title: {error}"
+                    )));
                     // The conversation shows its own error when you open it.
                     if self.assistant.selected_thread.as_ref() != Some(thread) {
                         return;
@@ -2643,14 +2694,18 @@ impl Qrow {
                     )
             )
             .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
-                panel.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(notice.clone()),
-                )
+                let alert = match notice {
+                    AssistantNotice::Info(message) => {
+                        Alert::info("assistant-notice", message.clone())
+                    }
+                    AssistantNotice::Warning(message) => {
+                        Alert::warning("assistant-notice", message.clone())
+                    }
+                    AssistantNotice::Error(message) => {
+                        Alert::error("assistant-notice", message.clone())
+                    }
+                };
+                panel.child(div().px_3().py_1().child(alert.small()))
             })
             .when(signed_out, |panel| panel.child(
                 div()

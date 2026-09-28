@@ -87,10 +87,11 @@ rows that Qrow has already downloaded.
 Individual network reads have a 120-second timeout. This is not a limit on the
 total query duration. A failed cancellation request is reported as an error.
 
-On application exit, Qrow follows the [workspace save flow](workspace.md#load-and-save-failures)
-and requests cancellation and session cleanup. It waits up to one second for worker shutdown. If the server
-cannot be reached, server idle and session timeouts remain responsible for
-abandoned resources.
+On application exit, Qrow uses the [workspace close
+confirmation](workspace.md#quit-and-save) if a query is active, then requests
+cancellation and session cleanup. It waits up to one second for worker
+shutdown. If the server cannot be reached, server idle and session timeouts
+remain responsible for abandoned resources.
 
 ## Errors and limitations
 

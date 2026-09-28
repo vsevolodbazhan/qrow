@@ -483,6 +483,7 @@ impl Qrow {
             set_menus(cx, false);
             self.assistant_panel.open = false;
             self.assistant_panel.unread = false;
+            self.assistant_panel.unread_error = false;
             self.assistant_panel.active_turn = None;
             self.assistant_panel.target = None;
             self.assistant_panel.pending_query = None;

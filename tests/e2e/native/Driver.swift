@@ -499,6 +499,13 @@ final class Driver {
             }
         }
     }
+    func requestWindowClose() throws {
+        guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
+              let close = attribute(window, kAXCloseButtonAttribute) else {
+            throw Failure("Window close button is unavailable")
+        }
+        try click(unsafeBitCast(close, to: AXUIElement.self))
+    }
     func testEditorHighlight() throws {
         let editor = try waitInput("SQL Editor")
         let (origin, extent) = try elementBounds(editor)
@@ -944,6 +951,20 @@ final class Driver {
         let readyModel = try wait("Model: Synthetic Model", timeout: 20)
         try require(attribute(readyModel, kAXEnabledAttribute) as? Bool != false, "Model stayed disabled after Codex started")
         _ = try wait("Send · Ask", role: kAXButtonRole)
+        try fill("Assistant Message", "Return to the latest message while hidden")
+        try press("Send")
+        _ = try wait("Assistant is working", timeout: 8)
+        try requestWindowClose()
+        _ = try wait("Keep Working", timeout: 10, role: kAXButtonRole)
+        try require(process.isRunning, "Quit closed Qrow while Assistant was working")
+        try press("Keep Working")
+        try waitGone("Keep Working", timeout: 5)
+        try press("Toggle Assistant")
+        _ = try wait("Toggle Assistant, working", timeout: 5, role: kAXButtonRole)
+        _ = try wait("Toggle Assistant, reply ready", timeout: 20, role: kAXButtonRole)
+        try require(find("Done") == nil, "The assistant completion used the removed Done label")
+        try press("Toggle Assistant, reply ready")
+        _ = try wait("I can help with this query", timeout: 5)
         try fill("Assistant Message", "Keep this draft")
         try press("Run")
         let draft = attribute(try waitInput("Assistant Message"), kAXValueAttribute) as? String
@@ -1019,7 +1040,7 @@ final class Driver {
         try waitGone("Jump to Latest", timeout: 5)
         try press("Toggle Assistant")
         try waitGone("Toggle Conversation List")
-        print("PASS: Assistant opt-in, docked chat, keyboard routing, direct SQL edit, and Undo")
+        print("PASS: Assistant opt-in, docked chat, hidden-turn notification, keyboard routing, direct SQL edit, and Undo")
     }
     func testAssistantAppend() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
@@ -1174,6 +1195,9 @@ final class Driver {
         try waitGone("Listed title", timeout: 10, role: kAXButtonRole)
         try openConversationMenu(generated)
         try pressMenuItem("Delete…")
+        // macOS Accessibility does not expose AlertDialog body text for this
+        // component. Keep a screenshot as the visual copy assertion.
+        try snapshot("assistant-delete-dialog")
         try press("Delete")
         try waitSavedConversations([(generated, "codex")])
         print("PASS: Assistant conversation menus rename, regenerate titles, and delete conversations without thread IDs in the list")
@@ -2090,6 +2114,11 @@ final class Driver {
         // result status. Synchronize on the running tab before checking that
         // busy connection actions remain unavailable.
         _ = try waitExact("Renamed tab, running", timeout: 20)
+        key(12, flags: .maskCommand) // Cmd+Q asks before stopping a running query.
+        _ = try wait("Keep Working", timeout: 10, role: kAXButtonRole)
+        try require(process.isRunning, "Quit closed Qrow while a query was running")
+        try press("Keep Working")
+        try waitGone("Keep Working", timeout: 5)
         try contextMenu("Qrow E2E live", role: kAXButtonRole)
         // GPUI exposes these as disabled menu items visually, but does not
         // publish AXEnabled on macOS. Verify their observable no-op behavior.

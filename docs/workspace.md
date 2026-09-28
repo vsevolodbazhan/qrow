@@ -68,9 +68,16 @@ and version 2 workspaces safe assistant defaults during load. The assistant is
 off by default. The migration preserves connections, tabs, SQL, active-tab
 state, and appearance settings.
 
+## Quit and save
+
 Qrow saves after a short editing delay. **Qrow → Quit Qrow**, **⌘Q**, and the
 window close button wait for confirmation that the latest workspace is saved.
 You can continue to edit while a save is in progress. Qrow saves those new edits
+before it exits.
+
+If an Assistant turn or query is active when you quit or close the window, Qrow
+shows **Work is still running**. Select **Keep Working** to leave Qrow open.
+Select **Quit Anyway** to stop the active work. Qrow still saves the workspace
 before it exits.
 
 ## Load and save failures

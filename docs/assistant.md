@@ -38,6 +38,9 @@ the conversation. It shows from the time that you send a message until the
 turn ends or fails. It also shows while Codex writes text or uses tools. It does
 not show while a query waits for your approval.
 
+See [Pane and connection state](#pane-and-connection-state) for the tab-strip
+status shown when the assistant pane is hidden.
+
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
 
@@ -188,8 +191,17 @@ space.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop Codex or a database query.
-The tab strip shows **Done** next to the assistant toggle if a hidden turn
-finishes. Reopen the pane to clear that state.
+The tab strip uses the assistant icon to show a hidden turn. A green icon means
+that a reply is ready. A warning-colored icon means that a query waits for your
+approval. A spinner means that Codex is working. A red alert icon means that a
+turn ended with an error. Open the assistant pane to clear the reply status.
+
+Assistant notices use an alert in the pane. These notices report an unavailable
+saved option, a title error, or another exceptional condition. Routine status
+does not add text above the message field.
+
+If you quit Qrow while Codex is working, Qrow uses the [workspace close
+confirmation](workspace.md#quit-and-save) before it stops the turn.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
 **Reconnect** replaces **Send** and **Cancel** below the message field. Its
