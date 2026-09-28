@@ -139,9 +139,8 @@ The `core-macos` job also builds the release application package and checks its
 size. The `e2e-macos` job reuses this package by default, and then does not set
 up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
 `false` to build the package in the E2E job. Native fixture archives download
-from a mirror first and use a checksum-keyed Actions cache. A failed, cancelled,
-or timed-out download can save progress for a later run. For the download
-sources, see [End-to-end testing](end-to-end-testing.md#how-the-suite-works).
+from a mirror in each run. For the download sources, see
+[End-to-end testing](end-to-end-testing.md#how-the-suite-works).
 
 The workflow retains `core-coverage`, `macos-package-and-performance`,
 `backend-evidence`, and `macos-evidence` for one day. Configure these individual
@@ -174,11 +173,12 @@ the GitHub Release asset. The workflow uses the latest non-draft release on the
 selected channel as the changelog start tag. If the channel has no previous
 release, it writes the target commit history as the changelog.
 
-The jobs run in this order:
+The jobs run in this order. As in the test workflow, `test-e2e-backend` runs at
+the same time as `test-core-macos`, and `test-e2e-macos` waits for both:
 
 ```text
-resolve-target -> test-core-backend -> test-core-macos -> test-e2e-backend ->
-test-e2e-macos -> package -> publish
+resolve-target -> test-core-backend -> test-core-macos  -> test-e2e-macos -> package -> publish
+                                    -> test-e2e-backend -^
 ```
 
 The publish job creates the release tag before it creates the GitHub Release.

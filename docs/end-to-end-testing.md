@@ -328,9 +328,9 @@ The last source has no speed limit. To change an archive version, add the new
 archive to the mirror first. The mirror README gives the procedure.
 
 Verified native downloads are cached under `target/e2e-downloads` between local
-runs. CI uses a checksum-keyed Actions cache for this directory. CI also keeps
-incomplete download progress for a later run, also after a job timeout. Each
-native archive transfer has a 2-hour limit. The macOS CI jobs allow 150 minutes,
+runs. CI downloads the archives in each run. It does not use an Actions cache,
+because the mirror is faster than a cache restore. Each native archive transfer
+has a 2-hour limit. The macOS CI jobs allow 150 minutes,
 so a slow download from the last source still leaves time to start the fixture
 and run the native checks.
 

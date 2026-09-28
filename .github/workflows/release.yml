@@ -102,7 +102,7 @@ jobs:
     name: test-e2e-backend
     needs:
       - resolve-target
-      - test-core-macos
+      - test-core-backend
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -137,6 +137,7 @@ jobs:
     name: test-e2e-macos
     needs:
       - resolve-target
+      - test-core-macos
       - test-e2e-backend
     runs-on: macos-15
     timeout-minutes: 150
@@ -157,19 +158,6 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      - name: Restore native E2E dependency cache
-        id: native-e2e-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
-      - name: Restore native E2E download progress
-        if: steps.native-e2e-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-
       - name: Check native automation permissions
         run: sh scripts/e2e/driver.sh --preflight
       - name: Select Java 17
@@ -178,39 +166,6 @@ jobs:
           echo "$JAVA_HOME_17_arm64/bin" >> "$GITHUB_PATH"
       - name: Run native E2E
         run: sh scripts/check.sh e2e/macos
-      - name: Check native E2E dependency cache state
-        id: native-e2e-cache-state
-        if: always()
-        shell: bash
-        run: |
-          if [ -f target/e2e-downloads/.complete ]; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ -d target/e2e-downloads ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Save completed native E2E dependency cache
-        if: >
-          always() &&
-          steps.native-e2e-cache.outputs.cache-hit != 'true' &&
-          steps.native-e2e-cache-state.outputs.complete == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
-      - name: Save native E2E download progress
-        if: >
-          always() &&
-          steps.native-e2e-cache-state.outputs.present == 'true' &&
-          steps.native-e2e-cache-state.outputs.complete != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: upload-e2e-macos-evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

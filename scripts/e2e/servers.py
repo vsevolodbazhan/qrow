@@ -168,13 +168,9 @@ def distribution(item, label=None):
 def downloads():
     manifest = json.loads((ROOT / "tests/e2e/native-downloads.json").read_text())
     cache = ROOT / "target/e2e-downloads"
-    marker = cache / ".complete"
-    if marker.exists():
-        marker.unlink()
     announce(f"Checking {len(manifest)} native fixture dependencies in {cache}.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         paths = list(executor.map(distribution, manifest.values(), manifest.keys()))
-    marker.write_text("All native fixture dependencies were verified.\n")
     announce("Native fixture dependencies are ready.")
     return dict(zip(manifest, paths))
 
