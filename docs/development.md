@@ -118,26 +118,21 @@ manual dispatches, and pull requests with the
 `converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
 draft pull request, including a `converted_to_draft` event, starts no jobs.
 
-A job waits only for the job that makes its input. The other jobs start at the
-same time:
+The core jobs start at the same time. The E2E jobs start at the same time after
+all core jobs pass:
 
 ```text
-core-dependencies
-core-scripts
-core-backend  -> e2e-backend
-core-macos
-package-macos -> e2e-macos
+core-dependencies, core-scripts, core-backend, core-macos -> e2e-backend, e2e-macos
 ```
 
-A failed job skips only the job that waits for it. For example, a failed
-`core-scripts` job does not stop `e2e-macos`. Every job checks out the same pull
+A failed core job skips both E2E jobs. Every job checks out the same pull
 request merge result. Core jobs run for fork pull requests. E2E jobs run for
 pushes, manual dispatches, and pull requests from this repository. They skip
 fork pull requests because they execute repository code in Docker and through
 macOS accessibility APIs. A newer run cancels an older run for the same pull
 request or branch, including manual runs.
 
-The `package-macos` job builds the release application package and checks its
+The `core-macos` job also builds the release application package and checks its
 size. The `e2e-macos` job reuses this package by default, and then does not set
 up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
 `false` to build the package in the E2E job. Native fixture archives download
@@ -145,7 +140,7 @@ from a mirror first and use a checksum-keyed Actions cache. A failed, cancelled,
 or timed-out download can save progress for a later run. For the download
 sources, see [End-to-end testing](end-to-end-testing.md#how-the-suite-works).
 
-The workflow retains `core-coverage`, `macos-performance`, `macos-package`,
+The workflow retains `core-coverage`, `macos-package-and-performance`,
 `backend-evidence`, and `macos-evidence` for one day. Configure these individual
 checks as required branch-protection checks:
 
@@ -154,7 +149,6 @@ test / core-dependencies
 test / core-scripts
 test / core-backend
 test / core-macos
-test / package-macos
 test / e2e-backend
 test / e2e-macos
 ```

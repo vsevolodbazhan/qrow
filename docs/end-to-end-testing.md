@@ -394,13 +394,13 @@ competing processes and lock release after a process is killed.
 
 ## Continuous integration
 
-The `test` workflow runs `e2e-backend` after `core-backend` and `e2e-macos`
-after `package-macos` for pushes to `main`, manual dispatches, and non-draft
-pull requests from this repository. It skips fork pull requests. The backend job uses the disposable
-Docker fixture. The macOS job uses the hosted `macos-15` runner, Java 17, and
-the native accessibility driver.
+The `test` workflow runs `e2e-backend` and `e2e-macos` after the core checks
+pass. It runs them for pushes to `main`, manual dispatches, and non-draft pull
+requests from this repository. It skips fork pull requests. The backend job
+uses the disposable Docker fixture. The macOS job uses the hosted `macos-15`
+runner, Java 17, and the native accessibility driver.
 
-The macOS E2E job reuses the package artifact from `package-macos` by default. A
+The macOS E2E job reuses the package artifact from `core-macos` by default. A
 manual `test` dispatch can set `reuse_macos_package` to `false` to build a fresh
 package. The release workflow runs the same E2E jobs before it packages a
 release. CI keeps E2E evidence artifacts for one day.

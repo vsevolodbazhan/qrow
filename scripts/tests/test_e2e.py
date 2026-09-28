@@ -95,9 +95,9 @@ class AcceptanceTests(unittest.TestCase):
             ("core-scripts", None),
             ("core-backend", None),
             ("core-macos", None),
-            ("package-macos", None),
-            ("e2e-backend", "core-backend"),
-            ("e2e-macos", "package-macos"),
+            # E2E jobs start only after every core check passes.
+            ("e2e-backend", "[core-dependencies, core-scripts, core-backend, core-macos]"),
+            ("e2e-macos", "[core-dependencies, core-scripts, core-backend, core-macos]"),
         ]
         for job, dependency in graph:
             with self.subTest(job=job):
@@ -110,19 +110,18 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn("statuses:", workflow)
 
     def test_macos_package_is_built_once_and_reused_by_native_e2e(self):
-        package = self.workflow_job("package-macos")
+        package = self.workflow_job("core-macos")
         native = self.workflow_job("e2e-macos")
         self.assertIn("sh scripts/package/macos.sh", package)
-        self.assertIn("name: macos-package\n", package)
-        self.assertNotIn("scripts/package/macos.sh", self.workflow_job("core-macos"))
-        self.assertIn("name: macos-package\n", native)
+        self.assertIn("name: macos-package-and-performance\n", package)
+        self.assertIn("name: macos-package-and-performance\n", native)
         # The reused package needs no Rust toolchain or compiled dependency cache.
         rust_steps = re.findall(r"- name: (?:Select Rust toolchain|Restore Rust cache)\n\s+if: (.+)", native)
         self.assertEqual(rust_steps, ["github.event_name == 'workflow_dispatch' && !inputs.reuse_macos_package"] * 2)
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos", "package-macos"]:
+        for job in ["core-dependencies", "core-scripts", "core-backend", "core-macos"]:
             with self.subTest(job=job):
                 self.assertIn("!github.event.pull_request.draft", self.workflow_job(job))
                 self.assertNotIn("head.repo.full_name", self.workflow_job(job))
@@ -135,7 +134,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_workflow_artifacts_expire_after_one_day(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        self.assertEqual(workflow.count("retention-days: 1"), 5)
+        self.assertEqual(workflow.count("retention-days: 1"), 4)
         self.assertNotIn("retention-days: 14", workflow)
 
     def test_native_e2e_cache_is_keyed_by_manifest(self):
