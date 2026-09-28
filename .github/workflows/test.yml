@@ -44,8 +44,7 @@ jobs:
 
   core-scripts:
     name: core-scripts
-    needs: core-dependencies
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -66,8 +65,7 @@ jobs:
 
   core-backend:
     name: core-backend
-    needs: core-scripts
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -95,8 +93,7 @@ jobs:
 
   core-macos:
     name: core-macos
-    needs: core-backend
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -117,21 +114,44 @@ jobs:
         run: |
           set -o pipefail
           sh scripts/core/performance.sh | tee performance.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success()
+        with:
+          name: macos-performance
+          path: performance.txt
+          retention-days: 1
+          if-no-files-found: error
+
+  package-macos:
+    name: package-macos
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
       - run: sh scripts/package/macos.sh
       - run: uv run --locked python scripts/core/size.py
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: success()
         with:
-          name: macos-package-and-performance
-          path: |
-            dist/Qrow-macos.zip
-            performance.txt
+          name: macos-package
+          path: dist/Qrow-macos.zip
           retention-days: 1
           if-no-files-found: error
 
   e2e-backend:
     name: e2e-backend
-    needs: core-macos
+    needs: core-backend
     if: >
       success() &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -161,7 +181,7 @@ jobs:
 
   e2e-macos:
     name: e2e-macos
-    needs: e2e-backend
+    needs: package-macos
     if: >
       success() &&
       (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -173,10 +193,14 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Select Rust toolchain
+        if: github.event_name == 'workflow_dispatch' && !inputs.reuse_macos_package
+        run: rustup show
+      - name: Restore Rust cache
+        if: github.event_name == 'workflow_dispatch' && !inputs.reuse_macos_package
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          shared-key: native
+          shared-key: package
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
@@ -203,8 +227,8 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.reuse_macos_package
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: macos-package-and-performance
-          path: target/macos-package
+          name: macos-package
+          path: target/macos-package/dist
       - name: Run native E2E
         run: sh scripts/e2e/macos.sh
         env:
