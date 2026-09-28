@@ -371,6 +371,11 @@ keeps its rows. After the scenario moves the last tab, the source connection
 has a new blank tab. See [Connections](connections.md) for tab copy and move
 behavior.
 
+The scenario fills the Logs history past its limit with a query, 100 rejected
+statements, and a second query. Rejected statements do not go to the server,
+so the check stays fast. **Copy All Logs** must start with the removal notice
+and must not include the first query.
+
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve
 SQL text. It selects **Keep Editing**, restores write access, and retries the

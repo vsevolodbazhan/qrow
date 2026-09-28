@@ -458,14 +458,34 @@ final class Driver {
         try fill("SQL Editor", sql)
         try press("Run")
     }
+    /// Waits for the status of a completed query. Rows appear before the
+    /// query completes, and completion selects the Results panel.
+    func waitQueryComplete(timeout: Double = 30) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        while !elements().contains(where: { strings($0).contains { $0.hasPrefix("Complete") } }) {
+            try require(clock.now < deadline, "Query did not complete")
+            try require(process.isRunning, "Qrow exited while waiting for the query to complete")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+    }
     func testActivityRetention() throws {
+        let started = clock.now
         try press("Logs Panel")
         try press("Clear Logs History")
-        for index in 0...100 {
-            let value = "retention-\(index)"
-            try query("SELECT '\(value)' AS value")
-            _ = try wait(value, timeout: 30, role: kAXCellRole)
+        // Logs keep 100 activity groups (MAX_EXECUTION_GROUPS in
+        // src/activity.rs). A rejected statement makes a group without a
+        // server request, so only the first and the last query go to Spark.
+        try query("SELECT 'retention-oldest' AS value")
+        _ = try wait("retention-oldest", timeout: 30, role: kAXCellRole)
+        try waitQueryComplete()
+        try fill("SQL Editor", "SELECT 'retention-rejected'; SELECT 2")
+        let run = try wait("Run", role: kAXButtonRole)
+        for _ in 0..<100 {
+            try require(AXUIElementPerformAction(run, kAXPressAction as CFString) == .success, "Run did not accept a press")
         }
+        try query("SELECT 'retention-latest' AS value")
+        _ = try wait("retention-latest", timeout: 30, role: kAXCellRole)
+        try waitQueryComplete()
         try press("Logs Panel")
         let clipboard = NSPasteboard.general
         let saved = (clipboard.pasteboardItems ?? []).map { item in
@@ -485,15 +505,17 @@ final class Driver {
         try press("Copy All Logs")
         let deadline = clock.now.advanced(by: .seconds(5))
         var copied = clipboard.string(forType: .string) ?? ""
-        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-100"))
+        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-latest"))
             && clock.now < deadline {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
             copied = clipboard.string(forType: .string) ?? ""
         }
         try require(
-            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
+            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-latest")
+                && copied.contains("Run one statement at a time"),
             "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
         )
+        try require(!copied.contains("retention-oldest"), "Logs retained the oldest query after the limit")
         try require(
             !copied.contains("reconnect-works"),
             "Logs retained activity from before the retention scenario"
@@ -502,6 +524,7 @@ final class Driver {
         // interaction so the screenshot shows the start of retained history.
         try scrollLogsToTop(app)
         try snapshot("activity-retention")
+        samples.append("activity_retention_seconds=\(started.duration(to: clock.now))")
         print("PASS: Logs records when older activity is removed")
     }
     func selectConnection(_ name: String) throws {
