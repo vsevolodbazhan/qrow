@@ -112,14 +112,36 @@ func setTestWindowFrame(_ app: AXUIElement) throws {
     )
     print("Set the Qrow test window: \(actualPosition) \(actualSize)")
 }
+/// Returns the point to click for an element. Query tabs scroll under the fixed
+/// Toggle Sidebar and New Tab controls of the tab strip. The middle of a partly
+/// hidden tab can then be over one of these controls, so for a tab the point is
+/// the middle of its visible part.
+func clickTarget(_ element: AXUIElement, _ point: CGPoint, _ extent: CGSize) -> CGPoint {
+    var target = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
+    guard attribute(element, kAXRoleAttribute) as? String == kAXRadioButtonRole,
+          let window = attribute(element, kAXWindowAttribute) else { return target }
+    var left = point.x
+    var right = point.x + extent.width
+    for control in descendants(unsafeBitCast(window, to: AXUIElement.self)) {
+        guard attribute(control, kAXRoleAttribute) as? String == kAXButtonRole,
+              let label = strings(control).first, ["Toggle Sidebar", "New Tab"].contains(label),
+              let (controlPoint, controlExtent) = try? elementBounds(control),
+              abs(controlPoint.y + controlExtent.height / 2 - target.y) < extent.height / 2 else { continue }
+        if label == "Toggle Sidebar" {
+            left = max(left, controlPoint.x + controlExtent.width)
+        } else {
+            right = min(right, controlPoint.x)
+        }
+    }
+    if left < right { target.x = (left + right) / 2 }
+    return target
+}
 func click(_ element: AXUIElement) throws {
     // Dialog accessibility nodes appear before their opening animation settles.
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
     print("Click \(strings(element)): \(point) \(extent)")
-    var clickPoint = point
-    clickPoint.x += extent.width / 2
-    clickPoint.y += extent.height / 2
+    let clickPoint = clickTarget(element, point, extent)
     for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
         let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .left)!
         event.setIntegerValueField(.mouseEventClickState, value: 1)
@@ -136,9 +158,7 @@ func clickPoint(_ point: CGPoint) {
 func rightClick(_ element: AXUIElement) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
-    var clickPoint = point
-    clickPoint.x += extent.width / 2
-    clickPoint.y += extent.height / 2
+    let clickPoint = clickTarget(element, point, extent)
     print("Right click \(strings(element)): \(point) \(extent)")
     for eventType in [CGEventType.rightMouseDown, .rightMouseUp] {
         let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .right)!
