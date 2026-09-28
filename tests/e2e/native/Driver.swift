@@ -1703,9 +1703,9 @@ final class Driver {
 
         print("PASS: New conversation tabs use short generated titles, keep names unique, retain defaults on title failure, preserve user tab names, and shimmer while titles generate")
     }
-    /// A conversation starts in a tab with SQL, stays in the list when its
-    /// tab closes, opens in a new tab, moves with its tab to another
-    /// connection, and leaves its tab open when you delete it.
+    /// A conversation starts in a tab with SQL and stays in the list when its
+    /// tab closes. Its next message opens a new tab. The conversation moves
+    /// with its tab and leaves the tab open when you delete it.
     func testAssistantTabBinding() throws {
         try waitInputValue("SQL Editor", "SELECT 5;")
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
@@ -1737,6 +1737,13 @@ final class Driver {
         try click(wait("Alpha · Tab closed", timeout: 10, role: kAXButtonRole))
         try showConversation()
         _ = try wait("Tab SQL: SELECT 5;", timeout: 10)
+        try waitSaved("browsing a closed conversation leaves it detached") { workspace in
+            savedConversations(workspace).first?["tab_id"] is NSNull
+                && savedTabs(workspace).allSatisfy { $0["title"] as? String != "Title: Report the tab" }
+        }
+        try fill("Assistant Message", "Continue the report")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
         var reopened = ""
         let reopenedTitle = "Title: Report the tab"
         try waitSaved("the conversation opens in a new tab under Alpha") { workspace in
@@ -1799,7 +1806,7 @@ final class Driver {
         try waitSaved("the tab menu starts a conversation in this tab") { workspace in
             savedConversations(workspace).first?["tab_id"] as? String == reopened
         }
-        print("PASS: An Assistant conversation starts in a tab with SQL, survives a closed tab, opens in a new tab, moves with its tab, and leaves its tab when deleted. The tab menu starts a conversation only in a tab without one")
+        print("PASS: An Assistant conversation starts in a tab with SQL, stays detached while browsed after its tab closes, opens a new tab on the next message, moves with its tab, and leaves its tab when deleted. The tab menu starts a conversation only in a tab without one")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, the last

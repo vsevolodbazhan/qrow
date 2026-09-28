@@ -224,10 +224,12 @@ Each conversation changes and runs SQL only in its own tab. It can read the
 other tabs. Parallel turns use your Codex plan limits faster.
 
 A tab cannot close while its conversation works or waits for approval. When
-you close the tab of a conversation, the conversation stays in the thread
-list, which shows **Tab closed** for it. Select the conversation to open it in
-a new tab under its last connection. The new tab uses the conversation title
-if one is available. Qrow does not keep the SQL of the closed tab.
+you close the tab, the conversation stays in the thread list. The list shows
+**Tab closed**. Select the conversation to read its messages in the pane.
+The conversation stays without a tab until you send another message. Qrow
+then opens a new tab under the conversation's last connection. Qrow uses the
+conversation title for the new tab if a title is available. Qrow does not
+keep the SQL of the closed tab.
 
 To move a conversation to another connection, right-click its tab and select
 **Move to Connection…**. The next message uses the new connection. You cannot
