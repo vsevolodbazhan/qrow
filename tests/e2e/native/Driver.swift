@@ -1394,10 +1394,10 @@ final class Driver {
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, the last
     /// word of a message with inline code, and the end of bold text lines.
-    func seedAssistantLayoutWorkspace(panelWidth: Double = 536) throws {
+    func seedAssistantLayoutWorkspace(panelWidth: Double = 536, theme: String? = nil) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
-        let settings: [String: Any] = [
+        var settings: [String: Any] = [
             "ui_scale": 1.1,
             "assistant": [
                 "enabled": true,
@@ -1406,6 +1406,7 @@ final class Driver {
                 "panel_width": panelWidth,
             ],
         ]
+        if let theme { settings["theme"] = theme }
         let data = try JSONSerialization.data(withJSONObject: [
             "version": 3, "settings": settings, "profiles": [], "tabs": [], "active_tab": 0,
         ])
@@ -1438,6 +1439,74 @@ final class Driver {
         try waitGone("New Connection", timeout: 5)
         try checkWideTableReply("assistant-wide-table-no-sidebar")
         print("PASS: Assistant messages with inline code show every line, bold text wraps inside the reply, and wide table replies use the transcript width, show the whole table, and scroll")
+    }
+    /// A selection in a user message bubble shows in One Dark, and the selected
+    /// text keeps its color. A selection painted over the glyphs dimmed them,
+    /// and One Dark's earlier selection color matched the bubble.
+    func testAssistantSelection() throws {
+        key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        try fill("Assistant Message", "Count the weekend before last.")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let message = try wait("You: Count the weekend before last.", timeout: 5)
+        let (origin, extent) = try elementBounds(message)
+
+        // The message text covers the capture, so its most frequent color is
+        // the surface behind the text, and its lightest color is the text.
+        func capture(_ name: String) throws -> (surface: NSColor, text: NSColor) {
+            let path = "\(artifacts)/\(name).png"
+            _ = try command(["screencapture", "-x", "-R", "\(Int(origin.x)),\(Int(origin.y)),\(Int(extent.width)),\(Int(extent.height))", path])
+            guard let data = FileManager.default.contents(atPath: path),
+                  let bitmap = NSBitmapImageRep(data: data) else {
+                throw Failure("Could not read the \(name) capture")
+            }
+            var counts: [Int: Int] = [:]
+            var text: NSColor?
+            for y in 0..<bitmap.pixelsHigh {
+                for x in 0..<bitmap.pixelsWide {
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                    let rgb = [color.redComponent, color.greenComponent, color.blueComponent].map { Int(($0 * 255).rounded()) }
+                    counts[rgb[0] << 16 | rgb[1] << 8 | rgb[2], default: 0] += 1
+                    if text.map({ color.redComponent + color.greenComponent + color.blueComponent
+                        > $0.redComponent + $0.greenComponent + $0.blueComponent }) ?? true {
+                        text = color
+                    }
+                }
+            }
+            guard let surface = counts.max(by: { $0.value < $1.value })?.key, let text else {
+                throw Failure("The \(name) capture is empty")
+            }
+            return (NSColor(deviceRed: CGFloat(surface >> 16) / 255,
+                            green: CGFloat(surface >> 8 & 255) / 255,
+                            blue: CGFloat(surface & 255) / 255,
+                            alpha: 1), text)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+
+        let before = try capture("assistant-selection-before")
+        // A triple click selects the line of the message.
+        let center = CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2)
+        for clickState in 1...3 {
+            for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
+                let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: center, mouseButton: .left)!
+                event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+                event.post(tap: .cghidEventTap)
+            }
+        }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+        let after = try capture("assistant-selection-after")
+        try snapshot("assistant-selected-message")
+        try require(distance(after.surface, before.surface) > 0.06,
+                    "The selection does not show on the user message bubble: \(before.surface) and \(after.surface)")
+        try require(distance(after.text, before.text) < 0.05,
+                    "The selection changes the color of the selected text from \(before.text) to \(after.text)")
+        print("PASS: A selection in a user message shows in One Dark and keeps the text color")
     }
     /// At this width the message fits on one line. If the text breaks before
     /// the last word, the bubble keeps its one-line height and hides the
@@ -2210,6 +2279,10 @@ do {
                 try driver.seedAssistantLayoutWorkspace()
                 try driver.start()
                 try driver.testAssistantLayout()
+            } else if CommandLine.arguments.contains("--assistant-selection-only") {
+                try driver.seedAssistantLayoutWorkspace(theme: "One Dark")
+                try driver.start()
+                try driver.testAssistantSelection()
             } else if CommandLine.arguments.contains("--editor-highlight-only") {
                 try driver.start()
                 try driver.testEditorHighlight()
@@ -2233,6 +2306,7 @@ do {
         }
         if CommandLine.arguments.contains("--editor-highlight-only")
             || CommandLine.arguments.contains("--assistant-layout-only")
+            || CommandLine.arguments.contains("--assistant-selection-only")
             || CommandLine.arguments.contains("--assistant-append-only")
             || CommandLine.arguments.contains("--assistant-titles-only")
             || CommandLine.arguments.contains("--assistant-statement-only")

@@ -16,6 +16,9 @@ Qrow changes these files:
   its own face. Before, the wrapper measured it in the regular body face, which
   is narrower. A line with bold text then became wider than the column, and
   the column clipped its end.
+- `src/text/inline.rs`: Markdown text paints its selection under the glyphs,
+  as the input does. Before, the selection was painted over the glyphs and
+  dimmed the selected text. `src/text/text_view.rs` adds the regression test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

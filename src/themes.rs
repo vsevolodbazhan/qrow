@@ -138,4 +138,38 @@ mod tests {
         assert_eq!(themes.themes[0].name.as_ref(), ONE_DARK_THEME);
         assert!(themes.themes[0].mode.is_dark());
     }
+
+    #[test]
+    fn text_selection_shows_on_user_messages() {
+        use gpui_kit::component::Colorize as _;
+        use std::rc::Rc;
+
+        for source in THEME_SET_SOURCES
+            .iter()
+            .copied()
+            .chain(std::iter::once(ONE_DARK_THEME_SET))
+        {
+            let themes: ThemeSet = serde_json::from_str(source).unwrap();
+            for config in themes.themes {
+                let name = config.name.clone();
+                let mut theme = Theme::default();
+                theme.apply_config(&Rc::new(config));
+                let colors = theme.semantic_tokens().colors;
+                // GPUI Kit's tinted bubble, which the assistant uses for the user's messages.
+                let bubble = colors
+                    .primary
+                    .mix_oklab(colors.background, if theme.is_dark() { 0.24 } else { 0.12 });
+                let selected = bubble.blend(colors.selection).to_rgb();
+                let bubble = bubble.to_rgb();
+                let distance = ((selected.r - bubble.r).powi(2)
+                    + (selected.g - bubble.g).powi(2)
+                    + (selected.b - bubble.b).powi(2))
+                .sqrt();
+                assert!(
+                    distance > 0.05,
+                    "{name}: selection is {distance:.3} from the user message bubble"
+                );
+            }
+        }
+    }
 }

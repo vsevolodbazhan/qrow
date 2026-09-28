@@ -2235,6 +2235,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn selection_paints_under_the_text() {
+        use crate::text::inline::test_fonts::WideMonoTextSystem;
+        use gpui::TestApp;
+
+        const TEXT_BACKGROUND: u32 = 0x20f0b0;
+        const SELECTION: u32 = 0x2563eb;
+
+        struct SelectionRoot {
+            text_view: Entity<TextViewState>,
+        }
+
+        impl Render for SelectionRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .w(px(320.))
+                    .text_bg(gpui::rgb(TEXT_BACKGROUND))
+                    .child(
+                        TextView::new(&self.text_view).style(
+                            TextViewStyle::default().with_selection(gpui::rgb(SELECTION).into()),
+                        ),
+                    )
+            }
+        }
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        app.update(crate::init);
+        let mut window = app.open_window(|_, cx| SelectionRoot {
+            text_view: cx.new(|cx| TextViewState::markdown("Selected text", cx)),
+        });
+        window.draw();
+        app.run_until_parked();
+        window.update(|root, _, cx| root.text_view.update(cx, |state, cx| state.select_all(cx)));
+        window.draw();
+
+        let (selection, text) = window.update(|_, window, _| {
+            let quads = window.painted_quads();
+            let orders = |color: u32| {
+                let background: gpui::Background = gpui::rgb(color).into();
+                quads
+                    .iter()
+                    .filter(|quad| quad.background == background)
+                    .map(|quad| quad.order)
+                    .collect::<Vec<_>>()
+            };
+            (orders(SELECTION), orders(TEXT_BACKGROUND))
+        });
+
+        assert!(!selection.is_empty(), "select all must paint a selection");
+        assert!(
+            !text.is_empty(),
+            "the inherited text background must make actual text paint observable"
+        );
+        assert!(
+            selection.iter().max() < text.iter().min(),
+            "a selection painted over the glyphs dims them; \
+             selection orders={selection:?}, text orders={text:?}"
+        );
+    }
+
     #[gpui::test]
     fn markdown_link_opens_url_without_handler(cx: &mut TestAppContext) {
         cx.update(crate::init);

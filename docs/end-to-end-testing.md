@@ -131,6 +131,18 @@ drawn at another. The check makes sure that:
 
 The table checks run with the Connections sidebar shown and hidden.
 
+To check text selection in assistant messages, use the same package steps with
+a new, empty workspace directory and run:
+
+```sh
+target/e2e-tools/native-driver --assistant-selection-only
+```
+
+The driver writes the same workspace with the One Dark theme. It selects the
+line of a user message with a triple click. The check makes sure that the
+selection changes the color of the message bubble and that the text keeps its
+color.
+
 To check that the assistant keeps earlier SQL, use the package steps in the
 assistant font check above. Use a new, empty workspace directory. Replace the
 last driver command with:

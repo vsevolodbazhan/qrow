@@ -818,12 +818,22 @@ impl Element for Inline {
             return;
         }
         let text_layout = self.styled_text.layout().clone();
-        self.styled_text
-            .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
 
         // layout selections
         let (is_selectable, is_selection, selection) =
             self.layout_selections(&text_layout, &bounds, window, cx);
+
+        // Paint the selection before the text, as the input does. A selection
+        // painted over the glyphs dims them toward its color.
+        if let Some(selection) = &selection {
+            let color = GlobalState::global(cx)
+                .text_view_state()
+                .map(|state| state.read(cx).text_view_style.selection())
+                .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
+            Self::paint_selection(selection, &text_layout, &bounds, window, color);
+        }
+        self.styled_text
+            .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
 
         let Ok(mut state) = self.state.lock() else {
             return;
@@ -852,19 +862,13 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
 
-        if let Some(selection) = &state.selection {
-            let color = GlobalState::global(cx)
-                .text_view_state()
-                .map(|state| state.read(cx).text_view_style.selection())
-                .unwrap_or_else(|| crate::Theme::global(cx).tokens.colors.selection);
-            Self::paint_selection(selection, &text_layout, &bounds, window, color);
-            if let Some((start, end)) = Self::selection_edges(selection, &text_layout)
-                && let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned()
-            {
-                text_view_state.update(cx, |state, _| {
-                    state.selection_adapter.register_selection_edges(start, end);
-                });
-            }
+        if let Some(selection) = &state.selection
+            && let Some((start, end)) = Self::selection_edges(selection, &text_layout)
+            && let Some(text_view_state) = GlobalState::global(cx).text_view_state().cloned()
+        {
+            text_view_state.update(cx, |state, _| {
+                state.selection_adapter.register_selection_edges(start, end);
+            });
         }
 
         if is_selectable {

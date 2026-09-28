@@ -63,7 +63,7 @@
     "danger.foreground": "#1e2024",
     "primary.active.background": "#528bcc",
     "primary.hover.background": "#78baf2",
-    "selection.background": "#354157",
+    "selection.background": "#1d4ed8",
     "list.active.background": "#354157",
     "table.active.background": "#35415700",
     "table.even.background": "#23262b",
