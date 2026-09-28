@@ -32,10 +32,12 @@ zeroize = "1"
 security-framework = "3"
 
 [dev-dependencies]
-# Headless UI integration tests of the real Qrow window. Keep the version and
-# source equal to the normal dependency.
-gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
 proptest = "=1.11.0"
+
+# Headless UI integration tests of the real Qrow window. The UI builds only on
+# macOS; keep the version and source equal to the normal dependency.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
 
 [[test]]
 name = "ui"
