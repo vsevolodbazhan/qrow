@@ -88,17 +88,18 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIsNotNone(match, f"Missing workflow job: {name}")
         return match.group("body")
 
-    def test_unified_workflow_has_one_serial_chain(self):
+    def test_unified_workflow_jobs_wait_only_for_their_inputs(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        chain = [
+        graph = [
             ("core-dependencies", None),
             ("core-scripts", "core-dependencies"),
             ("core-backend", "core-scripts"),
             ("core-macos", "core-backend"),
-            ("e2e-backend", "core-macos"),
-            ("e2e-macos", "e2e-backend"),
+            ("e2e-backend", "core-backend"),
+            # Backend E2E runs beside core-macos and gates the native UI suite.
+            ("e2e-macos", "[core-macos, e2e-backend]"),
         ]
-        for job, dependency in chain:
+        for job, dependency in graph:
             with self.subTest(job=job):
                 body = self.workflow_job(job)
                 if dependency:
@@ -107,6 +108,16 @@ class AcceptanceTests(unittest.TestCase):
                     self.assertNotIn("needs:", body)
                 self.assertIn("ref: ${{ github.sha }}", body)
         self.assertNotIn("statuses:", workflow)
+
+    def test_macos_package_is_built_once_and_reused_by_native_e2e(self):
+        package = self.workflow_job("core-macos")
+        native = self.workflow_job("e2e-macos")
+        self.assertIn("sh scripts/package/macos.sh", package)
+        self.assertIn("name: macos-package-and-performance\n", package)
+        self.assertIn("name: macos-package-and-performance\n", native)
+        # The reused package needs no Rust toolchain or compiled dependency cache.
+        rust_steps = re.findall(r"- name: (?:Select Rust toolchain|Restore Rust cache)\n\s+if: (.+)", native)
+        self.assertEqual(rust_steps, ["github.event_name == 'workflow_dispatch' && !inputs.reuse_macos_package"] * 2)
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
@@ -126,24 +137,27 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(workflow.count("retention-days: 1"), 4)
         self.assertNotIn("retention-days: 14", workflow)
 
-    def test_native_e2e_cache_is_keyed_by_manifest(self):
-        workflow = (ROOT / ".github/workflows/test.yml").read_text()
-        self.assertIn("actions/cache/restore@", workflow)
-        self.assertIn("actions/cache/save@", workflow)
-        self.assertIn("runner.arch", workflow)
-        self.assertIn("hashFiles('tests/e2e/native-downloads.json')", workflow)
+    def test_native_e2e_downloads_come_from_the_mirror_without_an_actions_cache(self):
+        # The mirror downloads the archives faster than an Actions cache restores them.
+        for path, name in ((".github/workflows/test.yml", "e2e-macos"), (".github/workflows/release.yml", "test-e2e-macos")):
+            with self.subTest(workflow=path):
+                job = self.workflow_job(name, path)
+                self.assertIn("timeout-minutes: 150", job)
+                self.assertNotIn("actions/cache", job)
+                self.assertNotIn("e2e-downloads", job)
 
     def test_release_workflow_runs_e2e_before_packaging(self):
-        workflow = (ROOT / ".github/workflows/release.yml").read_text()
         backend = self.workflow_job("test-e2e-backend", ".github/workflows/release.yml")
         native = self.workflow_job("test-e2e-macos", ".github/workflows/release.yml")
         package = self.workflow_job("package", ".github/workflows/release.yml")
-        self.assertIn("test-core-macos", backend)
+        # The same waterfall as the test workflow: backend E2E runs beside core-macos.
+        self.assertIn("- test-core-backend", backend)
+        self.assertNotIn("- test-core-macos", backend)
         self.assertIn("sh scripts/check.sh e2e/backend", backend)
-        self.assertIn("test-e2e-backend", native)
+        self.assertIn("- test-core-macos", native)
+        self.assertIn("- test-e2e-backend", native)
         self.assertIn("sh scripts/check.sh e2e/macos", native)
         self.assertIn("test-e2e-macos", package)
-        self.assertIn("actions/cache/restore@", workflow)
 
     def test_native_e2e_package_mode_validates_bundle(self):
         driver = (ROOT / "scripts/e2e/driver.sh").read_text()

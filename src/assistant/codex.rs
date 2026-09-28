@@ -1471,13 +1471,10 @@ impl From<CodexModel> for Model {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::{fs, io::Cursor, os::unix::fs::PermissionsExt};
+    use std::{fs, io::Cursor};
 
     fn write_executable(path: &Path, script: &str) {
-        fs::write(path, script).unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(path, permissions).unwrap();
+        crate::assistant::write_test_executable(path, script);
     }
 
     #[test]
@@ -1688,7 +1685,10 @@ done
         harness.request_timeout = Duration::from_millis(100);
 
         let first_error = harness.snapshot().unwrap_err();
-        assert!(first_error.to_string().contains("did not respond"));
+        assert!(
+            first_error.to_string().contains("did not respond"),
+            "{first_error}"
+        );
         harness.request_timeout = Duration::from_secs(2);
         let snapshot = harness.snapshot().unwrap();
 
@@ -1975,7 +1975,7 @@ done
 
         let error = harness.snapshot().unwrap_err();
 
-        assert!(error.to_string().contains("did not respond"));
+        assert!(error.to_string().contains("did not respond"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
@@ -2048,7 +2048,7 @@ sleep 30
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("did not respond"));
+        assert!(error.to_string().contains("did not respond"), "{error}");
         assert!(error.to_string().contains("diagnostic output"));
         assert!(!error.to_string().contains("sign in required"));
         assert!(started.elapsed() < REQUEST_TIMEOUT.saturating_mul(3));
@@ -2085,7 +2085,7 @@ while :; do sleep 1; done
             Ok(_) => panic!("a silent app-server must time out"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains("did not respond"));
+        assert!(error.to_string().contains("did not respond"), "{error}");
         let descendant = fs::read_to_string(directory.path().join("descendant.pid")).unwrap();
         let output = Command::new("/bin/ps")
             .args(["-o", "stat=", "-p", descendant.trim()])

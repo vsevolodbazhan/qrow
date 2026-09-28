@@ -118,24 +118,29 @@ manual dispatches, and pull requests with the
 `converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
 draft pull request, including a `converted_to_draft` event, starts no jobs.
 
-The workflow runs one job at a time in this order:
+Each job waits for the less expensive checks that can predict its failure.
+`e2e-backend` does not use the result of `core-macos`, so the two run at the
+same time:
 
 ```text
-core-dependencies -> core-scripts -> core-backend -> core-macos ->
-e2e-backend -> e2e-macos
+core-dependencies -> core-scripts -> core-backend -> core-macos  -> e2e-macos
+                                                  -> e2e-backend -^
 ```
 
-A failed job skips all jobs that follow it. Every job checks out the same pull
+`e2e-macos` waits for `core-macos` and `e2e-backend`. A failed job skips all
+jobs that wait for it, directly or through another job. Every job checks out the same pull
 request merge result. Core jobs run for fork pull requests. E2E jobs run for
 pushes, manual dispatches, and pull requests from this repository. They skip
 fork pull requests because they execute repository code in Docker and through
 macOS accessibility APIs. A newer run cancels an older run for the same pull
 request or branch, including manual runs.
 
-The `e2e-macos` job reuses the package from `core-macos` by default. A manual
-dispatch has the `reuse_macos_package` input. Set it to `false` to build the
-package in the E2E job. Native fixture archives use a checksum-keyed Actions
-cache. A failed download can save progress for a later run.
+The `core-macos` job also builds the release application package and checks its
+size. The `e2e-macos` job reuses this package by default, and then does not set
+up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
+`false` to build the package in the E2E job. Native fixture archives download
+from a mirror in each run. For the download sources, see
+[End-to-end testing](end-to-end-testing.md#how-the-suite-works).
 
 The workflow retains `core-coverage`, `macos-package-and-performance`,
 `backend-evidence`, and `macos-evidence` for one day. Configure these individual
@@ -168,11 +173,12 @@ the GitHub Release asset. The workflow uses the latest non-draft release on the
 selected channel as the changelog start tag. If the channel has no previous
 release, it writes the target commit history as the changelog.
 
-The jobs run in this order:
+The jobs run in this order. As in the test workflow, `test-e2e-backend` runs at
+the same time as `test-core-macos`, and `test-e2e-macos` waits for both:
 
 ```text
-resolve-target -> test-core-backend -> test-core-macos -> test-e2e-backend ->
-test-e2e-macos -> package -> publish
+resolve-target -> test-core-backend -> test-core-macos  -> test-e2e-macos -> package -> publish
+                                    -> test-e2e-backend -^
 ```
 
 The publish job creates the release tag before it creates the GitHub Release.

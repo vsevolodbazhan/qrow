@@ -303,6 +303,8 @@ pub struct Qrow {
     tabs: Vec<Tab>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
+    /// Scrolls the query tab strip to show the active tab.
+    tab_scroll: ScrollHandle,
     form: Option<ProfileEditor>,
     tab_form: Option<TabEditor>,
     menu: Option<ContextMenu>,
@@ -437,6 +439,7 @@ impl Qrow {
             tabs: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
+            tab_scroll: ScrollHandle::new(),
             form: None,
             tab_form: None,
             menu: None,
@@ -1140,6 +1143,15 @@ impl Qrow {
         self.active = index;
         if let Some(profile) = self.tabs[index].saved.profile {
             self.active_tabs.insert(profile, self.tabs[index].saved.id);
+        }
+        // A new or selected tab can be outside the visible part of a full tab
+        // strip. The scroll applies at the next layout, after the tab renders.
+        if let Some(position) = self
+            .visible_tab_indices()
+            .iter()
+            .position(|visible| *visible == index)
+        {
+            self.tab_scroll.scroll_to_item(position);
         }
         self.tabs[index].panel.output_visible();
         self.tabs[index]

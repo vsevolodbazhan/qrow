@@ -64,45 +64,35 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
     AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &extent)
     return (point, extent)
 }
-/// Shrinks the Qrow window to fit the main display. With `grow`, the window
-/// also fills the main display.
-func fitWindowToMainDisplay(_ app: AXUIElement, grow: Bool = false) throws {
+/// Every run uses the Qrow window size of a hosted macOS runner, whose main
+/// display is 1024 by 768 points. Local runs then show the same layout, menu
+/// placement, and pane widths as CI runs.
+let testWindowSize = CGSize(width: 992, height: 652)
+/// Sets the Qrow window to `testWindowSize` near the top of the main display.
+func setTestWindowFrame(_ app: AXUIElement) throws {
     _ = NSApplication.shared
     guard let window = (attribute(app, kAXWindowsAttribute) as? [AXUIElement])?.first,
           let screen = NSScreen.screens.first else {
         throw Failure("Qrow window or main display is unavailable")
     }
     let visible = screen.visibleFrame
-    let minimum = CGSize(width: 850, height: 560)
-    let width = min(visible.width - 32, CGFloat(env["QROW_E2E_MAX_WINDOW_WIDTH"].flatMap(Double.init) ?? .infinity))
-    let height = visible.height - 32
     try require(
-        width >= minimum.width && height >= minimum.height,
-        "Main display is too small for the minimum Qrow window"
+        visible.width - 32 >= testWindowSize.width && visible.height - 32 >= testWindowSize.height,
+        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window"
     )
-
-    let (position, extent) = try elementBounds(window)
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)
-    let currentFrame = CGRect(origin: position, size: extent)
-    guard grow || !safeFrame.contains(currentFrame) || extent.width > width else { return }
 
-    var fittedSize = grow
-        ? CGSize(width: width, height: height)
-        : CGSize(width: min(extent.width, width), height: min(extent.height, height))
-    guard let sizeValue = AXValueCreate(.cgSize, &fittedSize) else {
+    var size = testWindowSize
+    guard let sizeValue = AXValueCreate(.cgSize, &size) else {
         throw Failure("Could not create the Qrow window size")
     }
     try require(
         AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success,
-        "Could not resize the Qrow window for the main display"
+        "Could not resize the Qrow window for the test"
     )
-
-    var fittedPosition = CGPoint(
-        x: visible.minX + (visible.width - fittedSize.width) / 2,
-        y: top + 16
-    )
-    guard let positionValue = AXValueCreate(.cgPoint, &fittedPosition) else {
+    var position = CGPoint(x: visible.minX + (visible.width - size.width) / 2, y: top + 16)
+    guard let positionValue = AXValueCreate(.cgPoint, &position) else {
         throw Failure("Could not create the Qrow window position")
     }
     try require(
@@ -112,21 +102,46 @@ func fitWindowToMainDisplay(_ app: AXUIElement, grow: Bool = false) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
 
     let (actualPosition, actualSize) = try elementBounds(window)
-    let actualFrame = CGRect(origin: actualPosition, size: actualSize)
     try require(
-        safeFrame.insetBy(dx: -1, dy: -1).contains(actualFrame),
+        abs(actualSize.width - size.width) <= 1 && abs(actualSize.height - size.height) <= 1,
+        "Qrow window is \(actualSize), not the \(size) test window"
+    )
+    try require(
+        safeFrame.insetBy(dx: -1, dy: -1).contains(CGRect(origin: actualPosition, size: actualSize)),
         "Qrow window is outside the main display after repositioning"
     )
-    print("Fitted Qrow window to the main display: \(actualPosition) \(actualSize)")
+    print("Set the Qrow test window: \(actualPosition) \(actualSize)")
+}
+/// Returns the point to click for an element. Query tabs scroll under the fixed
+/// Toggle Sidebar and New Tab controls of the tab strip. The middle of a partly
+/// hidden tab can then be over one of these controls, so for a tab the point is
+/// the middle of its visible part.
+func clickTarget(_ element: AXUIElement, _ point: CGPoint, _ extent: CGSize) -> CGPoint {
+    var target = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
+    guard attribute(element, kAXRoleAttribute) as? String == kAXRadioButtonRole,
+          let window = attribute(element, kAXWindowAttribute) else { return target }
+    var left = point.x
+    var right = point.x + extent.width
+    for control in descendants(unsafeBitCast(window, to: AXUIElement.self)) {
+        guard attribute(control, kAXRoleAttribute) as? String == kAXButtonRole,
+              let label = strings(control).first, ["Toggle Sidebar", "New Tab"].contains(label),
+              let (controlPoint, controlExtent) = try? elementBounds(control),
+              abs(controlPoint.y + controlExtent.height / 2 - target.y) < extent.height / 2 else { continue }
+        if label == "Toggle Sidebar" {
+            left = max(left, controlPoint.x + controlExtent.width)
+        } else {
+            right = min(right, controlPoint.x)
+        }
+    }
+    if left < right { target.x = (left + right) / 2 }
+    return target
 }
 func click(_ element: AXUIElement) throws {
     // Dialog accessibility nodes appear before their opening animation settles.
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
     print("Click \(strings(element)): \(point) \(extent)")
-    var clickPoint = point
-    clickPoint.x += extent.width / 2
-    clickPoint.y += extent.height / 2
+    let clickPoint = clickTarget(element, point, extent)
     for eventType in [CGEventType.leftMouseDown, .leftMouseUp] {
         let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .left)!
         event.setIntegerValueField(.mouseEventClickState, value: 1)
@@ -143,9 +158,7 @@ func clickPoint(_ point: CGPoint) {
 func rightClick(_ element: AXUIElement) throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
     let (point, extent) = try elementBounds(element)
-    var clickPoint = point
-    clickPoint.x += extent.width / 2
-    clickPoint.y += extent.height / 2
+    let clickPoint = clickTarget(element, point, extent)
     print("Right click \(strings(element)): \(point) \(extent)")
     for eventType in [CGEventType.rightMouseDown, .rightMouseUp] {
         let event = CGEvent(mouseEventSource: nil, mouseType: eventType, mouseCursorPosition: clickPoint, mouseButton: .right)!
@@ -310,6 +323,16 @@ final class Driver {
             try click(element)
         }
     }
+    /// Moves keyboard focus into the open submenu of `parent`. A submenu that
+    /// does not fit on the right opens on the left. Then Left enters it, as in
+    /// native macOS menus, and Right closes it.
+    func enterSubmenu(_ parent: String, showing item: String) throws {
+        let child = try wait(item, role: kAXMenuItemRole)
+        let (childPosition, _) = try elementBounds(child)
+        let (parentPosition, _) = try elementBounds(try wait(parent))
+        key(childPosition.x < parentPosition.x ? 123 : 124)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+    }
     func pressMenuItem(_ label: String) throws {
         // Menu items are transient. Use their accessibility action instead of
         // a screen coordinate that can be stale on scaled or multi-display
@@ -458,14 +481,34 @@ final class Driver {
         try fill("SQL Editor", sql)
         try press("Run")
     }
+    /// Waits for the status of a completed query. Rows appear before the
+    /// query completes, and completion selects the Results panel.
+    func waitQueryComplete(timeout: Double = 30) throws {
+        let deadline = clock.now.advanced(by: .seconds(timeout))
+        while !elements().contains(where: { strings($0).contains { $0.hasPrefix("Complete") } }) {
+            try require(clock.now < deadline, "Query did not complete")
+            try require(process.isRunning, "Qrow exited while waiting for the query to complete")
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
+        }
+    }
     func testActivityRetention() throws {
+        let started = clock.now
         try press("Logs Panel")
         try press("Clear Logs History")
-        for index in 0...100 {
-            let value = "retention-\(index)"
-            try query("SELECT '\(value)' AS value")
-            _ = try wait(value, timeout: 30, role: kAXCellRole)
+        // Logs keep 100 activity groups (MAX_EXECUTION_GROUPS in
+        // src/activity.rs). A rejected statement makes a group without a
+        // server request, so only the first and the last query go to Spark.
+        try query("SELECT 'retention-oldest' AS value")
+        _ = try wait("retention-oldest", timeout: 30, role: kAXCellRole)
+        try waitQueryComplete()
+        try fill("SQL Editor", "SELECT 'retention-rejected'; SELECT 2")
+        let run = try wait("Run", role: kAXButtonRole)
+        for _ in 0..<100 {
+            try require(AXUIElementPerformAction(run, kAXPressAction as CFString) == .success, "Run did not accept a press")
         }
+        try query("SELECT 'retention-latest' AS value")
+        _ = try wait("retention-latest", timeout: 30, role: kAXCellRole)
+        try waitQueryComplete()
         try press("Logs Panel")
         let clipboard = NSPasteboard.general
         let saved = (clipboard.pasteboardItems ?? []).map { item in
@@ -485,15 +528,17 @@ final class Driver {
         try press("Copy All Logs")
         let deadline = clock.now.advanced(by: .seconds(5))
         var copied = clipboard.string(forType: .string) ?? ""
-        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-100"))
+        while (!copied.hasPrefix("Older activity was removed\n") || !copied.contains("retention-latest"))
             && clock.now < deadline {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
             copied = clipboard.string(forType: .string) ?? ""
         }
         try require(
-            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-100"),
+            copied.hasPrefix("Older activity was removed\n") && copied.contains("retention-latest")
+                && copied.contains("Run one statement at a time"),
             "Copy All did not put the retention boundary before the retained entries: \(copied.prefix(120))"
         )
+        try require(!copied.contains("retention-oldest"), "Logs retained the oldest query after the limit")
         try require(
             !copied.contains("reconnect-works"),
             "Logs retained activity from before the retention scenario"
@@ -502,6 +547,7 @@ final class Driver {
         // interaction so the screenshot shows the start of retained history.
         try scrollLogsToTop(app)
         try snapshot("activity-retention")
+        samples.append("activity_retention_seconds=\(started.duration(to: clock.now))")
         print("PASS: Logs records when older activity is removed")
     }
     func selectConnection(_ name: String) throws {
@@ -554,7 +600,7 @@ final class Driver {
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
         _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
-        try fitWindowToMainDisplay(app)
+        try setTestWindowFrame(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             if let sample = try? command(["ps", "-o", "rss=,%cpu=", "-p", "\(self.process.processIdentifier)"]) {
@@ -1054,15 +1100,32 @@ final class Driver {
         try snapshot("assistant-tool-expanded")
         try activate(try waitExact("Tool call: Append query", timeout: 5))
         try waitGone("Arguments:", timeout: 5)
-        let editor = try waitInput("SQL Editor")
-        let (editorPosition, _) = try elementBounds(editor)
-        clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
-        try require(
-            AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
-            "Could not focus SQL Editor for Undo",
-        )
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-        key(0) // A normal user edit must not merge with the assistant edit.
+        // A normal user edit must not merge with the assistant edit. The
+        // editor can take focus after the typed key arrives, so type again
+        // until the key is in the editor. Otherwise Undo goes to another field.
+        var typed = false
+        for _ in 0..<3 where !typed {
+            let editor = try waitInput("SQL Editor")
+            let (editorPosition, _) = try elementBounds(editor)
+            clickPoint(CGPoint(x: editorPosition.x + 80, y: editorPosition.y + 20))
+            try require(
+                AXUIElementSetAttributeValue(editor, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+                "Could not focus SQL Editor for Undo",
+            )
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+            key(0)
+            let typedDeadline = clock.now.advanced(by: .seconds(2))
+            repeat {
+                if let input = accessibleInput("SQL Editor"),
+                   let value = attribute(input, kAXValueAttribute) as? String, value != "SELECT 1" {
+                    try require(value.filter { $0 == "a" }.count == 1, "SQL Editor received more than one typed key: \(value)")
+                    typed = true
+                    break
+                }
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            } while clock.now < typedDeadline
+        }
+        try require(typed, "SQL Editor did not receive the typed key before Undo")
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         key(6, flags: .maskCommand)
         try waitInputValue("SQL Editor", "SELECT 1")
@@ -1406,13 +1469,14 @@ final class Driver {
     /// A wide pane keeps a reopened thread list open when you select a
     /// conversation in it.
     func testAssistantThreadList() throws {
-        try fitWindowToMainDisplay(app, grow: true)
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
         key(11, flags: .maskCommand) // Cmd+B hides the Connections sidebar.
         try waitGone("New Connection")
-        _ = try wait("Search Conversations")
-        try require(find("Back to Conversation") == nil, "The assistant pane is narrow. Use a larger main display")
+        guard (try? wait("Search Conversations", timeout: 10)) != nil, find("Back to Conversation") == nil else {
+            try require(process.isRunning, "Qrow exited while waiting for Search Conversations")
+            throw Failure("The assistant pane is narrow. Use a larger main display")
+        }
         for (index, message) in ["Count sandbox schemas now", "Count sandbox schemas again"].enumerated() {
             if index > 0 { try press("New Conversation") }
             try fill("Assistant Message", message)
@@ -1823,8 +1887,7 @@ final class Driver {
         try contextMenu(reopenedTitle, exact: true)
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
-        key(124)
-        _ = try wait("Beta", role: kAXMenuItemRole)
+        try enterSubmenu("Move to Connection…", showing: "Beta")
         key(36)
         try waitGone("Move to Connection…")
         try waitSaved("the conversation moves with its tab") { workspace in
@@ -1874,11 +1937,11 @@ final class Driver {
     /// Writes a new synthetic workspace with the UI scale and pane width at
     /// which the transcript cut off messages: a wide table reply, the last
     /// word of a message with inline code, and the end of bold text lines.
-    func seedAssistantLayoutWorkspace(panelWidth: Double = 536, theme: String? = nil) throws {
+    func seedAssistantLayoutWorkspace(panelWidth: Double = 536, uiScale: Double = 1.1, theme: String? = nil) throws {
         let workspace = URL(fileURLWithPath: env["QROW_DATA_DIR"]!).appendingPathComponent("workspace.json")
         try require(!FileManager.default.fileExists(atPath: workspace.path), "The layout check needs an empty workspace directory")
         var settings: [String: Any] = [
-            "ui_scale": 1.1,
+            "ui_scale": uiScale,
             "assistant": [
                 "enabled": true,
                 "data_sharing_notice_version": 1,
@@ -2327,10 +2390,7 @@ final class Driver {
         try contextMenu("Query 1", exact: true)
         _ = try wait("Copy to Connection…")
         for _ in 0..<3 { key(125) }
-        // The context menu has room to open this submenu to the right in the
-        // native test window.
-        key(124)
-        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        try enterSubmenu("Copy to Connection…", showing: "Qrow E2E copy")
         key(36)
         try waitGone("Copy to Connection…")
         try selectConnection("Qrow E2E copy")
@@ -2352,8 +2412,7 @@ final class Driver {
         try contextMenu("Query 1", exact: true)
         _ = try wait("Move to Connection…")
         for _ in 0..<4 { key(125) }
-        key(124)
-        _ = try wait("Qrow E2E copy", role: kAXMenuItemRole)
+        try enterSubmenu("Move to Connection…", showing: "Qrow E2E copy")
         key(36)
         try waitGone("Move to Connection…")
         try selectConnection("Qrow E2E copy")
@@ -2769,7 +2828,8 @@ do {
                 try driver.start()
                 try driver.testAssistantTabBinding()
             } else if CommandLine.arguments.contains("--assistant-thread-list-only") {
-                try driver.seedAssistantLayoutWorkspace(panelWidth: 900)
+                // A 1024-point hosted runner display fits a wide pane only below 1.0 scale.
+                try driver.seedAssistantLayoutWorkspace(panelWidth: 900, uiScale: 0.9)
                 try driver.start()
                 try driver.testAssistantThreadList()
             } else if CommandLine.arguments.contains("--assistant-sign-in-only") {

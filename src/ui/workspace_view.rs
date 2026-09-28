@@ -242,6 +242,7 @@ impl Qrow {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
         TabBar::new("query-tabs")
+            .track_scroll(&self.tab_scroll)
             .selected_index(
                 visible
                     .iter()

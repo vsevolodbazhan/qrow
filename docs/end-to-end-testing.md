@@ -251,8 +251,9 @@ target/e2e-tools/native-driver --assistant-thread-list-only
 ```
 
 The driver starts two conversations, closes and opens the thread list, and
-selects a conversation. The check confirms that the list stays open. This check
-needs a main display that fits a wide assistant pane.
+selects a conversation. The check confirms that the list stays open. It uses a
+90% interface scale, so the test window fits the wide assistant pane. If the
+pane is narrow, the check stops after 10 seconds.
 
 To check the assistant sign-in screen, use the same package steps and a new,
 empty workspace directory. Run:
@@ -318,20 +319,29 @@ including Spark engines and executors, after the run.
 
 [Docker fixture sources](../tests/e2e/fixture/) pin base images by digest.
 [Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
-sizes, and SHA-512 checksums. Verified native downloads are cached under
-`target/e2e-downloads` between local runs. The first run after a dependency
-change still downloads from the public archive service, which can be slow. CI
-uses a checksum-keyed Actions cache for this directory and also preserves
-incomplete download progress for a later run. Each native archive transfer has
-a 2-hour limit. The macOS CI job allows 150 minutes so a slow first download
-still leaves time to start the fixture and run the native checks.
+sizes, SHA-512 checksums, and an ordered list of sources. The Apache archives
+come first from the
+[Qrow E2E fixtures mirror](https://github.com/vsevolodbazhan/qrow-e2e-fixtures),
+because the public Apache archive service is slow. If a source fails, or stays
+below 256 KiB/s for 60 seconds, the download continues from the next source.
+The last source has no speed limit. To change an archive version, add the new
+archive to the mirror first. The mirror README gives the procedure.
+
+Verified native downloads are cached under `target/e2e-downloads` between local
+runs. CI downloads the archives in each run. It does not use an Actions cache,
+because the mirror is faster than a cache restore. Each native archive transfer
+has a 2-hour limit. The macOS CI jobs allow 150 minutes,
+so a slow download from the last source still leaves time to start the fixture
+and run the native checks.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
 and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
-The driver resizes and centers the Qrow window on the main display if the window
-does not fit. The display must support the app's minimum window size.
+The driver sets the Qrow window to 992 by 652 points, the window size on a
+hosted macOS runner, and centers it near the top of the main display. Local and
+CI runs then show the same layout, including the side on which a submenu opens.
+The main display must fit this window with a 16-point margin on each side.
 
 The driver records Qrow process memory and CPU samples. Its launch measurement
 ends when the New Connection control becomes accessible. This does not measure
@@ -371,6 +381,11 @@ keeps its rows. After the scenario moves the last tab, the source connection
 has a new blank tab. See [Connections](connections.md) for tab copy and move
 behavior.
 
+The scenario fills the Logs history past its limit with a query, 100 rejected
+statements, and a second query. Rejected statements do not go to the server,
+so the check stays fast. **Copy All Logs** must start with the removal notice
+and must not include the first query.
+
 The driver also blocks writes to its temporary workspace before **⌘Q** and
 window close. It checks that failed saves keep the editor open and preserve
 SQL text. It selects **Keep Editing**, restores write access, and retries the
@@ -380,11 +395,11 @@ competing processes and lock release after a process is killed.
 
 ## Continuous integration
 
-The `test` workflow runs `e2e-backend` and `e2e-macos` after the core checks for
-pushes to `main`, manual dispatches, and non-draft pull requests from this
-repository. It skips fork pull requests. The backend job uses the disposable
-Docker fixture. The macOS job uses the hosted `macos-15` runner, Java 17, and
-the native accessibility driver.
+The `test` workflow runs `e2e-backend` after `core-backend`, and `e2e-macos`
+after `core-macos` and `e2e-backend`. It runs them for pushes to `main`, manual dispatches, and non-draft pull
+requests from this repository. It skips fork pull requests. The backend job
+uses the disposable Docker fixture. The macOS job uses the hosted `macos-15`
+runner, Java 17, and the native accessibility driver.
 
 The macOS E2E job reuses the package artifact from `core-macos` by default. A
 manual `test` dispatch can set `reuse_macos_package` to `false` to build a fresh

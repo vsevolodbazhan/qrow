@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
@@ -30,7 +31,7 @@ class NativeFixtureTests(unittest.TestCase):
             partial = cache / "fixture.partial"
             partial.write_bytes(b"ab")
             payload = b"abcd"
-            item = {"url": "https://example.invalid/fixture.jar", "directory": "fixture.jar", "bytes": len(payload),
+            item = {"urls": ["https://example.invalid/fixture.jar"], "directory": "fixture.jar", "bytes": len(payload),
                     "sha512": hashlib.sha512(payload).hexdigest()}
 
             def start(command):
@@ -47,6 +48,57 @@ class NativeFixtureTests(unittest.TestCase):
             self.assertEqual(command[command.index("--max-time") + 1], str(native_fixture.DOWNLOAD_TIMEOUT_SECONDS))
             self.assertNotIn("--retry", command)
 
+    def test_download_falls_back_to_the_next_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "target/e2e-downloads"
+            payload = b"abcd"
+            item = {"urls": ["https://mirror.invalid/fixture.jar", "https://origin.invalid/fixture.jar"],
+                    "directory": "fixture.jar", "bytes": len(payload), "sha512": hashlib.sha512(payload).hexdigest()}
+
+            def start(command):
+                output = Path(command[command.index("--output") + 1])
+                process = MagicMock()
+                process.poll.return_value = 0
+                if command[-1].startswith("https://mirror."):
+                    output.write_bytes(payload[:2])
+                    process.returncode = 28
+                else:
+                    self.assertEqual(output.read_bytes(), payload[:2])
+                    output.write_bytes(payload)
+                    process.returncode = 0
+                return process
+
+            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
+                self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
+            mirror, origin = (call.args[0] for call in popen.call_args_list)
+            self.assertEqual(mirror[-1], item["urls"][0])
+            self.assertEqual(mirror[mirror.index("--speed-limit") + 1], str(native_fixture.DOWNLOAD_MINIMUM_RATE))
+            self.assertEqual(origin[-1], item["urls"][1])
+            self.assertNotIn("--speed-limit", origin)
+            self.assertFalse((cache / "fixture.partial").exists())
+
+    def test_download_fails_when_every_source_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            item = {"urls": ["https://mirror.invalid/fixture.jar", "https://origin.invalid/fixture.jar"],
+                    "directory": "fixture.jar", "bytes": 4, "sha512": hashlib.sha512(b"abcd").hexdigest()}
+            process = MagicMock()
+            process.poll.return_value = 0
+            process.returncode = 22
+            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", return_value=process) as popen, patch.object(native_fixture, "announce"):
+                with self.assertRaises(native_fixture.subprocess.CalledProcessError):
+                    native_fixture.distribution(item)
+            self.assertEqual(popen.call_count, 2)
+
+    def test_manifest_sources_share_one_archive_name(self):
+        manifest = json.loads((native_fixture.ROOT / "tests/e2e/native-downloads.json").read_text())
+        for name, item in manifest.items():
+            with self.subTest(dependency=name):
+                self.assertTrue(item["urls"])
+                self.assertEqual(len({url.rsplit("/", 1)[1] for url in item["urls"]}), 1)
+                self.assertTrue(all(url.startswith("https://") for url in item["urls"]))
+
     def test_cached_download_is_verified_before_use(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -54,7 +106,7 @@ class NativeFixtureTests(unittest.TestCase):
             cache.mkdir(parents=True)
             archive = cache / "fixture.jar"
             archive.write_bytes(b"verified fixture")
-            item = {"url": "https://example.invalid/fixture.jar", "directory": "fixture.jar",
+            item = {"urls": ["https://example.invalid/fixture.jar"], "directory": "fixture.jar",
                     "sha512": hashlib.sha512(archive.read_bytes()).hexdigest()}
             with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "run") as download:
                 self.assertEqual(native_fixture.distribution(item), archive)
