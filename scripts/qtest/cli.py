@@ -1,0 +1,338 @@
+"""Command line of qtest. Run `./qtest help` for the guide."""
+import argparse
+import json
+import re
+import subprocess
+import sys
+
+import catalog
+import runner
+from runner import EXIT_FAILED, EXIT_MISSING, EXIT_PASSED, EXIT_USAGE, ROOT
+
+GUIDE = ROOT / "docs/testing.md"
+
+DESCRIPTION = """\
+Run Qrow's checks and tests: formatting, lint, unit, UI, coverage,
+performance, dependency policy, scripts, and end-to-end suites.
+
+Everyday use:
+  ./qtest                  fast local checks (the default group)
+  ./qtest run ui           one suite
+  ./qtest run ui/queries   tests of one suite whose names contain "queries"
+  ./qtest run --changed    the suites that your changed files affect
+  ./qtest list             suites, groups, and what each one needs
+  ./qtest doctor           missing tools, with the fix for each one
+  ./qtest help TOPIC       a section of docs/testing.md
+
+Exit codes: 0 passed, 1 failed, 2 usage error, 3 missing prerequisite.
+"""
+
+
+def slug(heading):
+    return re.sub(r"[^a-z0-9]+", "-", heading.lower()).strip("-")
+
+
+def guide_sections():
+    """Level-two sections of docs/testing.md, keyed by slug."""
+    sections = {}
+    current = None
+    for line in GUIDE.read_text().splitlines():
+        if line.startswith("## "):
+            current = slug(line[3:])
+            sections[current] = [line]
+        elif current:
+            sections[current].append(line)
+    return {key: "\n".join(lines).strip() + "\n" for key, lines in sections.items()}
+
+
+# Commands -----------------------------------------------------------------
+
+
+def command_list(args):
+    if args.tests:
+        return list_tests(args)
+    suites = [{
+        "name": suite.name,
+        "summary": suite.summary,
+        "requires": list(suite.requires),
+        "macos_only": suite.macos_only,
+        "explicit_only": suite.explicit_only,
+        "filterable": suite.filterable,
+    } for suite in catalog.SUITES.values()]
+    groups = [{"name": name, "summary": summary, "suites": list(members)}
+              for name, (summary, members) in catalog.GROUPS.items()]
+    if args.json:
+        print(json.dumps({"suites": suites, "groups": groups}, indent=2))
+        return EXIT_PASSED
+    width = max(len(suite["name"]) for suite in suites) + 2
+    print("Suites (select by name; `name/filter` selects tests by name where marked *):")
+    for suite in suites:
+        flags = "*" if suite["filterable"] else " "
+        extra = []
+        if suite["macos_only"]:
+            extra.append("macOS")
+        if suite["explicit_only"]:
+            extra.append("not in groups")
+        tail = f"  [{', '.join(extra)}]" if extra else ""
+        print(f"  {suite['name']:<{width}}{flags} {suite['summary']}{tail}")
+    print("\nGroups:")
+    for group in groups:
+        print(f"  {group['name']:<{width}}  {group['summary']}")
+        print(f"  {'':<{width}}  {' '.join(group['suites'])}")
+    print("\nRun `./qtest list SUITE --tests` to list the tests of a suite.")
+    return EXIT_PASSED
+
+
+def list_tests(args):
+    selected, _ = runner.resolve(args.selectors or ["default"])
+    tests = []
+    for item in selected:
+        for step in item.suite.steps:
+            if step.nextest_filter is None:
+                continue
+            command = runner.render_command(step, {}, item.test_filter, [])
+            command[2] = "list"
+            command += ["--message-format", "json"]
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+            if result.returncode:
+                sys.stderr.write(result.stderr)
+                return EXIT_FAILED
+            listing = json.loads(result.stdout)
+            for binary in listing["rust-suites"].values():
+                for name, case in binary["testcases"].items():
+                    if case["filter-match"]["status"] == "matches":
+                        tests.append({"suite": item.suite.name, "binary": binary["binary-id"], "test": name})
+    if args.json:
+        print(json.dumps(tests, indent=2))
+    else:
+        for test in tests:
+            print(f"{test['suite']}  {test['binary']}  {test['test']}")
+    return EXIT_PASSED
+
+
+def command_run(args):
+    if args.repeat < 1:
+        raise runner.UsageError("--repeat must be 1 or more.")
+    for selector in args.selectors:
+        _, _, test_filter = selector.partition("/")
+        if test_filter and not re.fullmatch(r"[A-Za-z0-9_:]+", test_filter):
+            raise runner.UsageError(f"Test filters use letters, digits, `_`, and `::`: {test_filter}")
+    changed = runner.changed_paths_from_git() if args.changed else None
+    selected, notes = runner.resolve(args.selectors, changed)
+    output = runner.Output(quiet=args.json or args.quiet)
+    for note in notes:
+        output.note(note)
+    options = {"runtime": args.runtime, "repeat": args.repeat}
+    summary = runner.run(selected, options, args.extra, output, fail_fast=args.fail_fast)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+    else:
+        print_summary(summary)
+    return summary["exit_code"]
+
+
+def print_summary(summary):
+    print(f"\nqtest run {summary['run']}: {summary['status']}", file=sys.stderr)
+    for suite in summary["suites"]:
+        duration = f"{suite['duration_s']:.0f}s" if suite.get("duration_s") else ""
+        print(f"  {suite['status']:<8} {suite['name']:<10} {duration:>6}  {suite.get('reason', '')}",
+              file=sys.stderr)
+        for failure in suite.get("failures", []):
+            print(f"           FAILED {failure['test']}", file=sys.stderr)
+        if suite["status"] == "failed":
+            print(f"           log: {suite['log']}", file=sys.stderr)
+    print(f"  artifacts: {summary['artifacts']}", file=sys.stderr)
+
+
+def command_doctor(args):
+    if args.selectors:
+        selected, _ = runner.resolve(args.selectors)
+        suites = [item.suite for item in selected]
+    else:
+        suites = [suite for suite in catalog.SUITES.values() if catalog.MACOS or not suite.macos_only]
+    options = {"runtime": args.runtime}
+    results = {}
+    for suite in suites:
+        for requirement in suite.requires:
+            if requirement not in results:
+                results[requirement] = runner.check_requirement(requirement, options, thorough=True)
+    report = [{"requirement": name, "ok": fix is None, "fix": fix,
+               "suites": [suite.name for suite in suites if name in suite.requires]}
+              for name, fix in results.items()]
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        for entry in report:
+            mark = "ok     " if entry["ok"] else "MISSING"
+            print(f"{mark} {entry['requirement']:<16} ({', '.join(entry['suites'])})")
+            if entry["fix"]:
+                print(f"        {entry['fix']}")
+    return EXIT_PASSED if all(entry["ok"] for entry in report) else EXIT_MISSING
+
+
+def command_install(args):
+    names = args.tools or list(catalog.TOOLS)
+    unknown = [name for name in names if name not in catalog.TOOLS]
+    if unknown:
+        raise runner.UsageError(f"Unknown tool: {', '.join(unknown)}. Known: {', '.join(catalog.TOOLS)}")
+    for name in names:
+        tool = catalog.TOOLS[name]
+        if runner.check_requirement(name, {}) is None:
+            print(f"[qtest] {name} {tool.version} is installed.", file=sys.stderr)
+            continue
+        for command in tool.install:
+            print(f"[qtest] $ {subprocess.list2cmdline(command)}", file=sys.stderr)
+            if subprocess.run(command, cwd=ROOT).returncode:
+                return EXIT_FAILED
+    return EXIT_PASSED
+
+
+def command_help(args):
+    sections = guide_sections()
+    if not args.topic:
+        print(DESCRIPTION)
+        print("Commands: " + ", ".join(COMMANDS))
+        print("Run `./qtest COMMAND --help` for the options of a command.\n")
+        print("Topics (sections of docs/testing.md):")
+        for key in sections:
+            print(f"  {key}")
+        return EXIT_PASSED
+    if args.topic not in sections:
+        raise runner.UsageError(f"Unknown topic: {args.topic}. Run `./qtest help` for the list.")
+    print(sections[args.topic], end="")
+    return EXIT_PASSED
+
+
+UI_TEST_TEMPLATE = '''
+#[gpui_kit::test]
+fn {name}(cx: &mut TestAppContext) {{
+    let app = TestApp::launch(cx, Workspace::default());
+    // Operate the window through element IDs, then check the visible result
+    // and the saved workspace. See `./qtest help write-a-ui-test`.
+    let _ = &app;
+    panic!("Write the test {name}");
+}}
+'''
+
+UI_SUITE_HEADER = '''use crate::support::TestApp;
+use gpui_kit::TestAppContext;
+use qrow::model::Workspace;
+'''
+
+
+def command_new(args):
+    for value, label in ((args.suite, "Suite"), (args.name, "Test name")):
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", value):
+            raise runner.UsageError(f"{label} must be snake_case: {value}")
+    directory = ROOT / "tests" / args.layer
+    main = directory / "main.rs"
+    path = directory / f"{args.suite}.rs"
+    if args.suite in ("main", "support"):
+        raise runner.UsageError(f"{args.suite} is reserved.")
+    if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text()):
+        raise runner.UsageError(f"{path.relative_to(ROOT)} already has {args.name}.")
+    text = path.read_text() if path.exists() else UI_SUITE_HEADER
+    path.write_text(text + UI_TEST_TEMPLATE.format(name=args.name))
+    lines = main.read_text().splitlines()
+    module = f"mod {args.suite};"
+    if module not in lines:
+        modules = sorted({*[line for line in lines if line.startswith("mod ")], module})
+        other = [line for line in lines if not line.startswith("mod ")]
+        main.write_text("\n".join([*other, *modules]) + "\n")
+    print(f"Added {args.name} to {path.relative_to(ROOT)}. It fails until you write it.")
+    print(f"Run it with: ./qtest run {args.layer}/{args.name}")
+    return EXIT_PASSED
+
+
+def command_artifacts(args):
+    latest = runner.runs_dir() / "latest"
+    summary = latest / "summary.json"
+    if not summary.exists():
+        print("No qtest run has finished yet.", file=sys.stderr)
+        return EXIT_FAILED
+    data = json.loads(summary.read_text())
+    if args.json:
+        print(json.dumps(data, indent=2))
+    else:
+        print(data["artifacts"])
+    return EXIT_PASSED
+
+
+COMMANDS = {
+    "list": command_list,
+    "run": command_run,
+    "doctor": command_doctor,
+    "install": command_install,
+    "new": command_new,
+    "artifacts": command_artifacts,
+    "help": command_help,
+}
+
+
+def parser():
+    root = argparse.ArgumentParser(prog="qtest", description=DESCRIPTION,
+                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = root.add_subparsers(dest="command")
+
+    listing = commands.add_parser("list", help="Show suites and groups, or the tests of suites.")
+    listing.add_argument("selectors", nargs="*", help="Suites or groups whose tests to list (with --tests).")
+    listing.add_argument("--tests", action="store_true", help="List test names through cargo-nextest.")
+    listing.add_argument("--json", action="store_true", help="Print JSON.")
+
+    running = commands.add_parser(
+        "run", help="Run suites, groups, or filtered tests.",
+        description="Run suites or groups. SUITE/FILTER runs the tests of SUITE whose names "
+                    "contain FILTER. Arguments after `--` go to cargo-nextest.")
+    running.add_argument("selectors", nargs="*", metavar="SELECTOR",
+                         help="Suite, group, or SUITE/FILTER. Default: the default group.")
+    running.add_argument("--changed", action="store_true",
+                         help="Add the suites that changed paths affect.")
+    running.add_argument("--repeat", type=int, default=1, metavar="N",
+                         help="Run each selected suite N times and stop at the first failure.")
+    running.add_argument("--fail-fast", action="store_true", help="Skip the remaining suites after a failure.")
+    running.add_argument("--runtime", choices=["native", "docker"], default="native",
+                         help="Server runtime of the e2e suite (default: native).")
+    running.add_argument("--json", action="store_true", help="Print only a JSON summary on stdout.")
+    running.add_argument("--quiet", action="store_true", help="Do not stream command output.")
+
+    doctor = commands.add_parser("doctor", help="Check prerequisites and print a fix for each gap.")
+    doctor.add_argument("selectors", nargs="*", help="Check only these suites or groups.")
+    doctor.add_argument("--runtime", choices=["native", "docker"], default="native")
+    doctor.add_argument("--json", action="store_true", help="Print JSON.")
+
+    install = commands.add_parser("install", help="Install the pinned Cargo tools.")
+    install.add_argument("tools", nargs="*", help=f"Default: {', '.join(catalog.TOOLS)}.")
+
+    new = commands.add_parser("new", help="Add a test from the template.")
+    new.add_argument("layer", choices=["ui"], help="Test layer.")
+    new.add_argument("suite", help="File under tests/LAYER/, for example connections.")
+    new.add_argument("name", help="Test function name, in snake_case.")
+
+    artifacts = commands.add_parser("artifacts", help="Print the directory of the latest run.")
+    artifacts.add_argument("--json", action="store_true", help="Print the summary of the latest run.")
+
+    helping = commands.add_parser("help", help="Show the guide or one of its topics.")
+    helping.add_argument("topic", nargs="?")
+    return root
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    extra = []
+    if "--" in argv:
+        index = argv.index("--")
+        argv, extra = argv[:index], argv[index + 1:]
+    if not argv:
+        argv = ["run"]
+    arguments = parser().parse_args(argv)
+    arguments.extra = extra
+    if extra and arguments.command != "run":
+        print("qtest: arguments after `--` apply only to `run`.", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        return COMMANDS[arguments.command](arguments)
+    except runner.UsageError as error:
+        print(f"qtest: {error}", file=sys.stderr)
+        return EXIT_USAGE
+    except KeyboardInterrupt:
+        return 130

@@ -21,7 +21,7 @@ stack (although it's been confirmed to run on M1 8 GB Mac). This is test infrast
 Run from the repository root:
 
 ```sh
-sh scripts/check.sh e2e/backend
+./qtest run backend
 ```
 
 The command starts a disposable server stack, waits for an authenticated SQL
@@ -50,13 +50,13 @@ The default native suite uses Java 17 for the server fixture. Set `JAVA_HOME`
 to a Java 17 JDK, then run:
 
 ```sh
-sh scripts/check.sh e2e/macos
+./qtest run e2e
 ```
 
 To use Docker servers for the same native UI suite:
 
 ```sh
-sh scripts/check.sh e2e/macos --runtime docker
+./qtest run e2e --runtime docker
 ```
 
 The Docker mode requires a local daemon and does not require a host JDK.

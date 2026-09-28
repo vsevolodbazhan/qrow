@@ -40,8 +40,11 @@ const MAX_GENERATED_TITLE_CHARS: usize = 60;
 const MAX_TITLE_JOBS: usize = 8;
 #[cfg(not(test))]
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+// Fake app-servers in tests start while other test processes start too. A
+// loaded machine can take several seconds to start one, so the budget covers
+// that start. Tests of the timeout set a short `request_timeout` themselves.
 #[cfg(test)]
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct CodexHarness {
     cwd: PathBuf,

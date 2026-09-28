@@ -1,8 +1,9 @@
 # Development
 
 Use local checks to verify code, scripts, and dependency policy before a commit.
-These checks do not start Kyuubi or exercise the native UI. Real-server and
-native UI tests have a separate [end-to-end testing guide](end-to-end-testing.md).
+[Testing](testing.md) describes `./qtest`, the command for all checks and
+tests, including the real-server and native UI suites of the
+[end-to-end testing guide](end-to-end-testing.md).
 
 For application prerequisites, builds, packaging, and demo launch commands, see
 the [project README](../README.md). Run the commands below from the repository
@@ -10,58 +11,31 @@ root. The full local suite requires macOS.
 
 ## Set up check tools
 
-Install the script linters:
+Install the script linters and the pinned Cargo check tools, then the
+repository hooks:
 
 ```sh
 brew install shellcheck actionlint
-```
-
-Ruff is installed by `uv` from the locked development dependency group.
-
-Install the pinned Cargo check tools:
-
-```sh
-sh scripts/core/install.sh
-```
-
-Install the repository hooks:
-
-```sh
+./qtest install
 sh scripts/hooks/install.sh
+./qtest doctor
 ```
 
 [rust-toolchain.toml](../rust-toolchain.toml) selects Rust, rustfmt, and Clippy.
-The [tool installer](../scripts/core/install.sh) selects the dependency and
-coverage tools. Cargo checks use the lockfile. Python scripts use `uv`, the
-repository's pinned environment, and Ruff.
+The [qtest catalog](../scripts/qtest/catalog.py) pins cargo-nextest, the
+dependency tools, and the coverage tool. Cargo checks use the lockfile. Python
+scripts use `uv`, the repository's pinned environment, and Ruff.
 
 ## Run checks
 
-Use [scripts/check.sh](../scripts/check.sh) as the check entry point:
-
-| Command | Purpose |
-| --- | --- |
-| `sh scripts/check.sh` | Full local suite, excluding packaging and end-to-end tests. |
-| `sh scripts/check.sh core/backend` | Formatting, core lint, core tests, and Rust API documentation. |
-| `sh scripts/check.sh core/macos` | Full application lint and tests on macOS, including UI integration tests. |
-| `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, Ruff, and script unit tests. |
-| `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, unused dependencies, and `policy.py`. |
-| `sh scripts/check.sh core/coverage` | Core line coverage with an enforced floor. |
-| `sh scripts/check.sh core/performance` | SQL validation benchmarks with enforced budgets. |
-| `sh scripts/check.sh hook` | Fast checks used by the pre-commit hook. |
-
-The `dependencies.sh` script owns the `policy.py` check. The `scripts.sh`
-script does not run `policy.py`.
-
-Use `core/backend` for backend changes, `core/macos` for UI changes, and
-`core/scripts` for automation changes. Run the full suite for dependency changes
-or changes that affect several components. Core coverage does not include the
-UI. UI integration tests send pointer and keyboard events through GPUI. They do
-not verify macOS input, the menu bar, or rendered pixels.
+Run `./qtest` for the fast local checks, and `./qtest run all` for the full
+local suite. [Testing](testing.md#suites) lists each suite. Use `./qtest run
+--changed` to run the suites that your changes affect. Core coverage does not
+include the UI.
 
 These checks do not run real Kyuubi queries or retrieve user credentials.
-The Keychain integration test remains opt-in. End-to-end tests are ignored in
-ordinary Cargo runs.
+The Keychain integration test remains opt-in. End-to-end tests run only when
+you select their suites.
 
 ## Check the native UI
 
@@ -90,8 +64,9 @@ you need a new distributable. Do not replace the app while someone is testing it
 
 ## Hooks and continuous integration
 
-Pre-commit checks the staged Git snapshot and selects checks by changed path.
+Pre-commit checks the staged Git snapshot and selects suites by changed path.
 Pre-push checks each distinct revision being pushed with the full local suite.
+[Testing](testing.md#hooks-and-continuous-integration) gives the commands.
 Hooks export snapshots into temporary directories and share a build cache under
 `target/hook-checks`. They do not stash, restage, or modify working files.
 They do not package the application.
@@ -106,12 +81,12 @@ conversations that stay with their tabs.
 It does not use a Codex account.
 
 The release profile favors size so the optional assistant stays within the
-macOS package budget. Run `core/performance` after a release-profile change.
+macOS package budget. Run `./qtest run perf` after a release-profile change.
 
 Stage required code and configuration together. A passing working-copy check
-does not prove that the staged snapshot passes. Markdown changes outside the
-script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
-script checks, including changes to its README.
+does not prove that the staged snapshot passes. Markdown changes other than
+`docs/testing.md` do not trigger pre-commit checks. Changes under `scripts/`
+trigger script checks, including changes to its README.
 
 The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
 manual dispatches, and pull requests with the
@@ -166,9 +141,9 @@ reads the application version from `Cargo.toml`. The stable tag is
 `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
 
-The workflow runs `sh scripts/check.sh core/backend`,
-`sh scripts/check.sh core/macos`, `sh scripts/check.sh e2e/backend`, and
-`sh scripts/check.sh e2e/macos`. The E2E jobs run before packaging. The macOS
+The workflow runs `./qtest run fmt clippy rustdoc unit` on Linux,
+`./qtest run clippy unit ui` on macOS, and the `backend` and `e2e` suites. The
+E2E jobs run before packaging. The macOS
 package job builds the application bundle, creates a DMG, and publishes it as
 the GitHub Release asset. The workflow uses the latest non-draft release on the
 selected channel as the changelog start tag. If the channel has no previous
@@ -226,11 +201,8 @@ Proptest regression seeds when fixing a discovered failure.
 
 [UI integration tests](../tests/ui/) open the real Qrow window in a headless
 GPUI Kit window. Each test uses a new temporary workspace and an in-memory
-password store, so it does not use Keychain or the user's workspace. Real
-worker threads open real connections. For this reason the tests allow
-wake-ups from other threads, and waits use wall time. Reduced motion makes
-dialogs open without animation. Find controls by their `ElementId`. Add an ID
-to a control when a test needs it. Do not derive an ID from a list index.
+password store, so it does not use Keychain or the user's workspace.
+[Testing](testing.md#write-a-ui-test) describes how to write them.
 
 The core library must build with `--no-default-features`. Core coverage excludes
 the GPUI frontend and generated bindings. The line-coverage floor is 80%.

@@ -1,0 +1,341 @@
+"""Run suites: check requirements, execute steps, collect logs and failures."""
+from dataclasses import dataclass, field
+import datetime
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import subprocess
+import sys
+import threading
+import time
+import xml.etree.ElementTree as ElementTree
+
+import catalog
+
+ROOT = Path(__file__).resolve().parents[2]
+
+# Exit codes are part of the CLI contract; docs/testing.md lists them.
+EXIT_PASSED = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
+EXIT_MISSING = 3
+
+
+def target_dir():
+    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
+
+
+def runs_dir():
+    return target_dir() / "qtest" / "runs"
+
+
+# Requirements -------------------------------------------------------------
+
+
+def _succeeds(command, timeout=20):
+    try:
+        return subprocess.run(command, cwd=ROOT, capture_output=True, timeout=timeout).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _tool_version(tool):
+    try:
+        result = subprocess.run(tool.version_command, cwd=ROOT, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def check_requirement(name, options, thorough=False):
+    """Return None when the requirement holds, else a fix for the user."""
+    fixes = catalog.REQUIREMENTS
+    if name in ("cargo", "uv", "shellcheck", "actionlint"):
+        return None if shutil.which(name) else fixes[name]
+    if name == "macos":
+        return None if catalog.MACOS else fixes[name]
+    if name == "xcode":
+        return None if shutil.which("xcode-select") and _succeeds(["xcode-select", "-p"]) else fixes[name]
+    if name == "docker":
+        if not shutil.which("docker"):
+            return fixes["docker"]
+        return None if _succeeds(["docker", "info"]) else fixes["docker-running"]
+    if name in catalog.TOOLS:
+        tool = catalog.TOOLS[name]
+        version = _tool_version(tool)
+        return None if version and version.startswith(tool.version_prefix) else fixes[name]
+    if name == "desktop":
+        # The E2E orchestrator checks automation access itself before it starts servers.
+        if not thorough:
+            return None
+        return None if _succeeds(["sh", "scripts/e2e/driver.sh", "--preflight"], timeout=600) else fixes[name]
+    if name == "fixture-runtime":
+        if options.get("runtime") == "docker":
+            return check_requirement("docker", options)
+        java_home = os.environ.get("JAVA_HOME")
+        if java_home and all((Path(java_home) / "bin" / tool).is_file() for tool in ("java", "javac", "jar")):
+            return None
+        return fixes["java"]
+    raise ValueError(f"Unknown requirement: {name}")
+
+
+# Selection ----------------------------------------------------------------
+
+
+@dataclass
+class Selected:
+    suite: catalog.Suite
+    test_filter: str | None = None
+    explicit: bool = True
+
+
+class UsageError(Exception):
+    pass
+
+
+def resolve(selectors, changed_paths=None):
+    """Turn selectors into suites. Returns (selected, notes)."""
+    selected = []
+    notes = []
+
+    def add(name, test_filter=None, explicit=True):
+        if any(item.suite.name == name and item.test_filter == test_filter for item in selected):
+            return
+        selected.append(Selected(catalog.SUITES[name], test_filter, explicit))
+
+    if changed_paths is not None:
+        names = catalog.suites_for_changes(changed_paths)
+        notes.append("Changed paths select: " + (", ".join(names) if names else "no suites"))
+        for name in names:
+            add(name, explicit=False)
+    if not selectors and changed_paths is None:
+        selectors = ["default"]
+    for selector in selectors:
+        name, _, test_filter = selector.partition("/")
+        if name in catalog.GROUPS and not test_filter:
+            for member in catalog.GROUPS[name][1]:
+                add(member, explicit=False)
+        elif name in catalog.SUITES:
+            suite = catalog.SUITES[name]
+            if test_filter and not suite.filterable:
+                raise UsageError(f"Suite {name} does not accept a test filter.")
+            add(name, test_filter or None)
+        else:
+            import difflib
+            known = [*catalog.SUITES, *catalog.GROUPS]
+            close = difflib.get_close_matches(name, known, n=1)
+            hint = f" Did you mean {close[0]}?" if close else ""
+            raise UsageError(f"Unknown suite or group: {name}.{hint} Run `./qtest list`.")
+    return selected, notes
+
+
+def changed_paths_from_git():
+    """QROW_CHANGED_FILES (set by the pre-commit hook), else changes against origin/main."""
+    if "QROW_CHANGED_FILES" in os.environ:
+        return [line for line in os.environ["QROW_CHANGED_FILES"].splitlines() if line]
+    paths = set()
+    base = subprocess.run(["git", "merge-base", "HEAD", "origin/main"], cwd=ROOT,
+                          capture_output=True, text=True)
+    commands = [["git", "diff", "--name-only"], ["git", "diff", "--name-only", "--cached"],
+                ["git", "ls-files", "--others", "--exclude-standard"]]
+    if base.returncode == 0:
+        commands.append(["git", "diff", "--name-only", base.stdout.strip(), "HEAD"])
+    for command in commands:
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
+        paths.update(line for line in result.stdout.splitlines() if line)
+    return sorted(paths)
+
+
+# Execution ----------------------------------------------------------------
+
+
+@dataclass
+class SuiteResult:
+    name: str
+    status: str  # passed, failed, skipped, missing
+    duration_s: float = 0.0
+    log: str | None = None
+    reason: str | None = None
+    failed_step: str | None = None
+    missing: list = field(default_factory=list)
+    failures: list = field(default_factory=list)
+
+
+class Output:
+    """Writes progress to stderr unless quiet. Command output also goes to the suite log."""
+
+    def __init__(self, quiet):
+        self.quiet = quiet
+        self.lock = threading.Lock()
+
+    def note(self, message):
+        if not self.quiet:
+            with self.lock:
+                print(f"[qtest] {message}", file=sys.stderr, flush=True)
+
+    def stream(self, line):
+        if not self.quiet:
+            with self.lock:
+                sys.stderr.write(line)
+                sys.stderr.flush()
+
+
+def render_command(step, options, test_filter, extra):
+    # Replace only named placeholders; commands can contain other braces, like `find -exec {} +`.
+    values = {"{python}": sys.executable, "{target}": str(target_dir()),
+              "{runtime}": options.get("runtime", "native")}
+    command = []
+    for part in step.command:
+        for placeholder, value in values.items():
+            part = part.replace(placeholder, value)
+        command.append(part)
+    if step.nextest_filter is not None:
+        expression = step.nextest_filter
+        if test_filter:
+            expression = f"({expression}) and test({test_filter})"
+        profile = "ci" if os.environ.get("CI") else "default"
+        command += ["--profile", profile, "-E", expression, *extra]
+    return command
+
+
+def execute(command, env, timeout, log, output):
+    """Run one command in its own process group. Returns the exit code, or None on timeout."""
+    with log.open("a") as sink:
+        sink.write(f"$ {subprocess.list2cmdline(command)}\n")
+        sink.flush()
+        process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                   start_new_session=True)
+
+        def forward():
+            for line in iter(process.stdout.readline, ""):
+                sink.write(line)
+                sink.flush()
+                output.stream(line)
+
+        reader = threading.Thread(target=forward, daemon=True)
+        reader.start()
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            code = None
+        except BaseException:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            raise
+        reader.join(timeout=5)
+        process.stdout.close()
+        if code is None:
+            sink.write(f"[qtest] Stopped after the {timeout}s step limit.\n")
+    return code
+
+
+def junit_failures(path):
+    """Failed test names and the start of their messages from a nextest JUnit report."""
+    if not path.exists():
+        return []
+    failures = []
+    for case in ElementTree.parse(path).getroot().iter("testcase"):
+        problem = case.find("failure")
+        if problem is None:
+            problem = case.find("error")
+        if problem is None:
+            continue
+        # The element text holds the panic message; drop the backtrace hint.
+        text = problem.text or problem.get("message") or ""
+        lines = [line for line in text.splitlines() if not line.startswith("note: run with")]
+        failures.append({
+            "test": f"{case.get('classname')}::{case.get('name')}",
+            "message": "\n".join(lines).strip()[:2000],
+        })
+    return failures
+
+
+def run_suite(item, options, extra, run_dir, output):
+    suite = item.suite
+    started = time.monotonic()
+    if suite.macos_only and not catalog.MACOS and not item.explicit:
+        return SuiteResult(suite.name, "skipped", reason="Requires macOS.")
+    missing = []
+    for requirement in suite.requires:
+        fix = check_requirement(requirement, options)
+        if fix:
+            missing.append({"requirement": requirement, "fix": fix})
+    if missing:
+        return SuiteResult(suite.name, "missing", missing=missing,
+                           reason="; ".join(entry["fix"] for entry in missing))
+    log = run_dir / "logs" / f"{suite.name}.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    label = f"{suite.name}/{item.test_filter}" if item.test_filter else suite.name
+    output.note(f"{label}: {suite.summary} (log: {log})")
+    repeat = options.get("repeat", 1)
+    for iteration in range(1, repeat + 1):
+        if repeat > 1:
+            output.note(f"{label}: iteration {iteration} of {repeat}")
+        for step in suite.steps:
+            if item.test_filter and step.nextest_filter is None:
+                continue
+            command = render_command(step, options, item.test_filter, extra)
+            env = dict(os.environ, **dict(step.env))
+            code = execute(command, env, step.timeout, log, output)
+            if code == 0:
+                continue
+            result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
+                                 failed_step=subprocess.list2cmdline(command))
+            result.reason = "Step timed out." if code is None else f"Step exited with {code}."
+            if repeat > 1:
+                result.reason += f" Iteration {iteration} of {repeat}."
+            if step.nextest_filter is not None:
+                profile = "ci" if os.environ.get("CI") else "default"
+                junit = target_dir() / "nextest" / profile / "junit.xml"
+                if junit.exists():
+                    saved = run_dir / "junit" / f"{suite.name}.xml"
+                    saved.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(junit, saved)
+                    result.failures = junit_failures(saved)
+            return result
+    return SuiteResult(suite.name, "passed", time.monotonic() - started, str(log))
+
+
+def new_run_dir():
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = runs_dir() / f"{stamp}-{os.getpid()}"
+    path.mkdir(parents=True)
+    latest = runs_dir() / "latest"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    latest.symlink_to(path.name)
+    return path
+
+
+def run(selected, options, extra, output, fail_fast=False):
+    run_dir = new_run_dir()
+    results = []
+    for item in selected:
+        if fail_fast and any(result.status in ("failed", "missing") for result in results):
+            results.append(SuiteResult(item.suite.name, "skipped", reason="An earlier suite did not pass."))
+            continue
+        result = run_suite(item, options, extra, run_dir, output)
+        results.append(result)
+        output.note(f"{result.name}: {result.status}" + (f" ({result.reason})" if result.reason else ""))
+    statuses = {result.status for result in results}
+    if "failed" in statuses:
+        status, code = "failed", EXIT_FAILED
+    elif "missing" in statuses:
+        status, code = "missing", EXIT_MISSING
+    else:
+        status, code = "passed", EXIT_PASSED
+    summary = {
+        "run": run_dir.name,
+        "status": status,
+        "exit_code": code,
+        "artifacts": str(run_dir),
+        "suites": [{key: value for key, value in vars(result).items() if value not in (None, [])}
+                   for result in results],
+    }
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return summary
