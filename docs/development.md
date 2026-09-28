@@ -140,8 +140,10 @@ request or branch, including manual runs.
 The `package-macos` job builds the release application package and checks its
 size. The `e2e-macos` job reuses this package by default, and then does not set
 up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
-`false` to build the package in the E2E job. Native fixture archives use a checksum-keyed Actions
-cache. A failed download can save progress for a later run.
+`false` to build the package in the E2E job. Native fixture archives download
+from a mirror first and use a checksum-keyed Actions cache. A failed, cancelled,
+or timed-out download can save progress for a later run. For the download
+sources, see [End-to-end testing](end-to-end-testing.md#how-the-suite-works).
 
 The workflow retains `core-coverage`, `macos-performance`, `macos-package`,
 `backend-evidence`, and `macos-evidence` for one day. Configure these individual

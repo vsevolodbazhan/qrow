@@ -145,6 +145,15 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn("runner.arch", workflow)
         self.assertIn("hashFiles('tests/e2e/native-downloads.json')", workflow)
 
+    def test_native_e2e_cache_is_saved_after_a_timeout(self):
+        for path, name in ((".github/workflows/test.yml", "e2e-macos"), (".github/workflows/release.yml", "test-e2e-macos")):
+            with self.subTest(workflow=path):
+                job = self.workflow_job(name, path)
+                self.assertIn("timeout-minutes: 150", job)
+                self.assertEqual(job.count("uses: actions/cache/save@"), 2)
+                # A job timeout counts as a cancellation, so the save steps must not skip cancelled jobs.
+                self.assertNotIn("cancelled()", job)
+
     def test_release_workflow_runs_e2e_before_packaging(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         backend = self.workflow_job("test-e2e-backend", ".github/workflows/release.yml")

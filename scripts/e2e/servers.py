@@ -19,6 +19,8 @@ FIXTURE = ROOT / "tests/e2e/fixture"
 DOWNLOAD_REPORT_INTERVAL = 15
 DOWNLOAD_TIMEOUT_SECONDS = 120 * 60
 DOWNLOAD_WATCHDOG_SECONDS = DOWNLOAD_TIMEOUT_SECONDS + 60
+DOWNLOAD_MINIMUM_RATE = 256 * 1024
+DOWNLOAD_MINIMUM_RATE_SECONDS = 60
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -79,55 +81,69 @@ def preflight():
     return Path(java_home)
 
 
+def transfer(label, url, partial, total, more_sources):
+    initial_received = partial.stat().st_size if partial.exists() else 0
+    if initial_received:
+        announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
+    command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-",
+               "--max-time", str(DOWNLOAD_TIMEOUT_SECONDS)]
+    if more_sources:
+        # Leave a slow source early; the next source continues the same partial file.
+        command += ["--speed-limit", str(DOWNLOAD_MINIMUM_RATE), "--speed-time", str(DOWNLOAD_MINIMUM_RATE_SECONDS)]
+    command += ["--output", str(partial), url]
+    total_text = f" ({human_size(total)} total)" if total else ""
+    announce(f"{label}: downloading {url}{total_text}.")
+    started = time.monotonic()
+    process = subprocess.Popen(command)
+    try:
+        next_report = started + DOWNLOAD_REPORT_INTERVAL
+        while process.poll() is None:
+            now = time.monotonic()
+            if now >= next_report:
+                received = partial.stat().st_size if partial.exists() else initial_received
+                report_download_progress(label, received, total, started, initial_received)
+                next_report = now + DOWNLOAD_REPORT_INTERVAL
+            if now - started >= DOWNLOAD_WATCHDOG_SECONDS:
+                raise subprocess.TimeoutExpired(command, DOWNLOAD_WATCHDOG_SECONDS)
+            time.sleep(1)
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+        if total and partial.stat().st_size != total:
+            raise ValueError(f"Size mismatch for {partial}: expected {total}, got {partial.stat().st_size}")
+    except BaseException as error:
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        announce(f"{label}: download failed after {elapsed_seconds(started)}: {error}")
+        raise
+    announce(f"{label}: download complete: {human_size(partial.stat().st_size)} in {elapsed_seconds(started)}.")
+
+
 def distribution(item, label=None):
     label = label or item["directory"]
     total = item.get("bytes")
     cache = ROOT / "target/e2e-downloads"
     cache.mkdir(parents=True, exist_ok=True)
-    archive = cache / item["url"].rsplit("/", 1)[1]
+    urls = item["urls"]
+    archive = cache / urls[0].rsplit("/", 1)[1]
     if not archive.exists():
         partial = archive.with_suffix(".partial")
         if total and partial.exists() and partial.stat().st_size == total:
             announce(f"{label}: completed partial download found ({human_size(total)}).")
-            partial.rename(archive)
         else:
             if total and partial.exists() and partial.stat().st_size > total:
                 announce(f"{label}: discarding oversized partial download ({human_size(partial.stat().st_size)}).")
                 partial.unlink()
-            initial_received = partial.stat().st_size if partial.exists() else 0
-            if initial_received:
-                announce(f"{label}: resuming download at {human_size(initial_received)} / {human_size(total)}.")
-            command = ["curl", "--fail", "--silent", "--show-error", "--location", "--continue-at", "-",
-                       "--max-time", str(DOWNLOAD_TIMEOUT_SECONDS),
-                       "--output", str(partial), item["url"]]
-            total_text = f" ({human_size(total)} total)" if total else ""
-            announce(f"{label}: downloading {item['url']}{total_text}.")
-            started = time.monotonic()
-            process = subprocess.Popen(command)
-            try:
-                next_report = started + DOWNLOAD_REPORT_INTERVAL
-                while process.poll() is None:
-                    now = time.monotonic()
-                    if now >= next_report:
-                        received = partial.stat().st_size if partial.exists() else initial_received
-                        report_download_progress(label, received, total, started, initial_received)
-                        next_report = now + DOWNLOAD_REPORT_INTERVAL
-                    if now - started >= DOWNLOAD_WATCHDOG_SECONDS:
-                        raise subprocess.TimeoutExpired(command, DOWNLOAD_WATCHDOG_SECONDS)
-                    time.sleep(1)
-                if process.returncode:
-                    raise subprocess.CalledProcessError(process.returncode, command)
-                if total and partial.stat().st_size != total:
-                    raise ValueError(f"Size mismatch for {partial}: expected {total}, got {partial.stat().st_size}")
-            except BaseException as error:
-                if process.poll() is None:
-                    process.kill()
-                process.wait()
-                announce(f"{label}: download failed after {elapsed_seconds(started)}: {error}")
-                raise
-            partial.rename(archive)
-            announce(f"{label}: download complete: {human_size(archive.stat().st_size)} "
-                     f"in {elapsed_seconds(started)}.")
+            for index, url in enumerate(urls):
+                more_sources = index + 1 < len(urls)
+                try:
+                    transfer(label, url, partial, total, more_sources)
+                    break
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                    if not more_sources:
+                        raise
+                    announce(f"{label}: trying the next download source.")
+        partial.rename(archive)
     else:
         announce(f"{label}: using cached archive {archive.name} ({human_size(archive.stat().st_size)}).")
     if total and archive.stat().st_size != total:

@@ -320,13 +320,20 @@ including Spark engines and executors, after the run.
 
 [Docker fixture sources](../tests/e2e/fixture/) pin base images by digest.
 [Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
-sizes, and SHA-512 checksums. Verified native downloads are cached under
-`target/e2e-downloads` between local runs. The first run after a dependency
-change still downloads from the public archive service, which can be slow. CI
-uses a checksum-keyed Actions cache for this directory and also preserves
-incomplete download progress for a later run. Each native archive transfer has
-a 2-hour limit. The macOS CI job allows 150 minutes so a slow first download
-still leaves time to start the fixture and run the native checks.
+sizes, SHA-512 checksums, and an ordered list of sources. The Apache archives
+come first from the
+[Qrow E2E fixtures mirror](https://github.com/vsevolodbazhan/qrow-e2e-fixtures),
+because the public Apache archive service is slow. If a source fails, or stays
+below 256 KiB/s for 60 seconds, the download continues from the next source.
+The last source has no speed limit. To change an archive version, add the new
+archive to the mirror first. The mirror README gives the procedure.
+
+Verified native downloads are cached under `target/e2e-downloads` between local
+runs. CI uses a checksum-keyed Actions cache for this directory. CI also keeps
+incomplete download progress for a later run, also after a job timeout. Each
+native archive transfer has a 2-hour limit. The macOS CI jobs allow 150 minutes,
+so a slow download from the last source still leaves time to start the fixture
+and run the native checks.
 
 The [native driver](../tests/e2e/native/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
