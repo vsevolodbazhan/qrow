@@ -718,6 +718,21 @@ struct ConversationMenu {
     delete: MenuAction,
 }
 
+impl Qrow {
+    /// The menu of a thread list row. Qrow owns it like the tab menu; GPUI
+    /// Kit's `context_menu` keeps each dismissed menu alive.
+    fn open_thread_menu(
+        &mut self,
+        thread: &str,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let menu = self.conversation_menu(thread, cx);
+        self.open_context_menu(position, move |popup, _, _| menu.build(popup), window, cx);
+    }
+}
+
 impl ConversationMenu {
     fn build(&self, menu: PopupMenu) -> PopupMenu {
         let item = |label: &'static str, action: &MenuAction, disabled: bool| {
@@ -1879,6 +1894,7 @@ impl Qrow {
                         .child(
                             h_flex()
                                 .id("assistant-sign-in-waiting")
+                                .test_support()
                                 .role(Role::Status)
                                 .aria_label("Continue sign-in in your browser")
                                 .gap_2()
@@ -1924,6 +1940,7 @@ impl Qrow {
                             content.child(
                                 v_flex()
                                     .id("assistant-sign-in-error")
+                                    .test_support()
                                     .role(Role::Alert)
                                     .aria_label(format!("Couldn't sign in. {error}"))
                                     .gap_1()
@@ -2934,6 +2951,7 @@ impl Qrow {
                             content.child(
                                 h_flex()
                                     .id(format!("assistant-tool-tab-{}", entry.id))
+                                    .test_support()
                                     .role(Role::Paragraph)
                                     .aria_label(format!("Tab: {target}"))
                                     .px_2()
@@ -2947,6 +2965,7 @@ impl Qrow {
                         .child(
                             div()
                                 .id(format!("assistant-tool-detail-{}", entry.id))
+                                .test_support()
                                 .role(Role::Paragraph)
                                 .aria_label(detail.clone())
                                 .max_h_40()
@@ -3071,6 +3090,7 @@ impl Qrow {
             .child(
                 v_flex()
                     .id("assistant-thread-list")
+                    .test_support()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
@@ -3103,7 +3123,7 @@ impl Qrow {
                                     status.accessible_suffix(),
                                     if generating { ", generating title" } else { "" }
                                 );
-                                let menu = self.conversation_menu(&id, cx);
+                                let menu_thread = id.clone();
                                 let button = Button::new(format!("assistant-thread-{id}"))
                                     .ghost()
                                     .small()
@@ -3165,7 +3185,15 @@ impl Qrow {
                                         this.select_assistant_thread(&id, window, cx);
                                     }));
                                 row.child(button)
-                                    .context_menu(move |popup, _, _| menu.build(popup))
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                                            let (thread, position) = (menu_thread.clone(), event.position);
+                                            cx.defer_in(window, move |this, window, cx| {
+                                                this.open_thread_menu(&thread, position, window, cx)
+                                            });
+                                        }),
+                                    )
                                     .into_any_element()
                             }),
                     ),
@@ -3338,6 +3366,7 @@ impl Qrow {
                             .text_base()
                             .font_weight(FontWeight::MEDIUM)
                             .id("assistant-conversation-title")
+                            .test_support()
                             .role(Role::Status)
                             .aria_label(if title_generating {
                                 format!("Generating title for {displayed_title}")
@@ -3421,6 +3450,7 @@ impl Qrow {
             .when(!signed_out, |panel| panel.child(
                 div().relative().flex_1().min_h_0().child(v_flex()
                     .id("assistant-transcript")
+                    .test_support()
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&self.assistant_panel.scroll)
@@ -3486,6 +3516,7 @@ impl Qrow {
                                             .child(
                                         div()
                                             .id(format!("assistant-entry-{}", entry.id))
+                                            .test_support()
                                             .role(Role::Paragraph)
                                             .aria_label(format!(
                                                 "{}: {}",
@@ -3513,6 +3544,7 @@ impl Qrow {
                                         Bubble::new().with_variant(BubbleVariant::Ghost).child(
                                             div()
                                                 .id("assistant-working")
+                                                .test_support()
                                                 .role(Role::Status)
                                                 .aria_label("Assistant is working")
                                                 .child(
@@ -3555,6 +3587,7 @@ impl Qrow {
                     panel.child(
                         v_flex()
                             .id("assistant-query-approval")
+                            .test_support()
                             .role(Role::Alert)
                             .aria_label(format!(
                                 "Run in {tab_title} · {connection}? {}",
@@ -3622,7 +3655,9 @@ impl Qrow {
                     .border_t_1()
                     .border_color(cx.theme().border)
                     .child(
-                        div().key_context("AssistantComposer").child(
+                        // GPUI Kit's Textarea has no ID setter; tests find the
+                        // message field through its container.
+                        div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.assistant_panel.composer)
                                 .h_20()
                                 .w_full()

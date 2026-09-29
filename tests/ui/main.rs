@@ -2,6 +2,11 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod assistant_chat;
+mod assistant_layout;
+mod assistant_sql;
+mod assistant_tabs;
+mod assistant_threads;
 mod connections;
 mod dialogs;
 mod queries;

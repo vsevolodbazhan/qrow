@@ -36,7 +36,7 @@ use gpui_kit::component::{
     dialog::DialogFooter,
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{PopupMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -1633,7 +1633,7 @@ impl Qrow {
     }
     /// Open a context menu at the pointer. Callers defer this from their right
     /// mouse down so an already open menu dismisses itself first.
-    fn open_context_menu(
+    pub(crate) fn open_context_menu(
         &mut self,
         position: Point<Pixels>,
         items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,

@@ -3,6 +3,7 @@
 //! The `ui` and `e2e` test binaries share this module; each uses a part of it.
 #![allow(dead_code)]
 
+pub mod assistant;
 pub mod fixture;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
@@ -147,6 +148,18 @@ pub fn labelled(window: &Window, text: &str) -> Option<ElementSnapshot> {
         .find(|element| element.label() == Some(text))
 }
 
+/// The observed elements whose labels start with `prefix`.
+pub fn labelled_starting(window: &Window, prefix: &str) -> Vec<ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            element
+                .label()
+                .is_some_and(|label| label.starts_with(prefix))
+        })
+        .collect()
+}
+
 /// The bounds of the observed element `id`, or of the element labelled
 /// `id` when no element has that ID.
 pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
@@ -236,6 +249,16 @@ impl TestApp {
         workspace: Workspace,
         credentials: MemoryCredentials,
     ) -> Self {
+        Self::launch_in(cx, tempfile::tempdir().unwrap(), workspace, credentials)
+    }
+
+    /// Opens Qrow on `workspace`, saved in `directory`.
+    pub fn launch_in(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        workspace: Workspace,
+        credentials: MemoryCredentials,
+    ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
         cx.executor().allow_parking();
@@ -245,7 +268,6 @@ impl TestApp {
             // control. Reduced motion settles dialogs on their first frame.
             cx.set_reduce_motion(true);
         });
-        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("workspace.json");
         let workspace = Workspace {
             version: WORKSPACE_VERSION,
@@ -423,6 +445,70 @@ impl TestApp {
         self.wait_for(cx, "popup-menu");
     }
 
+    /// Moves the pointer over the element labelled exactly `text`, for
+    /// controls that show on hover, like the close button of a tab.
+    pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let position = labelled(window, text).unwrap().bounds().center();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
+    /// Right-clicks the one element whose label starts with `prefix`.
+    pub fn context_menu_starting(&self, cx: &mut TestAppContext, prefix: &str) {
+        self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
+            labelled_starting(window, prefix).len() == 1
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled_starting(window, prefix).remove(0);
+            pointer_click(window, &element, MouseButton::Right, cx);
+        });
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Clicks the first element whose label starts with `prefix`.
+    pub fn click_starting(&self, cx: &mut TestAppContext, prefix: &str) {
+        self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
+            !labelled_starting(window, prefix).is_empty()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled_starting(window, prefix).remove(0);
+            click_element(window, &element, cx);
+        });
+    }
+
+    /// Closes the window, which saves and releases the workspace, and opens
+    /// Qrow again on the same workspace directory.
+    pub fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        let Self {
+            window,
+            credentials,
+            _directory: directory,
+            ..
+        } = self;
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        let copy = MemoryCredentials::default();
+        for (id, password) in credentials.passwords.lock().unwrap().iter() {
+            copy.set_password(*id, password).unwrap();
+        }
+        let workspace = storage::load(&directory.path().join("workspace.json")).unwrap();
+        Self::launch_in(cx, directory, workspace, copy)
+    }
+
     /// Opens the submenu `parent` of the open menu and clicks its `item`.
     pub fn choose_in_submenu(&self, cx: &mut TestAppContext, parent: &str, item: &str) {
         self.wait_until(cx, parent, Duration::from_secs(10), |window, _| {
@@ -462,7 +548,11 @@ impl TestApp {
         self.update(cx, |window, cx| {
             window.click(id, cx);
             window.press("cmd-a", cx);
-            window.input(text, cx);
+            if text.is_empty() {
+                window.press("backspace", cx);
+            } else {
+                window.input(text, cx);
+            }
             let input = window.find(id);
             assert_eq!(input.focused(), Some(true), "{id} did not take focus");
             if let Some(value) = input.value() {
