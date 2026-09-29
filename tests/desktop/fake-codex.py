@@ -580,6 +580,47 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Run 170 rows and read results"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            read_ids = set()
+            omitted = []
+
+            def read_page(offset):
+                def received(success, result):
+                    if not success:
+                        finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                        return
+                    next_offset = result["next_offset"]
+                    if next_offset <= offset:
+                        finish_turn(thread_id, turn_id, f"Read results stalled at {offset}")
+                        return
+                    read_ids.update(int(row[0]) for row in result["rows"])
+                    omitted.extend(result.get("omitted_row_offsets", []))
+                    if result["more_downloaded_rows"]:
+                        read_page(next_offset)
+                    elif next_offset == 170 and read_ids == set(range(170)) - {25} and omitted == [25]:
+                        finish_turn(thread_id, turn_id, "Read all 170 row positions.")
+                    else:
+                        finish_turn(thread_id, turn_id, f"Bad result paging: {next_offset}, {len(read_ids)}, {omitted}")
+
+                call_tool(thread_id, turn_id, "read_results", {
+                    "version": 1, "tab_id": tab["id"], "offset": offset, "count": 100,
+                }, received)
+
+            def ran(success, result):
+                if not success or result.get("downloaded_rows") != 170:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                read_ids.update(int(row[0]) for row in result["rows"])
+                omitted.extend(result.get("omitted_row_offsets", []))
+                read_page(result["next_offset"])
+
+            call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                "version": 1, "tab_id": tab["id"],
+                "connection_id": tab["connection_id"],
+                "editor_revision": tab["editor_revision"],
+            }, ran)
         elif message.startswith(("Run selected SQL", "Run first SQL by range")):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]

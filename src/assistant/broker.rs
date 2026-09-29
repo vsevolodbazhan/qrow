@@ -528,13 +528,29 @@ pub fn bound_rows(
     offset: usize,
     requested: usize,
 ) -> Result<BoundedRows, ToolError> {
-    bound_rows_within(rows, offset, requested, MAX_TOOL_PAYLOAD_BYTES)
+    bound_rows_after(rows, offset, requested, 0)
+}
+
+/// Rows from `offset` when the result metadata already uses `used_bytes`.
+pub fn bound_rows_after(
+    rows: &[Vec<Option<String>>],
+    offset: usize,
+    requested: usize,
+    used_bytes: usize,
+) -> Result<BoundedRows, ToolError> {
+    bound_rows_within(
+        rows,
+        offset,
+        requested,
+        MAX_TOOL_PAYLOAD_BYTES.saturating_sub(used_bytes),
+        true,
+    )
 }
 
 /// Rows from `offset` for a query result that already uses `used_bytes` of the tool output.
 pub fn preview_rows(rows: &[Vec<Option<String>>], offset: usize, used_bytes: usize) -> BoundedRows {
     let budget = MAX_PREVIEW_BYTES.min(MAX_TOOL_PAYLOAD_BYTES.saturating_sub(used_bytes));
-    bound_rows_within(rows, offset, MAX_PREVIEW_ROWS, budget)
+    bound_rows_within(rows, offset, MAX_PREVIEW_ROWS, budget, false)
         .expect("the preview row count is within the tool row limit")
 }
 
@@ -543,6 +559,7 @@ fn bound_rows_within(
     offset: usize,
     requested: usize,
     budget: usize,
+    omit_unfittable: bool,
 ) -> Result<BoundedRows, ToolError> {
     if requested == 0 || requested > MAX_TOOL_ROWS {
         return Err(ToolError::new(
@@ -564,6 +581,11 @@ fn bound_rows_within(
             continue;
         };
         if full_row_bytes > remaining {
+            if output.is_empty() && omit_unfittable {
+                omitted_row_offsets.push(offset + index);
+                consumed += 1;
+                continue;
+            }
             break;
         }
         bytes = bytes.saturating_add(full_row_bytes + separator);
@@ -1448,6 +1470,34 @@ mod tests {
         let full = preview_rows(&rows, 0, MAX_TOOL_PAYLOAD_BYTES);
         assert!(full.rows.is_empty());
         assert_eq!(full.next_offset, 0);
+        assert!(full.omitted_row_offsets.is_empty());
+
+        let large = vec![vec![Some("x".repeat(MAX_PREVIEW_BYTES + 1))]];
+        let preview = preview_rows(&large, 0, 0);
+        assert!(preview.rows.is_empty());
+        assert_eq!(preview.next_offset, 0);
+        assert!(preview.omitted_row_offsets.is_empty());
+        let read = bound_rows_after(&large, 0, 1, 300).unwrap();
+        assert_eq!(read.rows, large);
+        assert_eq!(read.next_offset, 1);
+    }
+
+    #[test]
+    fn wide_rows_do_not_stall_result_paging() {
+        let mut rows: Vec<_> = (0..170)
+            .map(|number| vec![Some(number.to_string()), Some("value".into())])
+            .collect();
+        rows[25][1] = Some("x".repeat(MAX_TOOL_PAYLOAD_BYTES - 100));
+        let mut offset = 20;
+        let mut omitted = Vec::new();
+        while offset < rows.len() {
+            let page = bound_rows_after(&rows, offset, 100, 300).unwrap();
+            assert!(page.next_offset > offset, "row paging stopped at {offset}");
+            omitted.extend(page.omitted_row_offsets);
+            offset = page.next_offset;
+        }
+        assert_eq!(offset, 170);
+        assert_eq!(omitted, [25]);
     }
 
     #[test]
