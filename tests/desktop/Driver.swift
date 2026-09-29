@@ -409,7 +409,9 @@ final class Driver {
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         log = try FileHandle(forWritingTo: logURL)
         process.executableURL = URL(fileURLWithPath: "\(bundle)/Contents/MacOS/qrow")
-        if CommandLine.arguments.contains("--editor-highlight-only") {
+        let demo = CommandLine.arguments.contains("--editor-highlight-only")
+            || CommandLine.arguments.contains("--results-text-only")
+        if demo {
             process.arguments = ["--demo"]
         }
         process.environment = env
@@ -420,7 +422,7 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
-        _ = try wait(CommandLine.arguments.contains("--editor-highlight-only") ? "SQL Editor" : "New Connection", timeout: 20)
+        _ = try wait(demo ? "SQL Editor" : "New Connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
         try setTestWindowFrame(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -478,6 +480,48 @@ final class Driver {
         }
         try require(distance(reference, edge) < 0.015, "Active line highlight stops before the editor's right edge")
         print("PASS: The active line highlight reaches the right edge of the editor")
+    }
+    func testResultsText() throws {
+        let descender = try wait("Singapore Airlines", timeout: 20, role: kAXCellRole)
+        let (descenderOrigin, descenderSize) = try elementBounds(descender)
+        // Routes such as "HEL → ARN" have no descenders, so their ink ends at the baseline of the same row.
+        guard let baseline = elements().first(where: {
+            attribute($0, kAXRoleAttribute) as? String == kAXCellRole
+                && strings($0).contains { $0.contains("→") }
+                && (try? elementBounds($0)).map { abs($0.0.y - descenderOrigin.y) < 1 } == true
+        }) else { throw Failure("No baseline cell in the row of the descender cell") }
+        let (baselineOrigin, baselineSize) = try elementBounds(baseline)
+
+        // Returns the first and last pixel rows that contain text, in points.
+        func ink(_ name: String, _ origin: CGPoint, _ extent: CGSize) throws -> (Double, Double) {
+            let path = "\(artifacts)/results-text-\(name).png"
+            let rect = "\(Int(origin.x)),\(Int(origin.y)),\(Int(min(extent.width, 120))),\(Int(extent.height))"
+            _ = try command(["screencapture", "-x", "-R", rect, path])
+            guard let data = FileManager.default.contents(atPath: path),
+                  let bitmap = NSBitmapImageRep(data: data),
+                  let background = bitmap.colorAt(x: 1, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB) else {
+                throw Failure("Could not read results text capture")
+            }
+            let rows = (0..<bitmap.pixelsHigh).filter { y in
+                (0..<bitmap.pixelsWide).contains { x in
+                    guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+                    return max(abs(color.redComponent - background.redComponent),
+                               abs(color.greenComponent - background.greenComponent),
+                               abs(color.blueComponent - background.blueComponent)) > 0.3
+                }
+            }
+            guard let top = rows.first, let bottom = rows.last else { throw Failure("No text in \(name) cell") }
+            let scale = Double(bitmap.pixelsHigh) / Double(Int(extent.height))
+            return (Double(top) / scale, Double(bottom + 1) / scale)
+        }
+        let (capTop, baselineBottom) = try ink("baseline", baselineOrigin, baselineSize)
+        let (_, descenderBottom) = try ink("descender", descenderOrigin, descenderSize)
+        let capHeight = baselineBottom - capTop
+        let descent = descenderBottom - baselineBottom
+        print("results text: cap height \(capHeight) pt, descent \(descent) pt")
+        // A clipped cell keeps about 0.17 of the cap height below the baseline, a full one about 0.28.
+        try require(descent >= 0.22 * capHeight, "Results cell clips descenders: descent \(descent) pt, cap height \(capHeight) pt")
+        print("PASS: Results cells show letters below the baseline")
     }
     func stop() {
         sampleTimer?.invalidate()
@@ -915,6 +959,9 @@ do {
             } else if CommandLine.arguments.contains("--editor-highlight-only") {
                 try driver.start()
                 try driver.testEditorHighlight()
+            } else if CommandLine.arguments.contains("--results-text-only") {
+                try driver.start()
+                try driver.testResultsText()
             } else if CommandLine.arguments.contains("--window-close-only") {
                 try driver.start()
                 try driver.testFailedSaveExit(closeWindow: true)

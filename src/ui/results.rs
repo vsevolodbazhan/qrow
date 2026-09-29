@@ -191,7 +191,7 @@ impl TableDelegate for Results {
                 el.bg(cx.theme().selection)
                     .text_color(cx.theme().foreground)
             })
-            .child(div().line_height(relative(1.)).truncate().child(display))
+            .child(div().truncate().child(display))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |s, _, _, cx| {
