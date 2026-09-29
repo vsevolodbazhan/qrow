@@ -26,6 +26,12 @@ Qrow changes these files:
 - `src/text/inline.rs`: Markdown text paints its selection under the glyphs,
   as the input does. Before, the selection was painted over the glyphs and
   dimmed the selected text. `src/text/text_view.rs` adds the regression test.
+- `src/input/base/blink_cursor.rs`: the caret stops blinking and stays visible
+  10 seconds after the last input, focus, or window activation. Before, the
+  caret of a focused input blinked until the input lost focus, and each blink
+  repainted the whole Qrow window. The file also contains two fixes from GPUI
+  Kit 0.7.0 (longbridge/gpui-kit#3139 and #3140): a stop clears the blink
+  state, and a pause does not start a blink loop in an unfocused input.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.

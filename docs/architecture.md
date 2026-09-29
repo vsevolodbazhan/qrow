@@ -63,7 +63,10 @@ close wait for a save acknowledgement. [Workspace](workspace.md) describes
 save recovery and the native termination limitation. Idle UI work waits for
 notifications. Temporary timers
 handle pending saves and forms; active server operations have their own status
-checks. There is no continuous idle repaint loop.
+checks. The caret of a focused text field blinks for 10 seconds after the last
+input, focus, or window activation. Then the caret stays visible and does not
+blink, because each blink repaints the window. There is no continuous idle
+repaint loop.
 
 Result rendering virtualizes both dimensions. Stored values remain separate
 from shortened cell previews. Restoring the workspace does not restore sessions

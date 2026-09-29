@@ -2,10 +2,11 @@
 """Launch time, idle memory, and idle CPU of the release app.
 
 Starts target/release/qrow with an empty temporary workspace, waits until it
-reports that its UI is ready, lets it idle, and samples it with ps. The first
-launch after a build is slower while macOS checks the new executable, so one
-launch warms up and the median of the next launches counts. Prints one
-QROW_PERF line for each measurement and exits with 1 above a budget.
+reports that its UI is ready, lets it idle until the caret of the focused
+editor stops blinking, and samples it with ps. The first launch after a build
+is slower while macOS checks the new executable, so one launch warms up and
+the median of the next launches counts. Prints one QROW_PERF line for each
+measurement and exits with 1 above a budget.
 """
 import json
 import os
@@ -19,7 +20,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[2]
 READY = "Qrow GPUI initialized"
-IDLE_SECONDS = 3
+# The caret blinks for 10 seconds after the editor gets focus, and each blink
+# repaints the window.
+IDLE_SECONDS = 12
 SAMPLE_SECONDS = 5
 # Large regressions only; `./qtest compare` measures small ones.
 BUDGETS = {"app.launch_to_ui": 1500, "app.idle_rss": 400, "app.idle_cpu": 5}
