@@ -1,6 +1,5 @@
 use super::assistant_view::ThreadStatus;
 use super::*;
-use crate::model::copied_profile_name;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
     Icon, Selectable, TitleBar, h_flex,
@@ -11,7 +10,6 @@ use gpui_kit::component::{
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
-use std::rc::Rc;
 
 pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
 
@@ -115,7 +113,6 @@ impl Qrow {
                     .children(self.profiles.iter().map(|profile| {
                         let id = profile.id;
                         let busy = self.profile_busy(id);
-                        let in_use = self.profile_in_use(id);
                         let unread_error = self
                             .tabs
                             .iter()
@@ -126,25 +123,6 @@ impl Qrow {
                             if busy { ", running" } else { "" },
                             if unread_error { ", unread error" } else { "" }
                         );
-                        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
-                        let edited = profile.clone();
-                        let duplicated = profile.clone();
-                        let edit = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.edit_profile(edited.clone(), false, window, cx)
-                        }));
-                        let duplicate =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                let mut profile = duplicated.clone();
-                                profile.id = Uuid::new_v4();
-                                profile.name = copied_profile_name(&profile.name, |name| {
-                                    this.profiles.iter().any(|existing| existing.name == name)
-                                });
-                                this.edit_profile(profile, true, window, cx);
-                            }));
-                        let delete =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.confirm_delete_profile(id, window, cx)
-                            }));
                         let button = Button::new(SharedString::from(format!("profile-{id}")))
                             .ghost()
                             .small()
@@ -210,30 +188,15 @@ impl Qrow {
                             .h(self.ui_px(32.))
                             .flex_shrink_0()
                             .child(button)
-                            .context_menu(move |menu, _, _| {
-                                menu.action_context(restore.clone())
-                                    .item(
-                                        PopupMenuItem::new("Edit Connection…")
-                                            .on_click({
-                                                let edit = edit.clone();
-                                                move |event, window, cx| edit(event, window, cx)
-                                            })
-                                            .disabled(busy),
-                                    )
-                                    .item(PopupMenuItem::new("Duplicate").on_click({
-                                        let duplicate = duplicate.clone();
-                                        move |event, window, cx| duplicate(event, window, cx)
-                                    }))
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("Delete")
-                                            .on_click({
-                                                let delete = delete.clone();
-                                                move |event, window, cx| delete(event, window, cx)
-                                            })
-                                            .disabled(in_use),
-                                    )
-                            })
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                                    let position = event.position;
+                                    cx.defer_in(window, move |this, window, cx| {
+                                        this.open_profile_menu(id, position, window, cx)
+                                    });
+                                }),
+                            )
                     })),
             )
     }

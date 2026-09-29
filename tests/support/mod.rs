@@ -5,11 +5,15 @@
 
 pub mod fixture;
 use anyhow::Result;
+use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, App, AppContext, ElementId, TestAppContext, Window, px, size};
+use gpui_kit::{
+    Action, AnyWindowHandle, App, AppContext, Bounds, ElementId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, TestAppContext, Window, px, size,
+};
 use qrow::{
-    model::{WORKSPACE_VERSION, Workspace},
+    model::{Profile, WORKSPACE_VERSION, Workspace},
     storage::{self, Credentials},
     ui::{self, Environment, Qrow},
 };
@@ -39,6 +43,9 @@ impl MemoryCredentials {
     }
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
+    }
+    pub fn count(&self) -> usize {
+        self.passwords.lock().unwrap().len()
     }
 }
 
@@ -70,6 +77,133 @@ pub fn find_in(
     gpui_kit::base::test_support::snapshots(window)
         .into_iter()
         .find(|element| element.path().last() == Some(&id) && element.path().contains(&scope))
+}
+
+/// Whether `id` is an observed element, or the scope of one, in the last frame.
+pub fn present(window: &Window, id: &ElementId) -> bool {
+    window.try_find(id.clone()).is_some()
+        || elements(window)
+            .iter()
+            .any(|element| element.path().contains(id))
+}
+
+/// Every observed element of the last frame.
+pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
+    gpui_kit::base::test_support::snapshots(window)
+}
+
+/// The labels of every observed element, for failure messages.
+pub fn labels(window: &Window) -> Vec<String> {
+    let mut labels: Vec<_> = elements(window)
+        .iter()
+        .filter_map(|element| element.label().map(str::to_owned))
+        .filter(|label| !label.is_empty())
+        .collect();
+    labels.sort();
+    labels
+}
+
+/// Whether an observed element has a label that contains `text`.
+pub fn shows(window: &Window, text: &str) -> bool {
+    elements(window)
+        .iter()
+        .any(|element| element.label().is_some_and(|label| label.contains(text)))
+}
+
+/// The label of the observed element `id`.
+pub fn label(window: &Window, id: impl Into<ElementId>) -> Option<String> {
+    window
+        .try_find(id)
+        .and_then(|element| element.label().map(str::to_owned))
+}
+
+/// The accessibility value of the observed element `id`.
+pub fn value(window: &Window, id: impl Into<ElementId>) -> Option<String> {
+    window
+        .try_find(id)
+        .and_then(|element| element.value().map(str::to_owned))
+}
+
+/// The index of the item labelled `item` in the open menu `scope`
+/// ("popup-menu" or "submenu").
+pub fn menu_item(window: &mut Window, scope: &str, item: &str) -> Option<usize> {
+    if window.try_find(scope.to_owned()).is_none()
+        && find_in(window, scope.to_owned(), 0usize).is_none()
+    {
+        return None;
+    }
+    let scoped = window.within(scope.to_owned());
+    (0..64).find(|index| {
+        scoped
+            .try_find(*index)
+            .is_some_and(|entry| entry.label() == Some(item))
+    })
+}
+
+/// The observed element labelled exactly `text`.
+pub fn labelled(window: &Window, text: &str) -> Option<ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .find(|element| element.label() == Some(text))
+}
+
+/// The bounds of the observed element `id`, or of the element labelled
+/// `id` when no element has that ID.
+pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
+    window
+        .try_find(id.to_owned())
+        .or_else(|| labelled(window, id))
+        .unwrap_or_else(|| panic!("No element {id}. Labels: {:?}", labels(window)))
+        .bounds()
+}
+
+/// Clicks the center of an observed element, as `TestWindowExt::click` does
+/// for an ID. Use it for elements that GPUI Kit owns and does not name, like
+/// the search field of Settings. Prefer IDs for Qrow's own controls.
+pub fn click_element(window: &mut Window, element: &ElementSnapshot, cx: &mut App) {
+    pointer_click(window, element, MouseButton::Left, cx);
+}
+
+/// Presses and releases `button` at the center of an observed element.
+pub fn pointer_click(
+    window: &mut Window,
+    element: &ElementSnapshot,
+    button: MouseButton,
+    cx: &mut App,
+) {
+    assert!(element.visible(), "{:?} is not visible", element.path());
+    let position = element.bounds().center();
+    window.dispatch_event(
+        MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.dispatch_event(
+        MouseDownEvent {
+            button,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.dispatch_event(
+        MouseUpEvent {
+            button,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
 }
 
 /// The label of a result cell. Column 0 holds the row number.
@@ -141,6 +275,185 @@ impl TestApp {
     ) -> R {
         cx.update_window(self.window, |_, window, cx| f(window, cx))
             .expect("Qrow window closed")
+    }
+
+    pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.update(cx, |window, cx| window.click(id, cx));
+    }
+
+    pub fn press(&self, cx: &mut TestAppContext, key: &str) {
+        self.update(cx, |window, cx| window.press(key, cx));
+    }
+
+    /// Dispatches an action as a key binding or a menu item does.
+    pub fn dispatch(&self, cx: &mut TestAppContext, action: impl Action) {
+        self.update(cx, |window, cx| {
+            window.dispatch_action(action.boxed_clone(), cx)
+        });
+    }
+
+    /// Waits until the element `id` is in the frame.
+    pub fn wait_for(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        let what = format!("{id:?}");
+        self.wait_until(cx, &what, Duration::from_secs(10), |window, _| {
+            present(window, &id)
+        });
+    }
+
+    /// Waits until the element `id` has left the frame.
+    pub fn wait_gone(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        let what = format!("{id:?} to close");
+        self.wait_until(cx, &what, Duration::from_secs(10), |window, _| {
+            !present(window, &id)
+        });
+    }
+
+    /// Clicks the element labelled exactly `text`.
+    pub fn click_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled(window, text).unwrap();
+            click_element(window, &element, cx);
+        });
+    }
+
+    /// Replaces the text of the focused input after clicking the element
+    /// labelled `text`.
+    pub fn fill_labelled(&self, cx: &mut TestAppContext, text: &str, value: &str) {
+        self.click_labelled(cx, text);
+        self.update(cx, |window, cx| {
+            window.press("cmd-a", cx);
+            if value.is_empty() {
+                window.press("backspace", cx);
+            } else {
+                window.input(value, cx);
+            }
+        });
+    }
+
+    /// Opens the select `id` and chooses `option`. A searchable select filters
+    /// to the option; another select moves down its list with the keyboard.
+    pub fn select(&self, cx: &mut TestAppContext, id: &str, option: &str) {
+        let chosen = |app: &Self, cx: &mut TestAppContext| {
+            app.settle(cx);
+            app.update(cx, |window, _| {
+                value(window, id.to_owned()).as_deref() == Some(option)
+            })
+        };
+        self.update(cx, |window, cx| {
+            window.within(id.to_owned()).click("input", cx)
+        });
+        self.settle(cx);
+        self.update(cx, |window, cx| window.input(option, cx));
+        self.settle(cx);
+        self.press(cx, "enter");
+        if chosen(self, cx) {
+            return;
+        }
+        for downs in 1..10 {
+            self.update(cx, |window, cx| {
+                window.within(id.to_owned()).click("input", cx)
+            });
+            self.settle(cx);
+            for _ in 0..downs {
+                self.press(cx, "down");
+            }
+            self.press(cx, "enter");
+            if chosen(self, cx) {
+                return;
+            }
+        }
+        panic!("{id} has no option {option}");
+    }
+
+    /// Runs the queued work of the UI, like deferred updates of a select.
+    pub fn settle(&self, cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        self.update(cx, |window, cx| window.render_frame(cx));
+    }
+
+    /// The value of the stepper `id` of Settings.
+    pub fn stepper(&self, cx: &mut TestAppContext, id: &str) -> String {
+        self.update(cx, |window, _| {
+            window
+                .within(id.to_owned())
+                .find("value")
+                .value()
+                .unwrap_or_default()
+                .to_owned()
+        })
+    }
+
+    /// Clicks `button` ("increment" or "decrement") of the stepper `id` and
+    /// waits for `expected`.
+    pub fn step(&self, cx: &mut TestAppContext, id: &str, button: &str, expected: &str) {
+        self.update(cx, |window, cx| {
+            window.within(id.to_owned()).click(button.to_owned(), cx)
+        });
+        self.wait_until(
+            cx,
+            &format!("{id} to show {expected}"),
+            Duration::from_secs(10),
+            |window, _| {
+                window
+                    .within(id.to_owned())
+                    .try_find("value")
+                    .and_then(|v| v.value().map(str::to_owned))
+                    .as_deref()
+                    == Some(expected)
+            },
+        );
+    }
+
+    /// Right-clicks the element labelled exactly `text` and waits for its menu.
+    pub fn context_menu_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled(window, text).unwrap();
+            pointer_click(window, &element, MouseButton::Right, cx);
+        });
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Opens the submenu `parent` of the open menu and clicks its `item`.
+    pub fn choose_in_submenu(&self, cx: &mut TestAppContext, parent: &str, item: &str) {
+        self.wait_until(cx, parent, Duration::from_secs(10), |window, _| {
+            menu_item(window, "popup-menu", parent).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let index = menu_item(window, "popup-menu", parent).unwrap();
+            window.within("popup-menu").hover(index, cx);
+        });
+        self.choose(cx, "submenu", item);
+    }
+
+    /// Right-clicks `id` and waits for its context menu.
+    pub fn context_menu(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.update(cx, |window, cx| window.right_click(id, cx));
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Clicks the item labelled `item` in the open menu `scope`.
+    pub fn choose(&self, cx: &mut TestAppContext, scope: &str, item: &str) {
+        self.wait_until(
+            cx,
+            &format!("{item} in {scope}"),
+            Duration::from_secs(10),
+            |window, _| menu_item(window, scope, item).is_some(),
+        );
+        self.update(cx, |window, cx| {
+            let index = menu_item(window, scope, item).unwrap();
+            window.within(scope.to_owned()).click(index, cx);
+        });
     }
 
     /// Clicks `id`, selects its text, and types `text` in its place. Masked
@@ -220,4 +533,21 @@ impl TestApp {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+/// A synthetic connection that no test connects to.
+pub fn offline_profile(name: &str) -> Profile {
+    Profile {
+        name: name.into(),
+        host: "example.invalid".into(),
+        port: 10009,
+        username: "synthetic".into(),
+        database: "default".into(),
+        ..Profile::default()
+    }
+}
+
+/// The element ID of the sidebar row of a connection.
+pub fn connection_row(id: Uuid) -> ElementId {
+    ElementId::Name(format!("profile-{id}").into())
 }

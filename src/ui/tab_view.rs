@@ -90,9 +90,12 @@ impl Qrow {
             .gap_2()
             .child(
                 v_form().w_full().child(
-                    field()
-                        .label(spec.label)
-                        .child(Input::new(input).w_full().aria_label(spec.label)),
+                    field().label(spec.label).child(
+                        Input::new(input)
+                            .id(SharedString::from(format!("rename-{}-name", spec.key)))
+                            .w_full()
+                            .aria_label(spec.label),
+                    ),
                 ),
             )
             .when_some(error, |content, error| {

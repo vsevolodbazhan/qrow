@@ -52,6 +52,7 @@ impl Qrow {
             .child(
                 div()
                     .id("about-name")
+                    .test_support()
                     .role(Role::Label)
                     .text_size(rems(16. / 14.))
                     .font_semibold()
@@ -61,6 +62,7 @@ impl Qrow {
             .child(
                 div()
                     .id("about-version")
+                    .test_support()
                     .role(Role::Label)
                     .text_size(rems(12. / 14.))
                     .text_color(cx.theme().muted_foreground)
@@ -71,6 +73,7 @@ impl Qrow {
             .child(
                 div()
                     .id("about-copyright")
+                    .test_support()
                     .role(Role::Label)
                     .mt_2()
                     .text_size(rems(11. / 14.))

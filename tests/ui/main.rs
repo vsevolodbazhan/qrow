@@ -3,4 +3,6 @@
 mod support;
 
 mod connections;
+mod dialogs;
 mod queries;
+mod tabs;
