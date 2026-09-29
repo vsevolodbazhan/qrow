@@ -53,7 +53,10 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     app.scroll_to(cx, "connection-idle-behavior");
     app.select(cx, "connection-idle-behavior", "Keep connected");
     app.scroll_to(cx, "connection-keep-alive-query");
-    app.fill(cx, "connection-keep-alive-interval", "3");
+    // The worker sends a keep-alive when it is idle for the interval, and the
+    // window cannot run or page during it. The interval is longer than any
+    // step of this test on a loaded runner, so only the wait below meets one.
+    app.fill(cx, "connection-keep-alive-interval", "15");
     app.fill(
         cx,
         "connection-keep-alive-query",
@@ -62,14 +65,10 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
 
-    app.run_sql(
+    app.run_complete(
         cx,
         "CREATE TEMPORARY FUNCTION qrow_keep_alive AS 'io.qrow.fixture.Blocking'",
     );
-    app.wait_until(cx, "the setup statement", QUERY_TIMEOUT, |window, _| {
-        label(window, "query-status")
-            .is_some_and(|s| s.starts_with("Complete") || s.starts_with("Sending keep-alive"))
-    });
     app.run_sql(cx, "SET spark.sql.session.timeZone=Asia/Tokyo");
     app.wait_until(cx, "the session setting", QUERY_TIMEOUT, |window, _| {
         shows(window, "Asia/Tokyo")
