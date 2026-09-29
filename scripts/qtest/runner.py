@@ -174,6 +174,7 @@ class SuiteResult:
     failed_step: str | None = None
     missing: list = field(default_factory=list)
     failures: list = field(default_factory=list)
+    metrics: list = field(default_factory=list)
 
 
 class Output:
@@ -318,7 +319,30 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
     return None
 
 
+METRIC_PREFIX = "QROW_PERF "
+
+
+def metrics_in(log):
+    """The performance measurements that probes printed into a suite log."""
+    if not log.exists():
+        return []
+    found = []
+    for line in log.read_text().splitlines():
+        if METRIC_PREFIX in line:
+            try:
+                found.append(json.loads(line.split(METRIC_PREFIX, 1)[1]))
+            except json.JSONDecodeError:
+                continue
+    return found
+
+
 def run_suite(item, options, extra, run_dir, output, env=None):
+    result = run_suite_steps(item, options, extra, run_dir, output, env)
+    result.metrics = metrics_in(suite_log(run_dir, item.suite))
+    return result
+
+
+def run_suite_steps(item, options, extra, run_dir, output, env=None):
     suite = item.suite
     started = time.monotonic()
     env = env or {}
@@ -456,4 +480,7 @@ def run(selected, options, extra, output, fail_fast=False):
                    for result in results],
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    measured = [metric for result in results for metric in result.metrics]
+    if measured:
+        (run_dir / "perf.json").write_text(json.dumps(measured, indent=2) + "\n")
     return summary

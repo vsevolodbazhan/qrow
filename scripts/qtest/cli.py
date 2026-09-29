@@ -24,6 +24,7 @@ Everyday use:
   ./qtest list             suites, groups, and what each one needs
   ./qtest doctor           missing tools, with the fix for each one
   ./qtest fixture up       keep the test servers running between runs
+  ./qtest compare main     compare performance with another revision
   ./qtest help TOPIC       a section of docs/testing.md
 
 Exit codes: 0 passed, 1 failed, 2 usage error, 3 missing prerequisite.
@@ -287,6 +288,22 @@ def insert_module(lines, name):
     return [*lines[:position], f"mod {name};", *lines[position:]]
 
 
+def command_compare(args):
+    import compare
+    if args.rounds < 1:
+        raise runner.UsageError("--rounds must be 1 or more.")
+    suites = args.suites or list(catalog.COMPARE_SUITES)
+    for name in suites:
+        if name not in catalog.SUITES:
+            raise runner.UsageError(f"Unknown suite: {name}")
+    output = runner.Output(quiet=args.json)
+    report, code = compare.compare(args.ref, suites, args.rounds, args.threshold, output.note)
+    if report is None:
+        return code
+    print(json.dumps(report, indent=2) if args.json else compare.format_report(report))
+    return code
+
+
 def command_fixture(args):
     argv = [args.action]
     if args.action == "up":
@@ -316,6 +333,7 @@ COMMANDS = {
     "new": command_new,
     "artifacts": command_artifacts,
     "fixture": command_fixture,
+    "compare": command_compare,
     "help": command_help,
 }
 
@@ -367,6 +385,18 @@ def parser():
     servers.add_argument("action", choices=["up", "down", "status"])
     servers.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto",
                          help="auto: Docker when its daemon answers, else local Java processes.")
+
+    comparing = commands.add_parser(
+        "compare", help="Compare performance probes with another revision on this machine.",
+        description="Build REF in a worktree under target/qtest/compare/, run the performance suites "
+                    "there and here in alternating rounds, and report the median change of each probe. "
+                    "Exits with 1 when a probe is slower than the threshold.")
+    comparing.add_argument("ref", help="A revision that has the performance suites, for example main.")
+    comparing.add_argument("suites", nargs="*", help=f"Default: {', '.join(catalog.COMPARE_SUITES)}.")
+    comparing.add_argument("--rounds", type=int, default=3, help="Runs of each side (default: 3).")
+    comparing.add_argument("--threshold", type=float, default=25.,
+                           help="The change in percent above which a probe counts as slower (default: 25).")
+    comparing.add_argument("--json", action="store_true", help="Print only a JSON report on stdout.")
 
     artifacts = commands.add_parser("artifacts", help="Print the directory of the latest run.")
     artifacts.add_argument("--json", action="store_true", help="Print the summary of the latest run.")

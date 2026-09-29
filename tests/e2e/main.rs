@@ -7,5 +7,6 @@ mod assistant;
 mod blocking;
 mod connections;
 mod logs;
+mod perf;
 mod queries;
 mod sessions;

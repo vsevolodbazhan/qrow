@@ -124,9 +124,23 @@ SUITES = {
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "backend")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e)", "--run-ignored", "only"),),
+              (nextest("binary(e2e) & not test(/^perf::/)", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
+        Suite("perf-ui", "Frame, scroll, and editor timings of the real window in a release-like build.",
+              ("cargo", "cargo-nextest", "macos"),
+              (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
+              macos_only=True, explicit_only=True),
+        Suite("perf-e2e", "Query and page latency of the real window against the real servers.",
+              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
+              (nextest("binary(e2e) & test(/^perf::/)", "--run-ignored", "only", "--no-capture"),),
+              macos_only=True, explicit_only=True, fixture="any",
+              prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
+        Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
+              ("cargo", "uv", "macos"),
+              (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
+               Step((PYTHON, "scripts/perf/app.py"))),
+              macos_only=True, explicit_only=True),
         Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
               ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
               (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
@@ -137,6 +151,9 @@ SUITES = {
               cleanup=(Step((PYTHON, "scripts/e2e/keychain.py")),)),
     ]
 }
+
+# `./qtest compare` runs these suites when you name none. They need no servers.
+COMPARE_SUITES = ("perf", "perf-ui", "perf-app")
 
 GROUPS = {
     "default": ("Fast local checks. Runs when you give no selector.",
