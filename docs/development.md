@@ -92,17 +92,20 @@ branch, including manual runs.
 Configure these individual checks as required checks of the `main` ruleset:
 
 ```text
-checks / dependencies
-checks / scripts
-checks / core-linux
-checks / core-macos
-checks / package-macos
-checks / e2e-backend
-checks / e2e-macos
+checks / plan
+checks / static
+checks / core
+checks / ui
+checks / package
+checks / backend
+checks / e2e
+checks / perf
 ```
 
-There is no aggregate CI gate. A skipped E2E job of a fork pull request
-counts as passed.
+There is no aggregate CI gate. A skipped job counts as passed: a job that the
+plan does not select, and a server job of a fork pull request. The `plan`
+check must be required, because the other jobs skip when it fails. Do not
+require the `checks` check. Only a skipped draft run reports it.
 
 The [release workflow](../.github/workflows/release.yml) is manual. Use it to
 publish a nightly or stable release. It accepts an optional commit SHA or ref.
@@ -118,9 +121,8 @@ resolve-target -> checks -> dmg -> publish
 ```
 
 `resolve-target` finds the commit and the release version. `checks` is the
-checks workflow, the same as for a pull request. Its `package-macos` job
-builds the package with the release version, and `e2e-macos` tests that
-package. `dmg` puts the tested package in a DMG. The publish job creates the
+checks workflow with all jobs. Its `package` job builds the package with the
+release version, and its `e2e` job tests that package. `dmg` puts the tested package in a DMG. The publish job creates the
 release tag, and then the GitHub Release with the DMG as its asset. The
 workflow uses the latest non-draft release on the selected channel as the
 changelog start tag. If the channel has no previous release, it writes the

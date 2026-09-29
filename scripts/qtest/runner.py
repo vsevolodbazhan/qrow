@@ -299,7 +299,8 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if item.test_filter and step in suite.steps and step.nextest_filter is None:
             continue
         command = render_command(step, options, item.test_filter, extra)
-        code = execute(command, dict(os.environ, **env, **dict(step.env)), step.timeout, log, output)
+        step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
+        code = execute(command, dict(os.environ, **env, **step_env), step.timeout, log, output)
         if code == 0:
             continue
         result = SuiteResult(suite.name, "failed", time.monotonic() - started, str(log),
@@ -424,7 +425,8 @@ def new_run_dir():
     return path
 
 
-def run(selected, options, extra, output, fail_fast=False):
+def run(selected, options, extra, output, fail_fast=False, report_only=()):
+    """Run the selected suites. A failure of a `report_only` suite does not fail the run."""
     run_dir = new_run_dir()
     results = [None] * len(selected)
     blocked = [precheck(item, options) for item in selected]
@@ -435,7 +437,8 @@ def run(selected, options, extra, output, fail_fast=False):
     try:
         for index, item in enumerate(selected):
             name = item.suite.name
-            if fail_fast and any(result and result.status in ("failed", "missing") for result in results):
+            if fail_fast and any(result and result.status in ("failed", "missing")
+                                 and result.name not in report_only for result in results):
                 results[index] = SuiteResult(name, "skipped", reason="An earlier suite did not pass.")
                 continue
             if item.suite.fixture and blocked[index] is None and not prepared:
@@ -464,7 +467,7 @@ def run(selected, options, extra, output, fail_fast=False):
     finally:
         if session:
             session.release()
-    statuses = {result.status for result in results}
+    statuses = {result.status for result in results if result.name not in report_only}
     if "failed" in statuses:
         status, code = "failed", EXIT_FAILED
     elif "missing" in statuses:
@@ -476,7 +479,8 @@ def run(selected, options, extra, output, fail_fast=False):
         "status": status,
         "exit_code": code,
         "artifacts": str(run_dir),
-        "suites": [{key: value for key, value in vars(result).items() if value not in (None, [])}
+        "suites": [{**{key: value for key, value in vars(result).items() if value not in (None, [])},
+                    **({"report_only": True} if result.name in report_only else {})}
                    for result in results],
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

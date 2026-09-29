@@ -58,6 +58,7 @@ class ChangeRuleTests(unittest.TestCase):
         cases = {
             "src/ui.rs": rust,
             "tests/ui/support.rs": rust,
+            "tests/fixture/server/Blocking.java": [],
             "vendor/gpui-base/src/lib.rs": rust,
             "deny.toml": ["policy", "deps"],
             "Cargo.lock": [*rust, "policy", "deps"],
@@ -189,6 +190,21 @@ class RunTests(unittest.TestCase):
     def test_fail_fast_skips_later_suites(self):
         summary = self.run_suites(fake_suite("bad", "exit 1"), fake_suite("later", "exit 0"), fail_fast=True)
         self.assertEqual(summary["suites"][1]["status"], "skipped")
+
+    def test_a_report_only_failure_does_not_fail_the_run(self):
+        selected = [runner.Selected(fake_suite("probe", "exit 1")), runner.Selected(fake_suite("check", "exit 0"))]
+        summary = runner.run(selected, {"repeat": 1}, [], runner.Output(quiet=True), fail_fast=True,
+                             report_only=("probe",))
+        self.assertEqual((summary["status"], summary["exit_code"]), ("passed", runner.EXIT_PASSED))
+        probe, check = summary["suites"]
+        self.assertEqual((probe["status"], probe["report_only"]), ("failed", True))
+        self.assertEqual(check["status"], "passed")
+        self.assertNotIn("report_only", check)
+
+    def test_step_environment_names_the_target_directory(self):
+        step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
+        summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
+        self.assertIn(f"dir={os.environ['CARGO_TARGET_DIR']}/package", Path(summary["suites"][0]["log"]).read_text())
 
     def test_a_suite_stops_at_its_first_failed_step(self):
         summary = self.run_suites(fake_suite("steps", "exit 1", "echo second"))
@@ -338,6 +354,32 @@ class PerformanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(compare, "base_tree", return_value=(Path(directory), "a" * 40)):
             self.assertEqual(compare.compare("old", ["perf"], 1, 25, lambda _: None), (None, runner.EXIT_MISSING))
+
+
+class ToolArchiveTests(unittest.TestCase):
+    def test_pinned_archives_have_digests(self):
+        for tool in catalog.TOOLS.values():
+            for target, url, digest in tool.archives:
+                with self.subTest(tool=tool.name, target=target):
+                    self.assertTrue(url.startswith("https://") and tool.version in url and target in url)
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_an_archive_installs_only_with_its_pinned_digest(self):
+        import hashlib
+        import tarfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cargo-nextest").write_text("#!/bin/sh\n")
+            archive = root / "tool.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(root / "cargo-nextest", arcname="cargo-nextest")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            tool = catalog.TOOLS["cargo-nextest"]
+            with patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}), contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(cli.install_archive(tool, archive.as_uri(), "0" * 64))
+                self.assertFalse((root / "home/bin/cargo-nextest").exists())
+                self.assertTrue(cli.install_archive(tool, archive.as_uri(), digest))
+            self.assertTrue(os.access(root / "home/bin/cargo-nextest", os.X_OK))
 
 
 class CommandLineTests(unittest.TestCase):

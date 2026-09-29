@@ -10,6 +10,16 @@ import re
 MACOS = platform.system() == "Darwin"
 
 
+def target_triple():
+    """The target of the prebuilt tool archives for this computer, or None."""
+    if MACOS:
+        return "universal-apple-darwin"
+    if platform.system() == "Linux":
+        machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
+        return f"{machine}-unknown-linux-gnu"
+    return None
+
+
 @dataclass(frozen=True)
 class Tool:
     """A pinned development tool that `qtest install` provides."""
@@ -18,13 +28,23 @@ class Tool:
     version_command: tuple[str, ...]
     version_prefix: str
     install: tuple[tuple[str, ...], ...]
+    # Prebuilt archives by target: (URL, SHA-256). `qtest install` downloads
+    # the archive for this computer, checks its digest, and falls back to
+    # `install` when there is none. A download takes seconds, a build minutes.
+    archives: tuple[tuple[str, str, str], ...] = ()
 
 
 TOOLS = {
     tool.name: tool
     for tool in [
         Tool("cargo-nextest", "0.9.146", ("cargo", "nextest", "--version"), "cargo-nextest 0.9.146",
-             (("cargo", "install", "--locked", "cargo-nextest", "--version", "0.9.146"),)),
+             (("cargo", "install", "--locked", "cargo-nextest", "--version", "0.9.146"),),
+             tuple((target, "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.146/"
+                    f"cargo-nextest-0.9.146-{target}.tar.gz", digest) for target, digest in [
+                 ("universal-apple-darwin", "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8"),
+                 ("x86_64-unknown-linux-gnu", "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
+                 ("aarch64-unknown-linux-gnu", "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
+             ])),
         Tool("cargo-deny", "0.20.2", ("cargo", "deny", "--version"), "cargo-deny 0.20.2",
              (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),)),
         Tool("cargo-machete", "0.9.2", ("cargo", "machete", "--version"), "0.9.2",
@@ -141,6 +161,11 @@ SUITES = {
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
                Step((PYTHON, "scripts/perf/app.py"))),
               macos_only=True, explicit_only=True),
+        Suite("package", "The release app package, built in the target directory, and its size budget.",
+              ("cargo", "uv", "macos", "xcode"),
+              (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
+               Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
+              macos_only=True, explicit_only=True),
         Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
               ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
               (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
@@ -163,7 +188,7 @@ GROUPS = {
 }
 
 # Changed paths select suites for `qtest run --changed` and the hooks.
-RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/|benches/|vendor/"
+RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/(?!fixture/)|benches/|vendor/"
               r"|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
 RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
@@ -199,6 +224,64 @@ def suites_for_changes(paths):
 def suites_for_hook(hook, paths):
     """Return the suites that the changed paths select and that the hook runs."""
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
+
+
+@dataclass(frozen=True)
+class CiJob:
+    """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
+    name: str
+    summary: str
+    runner: str
+    suites: tuple[str, ...]
+    # Suites that run and report their measurements, but do not fail the job.
+    report_only: tuple[str, ...] = ()
+    # Jobs whose failure predicts a failure of this job, or whose output it uses.
+    needs: tuple[str, ...] = ()
+    # A pull request runs the job when it changes a path that matches.
+    paths: str = r"^"
+    runtime: str = "auto"
+
+
+LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
+E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
+CI_JOBS = {
+    job.name: job
+    for job in [
+        CiJob("static", "Formatting, lint, API docs, dependency policy, and scripts.", LINUX,
+              ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
+        CiJob("core", "Core unit tests with line coverage.", LINUX, ("coverage",), paths=RUST_PATHS),
+        CiJob("ui", "Lint of the application, unit tests, and the headless window.", MACOS_RUNNER,
+              ("clippy", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+        CiJob("package", "The release package, its size, and the launch and idle probes of the app.",
+              MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
+              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
+        CiJob("backend", "Connector and worker against the servers in Docker.", LINUX, ("backend",),
+              needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}", runtime="docker"),
+        CiJob("e2e", "The window and the package against local Java servers, and the query probes.",
+              MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
+              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
+        CiJob("perf", "The SQL benchmark budgets, and the frame and editor probes.", MACOS_RUNNER,
+              ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
+    ]
+}
+# A change to these paths can change any job, so it runs all of them.
+CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
+
+
+def ci_jobs_for_changes(paths):
+    """Return the CI jobs for the changed paths, with the jobs that they wait for."""
+    selected = {"static"}
+    for path in paths:
+        if re.search(CI_ALL_PATHS, path):
+            return list(CI_JOBS)
+        selected.update(name for name, job in CI_JOBS.items() if re.search(job.paths, path))
+    pending = list(selected)
+    while pending:
+        for need in CI_JOBS[pending.pop()].needs:
+            if need not in selected:
+                selected.add(need)
+                pending.append(need)
+    return [name for name in CI_JOBS if name in selected]
 
 
 REQUIREMENTS = {
