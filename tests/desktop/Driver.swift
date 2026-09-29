@@ -758,11 +758,13 @@ final class Driver {
     /// At this width the first message fits on one line, and the second
     /// message wraps. If a layout at the bubble's own width breaks a line
     /// again, the bubble keeps the height of the first layout and hides the
-    /// last line, and the message extends below the bubble.
+    /// last line, and the message extends below the bubble. The insets are
+    /// checked on the second message, because the second reply scrolls the
+    /// first message out of the transcript.
     func checkInlineCodeMessages() throws {
-        let message = try checkInlineCodeMessage(
-            "How many tables are in `sandbox_vbazhan` schema?", name: "assistant-inline-code-message")
         _ = try checkInlineCodeMessage(
+            "How many tables are in `sandbox_vbazhan` schema?", name: "assistant-inline-code-message")
+        let message = try checkInlineCodeMessage(
             "When did the latest vacuum complete on `integrations.bookings`?", name: "assistant-wrapped-inline-code-message")
         try checkMessageInsets(message)
     }
