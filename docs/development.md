@@ -43,7 +43,7 @@ Use [scripts/check.sh](../scripts/check.sh) as the check entry point:
 | --- | --- |
 | `sh scripts/check.sh` | Full local suite, excluding packaging and end-to-end tests. |
 | `sh scripts/check.sh core/backend` | Formatting, core lint, core tests, and Rust API documentation. |
-| `sh scripts/check.sh core/macos` | Full application lint and tests on macOS. |
+| `sh scripts/check.sh core/macos` | Full application lint and tests on macOS, including UI integration tests. |
 | `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, Ruff, and script unit tests. |
 | `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, unused dependencies, and `policy.py`. |
 | `sh scripts/check.sh core/coverage` | Core line coverage with an enforced floor. |
@@ -55,8 +55,9 @@ script does not run `policy.py`.
 
 Use `core/backend` for backend changes, `core/macos` for UI changes, and
 `core/scripts` for automation changes. Run the full suite for dependency changes
-or changes that affect several components. Native lint and core coverage do not
-verify pointer, keyboard, or window behavior.
+or changes that affect several components. Core coverage does not include the
+UI. UI integration tests send pointer and keyboard events through GPUI. They do
+not verify macOS input, the menu bar, or rendered pixels.
 
 These checks do not run real Kyuubi queries or retrieve user credentials.
 The Keychain integration test remains opt-in. End-to-end tests are ignored in
@@ -222,6 +223,14 @@ Local protocol fixtures test the connector without a real Spark deployment.
 Worker tests exercise session coordination and bounded fetching. Property tests
 exercise SQL validation with arbitrary Unicode and quoting. Preserve generated
 Proptest regression seeds when fixing a discovered failure.
+
+[UI integration tests](../tests/ui/) open the real Qrow window in a headless
+GPUI Kit window. Each test uses a new temporary workspace and an in-memory
+password store, so it does not use Keychain or the user's workspace. Real
+worker threads open real connections. For this reason the tests allow
+wake-ups from other threads, and waits use wall time. Reduced motion makes
+dialogs open without animation. Find controls by their `ElementId`. Add an ID
+to a control when a test needs it. Do not derive an ID from a list index.
 
 The core library must build with `--no-default-features`. Core coverage excludes
 the GPUI frontend and generated bindings. The line-coverage floor is 80%.

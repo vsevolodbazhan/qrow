@@ -3,6 +3,7 @@ mod assistant_tools;
 mod assistant_view;
 mod button_pair;
 mod connection_form;
+mod environment;
 mod output;
 mod profile_view;
 mod results;
@@ -10,20 +11,12 @@ mod setting_row;
 mod settings_view;
 mod tab_view;
 mod workspace_view;
-pub(crate) use workspace_view::WindowView;
+pub use crate::assets::Assets;
+pub use environment::Environment;
+pub use workspace_view::WindowView;
 
 use crate::themes;
-use gpui_kit::component::{
-    ActiveTheme, Disableable, IconName, Sizable, WindowExt,
-    button::{Button, ButtonVariant, ButtonVariants},
-    dialog::DialogFooter,
-    input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
-    table::TableState,
-};
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::*;
-use qrow::{
+use crate::{
     activity::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
@@ -37,6 +30,17 @@ use qrow::{
     storage::{self, Saver},
     worker::{Event, Worker},
 };
+use gpui_kit::component::{
+    ActiveTheme, Disableable, IconName, Root, Sizable, Theme, WindowExt,
+    button::{Button, ButtonVariant, ButtonVariants},
+    dialog::DialogFooter,
+    highlighter::{LanguageConfig, LanguageRegistry},
+    input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    table::TableState,
+};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 use results::Results;
 use std::{
     collections::BTreeMap,
@@ -64,7 +68,24 @@ actions!(
         Quit
     ]
 );
+/// Initializes GPUI Kit, themes, the SQL language, key bindings, and menus.
+/// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
+    gpui_kit::init(cx);
+    themes::init(cx);
+    // Wide result sets need a persistent, discoverable horizontal scrollbar.
+    Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
+    LanguageRegistry::singleton().register(
+        "sql",
+        &LanguageConfig::new(
+            "sql",
+            tree_sitter_sequel::LANGUAGE.into(),
+            vec![],
+            tree_sitter_sequel::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+    );
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new(
@@ -84,6 +105,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
     ]);
     set_menus(cx, false);
+}
+
+/// Wraps a Qrow view in its window shell and the GPUI Kit root.
+pub fn root(qrow: Entity<Qrow>, window: &mut Window, cx: &mut Context<Root>) -> Root {
+    let shell = cx.new(|_| WindowView::new(qrow));
+    Root::new(shell, window, cx)
 }
 
 fn set_menus(cx: &mut App, assistant_enabled: bool) {
@@ -312,6 +339,7 @@ pub struct Qrow {
     dirty: Option<Instant>,
     message: Option<String>,
     demo: bool,
+    credentials: Arc<dyn storage::Credentials>,
     sidebar: bool,
     sidebar_width: Pixels,
     editor_height: Pixels,
@@ -330,13 +358,17 @@ impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
         px(self.settings.ui_scale * value)
     }
-    pub fn new(window: &mut Window, cx: &mut Context<Self>, demo: bool, started: Instant) -> Self {
+    pub fn new(
+        environment: Environment,
+        started: Instant,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (wake, notifications) = async_channel::bounded(1);
         let save_wake = wake.clone();
-        let path = storage::workspace_path();
-        let (mut workspace, mut message, saver) = if demo {
-            (demo_workspace(), None, None)
-        } else {
+        let demo = environment.is_demo();
+        let (mut workspace, mut message, saver) = if let Some(path) = environment.workspace() {
+            let path = path.clone();
             match Saver::open(path, move || {
                 let _ = save_wake.try_send(());
             }) {
@@ -349,6 +381,8 @@ impl Qrow {
                     None,
                 ),
             }
+        } else {
+            (demo_workspace(), None, None)
         };
         let fonts = installed_fonts(cx);
         workspace.normalize();
@@ -447,6 +481,7 @@ impl Qrow {
             dirty: (!demo && (unavailable_font || unavailable_theme)).then(Instant::now),
             message,
             demo,
+            credentials: environment.credentials(),
             sidebar: true,
             sidebar_width: px(240. * scale),
             editor_height: px(285. * scale),
@@ -1365,9 +1400,12 @@ impl Qrow {
         }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
-            tab.worker = Some(Worker::new(Arc::new(move || {
-                let _ = wake.try_send(());
-            })));
+            tab.worker = Some(Worker::new(
+                Arc::new(move || {
+                    let _ = wake.try_send(());
+                }),
+                self.credentials.clone(),
+            ));
         }
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
@@ -2025,10 +2063,13 @@ impl Qrow {
         let _ = self.wake.try_send(());
         form.error = None;
         let demo = self.demo;
+        let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
         std::thread::spawn(move || {
             let result = if !demo && !password.is_empty() {
-                storage::set_password(profile.id, &password).map_err(|e| e.to_string())
+                credentials
+                    .set_password(profile.id, &password)
+                    .map_err(|e| e.to_string())
             } else {
                 Ok(())
             };
@@ -2156,8 +2197,9 @@ impl Qrow {
         // Keychain work must stay off the GPUI thread. A failure here can only
         // leave the secret behind, which is what the old behaviour did anyway.
         if !self.demo {
+            let credentials = self.credentials.clone();
             std::thread::spawn(move || {
-                let _ = storage::delete_password(id);
+                let _ = credentials.delete_password(id);
             });
         }
         self.form = None;
@@ -2235,12 +2277,12 @@ impl Qrow {
                 ("cancelled", "BOOLEAN"),
             ]
             .into_iter()
-            .map(|(name, data_type)| qrow::model::Column {
+            .map(|(name, data_type)| crate::model::Column {
                 name: name.into(),
                 data_type: data_type.into(),
             })
             .collect();
-            columns.extend((9..=141).map(|n| qrow::model::Column {
+            columns.extend((9..=141).map(|n| crate::model::Column {
                 name: format!("metric_{n}"),
                 data_type: "DOUBLE".into(),
             }));

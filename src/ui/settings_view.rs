@@ -1,5 +1,9 @@
 use super::setting_row::Rows;
 use super::*;
+use crate::model::{
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
+};
+use crate::sql::KeywordCase;
 use crate::themes;
 use gpui_kit::component::{
     IndexPath, h_flex,
@@ -10,10 +14,6 @@ use gpui_kit::component::{
     switch::Switch,
     v_flex,
 };
-use qrow::model::{
-    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
-};
-use qrow::sql::KeywordCase;
 use std::cell::{Cell, RefCell};
 
 const DIALOG_REMS: f32 = 56.;

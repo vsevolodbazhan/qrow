@@ -211,40 +211,54 @@ impl Drop for Saver {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub fn password(id: Uuid) -> Result<Zeroizing<String>> {
-    let bytes = Zeroizing::new(security_framework::passwords::get_generic_password("io.qrow.connection", &id.to_string())
-        .context("Could not read the password from macOS Keychain. Edit the connection to save a password")?);
-    Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
+/// Connection passwords, keyed by profile ID. The application uses
+/// [`Keychain`]; tests supply an in-memory store.
+pub trait Credentials: Send + Sync {
+    fn password(&self, id: Uuid) -> Result<Zeroizing<String>>;
+    fn set_password(&self, id: Uuid, password: &str) -> Result<()>;
+    /// Deleting a profile leaves its secret behind otherwise, keyed by a UUID
+    /// that nothing refers to any more.
+    fn delete_password(&self, id: Uuid) -> Result<()>;
 }
 
-#[cfg(target_os = "macos")]
-pub fn set_password(id: Uuid, password: &str) -> Result<()> {
-    security_framework::passwords::set_generic_password(
-        "io.qrow.connection",
-        &id.to_string(),
-        password.as_bytes(),
-    )
-    .context("Could not save the password in macOS Keychain")
-}
+/// Connection passwords in the macOS Keychain.
+pub struct Keychain;
 
-/// Deleting a profile leaves its secret behind otherwise, keyed by a UUID that
-/// nothing refers to any more.
 #[cfg(target_os = "macos")]
-pub fn delete_password(id: Uuid) -> Result<()> {
-    security_framework::passwords::delete_generic_password("io.qrow.connection", &id.to_string())
+impl Credentials for Keychain {
+    fn password(&self, id: Uuid) -> Result<Zeroizing<String>> {
+        let bytes = Zeroizing::new(security_framework::passwords::get_generic_password("io.qrow.connection", &id.to_string())
+            .context("Could not read the password from macOS Keychain. Edit the connection to save a password")?);
+        Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
+    }
+
+    fn set_password(&self, id: Uuid, password: &str) -> Result<()> {
+        security_framework::passwords::set_generic_password(
+            "io.qrow.connection",
+            &id.to_string(),
+            password.as_bytes(),
+        )
+        .context("Could not save the password in macOS Keychain")
+    }
+
+    fn delete_password(&self, id: Uuid) -> Result<()> {
+        security_framework::passwords::delete_generic_password(
+            "io.qrow.connection",
+            &id.to_string(),
+        )
         .context("Could not delete the password from macOS Keychain")
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn password(_: Uuid) -> Result<Zeroizing<String>> {
-    anyhow::bail!("Keychain requires macOS")
-}
-#[cfg(not(target_os = "macos"))]
-pub fn set_password(_: Uuid, _: &str) -> Result<()> {
-    anyhow::bail!("Keychain requires macOS")
-}
-#[cfg(not(target_os = "macos"))]
-pub fn delete_password(_: Uuid) -> Result<()> {
-    anyhow::bail!("Keychain requires macOS")
+impl Credentials for Keychain {
+    fn password(&self, _: Uuid) -> Result<Zeroizing<String>> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn set_password(&self, _: Uuid, _: &str) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn delete_password(&self, _: Uuid) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
 }

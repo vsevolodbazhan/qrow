@@ -25,7 +25,7 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
-pub(crate) struct Assets;
+pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {

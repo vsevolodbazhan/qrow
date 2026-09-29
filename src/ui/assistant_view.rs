@@ -1,4 +1,23 @@
 use super::*;
+use crate::{
+    assistant::{
+        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, TitleRequest, ToolCall,
+        TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
+        broker::{
+            ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
+            SelectedTabContext, TabSummary, WorkspaceContext, bound_text, context_statement_ranges,
+        },
+        history_item_text,
+        service::{
+            Command as AssistantCommand, Event as AssistantServiceEvent, Operation, Service,
+        },
+        tools,
+    },
+    model::{
+        AssistantConversation, AssistantExecutionMode, AssistantTitleSource,
+        MAX_ASSISTANT_CONVERSATION_TITLE,
+    },
+};
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
@@ -20,25 +39,6 @@ use gpui_kit::component::{
     spinner::Spinner,
     text::{TextView, TextViewStyle},
     v_flex,
-};
-use qrow::{
-    assistant::{
-        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, TitleRequest, ToolCall,
-        TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
-        broker::{
-            ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
-            SelectedTabContext, TabSummary, WorkspaceContext, bound_text, context_statement_ranges,
-        },
-        history_item_text,
-        service::{
-            Command as AssistantCommand, Event as AssistantServiceEvent, Operation, Service,
-        },
-        tools,
-    },
-    model::{
-        AssistantConversation, AssistantExecutionMode, AssistantTitleSource,
-        MAX_ASSISTANT_CONVERSATION_TITLE,
-    },
 };
 use serde_json::{Value, json};
 use std::{

@@ -34,6 +34,15 @@ security-framework = "3"
 [dev-dependencies]
 proptest = "=1.11.0"
 
+# Headless UI integration tests of the real Qrow window. The UI builds only on
+# macOS; keep the version and source equal to the normal dependency.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
+
+[[test]]
+name = "ui"
+required-features = ["ui"]
+
 [patch.crates-io]
 # GPUI Base 0.6.6 with three Qrow fixes: the active-line paint covers the
 # editor's right padding, inline code lines keep one line when they fit, and
