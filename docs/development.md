@@ -71,14 +71,11 @@ Hooks export snapshots into temporary directories and share a build cache under
 `target/hook-checks`. They do not stash, restage, or modify working files.
 They do not package the application.
 
-The macOS end-to-end run uses a synthetic Codex app server to check assistant
-opt-in, the docked pane, a chat turn, appended SQL, formatting of a long
-appended or edited query in the keyword case and tab size from Settings, Undo,
-query approval, statement targeting, tab changes during a turn, automatic query
-execution, the result rows that Qrow returns to Codex, generated
-conversation titles and tab names, calls that name another open tab, parallel conversations in their own tabs, and
-conversations that stay with their tabs.
-It does not use a Codex account.
+The UI and E2E tests use a synthetic Codex app server to check the assistant:
+opt-in, the docked pane, chat turns, appended and formatted SQL, Undo, query
+approval and automatic execution, statement targets, tab changes during a
+turn, generated titles and tab names, parallel conversations, and
+conversations that stay with their tabs. They do not use a Codex account.
 
 The release profile favors size so the optional assistant stays within the
 macOS package budget. Run `./qtest run perf` after a release-profile change.
