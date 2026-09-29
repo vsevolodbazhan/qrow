@@ -58,6 +58,7 @@ class ChangeRuleTests(unittest.TestCase):
         cases = {
             "src/ui.rs": rust,
             "tests/ui/support.rs": rust,
+            "tests/fixture/server/Blocking.java": [],
             "vendor/gpui-base/src/lib.rs": rust,
             "deny.toml": ["policy", "deps"],
             "Cargo.lock": [*rust, "policy", "deps"],
@@ -189,6 +190,21 @@ class RunTests(unittest.TestCase):
     def test_fail_fast_skips_later_suites(self):
         summary = self.run_suites(fake_suite("bad", "exit 1"), fake_suite("later", "exit 0"), fail_fast=True)
         self.assertEqual(summary["suites"][1]["status"], "skipped")
+
+    def test_a_report_only_failure_does_not_fail_the_run(self):
+        selected = [runner.Selected(fake_suite("probe", "exit 1")), runner.Selected(fake_suite("check", "exit 0"))]
+        summary = runner.run(selected, {"repeat": 1}, [], runner.Output(quiet=True), fail_fast=True,
+                             report_only=("probe",))
+        self.assertEqual((summary["status"], summary["exit_code"]), ("passed", runner.EXIT_PASSED))
+        probe, check = summary["suites"]
+        self.assertEqual((probe["status"], probe["report_only"]), ("failed", True))
+        self.assertEqual(check["status"], "passed")
+        self.assertNotIn("report_only", check)
+
+    def test_step_environment_names_the_target_directory(self):
+        step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
+        summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
+        self.assertIn(f"dir={os.environ['CARGO_TARGET_DIR']}/package", Path(summary["suites"][0]["log"]).read_text())
 
     def test_a_suite_stops_at_its_first_failed_step(self):
         summary = self.run_suites(fake_suite("steps", "exit 1", "echo second"))

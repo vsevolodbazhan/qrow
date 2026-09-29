@@ -46,14 +46,16 @@ accept a test filter.
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
+| `package` | The release app package in `target/package/`, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
 On Linux, `unit` and `clippy` use only the core library, and `ui`, `e2e`, and
 `desktop` are not available.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
-Spark servers. `desktop` also takes over the desktop. These suites run only
-when you select them by name. See [Run the servers](#run-the-servers) and
+Spark servers. `desktop` also takes over the desktop. These suites, the
+`perf-*` probes, and `package` run only when you select them by name.
+`package` does not replace `dist/Qrow.app`. See [Run the servers](#run-the-servers) and
 [Run the desktop suite](#run-the-desktop-suite).
 
 The suites without servers check these parts:
@@ -317,6 +319,16 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The first launch after a build warms up, and the median of the next three counts. |
 
+CI runs `perf` with its budgets. It runs the other probes as report-only
+suites, because the hosted runners are slower and less steady than a
+developer computer. Runs on `main` keep the measurements for 90 days. To get
+the measurements of a run, download its `performance-package`,
+`performance-e2e`, or `performance-perf` artifact, for example:
+
+```sh
+gh run download RUN_ID -n performance-perf
+```
+
 To find smaller changes, compare the probes with another revision on the
 same machine:
 
@@ -498,29 +510,45 @@ disk space back. The next hook then builds the dependencies again.
 
 The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
 [test workflow](../.github/workflows/test.yml) and the
-[release workflow](../.github/workflows/release.yml) call it. Its jobs:
+[release workflow](../.github/workflows/release.yml) call it. The qtest
+catalog defines its jobs: the suites of each job, the jobs that it waits
+for, and the paths that select it. The workflow prepares each runner and runs
+`./qtest ci JOB`. To run the suites of a job on your computer, run the same
+command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 
-| Job | Waits for | Runs |
-| --- | --- | --- |
-| `dependencies` | | `deps` |
-| `scripts` | | `scripts` |
-| `core-linux` | | `fmt`, `clippy`, `rustdoc`, `unit`, `coverage` on Linux |
-| `core-macos` | `core-linux` | `clippy`, `unit`, `ui`, `perf` on macOS |
-| `package-macos` | `core-linux` | The release application package and its size check |
-| `e2e-backend` | `core-linux` | `backend` with Docker |
-| `e2e-macos` | `package-macos` | `e2e`, and `desktop` on the package of `package-macos`, with local Java servers |
+| Job | Runner | Suites | Waits for |
+| --- | --- | --- | --- |
+| `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
+| `core` | Linux | `coverage`, which runs the unit tests of the core library | |
+| `ui` | macOS | `clippy`, `unit`, `ui` | `core` |
+| `package` | macOS | `package`, and `perf-app` (report only) | `core` |
+| `backend` | Linux | `backend` with Docker | `core` |
+| `e2e` | macOS | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
+| `perf` | macOS | `perf`, and `perf-ui` (report only) | `core` |
 
-The failures of `core-linux` predict the failures of the macOS and E2E jobs,
-so these jobs wait for it. `e2e-macos` also waits for the package that it
-tests. A failed job skips the jobs that wait for it.
+The failures of `core` predict the failures of the macOS and server jobs, so
+these jobs wait for it. `e2e` also waits for the package that it tests. A
+failed job skips the jobs that wait for it. A report-only suite runs, and its
+measurements go into the run summary. Its failure does not fail the job.
 
-In CI, qtest uses the `ci` nextest profile. The E2E jobs skip pull requests
+A `plan` job selects the jobs of a pull request from its changed files. It
+always selects `static`. Changes to Rust sources select all jobs. Changes to
+the server fixture or the E2E scripts select `backend` and `e2e`. Changes to
+the packaging or probe scripts select `package`. Changes to the workflows,
+`qtest`, `scripts/core/`, or the Python dependencies select all jobs. A
+selected job also selects the jobs that it waits for. A job that the plan does
+not select shows as skipped. Pushes, manual runs, and releases run all jobs.
+To see the plan of your changes, run `./qtest ci plan`.
+
+In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. `e2e-macos` runs on the hosted `macos-15` runner, and its
-two suites share one set of servers. The native archives download from the
+accessibility APIs. `e2e` runs on the hosted `macos-15` runner, and its
+suites share one set of servers. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Runs on `main`
 save the Rust build caches. Other runs only restore them. CI keeps its
-artifacts for one day. See
+artifacts for one day. Runs on `main` also keep the measurements of the
+`package`, `e2e`, and `perf` jobs for 90 days, in the `performance-JOB`
+artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.
 

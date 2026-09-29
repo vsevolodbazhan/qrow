@@ -141,6 +141,11 @@ SUITES = {
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
                Step((PYTHON, "scripts/perf/app.py"))),
               macos_only=True, explicit_only=True),
+        Suite("package", "The release app package, built in the target directory, and its size budget.",
+              ("cargo", "uv", "macos", "xcode"),
+              (Step(("sh", "scripts/package/macos.sh"), env=(("QROW_DIST_DIR", "{target}/package"),), timeout=40 * 60),
+               Step((PYTHON, "scripts/core/size.py"), env=(("QROW_DIST_DIR", "{target}/package"),))),
+              macos_only=True, explicit_only=True),
         Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
               ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
               (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
@@ -163,7 +168,7 @@ GROUPS = {
 }
 
 # Changed paths select suites for `qtest run --changed` and the hooks.
-RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/|benches/|vendor/"
+RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/(?!fixture/)|benches/|vendor/"
               r"|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
 RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
@@ -199,6 +204,64 @@ def suites_for_changes(paths):
 def suites_for_hook(hook, paths):
     """Return the suites that the changed paths select and that the hook runs."""
     return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
+
+
+@dataclass(frozen=True)
+class CiJob:
+    """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
+    name: str
+    summary: str
+    runner: str
+    suites: tuple[str, ...]
+    # Suites that run and report their measurements, but do not fail the job.
+    report_only: tuple[str, ...] = ()
+    # Jobs whose failure predicts a failure of this job, or whose output it uses.
+    needs: tuple[str, ...] = ()
+    # A pull request runs the job when it changes a path that matches.
+    paths: str = r"^"
+    runtime: str = "auto"
+
+
+LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
+E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
+CI_JOBS = {
+    job.name: job
+    for job in [
+        CiJob("static", "Formatting, lint, API docs, dependency policy, and scripts.", LINUX,
+              ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
+        CiJob("core", "Core unit tests with line coverage.", LINUX, ("coverage",), paths=RUST_PATHS),
+        CiJob("ui", "Lint of the application, unit tests, and the headless window.", MACOS_RUNNER,
+              ("clippy", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+        CiJob("package", "The release package, its size, and the launch and idle probes of the app.",
+              MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
+              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
+        CiJob("backend", "Connector and worker against the servers in Docker.", LINUX, ("backend",),
+              needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}", runtime="docker"),
+        CiJob("e2e", "The window and the package against local Java servers, and the query probes.",
+              MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
+              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
+        CiJob("perf", "The SQL benchmark budgets, and the frame and editor probes.", MACOS_RUNNER,
+              ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
+    ]
+}
+# A change to these paths can change any job, so it runs all of them.
+CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pyproject\.toml$|uv\.lock$)"
+
+
+def ci_jobs_for_changes(paths):
+    """Return the CI jobs for the changed paths, with the jobs that they wait for."""
+    selected = {"static"}
+    for path in paths:
+        if re.search(CI_ALL_PATHS, path):
+            return list(CI_JOBS)
+        selected.update(name for name, job in CI_JOBS.items() if re.search(job.paths, path))
+    pending = list(selected)
+    while pending:
+        for need in CI_JOBS[pending.pop()].needs:
+            if need not in selected:
+                selected.add(need)
+                pending.append(need)
+    return [name for name in CI_JOBS if name in selected]
 
 
 REQUIREMENTS = {
