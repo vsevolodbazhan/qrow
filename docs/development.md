@@ -177,6 +177,12 @@ Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
 
+`vendor/` contains patched copies of some GPUI crates, and
+[Cargo.toml](../Cargo.toml) uses them in place of the crates.io releases. The
+`QROW-PATCH.md` file of each crate lists the changes. When you upgrade GPUI Kit,
+apply the changes to the new release again, or remove a patch when the release
+includes its fix.
+
 ## Build identity
 
 [Cargo.toml](../Cargo.toml) holds the version. The About dialog reads it, and

@@ -59,6 +59,11 @@ required-features = ["ui"]
 # includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
+# GPUI's macOS platform 0.3.6 with one Qrow fix: a window stops its display
+# link while GPUI requests no frames. See vendor/gpui-pre-macos/QROW-PATCH.md.
+# Remove this patch when a GPUI release includes the fix.
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+
 # Performance probes build like the release, without link-time optimization,
 # so that they compile faster.
 [profile.perf]

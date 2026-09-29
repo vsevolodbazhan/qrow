@@ -65,6 +65,11 @@ notifications. Temporary timers
 handle pending saves and forms; active server operations have their own status
 checks. There is no continuous idle repaint loop.
 
+A window gets display refresh ticks only while GPUI requests frames. It stops
+its display link 1 second after the last frame request, so an idle window does
+not wake the main thread at the refresh rate of the display. See the
+[macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
+
 Result rendering virtualizes both dimensions. Stored values remain separate
 from shortened cell previews. Restoring the workspace does not restore sessions
 or results. It does not restore Logs history, so database connections do not
