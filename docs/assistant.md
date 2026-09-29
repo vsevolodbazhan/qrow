@@ -76,8 +76,13 @@ query tabs, the SQL of its tab, query status, and requested result rows and
 Logs.
 When an assistant query or row fetch ends, Qrow sends its first downloaded rows
 to Codex with the result: up to 20 rows and 16 KB. Codex then does not need a
-separate request to read them. It
-appends each new query to the tab of the conversation. It keeps existing queries and
+separate request to read them. Codex can use **Read results** to read later
+downloaded rows. Each result gives the
+offset for the next read and tells Codex if more downloaded rows remain. If a
+row is too large for a tool result, Qrow lists its offset and continues with
+later rows. Codex cannot read that row through **Read results**.
+
+Codex appends each new query to the tab of the conversation. It keeps existing queries and
 selects the new query so it can run that statement alone. If the previous
 query has no final semicolon, Qrow adds one. The assistant starts each query
 that it writes with a short `--` comment that tells what the query does, for

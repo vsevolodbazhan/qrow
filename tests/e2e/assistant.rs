@@ -64,3 +64,19 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
     app.wait_cell(cx, 0, 1, "3");
     app.wait_idle(cx);
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn the_assistant_reads_170_results_past_a_wide_row(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let sql = "SELECT id, CASE WHEN id = 25 THEN repeat('x', 64400) ELSE 'value' END AS payload FROM range(170) ORDER BY id";
+    let (workspace, credentials) = Kyuubi::get().connections(&["Alpha"], sql);
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    app.wait_editor(cx, sql);
+    app.open_assistant(cx);
+    app.choose_send_mode(cx, "Run automatically");
+    app.click(cx, "confirm-conversation-auto-run");
+    app.send(cx, "Run 170 rows and read results");
+    app.wait_reply(cx, "Read all 170 row positions.");
+    app.wait_idle(cx);
+}

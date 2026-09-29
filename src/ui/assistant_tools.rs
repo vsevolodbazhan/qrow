@@ -8,8 +8,8 @@ use crate::assistant::{
     ToolCall, ToolResult,
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
-        MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows, bound_text,
-        context_statement_ranges, preview_rows,
+        MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows_after,
+        bound_text, context_statement_ranges, preview_rows,
     },
     service::Command as AssistantCommand,
 };
@@ -842,6 +842,7 @@ impl Qrow {
             let preview = preview_rows(&results.rows, pending.first_row, used);
             content["rows"] = json!(preview.rows);
             content["next_offset"] = json!(preview.next_offset);
+            content["more_downloaded_rows"] = json!(preview.next_offset < results.rows.len());
             if !preview.omitted_row_offsets.is_empty() {
                 content["omitted_row_offsets"] = json!(preview.omitted_row_offsets);
             }
@@ -962,16 +963,24 @@ impl Qrow {
             .ok_or_else(|| failure("invalid_arguments", "The query tab was not found."))?;
         let data = tab.table.read(cx);
         let data = data.delegate();
+        let mut content = json!({"version": 1, "tab_id": args.tab_id,
+            "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
+            "downloaded_rows": data.rows.len(), "rows": [], "next_offset": args.offset,
+            "more_downloaded_rows": false, "truncated": false, "omitted_row_offsets": []});
+        let used = serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
         let bounded =
-            bound_rows(&data.rows, args.offset, args.count).map_err(|error| ToolResult {
-                success: false,
-                content: json!({"version": 1, "error": error}),
+            bound_rows_after(&data.rows, args.offset, args.count, used).map_err(|error| {
+                ToolResult {
+                    success: false,
+                    content: json!({"version": 1, "error": error}),
+                }
             })?;
-        Ok(success(
-            json!({"version": 1, "tab_id": args.tab_id, "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
-            "downloaded_rows": data.rows.len(), "rows": bounded.rows, "next_offset": bounded.next_offset,
-            "truncated": bounded.truncated, "omitted_row_offsets": bounded.omitted_row_offsets}),
-        ))
+        content["rows"] = json!(bounded.rows);
+        content["next_offset"] = json!(bounded.next_offset);
+        content["more_downloaded_rows"] = json!(bounded.next_offset < data.rows.len());
+        content["truncated"] = json!(bounded.truncated);
+        content["omitted_row_offsets"] = json!(bounded.omitted_row_offsets);
+        Ok(success(content))
     }
 
     fn tool_fetch(&mut self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
