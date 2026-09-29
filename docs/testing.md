@@ -165,7 +165,10 @@ a prerequisite is missing.
 `./qtest install` installs the pinned Cargo tools: cargo-nextest,
 cargo-deny, cargo-machete, and cargo-llvm-cov with its LLVM component. Give
 tool names to install only those tools. The [catalog](../scripts/qtest/catalog.py)
-holds the pinned versions.
+holds the pinned versions. On macOS and Linux, cargo-nextest comes from its
+prebuilt release archive, which takes seconds. qtest checks the archive
+against the SHA-256 digest in the catalog, and builds the tool from source
+when the download fails. The other tools build from source.
 
 Install the script linters separately:
 

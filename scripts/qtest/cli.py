@@ -226,12 +226,47 @@ def command_install(args):
     return install_tools(names)
 
 
+def install_archive(tool, url, digest):
+    """Download a prebuilt tool archive, check its digest, and unpack it into the Cargo bin directory."""
+    import hashlib
+    import os
+    import tarfile
+    import tempfile
+    import urllib.request
+    from pathlib import Path
+    bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+    print(f"[qtest] Downloading {url}", file=sys.stderr)
+    with tempfile.TemporaryDirectory() as directory:
+        archive = Path(directory) / "tool.tar.gz"
+        with urllib.request.urlopen(url, timeout=120) as response:
+            archive.write_bytes(response.read())
+        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if actual != digest:
+            print(f"[qtest] {tool.name}: SHA-256 {actual} does not match the pinned {digest}.", file=sys.stderr)
+            return False
+        with tarfile.open(archive) as bundle:
+            member = bundle.getmember(tool.name)
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            bundle.extract(member, bin_dir, filter="data")
+        (bin_dir / tool.name).chmod(0o755)
+    return True
+
+
 def install_tools(names):
     for name in names:
         tool = catalog.TOOLS[name]
         if runner.check_requirement(name, {}) is None:
             print(f"[qtest] {name} {tool.version} is installed.", file=sys.stderr)
             continue
+        archive = next(((url, digest) for target, url, digest in tool.archives
+                        if target == catalog.target_triple()), None)
+        if archive:
+            try:
+                if install_archive(tool, *archive) and runner.check_requirement(name, {}) is None:
+                    continue
+            except OSError as error:
+                print(f"[qtest] {name}: download failed ({error}).", file=sys.stderr)
+            print(f"[qtest] {name}: building it from source instead.", file=sys.stderr)
         for command in tool.install:
             print(f"[qtest] $ {subprocess.list2cmdline(command)}", file=sys.stderr)
             if subprocess.run(command, cwd=ROOT).returncode:

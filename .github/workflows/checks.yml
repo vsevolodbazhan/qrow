@@ -280,6 +280,7 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref }}
       - run: rustup show
+      # The perf profile has no LTO, so with this cache only Qrow builds again.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: perf

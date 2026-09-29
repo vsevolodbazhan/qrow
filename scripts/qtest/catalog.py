@@ -10,6 +10,16 @@ import re
 MACOS = platform.system() == "Darwin"
 
 
+def target_triple():
+    """The target of the prebuilt tool archives for this computer, or None."""
+    if MACOS:
+        return "universal-apple-darwin"
+    if platform.system() == "Linux":
+        machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
+        return f"{machine}-unknown-linux-gnu"
+    return None
+
+
 @dataclass(frozen=True)
 class Tool:
     """A pinned development tool that `qtest install` provides."""
@@ -18,13 +28,23 @@ class Tool:
     version_command: tuple[str, ...]
     version_prefix: str
     install: tuple[tuple[str, ...], ...]
+    # Prebuilt archives by target: (URL, SHA-256). `qtest install` downloads
+    # the archive for this computer, checks its digest, and falls back to
+    # `install` when there is none. A download takes seconds, a build minutes.
+    archives: tuple[tuple[str, str, str], ...] = ()
 
 
 TOOLS = {
     tool.name: tool
     for tool in [
         Tool("cargo-nextest", "0.9.146", ("cargo", "nextest", "--version"), "cargo-nextest 0.9.146",
-             (("cargo", "install", "--locked", "cargo-nextest", "--version", "0.9.146"),)),
+             (("cargo", "install", "--locked", "cargo-nextest", "--version", "0.9.146"),),
+             tuple((target, "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.146/"
+                    f"cargo-nextest-0.9.146-{target}.tar.gz", digest) for target, digest in [
+                 ("universal-apple-darwin", "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8"),
+                 ("x86_64-unknown-linux-gnu", "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
+                 ("aarch64-unknown-linux-gnu", "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
+             ])),
         Tool("cargo-deny", "0.20.2", ("cargo", "deny", "--version"), "cargo-deny 0.20.2",
              (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),)),
         Tool("cargo-machete", "0.9.2", ("cargo", "machete", "--version"), "0.9.2",

@@ -356,6 +356,32 @@ class PerformanceTests(unittest.TestCase):
             self.assertEqual(compare.compare("old", ["perf"], 1, 25, lambda _: None), (None, runner.EXIT_MISSING))
 
 
+class ToolArchiveTests(unittest.TestCase):
+    def test_pinned_archives_have_digests(self):
+        for tool in catalog.TOOLS.values():
+            for target, url, digest in tool.archives:
+                with self.subTest(tool=tool.name, target=target):
+                    self.assertTrue(url.startswith("https://") and tool.version in url and target in url)
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
+    def test_an_archive_installs_only_with_its_pinned_digest(self):
+        import hashlib
+        import tarfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cargo-nextest").write_text("#!/bin/sh\n")
+            archive = root / "tool.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(root / "cargo-nextest", arcname="cargo-nextest")
+            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+            tool = catalog.TOOLS["cargo-nextest"]
+            with patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}), contextlib.redirect_stderr(io.StringIO()):
+                self.assertFalse(cli.install_archive(tool, archive.as_uri(), "0" * 64))
+                self.assertFalse((root / "home/bin/cargo-nextest").exists())
+                self.assertTrue(cli.install_archive(tool, archive.as_uri(), digest))
+            self.assertTrue(os.access(root / "home/bin/cargo-nextest", os.X_OK))
+
+
 class CommandLineTests(unittest.TestCase):
     def call(self, *argv):
         stdout, stderr = io.StringIO(), io.StringIO()
