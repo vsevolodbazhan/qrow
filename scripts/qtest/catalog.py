@@ -158,21 +158,32 @@ COMPARE_SUITES = ("perf", "perf-ui", "perf-app")
 GROUPS = {
     "default": ("Fast local checks. Runs when you give no selector.",
                 ("fmt", "clippy", "unit", "ui")),
-    "all": ("Every local suite without servers. The pre-push hook runs this group.",
+    "all": ("Every local suite without servers. CI runs these suites and the suites with servers.",
             ("scripts", "deps", "fmt", "clippy", "rustdoc", "unit", "ui", "perf", "coverage")),
 }
 
-# Changed paths select suites for `qtest run --changed` and the pre-commit hook.
+# Changed paths select suites for `qtest run --changed` and the hooks.
 RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/|benches/|vendor/"
               r"|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
+RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
-    (RUST_PATHS, ("fmt", "clippy", "unit", "ui")),
+    (RUST_PATHS, RUST_SUITES),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/workflows/)",
      ("policy",)),
+    (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
     (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest$|docs/testing\.md$)",
      ("scripts",)),
-    (r"^scripts/core/preflight\.sh$", ("fmt", "clippy", "unit", "ui", "policy")),
+    (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
 )
+
+# `qtest hook NAME` runs the suites that the changed paths select, but only
+# those of the hook. A commit gets the checks that take seconds. A push also
+# gets the tests. CI runs everything, including `perf` and `coverage`.
+HOOKS = {
+    "pre-commit": ("Static checks of the staged files.", ("scripts", "policy", "fmt", "clippy")),
+    "pre-push": ("Static checks and tests of the pushed changes.",
+                 ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc", "unit", "ui")),
+}
 
 
 def suites_for_changes(paths):
@@ -183,6 +194,11 @@ def suites_for_changes(paths):
             if re.search(pattern, path):
                 selected.update(names)
     return [name for name in SUITES if name in selected]
+
+
+def suites_for_hook(hook, paths):
+    """Return the suites that the changed paths select and that the hook runs."""
+    return [name for name in suites_for_changes(paths) if name in HOOKS[hook][1]]
 
 
 REQUIREMENTS = {

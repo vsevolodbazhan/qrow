@@ -5,12 +5,33 @@ if ! command -v git >/dev/null 2>&1; then
     exit 1
 fi
 repository="$(git rev-parse --show-toplevel)"
+remote="${1:-origin}"
+zeros=0000000000000000000000000000000000000000
+# The default branch of the remote, for branches that the remote does not have yet.
+default_branch="$(git rev-parse --verify --quiet "refs/remotes/$remote/HEAD" ||
+    git rev-parse --verify --quiet "refs/remotes/$remote/main" || true)"
 # Verify the actual commits being pushed, including pushes from another branch.
 seen=' '
-while read -r local_ref local_oid _remote_ref _remote_oid; do
-    case "$local_oid" in 0000000000000000000000000000000000000000) continue ;; esac
+while read -r local_ref local_oid _remote_ref remote_oid; do
+    case "$local_oid" in "$zeros") continue ;; esac
     case "$seen" in *" $local_oid "*) continue ;; esac
     seen="$seen$local_oid "
+    # Check the changes that the remote does not have: against the remote
+    # branch when the push extends it, else against the default branch.
+    if [ "$remote_oid" != "$zeros" ] && git merge-base --is-ancestor "$remote_oid" "$local_oid" 2>/dev/null; then
+        base="$remote_oid"
+    elif [ -n "$default_branch" ]; then
+        base="$(git merge-base "$default_branch" "$local_oid" || true)"
+    else
+        base=''
+    fi
+    if [ -n "$base" ]; then
+        QROW_CHANGED_FILES="$(git diff --name-only "$base" "$local_oid")"
+    else
+        # No common history: check every file.
+        QROW_CHANGED_FILES="$(git ls-tree -r --name-only "$local_oid")"
+    fi
+    export QROW_CHANGED_FILES
     printf 'Checking %s before push…\n' "$local_ref"
-    sh "$repository/scripts/hooks/snapshot.sh" "$local_oid" run all --fail-fast </dev/null
+    sh "$repository/scripts/hooks/snapshot.sh" "$local_oid" hook pre-push </dev/null
 done
