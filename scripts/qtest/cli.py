@@ -137,6 +137,17 @@ def command_run(args):
     return summary["exit_code"]
 
 
+def command_hook(args):
+    """Run the suites of a Git hook. The hook gives the changed paths in QROW_CHANGED_FILES."""
+    names = catalog.suites_for_hook(args.name, runner.changed_paths_from_git())
+    output = runner.Output(quiet=False)
+    output.note(f"{args.name}: changed paths select " + (", ".join(names) if names else "no suites"))
+    selected, _ = runner.resolve(names) if names else ([], [])
+    summary = runner.run(selected, {"runtime": "auto", "repeat": 1}, [], output, fail_fast=True)
+    print_summary(summary)
+    return summary["exit_code"]
+
+
 def print_summary(summary):
     print(f"\nqtest run {summary['run']}: {summary['status']}", file=sys.stderr)
     for suite in summary["suites"]:
@@ -328,6 +339,7 @@ def command_artifacts(args):
 COMMANDS = {
     "list": command_list,
     "run": command_run,
+    "hook": command_hook,
     "doctor": command_doctor,
     "install": command_install,
     "new": command_new,
@@ -364,6 +376,12 @@ def parser():
                               "default) uses Docker when its daemon answers, else local Java processes.")
     running.add_argument("--json", action="store_true", help="Print only a JSON summary on stdout.")
     running.add_argument("--quiet", action="store_true", help="Do not stream command output.")
+
+    hook = commands.add_parser(
+        "hook", help="Run the suites of a Git hook for the paths in QROW_CHANGED_FILES.",
+        description="The repository hooks call this command in a snapshot of the commit. "
+                    "It runs the suites that the changed paths select and that the hook includes.")
+    hook.add_argument("name", choices=list(catalog.HOOKS))
 
     doctor = commands.add_parser("doctor", help="Check prerequisites and print a fix for each gap.")
     doctor.add_argument("selectors", nargs="*", help="Check only these suites or groups.")

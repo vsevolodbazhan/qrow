@@ -81,7 +81,7 @@ A group selects several suites.
 | Group | Suites | Use |
 | --- | --- | --- |
 | `default` | `fmt`, `clippy`, `unit`, `ui` | Runs when you give no selector. |
-| `all` | `scripts`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. The pre-push hook runs it. |
+| `all` | `scripts`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui`, `perf`, `coverage` | Every local suite without servers. |
 
 A group skips a suite that the platform does not support, for example `ui`
 on Linux. A suite that you select by name does not skip. It fails with a
@@ -110,9 +110,11 @@ Options:
 
 `--changed` reads `QROW_CHANGED_FILES` when it is set. Otherwise it uses your
 uncommitted and untracked files and the commits since `origin/main`. Changes
-to Rust sources, tests, and Cargo files select `fmt`, `clippy`, `unit`, and
-`ui`. Changes to dependency policy files or workflows select `policy`. Changes
-to scripts, hooks, workflows, `qtest`, or this page select `scripts`.
+to Rust sources, tests, and Cargo files select `fmt`, `clippy`, `rustdoc`,
+`unit`, and `ui`. Changes to Cargo files or dependency policy files also
+select `deps`. Changes to dependency policy files or workflows select
+`policy`. Changes to scripts, hooks, workflows, `qtest`, or this page select
+`scripts`.
 
 To list the tests of a suite, run `./qtest list ui --tests`.
 
@@ -470,34 +472,56 @@ GPUI Kit components register their element ID for tests, for example
 
 Install the repository hooks with `sh scripts/hooks/install.sh`. The hooks
 check a snapshot of the commit. They do not change your files or the index.
+Each hook runs `./qtest hook NAME` in the snapshot. The command runs the
+suites that the changed files select, as `--changed` does (see
+[Select tests](#select-tests)), and that the hook includes:
 
-| Hook | Runs |
-| --- | --- |
-| pre-commit | `./qtest run --changed --fail-fast` on the staged files. |
-| pre-push | `./qtest run all --fail-fast` on each pushed commit. |
+| Hook | Changed files | Suites |
+| --- | --- | --- |
+| pre-commit | The staged files. | `scripts`, `policy`, `fmt`, `clippy` |
+| pre-push | The changes that the remote does not have. | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc`, `unit`, `ui` |
 
-Hook snapshots share a build directory, `target/hook-checks`, in the checkout
-that runs the hook.
+With a warm build cache and a change to Rust sources, pre-commit takes about
+20 seconds, and pre-push takes about 2 minutes. The pre-push hook checks the
+last commit of each pushed branch. When the push adds commits to a remote
+branch, the hook compares with that branch. For a new or rewritten branch, it
+compares with the merge base of the remote default branch.
 
-The [test workflow](../.github/workflows/test.yml) runs the same suites:
+The hooks do not run `perf` and `coverage`. CI runs them. To run them before
+you push, run `./qtest run all`.
 
-| Job | Runs |
-| --- | --- |
-| `core-dependencies` | `deps` |
-| `core-scripts` | `scripts` |
-| `core-backend` | `fmt`, `clippy`, `rustdoc`, `unit`, `coverage` on Linux |
-| `core-macos` | `clippy`, `unit`, `ui`, `perf` on macOS, then packaging |
-| `e2e-backend` | `backend` with Docker |
-| `e2e-macos` | `e2e` and `desktop` with local Java servers |
+Hook snapshots share a build directory, `target/hook-checks`, in the main
+checkout. All worktrees of the repository use it. To use a different
+directory, set `QROW_HOOK_TARGET_DIR`. You can remove the directory to get
+disk space back. The next hook then builds the dependencies again.
+
+The [checks workflow](../.github/workflows/checks.yml) checks one commit. The
+[test workflow](../.github/workflows/test.yml) and the
+[release workflow](../.github/workflows/release.yml) call it. Its jobs:
+
+| Job | Waits for | Runs |
+| --- | --- | --- |
+| `dependencies` | | `deps` |
+| `scripts` | | `scripts` |
+| `core-linux` | | `fmt`, `clippy`, `rustdoc`, `unit`, `coverage` on Linux |
+| `core-macos` | `core-linux` | `clippy`, `unit`, `ui`, `perf` on macOS |
+| `package-macos` | `core-linux` | The release application package and its size check |
+| `e2e-backend` | `core-linux` | `backend` with Docker |
+| `e2e-macos` | `package-macos` | `e2e`, and `desktop` on the package of `package-macos`, with local Java servers |
+
+The failures of `core-linux` predict the failures of the macOS and E2E jobs,
+so these jobs wait for it. `e2e-macos` also waits for the package that it
+tests. A failed job skips the jobs that wait for it.
 
 In CI, qtest uses the `ci` nextest profile. The E2E jobs skip pull requests
-from forks. `e2e-macos` runs on the hosted `macos-15` runner, and its two
-suites share one set of servers. The native archives download from the mirror
-in each run, with a limit of 2 hours for each archive. CI keeps the E2E
-artifacts for one day. The release workflow runs the same E2E jobs before it
-packages a release. See
+from forks, because they run repository code in Docker and through macOS
+accessibility APIs. `e2e-macos` runs on the hosted `macos-15` runner, and its
+two suites share one set of servers. The native archives download from the
+mirror in each run, with a limit of 2 hours for each archive. Runs on `main`
+save the Rust build caches. Other runs only restore them. CI keeps its
+artifacts for one day. See
 [Development](development.md#hooks-and-continuous-integration) for workflow
-events and release checks.
+events, required checks, and releases.
 
 ## Limitations
 

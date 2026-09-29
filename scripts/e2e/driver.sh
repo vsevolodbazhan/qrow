@@ -28,7 +28,7 @@ export QROW_DATA_DIR="$QROW_E2E_ARTIFACTS/workspace"
 export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 QROW_E2E_REUSE_MACOS_PACKAGE="${QROW_E2E_REUSE_MACOS_PACKAGE:-false}"
-QROW_MACOS_PACKAGE="${QROW_MACOS_PACKAGE:-target/macos-package/dist/Qrow-macos.zip}"
+QROW_MACOS_PACKAGE="${QROW_MACOS_PACKAGE:-target/macos-package/Qrow-macos.zip}"
 case "$QROW_E2E_REUSE_MACOS_PACKAGE" in
     true | false) ;;
     *) echo "QROW_E2E_REUSE_MACOS_PACKAGE must be true or false." >&2; exit 1 ;;

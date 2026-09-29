@@ -54,23 +54,42 @@ class CatalogTests(unittest.TestCase):
 
 class ChangeRuleTests(unittest.TestCase):
     def test_paths_select_suites(self):
+        rust = ["fmt", "clippy", "rustdoc", "unit", "ui"]
         cases = {
-            "src/ui.rs": ["fmt", "clippy", "unit", "ui"],
-            "tests/ui/support.rs": ["fmt", "clippy", "unit", "ui"],
-            "vendor/gpui-base/src/lib.rs": ["fmt", "clippy", "unit", "ui"],
-            "deny.toml": ["policy"],
-            "Cargo.lock": ["fmt", "clippy", "unit", "ui", "policy"],
+            "src/ui.rs": rust,
+            "tests/ui/support.rs": rust,
+            "vendor/gpui-base/src/lib.rs": rust,
+            "deny.toml": ["policy", "deps"],
+            "Cargo.lock": [*rust, "policy", "deps"],
             ".github/workflows/test.yml": ["scripts", "policy"],
             "scripts/e2e/fixture.py": ["scripts"],
             "qtest": ["scripts"],
             "docs/testing.md": ["scripts"],
             "docs/queries.md": [],
-            "scripts/core/preflight.sh": ["fmt", "clippy", "unit", "ui", "scripts", "policy"],
+            "scripts/core/preflight.sh": [*rust, "scripts", "policy"],
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
                 expected_in_order = [name for name in catalog.SUITES if name in expected]
                 self.assertEqual(catalog.suites_for_changes([path]), expected_in_order)
+
+    def test_hooks_run_only_their_suites(self):
+        cases = {
+            ("pre-commit", "src/lib.rs"): ["fmt", "clippy"],
+            ("pre-push", "src/lib.rs"): ["fmt", "clippy", "rustdoc", "unit", "ui"],
+            ("pre-commit", "Cargo.lock"): ["fmt", "clippy", "policy"],
+            ("pre-push", "Cargo.lock"): ["fmt", "clippy", "rustdoc", "unit", "ui", "policy", "deps"],
+            ("pre-push", "scripts/qtest/cli.py"): ["scripts"],
+            ("pre-push", "docs/queries.md"): [],
+        }
+        for (hook, path), expected in cases.items():
+            with self.subTest(hook=hook, path=path):
+                expected_in_order = [name for name in catalog.SUITES if name in expected]
+                self.assertEqual(catalog.suites_for_hook(hook, [path]), expected_in_order)
+        # CI runs the slow suites.
+        for _, suites in catalog.HOOKS.values():
+            self.assertNotIn("coverage", suites)
+            self.assertNotIn("perf", suites)
 
     def test_hook_files_come_from_the_environment(self):
         with patch.dict(os.environ, {"QROW_CHANGED_FILES": "src/lib.rs\n\ndeny.toml\n"}):

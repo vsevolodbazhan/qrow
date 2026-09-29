@@ -62,92 +62,70 @@ you need a new distributable. Do not replace the app while someone is testing it
 
 ## Hooks and continuous integration
 
-Pre-commit checks the staged Git snapshot and selects suites by changed path.
-Pre-push checks each distinct revision being pushed with the full local suite.
-[Testing](testing.md#hooks-and-continuous-integration) gives the commands.
-Hooks export snapshots into temporary directories and share a build cache under
-`target/hook-checks`. They do not stash, restage, or modify working files.
-They do not package the application.
+The pre-commit hook checks the staged Git snapshot. The pre-push hook checks
+the last commit of each pushed branch. Both select suites by changed path.
+[Testing](testing.md#hooks-and-continuous-integration) gives the suites of
+each hook and each CI job. Hooks export snapshots into temporary directories
+and share a build cache under `target/hook-checks`. They do not stash,
+restage, or modify working files. They do not package the application.
 
 The release profile favors size so the optional assistant stays within the
 macOS package budget.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Markdown changes other than
-`docs/testing.md` do not trigger pre-commit checks. Changes under `scripts/`
+`docs/testing.md` do not trigger hook checks. Changes under `scripts/`
 trigger script checks, including changes to its README.
 
 The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
-manual dispatches, and pull requests with the
-`opened`, `reopened`, `synchronize`, `ready_for_review`, and
-`converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
-draft pull request, including a `converted_to_draft` event, starts no jobs.
+manual dispatches, and pull requests into any branch with the `opened`,
+`reopened`, `synchronize`, `ready_for_review`, and `converted_to_draft`
+actions. Pull requests in a stack get checks before their base merges. The
+workflow runs all jobs for a non-draft pull request. A draft pull request,
+including a `converted_to_draft` event, starts no jobs. To run the checks of a
+draft pull request, mark it as ready for review.
 
-Each job waits for the less expensive checks that can predict its failure.
-`e2e-backend` does not use the result of `core-macos`, so the two run at the
-same time:
+Every job checks out the same commit: the pull request merge result, or the
+pushed commit. A newer run cancels an older run for the same pull request or
+branch, including manual runs.
 
-```text
-core-dependencies -> core-scripts -> core-backend -> core-macos  -> e2e-macos
-                                                  -> e2e-backend -^
-```
-
-`e2e-macos` waits for `core-macos` and `e2e-backend`. A failed job skips all
-jobs that wait for it, directly or through another job. Every job checks out the same pull
-request merge result. Core jobs run for fork pull requests. E2E jobs run for
-pushes, manual dispatches, and pull requests from this repository. They skip
-fork pull requests because they execute repository code in Docker and through
-macOS accessibility APIs. A newer run cancels an older run for the same pull
-request or branch, including manual runs.
-
-The `core-macos` job also builds the release application package and checks its
-size. The `e2e-macos` job reuses this package by default, and then does not set
-up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
-`false` to build the package in the E2E job. Native fixture archives download
-from a mirror in each run. For the download sources, see
-[Run the servers](testing.md#run-the-servers).
-
-The workflow retains `core-coverage`, `macos-package-and-performance`,
-`backend-evidence`, and `macos-evidence` for one day. Configure these individual
-checks as required branch-protection checks:
+Configure these individual checks as required checks of the `main` ruleset:
 
 ```text
-test / core-dependencies
-test / core-scripts
-test / core-backend
-test / core-macos
-test / e2e-backend
-test / e2e-macos
+checks / dependencies
+checks / scripts
+checks / core-linux
+checks / core-macos
+checks / package-macos
+checks / e2e-backend
+checks / e2e-macos
 ```
 
-There is no aggregate CI gate. The [release workflow](../.github/workflows/release.yml)
-is manual. Use it to publish a nightly or stable release after the core and E2E
-checks pass.
+There is no aggregate CI gate. A skipped E2E job of a fork pull request
+counts as passed.
 
-The release workflow accepts an optional commit SHA or ref. Leave the field
-blank to use the latest commit on the branch selected for the workflow run. It
-reads the application version from `Cargo.toml`. The stable tag is
-`v<version>`. The nightly tag is
+The [release workflow](../.github/workflows/release.yml) is manual. Use it to
+publish a nightly or stable release. It accepts an optional commit SHA or ref.
+Leave the field blank to use the latest commit on the branch selected for the
+workflow run. It reads the application version from `Cargo.toml`. The stable
+tag is `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
 
-The workflow runs `./qtest run fmt clippy rustdoc unit` on Linux,
-`./qtest run clippy unit ui` on macOS, and the `backend` and `e2e` suites. The
-E2E jobs run before packaging. The macOS
-package job builds the application bundle, creates a DMG, and publishes it as
-the GitHub Release asset. The workflow uses the latest non-draft release on the
-selected channel as the changelog start tag. If the channel has no previous
-release, it writes the target commit history as the changelog.
-
-The jobs run in this order. As in the test workflow, `test-e2e-backend` runs at
-the same time as `test-core-macos`, and `test-e2e-macos` waits for both:
+The jobs run in this order:
 
 ```text
-resolve-target -> test-core-backend -> test-core-macos  -> test-e2e-macos -> package -> publish
-                                    -> test-e2e-backend -^
+resolve-target -> checks -> dmg -> publish
 ```
 
-The publish job creates the release tag before it creates the GitHub Release.
-The first release on a channel can run without a previous release or tag.
+`resolve-target` finds the commit and the release version. `checks` is the
+checks workflow, the same as for a pull request. Its `package-macos` job
+builds the package with the release version, and `e2e-macos` tests that
+package. `dmg` puts the tested package in a DMG. The publish job creates the
+release tag, and then the GitHub Release with the DMG as its asset. The
+workflow uses the latest non-draft release on the selected channel as the
+changelog start tag. If the channel has no previous release, it writes the
+target commit history as the changelog. The first release on a channel can
+run without a previous release or tag.
 
 The packaged application shows the channel-specific release version in the
 About dialog. The macOS bundle metadata keeps the numeric version from
@@ -176,10 +154,8 @@ The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
-See
-[Testing](testing.md#hooks-and-continuous-integration) for the suites of
-each job. Local checks cannot verify GitHub event
-filters, run cancellation, artifact transfer, or branch protection settings.
+Local checks cannot verify GitHub event filters, run cancellation, artifact
+transfer, or ruleset settings.
 
 ## Dependency maintenance
 

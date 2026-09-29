@@ -1,0 +1,225 @@
+# The checks of one commit. The test and release workflows call this workflow.
+# The callers own the concurrency group: a group here would let a release run
+# cancel a test run of the same branch.
+name: checks
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to check.
+        required: true
+        type: string
+      release-version:
+        description: The version that the package shows. Blank uses Cargo.toml.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  dependencies:
+    name: dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: dependency-tools
+          cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ./qtest install cargo-deny cargo-machete
+      - run: ./qtest run deps
+
+  scripts:
+    name: scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Install script linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: ./qtest run scripts
+
+  core-linux:
+    name: core-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: core
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest install cargo-nextest cargo-llvm-cov
+      - run: ./qtest run fmt clippy rustdoc unit coverage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success()
+        with:
+          name: core-coverage
+          path: target/coverage/core.lcov
+          retention-days: 1
+          if-no-files-found: error
+
+  # The jobs below wait for core-linux: its compile and unit failures predict
+  # their failures, and it takes about 2 minutes.
+  core-macos:
+    name: core-macos
+    needs: core-linux
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest install cargo-nextest
+      - run: ./qtest run clippy unit ui perf
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: core-macos-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  package-macos:
+    name: package-macos
+    needs: core-linux
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: sh scripts/package/macos.sh
+        env:
+          QROW_RELEASE_VERSION: ${{ inputs.release-version }}
+      - run: uv run --locked python scripts/core/size.py
+      # The E2E job tests this package, and a release publishes it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-package
+          path: dist/Qrow-macos.zip
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e-backend:
+    name: e2e-backend
+    needs: core-linux
+    # E2E jobs run repository code in Docker and through macOS accessibility
+    # APIs, so they skip pull requests from forks.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: core
+          save-if: false
+      - run: ./qtest install cargo-nextest
+      - run: ./qtest run backend
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: backend-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e-macos:
+    name: e2e-macos
+    needs: package-macos
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      # The headless E2E tests compile in this job.
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native
+          save-if: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Check native automation permissions
+        run: sh scripts/e2e/driver.sh --preflight
+      - name: Select Java 17
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_17_arm64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_arm64/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-package
+          path: target/macos-package
+      - run: ./qtest install cargo-nextest
+      - name: Run headless and native E2E
+        run: ./qtest run e2e desktop --runtime native
+        env:
+          QROW_E2E_REUSE_MACOS_PACKAGE: true
+          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: macos-evidence
+          path: |
+            target/qtest/runs/
+            target/e2e-tools/preflight.log
+          retention-days: 1
+          if-no-files-found: error
