@@ -7,7 +7,7 @@ check whether connection, query, result, and session behavior work together:
 - `e2e` tests the real Qrow window, headless, through GPUI input. See
   [Testing](testing.md#write-an-e2e-test) to write these tests.
 - `desktop` tests the packaged application through real keyboard and pointer
-  events.
+  events. It checks only the menu bar, Keychain, quit, and rendered pixels.
 
 [Testing](testing.md#run-the-servers) describes how qtest starts, shares, and
 reuses the servers.
@@ -75,212 +75,48 @@ select them with `--runtime native`. The Docker runtime does not require a
 host JDK.
 Java is a server-fixture dependency. Qrow itself remains a native Rust application.
 
-To check the editor's active line without a server, build an isolated package and
-run the native driver in demo mode:
-
-```sh
-qrow_editor_test_dir=$(mktemp -d)
-mkdir -p "$qrow_editor_test_dir/workspace"
-QROW_DIST_DIR="$qrow_editor_test_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
-sh scripts/e2e/driver.sh --preflight
-QROW_E2E_ARTIFACTS="$qrow_editor_test_dir" \
-QROW_DATA_DIR="$qrow_editor_test_dir/workspace" \
-QROW_E2E_BUNDLE="$qrow_editor_test_dir/package/Qrow.app" \
-target/e2e-tools/native-driver --editor-highlight-only
-```
-
-The driver checks the active line color at the editor's right edge. It saves
-`editor-highlight.png` in the temporary directory.
-
 The suite creates a release package inside the run directory. It does not
 replace `dist/Qrow.app`. It uses a temporary workspace and fresh synthetic
 Keychain credentials. The driver restores the previous clipboard contents
 after text entry.
 
-The full native suite also checks assistant fonts, appended SQL, statement
-selection, tab changes, titles, layout, sign-in, the wide thread list,
-parallel conversations, action calls with another tab ID, and conversation tabs. It runs each check with a separate
-temporary workspace and the same isolated package.
-The tab title check covers a generated name before the first reply, a duplicate
-name, a failed title request, and a tab name that you set.
+The `desktop` suite checks only what needs the real operating system. The
+[UI tests](testing.md#write-a-ui-test) and the
+[E2E tests](testing.md#write-an-e2e-test) check the other behavior of the
+window in-process. The main scenario of the driver:
 
-To check the Assistant font picker without a server fixture, use an isolated
-debug package and the synthetic Codex server:
+1. Opens **About Qrow** and **Settings…** from the application menu.
+2. Adds a connection through the connection form. The password goes to the
+   real Keychain, and a real query reads it.
+3. Blocks writes to the workspace before **⌘Q**. The failed save keeps the
+   editor open with its SQL, **Keep Editing** returns to it, and **Retry Save
+   and Quit** saves and quits.
+
+Then the driver runs these scenarios, each with a new workspace:
+
+| Scenario | Checks |
+| --- | --- |
+| `window-close-only` | The failed save before a window close, as for **⌘Q**. |
+| `assistant-layout-only` | Pixels of assistant messages at a scale of 1.1 and a pane width of 536: a message with inline code keeps one line, bold text wraps inside the reply, the user bubble ends at the right edge of the composer, and the composer has equal space above the field and below **Send**. |
+| `assistant-selection-only` | In One Dark, a selection in a user message changes the color of its bubble and keeps the color of its text. |
+| `editor-highlight-only` | In demo mode, the active line color reaches the right edge of the editor. |
+
+The assistant scenarios use the synthetic Codex server. To run one scenario
+without servers, build an isolated package and run the driver:
 
 ```sh
-qrow_font_test_dir=$(mktemp -d)
-mkdir -p "$qrow_font_test_dir/workspace"
-QROW_DIST_DIR="$qrow_font_test_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
+qrow_scenario_dir=$(mktemp -d)
+mkdir -p "$qrow_scenario_dir/workspace"
+QROW_DIST_DIR="$qrow_scenario_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
 sh scripts/e2e/driver.sh --preflight
-QROW_E2E_ARTIFACTS="$qrow_font_test_dir" \
-QROW_DATA_DIR="$qrow_font_test_dir/workspace" \
-QROW_E2E_BUNDLE="$qrow_font_test_dir/package/Qrow.app" \
-target/e2e-tools/native-driver --assistant-font-only
-```
-
-This check captures the conversation search row, selects System Font and Menlo,
-reads the saved settings, captures the transcript in each font, and deletes a
-conversation whose Codex history is missing. It then starts Qrow again with the
-same workspace and checks that the tab without a conversation starts a new one.
-Like Codex, the synthetic Codex server saves a conversation only after its first
-message.
-
-To check the layout of assistant messages, use the same package steps with a
-new, empty workspace directory and run:
-
-```sh
+QROW_E2E_ARTIFACTS="$qrow_scenario_dir" \
+QROW_DATA_DIR="$qrow_scenario_dir/workspace" \
+QROW_E2E_BUNDLE="$qrow_scenario_dir/package/Qrow.app" \
 target/e2e-tools/native-driver --assistant-layout-only
 ```
 
-The driver writes a synthetic workspace with a UI scale of 1.1 and an assistant
-pane width of 536. At this width, messages can be measured at one width and
-drawn at another. The check makes sure that:
-
-- A message with inline code that fits on one line shows its last word.
-- Lines of a reply with bold text end before the right edge of the reply.
-- The assistant reply starts at the left edge of the composer, and the user
-  message bubble ends at its right edge.
-- The space above the message field is equal to the space below **Send**.
-- A reply with a wide table uses the full transcript width.
-- The transcript scrolls to the end of the table.
-- The mouse wheel scrolls the transcript over the table.
-
-The table checks run with the Connections sidebar shown and hidden.
-
-To check text selection in assistant messages, use the same package steps with
-a new, empty workspace directory and run:
-
-```sh
-target/e2e-tools/native-driver --assistant-selection-only
-```
-
-The driver writes the same workspace with the One Dark theme. It selects the
-line of a user message with a triple click. The check makes sure that the
-selection changes the color of the message bubble and that the text keeps its
-color.
-
-To check that the assistant keeps earlier SQL, use the package steps in the
-assistant font check above. Use a new, empty workspace directory. Replace the
-last driver command with:
-
-```sh
-target/e2e-tools/native-driver --assistant-append-only
-```
-
-The check asks for two queries. It verifies that the second query follows the
-first query in the same tab. It also checks that the conversation gets a
-generated title after the first reply, that Qrow saves the title, and that the
-second reply does not change it. Next, the check asks for a long query with a
-comment above it. It checks that Qrow formats the statement, keeps the comment
-as written, and selects only the statement. Then the synthetic Codex server
-stops during a turn. The check makes sure that **Reconnect** replaces **Send** and **Cancel**,
-and that a message after the reconnection gets a reply.
-
-To check how the assistant runs one statement from a tab with several queries,
-use the package steps in the assistant font check above. Use a new, empty
-workspace directory. Replace the last driver command with:
-
-```sh
-target/e2e-tools/native-driver --assistant-statement-only
-```
-
-The driver uses a synthetic connection and cancels each query before it
-connects. It checks the exact SQL in each approval card. One card shows the
-latest appended query. The other shows an earlier query that the assistant
-selected by its byte range.
-
-To check the conversation actions, use the package steps in the assistant font
-check above. Use a new, empty workspace directory. Replace the last command
-with:
-
-```sh
-target/e2e-tools/native-driver --assistant-titles-only
-```
-
-The driver submits an empty name in the rename dialog and checks that the
-dialog stays open. It renames a conversation and makes a new title from the
-pane header. It starts a second conversation with the same generated title and
-checks that the thread list does not show thread IDs. It selects a
-conversation in the list and checks that the narrow pane shows the
-conversation. Then it uses the thread
-list context menu to cancel a rename, rename a conversation, make a new title,
-and delete a conversation. The driver reads the saved workspace to check each
-title and title source.
-
-To check a tab rename and selection change during an assistant turn, use the
-same package steps and a new, empty workspace directory. Run:
-
-```sh
-target/e2e-tools/native-driver --assistant-retarget-only
-```
-
-The driver renames another tab and selects it during a turn. The assistant
-reads SQL and requests a run with a tab ID that is not in the open tabs. The
-check confirms that the request uses the tab of the conversation. The tab shows
-that it waits for approval, and the pane of the selected tab does not show the
-request. The driver selects the conversation tab, checks the approval card, and
-cancels the request before it connects.
-
-To check two conversations that work at the same time, use the same package
-steps and a new, empty workspace directory. Run:
-
-```sh
-target/e2e-tools/native-driver --assistant-parallel-only
-```
-
-The driver writes a workspace with the synthetic connections Alpha and Beta. It
-starts a turn in the tab of each connection. The synthetic Codex server holds
-both turns until the driver releases them. Then each turn appends a query to its
-own tab and requests a run. The server sends each run request two times, as
-Codex does when a client resumes a thread. The check confirms that:
-
-- The thread list, the tabs, and the assistant toggle show each state: working,
-  waiting for approval, and reply ready.
-- Each tab gets only its own query.
-- A conversation selected in the list selects its tab and connection.
-- Qrow answers the repeated request only one time.
-
-To check how a conversation belongs to its tab, use the same package steps and
-a new, empty workspace directory. Run:
-
-```sh
-target/e2e-tools/native-driver --assistant-tab-binding-only
-```
-
-The driver starts a conversation in a tab that has SQL, and checks that the
-assistant reads this SQL. It closes the tab and checks that the thread list
-shows **Tab closed**. It selects the conversation, which opens in a new tab
-under the same connection. It moves this tab to the other connection and checks
-that the conversation moves with it. It checks that **Start Conversation** is
-not available in this tab. Then it deletes the conversation and checks that the
-tab stays. It starts a new conversation in the tab from the tab menu. The driver
-reads the saved workspace for each step.
-
-To check the thread list on a wide pane, use the same package steps and a new,
-empty workspace directory. Run:
-
-```sh
-target/e2e-tools/native-driver --assistant-thread-list-only
-```
-
-The driver starts two conversations, closes and opens the thread list, and
-selects a conversation. The check confirms that the list stays open. It uses a
-90% interface scale, so the test window fits the wide assistant pane. If the
-pane is narrow, the check stops after 10 seconds.
-
-To check the assistant sign-in screen, use the same package steps and a new,
-empty workspace directory. Run:
-
-```sh
-target/e2e-tools/native-driver --assistant-sign-in-only
-```
-
-The synthetic Codex server starts without an account. The driver selects
-**Sign in with ChatGPT…**, and the synthetic server returns an error before it
-supplies a sign-in page. Thus the check does not open a browser. The check
-confirms that the error stays visible until Codex reports an account. Then the
-sign-in screen closes and the driver sends a message. The waiting state and
-**Cancel** need a real Codex sign-in page, and the check does not cover them.
+The driver saves its screenshots and pixel captures in the temporary
+directory.
 
 ## Inspect failures
 
@@ -366,49 +202,8 @@ cold launch to a visible frame or rendering latency. The original M1 Mac with
 8 GB memory target remains unverified; it does not block the early release.
 Passing on a larger runner does not establish performance on that target.
 
-The native scenario starts with the application menu. It selects **About Qrow**,
-checks the version line and the copyright, closes the dialog with Escape, and
-opens the dialog again. This check does not use a server.
-
-Then the scenario opens **Settings…**. At a scale of 110%, the description of
-the interface font is wider than its column. The check makes sure that the
-font picker starts at the left edge of the theme picker. It does the same check
-for **SQL Keyword Case** in the Editor section. It changes fonts, sizes, and the
-keyword case, and checks that **Restore defaults** resets them. To run only the
-About and Settings checks, use the package steps in the assistant font check
-above and run `target/e2e-tools/native-driver --dialogs-only`.
-
-The native scenario checks connection-form error alerts. It rejects a missing
-username, a new connection with a duplicate name, and a rename to a duplicate
-name. Each error keeps the form open for correction.
-
-The native scenario checks result retention across connection changes. It runs a
-query on one profile, downloads more than one page, switches to a second
-profile, and checks that the first tab keeps its rows and session. It checks
-that each connection restores its own tab set and that keep-alive continues in
-hidden tabs. Returning to the first profile restores its last active tab.
-The scenario also checks profile edits while another profile is selected.
-Lifecycle edits preserve the session and cursor. Password changes and deletion
-close the matching sessions. It checks that **Disconnect** acts on the active
-tab only. Returning to a connection makes its tabs visible again. It also
-checks that connection selection does not add an activity entry. It checks Copy
-to Connection and Move to Connection from nested tab menus. The new tab has the
-source SQL, a unique tab name, and no result rows. After a copy, the source tab
-keeps its rows. After the scenario moves the last tab, the source connection
-has a new blank tab. See [Connections](connections.md) for tab copy and move
-behavior.
-
-The scenario fills the Logs history past its limit with a query, 100 rejected
-statements, and a second query. Rejected statements do not go to the server,
-so the check stays fast. **Copy All Logs** must start with the removal notice
-and must not include the first query.
-
-The driver also blocks writes to its temporary workspace before **⌘Q** and
-window close. It checks that failed saves keep the editor open and preserve
-SQL text. It selects **Keep Editing**, restores write access, and retries the
-save. After Qrow exits, the driver checks the saved SQL. The second case starts
-a new Qrow process with the same workspace. Core storage tests separately check
-competing processes and lock release after a process is killed.
+Core storage tests check competing processes and lock release after a
+process is killed. The driver checks the save of a real quit and window close.
 
 ## Continuous integration
 
