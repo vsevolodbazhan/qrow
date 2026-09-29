@@ -576,4 +576,5 @@ events, required checks, and releases.
 - Performance on an M1 Mac with 8 GB of memory is not verified. A pass on a
   larger machine does not show performance on that machine.
 - The pixel checks of `desktop` depend on the main display and its scale.
-- CI runs only the `perf` suite.
+- In CI, only `perf` has enforced budgets. The other probes are report-only,
+  so a slower probe does not fail CI. Compare their history on `main`.
