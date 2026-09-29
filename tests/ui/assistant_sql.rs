@@ -146,6 +146,9 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
     app.click(cx, "assistant-cancel-query");
     app.wait_reply(cx, "Implicit run rejected: invalid_arguments");
     app.update(cx, |window, _| {
-        assert!(approval(window).is_none(), "An implicit run targeted another statement");
+        assert!(
+            approval(window).is_none(),
+            "An implicit run targeted another statement"
+        );
     });
 }
