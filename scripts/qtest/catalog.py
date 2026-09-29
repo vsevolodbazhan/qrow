@@ -127,7 +127,7 @@ SUITES = {
               (nextest("binary(e2e)", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
-        Suite("desktop", "The packaged app, driven through macOS accessibility, against the real servers.",
+        Suite("desktop", "Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels.",
               ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
               (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
               macos_only=True, explicit_only=True, fixture="any",
