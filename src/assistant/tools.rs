@@ -36,7 +36,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
             }, "required": ["version", "tab_id", "connection_id", "editor_revision", "edits"],
             "additionalProperties": false
         })),
-        ("run_selected_tab_query", "Run one SQL statement from the query tab of this conversation through Qrow, subject to user approval mode. Without statement_range, it runs the selected text, or the whole tab when nothing is selected. To run another statement in a tab with several statements, pass one of the statement_ranges from the workspace context or read_tab_sql as statement_range. The range must match the current editor revision. A finished query returns its first downloaded rows in rows and the offset for read_results in next_offset.", json!({
+        ("run_selected_tab_query", "Run one SQL statement from the query tab of this conversation through Qrow, subject to user approval mode. Without statement_range, it runs the selected text, or the whole tab when nothing is selected. You may omit editor_revision only when running the query just appended in this turn; Qrow then uses that append's revision. For other runs, provide the current editor_revision. To run another statement in a tab with several statements, pass one of the statement_ranges from the workspace context or read_tab_sql as statement_range. The range must match the current editor revision. A finished query returns its first downloaded rows in rows and the offset for read_results in next_offset.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
                 "connection_id": {"type": "string", "format": "uuid"},
@@ -45,7 +45,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                     "start": {"type": "integer", "minimum": 0},
                     "end": {"type": "integer", "minimum": 0}},
                     "required": ["start", "end"], "additionalProperties": false}},
-            "required": ["version", "tab_id", "connection_id", "editor_revision"], "additionalProperties": false
+            "required": ["version", "tab_id", "connection_id"], "additionalProperties": false
         })),
         ("cancel_selected_tab_query", "Request best-effort cancellation of the running query in the query tab of this conversation.", target_schema()),
         ("get_query_status", "Read the current query status and bounded result metadata for a tab.", tab_schema()),
@@ -101,6 +101,20 @@ mod tests {
             tools
                 .iter()
                 .all(|tool| tool.input_schema["additionalProperties"] == false)
+        );
+    }
+
+    #[test]
+    fn run_schema_allows_the_revision_from_an_append_to_be_implicit() {
+        let run = definitions()
+            .into_iter()
+            .find(|tool| tool.name == "run_selected_tab_query")
+            .unwrap();
+        let required = run.input_schema["required"].as_array().unwrap();
+        assert!(!required.iter().any(|field| field == "editor_revision"));
+        assert_eq!(
+            run.input_schema["properties"]["editor_revision"]["type"],
+            "integer"
         );
     }
 }

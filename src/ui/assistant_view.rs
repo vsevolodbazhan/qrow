@@ -41,6 +41,7 @@ use gpui_kit::component::{
     v_flex,
 };
 use serde_json::{Value, json};
+use std::ops::Range;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::PathBuf,
@@ -610,12 +611,21 @@ pub(super) enum Unread {
 
 /// The live state of one conversation. Several conversations can have a turn
 /// at the same time.
+pub(super) struct AppendedQuery {
+    pub turn_id: String,
+    pub tab_id: Uuid,
+    pub connection_id: Option<Uuid>,
+    pub revision: u64,
+    pub selected_range: Range<usize>,
+}
+
 #[derive(Default)]
 pub(super) struct ThreadRun {
     pub active_turn: Option<String>,
     /// Codex owes a reply from the send until the turn ends.
     pub pending_reply: bool,
     pub target: Option<ActionTarget>,
+    pub appended_query: Option<AppendedQuery>,
     pub pending_query: Option<PendingQuery>,
     pub unread: Option<Unread>,
     pub loading_older: bool,

@@ -1,5 +1,6 @@
 use super::assistant_view::{
-    PendingQuery, PendingQueryKind, ToolActivity, ToolKind, ToolState, TranscriptEntry,
+    AppendedQuery, PendingQuery, PendingQueryKind, ToolActivity, ToolKind, ToolState,
+    TranscriptEntry,
 };
 use super::*;
 use crate::assistant::broker::ActionTarget;
@@ -66,6 +67,51 @@ struct TargetInput {
     version: u32,
     tab_id: Uuid,
     connection_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunInput {
+    version: u32,
+    tab_id: Uuid,
+    connection_id: Uuid,
+    editor_revision: Option<u64>,
+    statement_range: Option<Range<usize>>,
+}
+
+fn run_request(
+    input: RunInput,
+    appended: Option<&AppendedQuery>,
+    turn_id: &str,
+    document: &EditorDocument<'_>,
+) -> Result<RunRequest, ToolResult> {
+    let editor_revision = match input.editor_revision {
+        Some(revision) => revision,
+        None if input.statement_range.is_none()
+            && appended.is_some_and(|append| {
+                append.turn_id == turn_id
+                    && append.tab_id == document.tab_id
+                    && append.connection_id == document.connection_id
+                    && append.revision == document.revision
+                    && document.selected_range.as_ref() == Some(&append.selected_range)
+            }) =>
+        {
+            document.revision
+        }
+        None => {
+            return Err(failure(
+                "invalid_arguments",
+                "Provide editor_revision to run SQL other than the statement just appended and selected in this turn.",
+            ));
+        }
+    };
+    Ok(RunRequest {
+        version: input.version,
+        tab_id: input.tab_id,
+        connection_id: input.connection_id,
+        editor_revision,
+        statement_range: input.statement_range,
+    })
 }
 
 #[derive(Deserialize)]
@@ -454,6 +500,13 @@ impl Qrow {
             target.selected_range = Some(plan.appended_range.clone());
         }
         let revision = self.tabs[index].revision;
+        self.thread_run_mut(&call.thread_id).appended_query = Some(AppendedQuery {
+            turn_id: call.turn_id.clone(),
+            tab_id: plan.tab_id,
+            connection_id: args.connection_id,
+            revision,
+            selected_range: plan.appended_range.clone(),
+        });
         self.changed(cx);
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
@@ -469,16 +522,9 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let result = (|| {
-            let mut args: RunRequest = parse(call.arguments.clone())?;
+            let input: RunInput = parse(call.arguments.clone())?;
             let index = self.tool_tab_index(call)?;
             let tab = &self.tabs[index];
-            args.tab_id = tab.saved.id;
-            args.connection_id = tab.saved.profile.ok_or_else(|| {
-                failure(
-                    "no_action_target",
-                    "Connect the query tab of this conversation before running SQL.",
-                )
-            })?;
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
             let document = EditorDocument {
@@ -490,6 +536,17 @@ impl Qrow {
                 busy: tab.busy,
                 sql_style: self.settings.sql_style(),
             };
+            let appended = self
+                .thread_run(&call.thread_id)
+                .and_then(|run| run.appended_query.as_ref());
+            let mut args = run_request(input, appended, &call.turn_id, &document)?;
+            args.tab_id = tab.saved.id;
+            args.connection_id = tab.saved.profile.ok_or_else(|| {
+                failure(
+                    "no_action_target",
+                    "Connect the query tab of this conversation before running SQL.",
+                )
+            })?;
             let plan = ToolBroker::new(self.tool_target(call))
                 .plan_run(
                     CallIdentity {
@@ -1041,7 +1098,8 @@ impl Qrow {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_tab_id;
+    use super::{AppendedQuery, EditorDocument, RunInput, resolve_tab_id, run_request};
+    use serde_json::json;
     use uuid::Uuid;
 
     #[test]
@@ -1058,5 +1116,86 @@ mod tests {
             other
         );
         assert_eq!(resolve_tab_id(unknown, None, [conversation]), unknown);
+    }
+
+    #[test]
+    fn run_without_revision_requires_the_unchanged_append_selection() {
+        let tab_id = Uuid::new_v4();
+        let connection_id = Uuid::new_v4();
+        let sql = "SELECT 0;\n\nSELECT 1";
+        let document = EditorDocument {
+            tab_id,
+            connection_id: Some(connection_id),
+            revision: 8,
+            sql,
+            selected_range: Some(11..19),
+            busy: false,
+            sql_style: crate::sql::SqlStyle::default(),
+        };
+        let appended = AppendedQuery {
+            turn_id: "turn".into(),
+            tab_id,
+            connection_id: Some(connection_id),
+            revision: 8,
+            selected_range: 11..19,
+        };
+        let input = || {
+            serde_json::from_value::<RunInput>(json!({
+                "version": 1,
+                "tab_id": tab_id,
+                "connection_id": connection_id,
+            }))
+            .unwrap()
+        };
+        let request = run_request(input(), Some(&appended), "turn", &document).unwrap();
+        assert_eq!(request.editor_revision, 8);
+        assert!(request.statement_range.is_none());
+        assert!(run_request(input(), None, "turn", &document).is_err());
+        assert!(run_request(input(), Some(&appended), "next-turn", &document).is_err());
+        assert!(
+            run_request(
+                input(),
+                Some(&appended),
+                "turn",
+                &EditorDocument {
+                    revision: 9,
+                    ..document.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            run_request(
+                input(),
+                Some(&appended),
+                "turn",
+                &EditorDocument {
+                    selected_range: Some(0..9),
+                    ..document.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            run_request(
+                input(),
+                Some(&appended),
+                "turn",
+                &EditorDocument {
+                    tab_id: Uuid::new_v4(),
+                    ..document.clone()
+                }
+            )
+            .is_err()
+        );
+
+        let range_input = serde_json::from_value(json!({
+            "version": 1,
+            "tab_id": tab_id,
+            "connection_id": connection_id,
+            "statement_range": {"start": 0, "end": 8},
+        }))
+        .unwrap();
+        assert!(run_request(range_input, Some(&appended), "turn", &document).is_err());
     }
 }
