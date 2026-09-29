@@ -6,7 +6,8 @@ import subprocess
 import sys
 
 import catalog
-import runner
+import runner  # Adds scripts/e2e to the import path for fixture.
+import fixture  # noqa: E402
 from runner import EXIT_FAILED, EXIT_MISSING, EXIT_PASSED, EXIT_USAGE, ROOT
 
 GUIDE = ROOT / "docs/testing.md"
@@ -22,6 +23,7 @@ Everyday use:
   ./qtest run --changed    the suites that your changed files affect
   ./qtest list             suites, groups, and what each one needs
   ./qtest doctor           missing tools, with the fix for each one
+  ./qtest fixture up       keep the test servers running between runs
   ./qtest help TOPIC       a section of docs/testing.md
 
 Exit codes: 0 passed, 1 failed, 2 usage error, 3 missing prerequisite.
@@ -57,6 +59,7 @@ def command_list(args):
         "requires": list(suite.requires),
         "macos_only": suite.macos_only,
         "explicit_only": suite.explicit_only,
+        "servers": suite.fixture is not None,
         "filterable": suite.filterable,
     } for suite in catalog.SUITES.values()]
     groups = [{"name": name, "summary": summary, "suites": list(members)}
@@ -71,6 +74,8 @@ def command_list(args):
         extra = []
         if suite["macos_only"]:
             extra.append("macOS")
+        if suite["servers"]:
+            extra.append("servers")
         if suite["explicit_only"]:
             extra.append("not in groups")
         tail = f"  [{', '.join(extra)}]" if extra else ""
@@ -219,6 +224,27 @@ use gpui_kit::TestAppContext;
 use qrow::model::Workspace;
 '''
 
+E2E_TEST_TEMPLATE = '''
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn {name}(cx: &mut TestAppContext) {{
+    let kyuubi = Kyuubi::get();
+    let (workspace, credentials) = kyuubi.workspace("SELECT 1 AS value", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    // Run SQL through the window, wait with QUERY_TIMEOUT, and check the
+    // result table. See `./qtest help write-an-e2e-test`.
+    let _ = &app;
+    panic!("Write the test {name}");
+}}
+'''
+
+E2E_SUITE_HEADER = '''use crate::support::TestApp;
+use crate::support::fixture::{Kyuubi, PASSWORD};
+use gpui_kit::TestAppContext;
+'''
+
+TEMPLATES = {"ui": (UI_SUITE_HEADER, UI_TEST_TEMPLATE), "e2e": (E2E_SUITE_HEADER, E2E_TEST_TEMPLATE)}
+
 
 def command_new(args):
     for value, label in ((args.suite, "Suite"), (args.name, "Test name")):
@@ -231,17 +257,41 @@ def command_new(args):
         raise runner.UsageError(f"{args.suite} is reserved.")
     if path.exists() and re.search(rf"\bfn {args.name}\(", path.read_text()):
         raise runner.UsageError(f"{path.relative_to(ROOT)} already has {args.name}.")
-    text = path.read_text() if path.exists() else UI_SUITE_HEADER
-    path.write_text(text + UI_TEST_TEMPLATE.format(name=args.name))
+    header, template = TEMPLATES[args.layer]
+    text = path.read_text() if path.exists() else header
+    path.write_text(text + template.format(name=args.name))
     lines = main.read_text().splitlines()
     module = f"mod {args.suite};"
     if module not in lines:
-        modules = sorted({*[line for line in lines if line.startswith("mod ")], module})
-        other = [line for line in lines if not line.startswith("mod ")]
-        main.write_text("\n".join([*other, *modules]) + "\n")
+        main.write_text("\n".join(insert_module(lines, args.suite)) + "\n")
     print(f"Added {args.name} to {path.relative_to(ROOT)}. It fails until you write it.")
     print(f"Run it with: ./qtest run {args.layer}/{args.name}")
     return EXIT_PASSED
+
+
+def insert_module(lines, name):
+    """Add `mod name;` among the plain module declarations in sorted order.
+
+    A declaration with an attribute, like `#[path = …] mod support;`, stays
+    with its attribute.
+    """
+    plain = [index for index, line in enumerate(lines)
+             if re.fullmatch(r"mod \w+;", line) and not (index and lines[index - 1].startswith("#["))]
+    later = [index for index in plain if lines[index][4:-1] > name]
+    if later:
+        position = later[0]
+    elif plain:
+        position = plain[-1] + 1
+    else:
+        position = len(lines)
+    return [*lines[:position], f"mod {name};", *lines[position:]]
+
+
+def command_fixture(args):
+    argv = [args.action]
+    if args.action == "up":
+        argv += ["--runtime", args.runtime]
+    return fixture.main(argv)
 
 
 def command_artifacts(args):
@@ -265,6 +315,7 @@ COMMANDS = {
     "install": command_install,
     "new": command_new,
     "artifacts": command_artifacts,
+    "fixture": command_fixture,
     "help": command_help,
 }
 
@@ -290,23 +341,32 @@ def parser():
     running.add_argument("--repeat", type=int, default=1, metavar="N",
                          help="Run each selected suite N times and stop at the first failure.")
     running.add_argument("--fail-fast", action="store_true", help="Skip the remaining suites after a failure.")
-    running.add_argument("--runtime", choices=["native", "docker"], default="native",
-                         help="Server runtime of the e2e suite (default: native).")
+    running.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto",
+                         help="Server runtime of the backend, e2e, and desktop suites. auto (the "
+                              "default) uses Docker when its daemon answers, else local Java processes.")
     running.add_argument("--json", action="store_true", help="Print only a JSON summary on stdout.")
     running.add_argument("--quiet", action="store_true", help="Do not stream command output.")
 
     doctor = commands.add_parser("doctor", help="Check prerequisites and print a fix for each gap.")
     doctor.add_argument("selectors", nargs="*", help="Check only these suites or groups.")
-    doctor.add_argument("--runtime", choices=["native", "docker"], default="native")
+    doctor.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto")
     doctor.add_argument("--json", action="store_true", help="Print JSON.")
 
     install = commands.add_parser("install", help="Install the pinned Cargo tools.")
     install.add_argument("tools", nargs="*", help=f"Default: {', '.join(catalog.TOOLS)}.")
 
     new = commands.add_parser("new", help="Add a test from the template.")
-    new.add_argument("layer", choices=["ui"], help="Test layer.")
+    new.add_argument("layer", choices=list(TEMPLATES), help="Test layer.")
     new.add_argument("suite", help="File under tests/LAYER/, for example connections.")
     new.add_argument("name", help="Test function name, in snake_case.")
+
+    servers = commands.add_parser(
+        "fixture", help="Start, stop, or check servers that later runs reuse.",
+        description="`up` starts the disposable servers and keeps them running. The backend, "
+                    "e2e, and desktop suites reuse them, which saves the start time. `down` stops them.")
+    servers.add_argument("action", choices=["up", "down", "status"])
+    servers.add_argument("--runtime", choices=["auto", "docker", "native"], default="auto",
+                         help="auto: Docker when its daemon answers, else local Java processes.")
 
     artifacts = commands.add_parser("artifacts", help="Print the directory of the latest run.")
     artifacts.add_argument("--json", action="store_true", help="Print the summary of the latest run.")

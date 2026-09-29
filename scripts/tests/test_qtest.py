@@ -36,7 +36,7 @@ class CatalogTests(unittest.TestCase):
     def test_guide_lists_every_suite_and_group(self):
         for name in [*catalog.SUITES, *catalog.GROUPS]:
             with self.subTest(name=name):
-                self.assertRegex(GUIDE, rf"\n\| `{name}`")
+                self.assertTrue(f"\n| `{name}`" in GUIDE, f"docs/testing.md has no table row for {name}")
 
     def test_guide_marks_exactly_the_filterable_suites(self):
         for suite in catalog.SUITES.values():
@@ -48,6 +48,8 @@ class CatalogTests(unittest.TestCase):
         topics = cli.guide_sections()
         self.assertIn("write-a-ui-test", topics)
         self.assertIn("write-a-ui-test", cli.UI_TEST_TEMPLATE)
+        self.assertIn("write-an-e2e-test", topics)
+        self.assertIn("write-an-e2e-test", cli.E2E_TEST_TEMPLATE)
 
 
 class ChangeRuleTests(unittest.TestCase):
@@ -59,7 +61,7 @@ class ChangeRuleTests(unittest.TestCase):
             "deny.toml": ["policy"],
             "Cargo.lock": ["fmt", "clippy", "unit", "ui", "policy"],
             ".github/workflows/test.yml": ["scripts", "policy"],
-            "scripts/e2e/run.py": ["scripts"],
+            "scripts/e2e/fixture.py": ["scripts"],
             "qtest": ["scripts"],
             "docs/testing.md": ["scripts"],
             "docs/queries.md": [],
@@ -190,11 +192,91 @@ class RunTests(unittest.TestCase):
         self.assertIn("Iteration 3 of 5", summary["suites"][0]["reason"])
 
     def test_docker_runtime_needs_docker_instead_of_java(self):
-        with patch.object(runner, "check_requirement", wraps=runner.check_requirement) as check, \
-                patch.object(runner.shutil, "which", return_value=None):
+        with patch.object(runner.shutil, "which", return_value=None):
             fix = runner.check_requirement("fixture-runtime", {"runtime": "docker"})
         self.assertEqual(fix, catalog.REQUIREMENTS["docker"])
-        check.assert_any_call("docker", {"runtime": "docker"})
+
+    def test_suites_that_stop_engines_reject_local_processes(self):
+        fix = runner.check_requirement("fixture-runtime", {"runtime": "native", "fixture": "docker"})
+        self.assertEqual(fix, catalog.REQUIREMENTS["fixture-docker"])
+
+
+class FakeFixture:
+    runtime = "docker"
+    port = 4242
+
+    def __init__(self, events):
+        self.events = events
+
+    def env(self):
+        return {"QROW_E2E_PROJECT": "qrow-e2e-unit", "QROW_E2E_PORT": "4242"}
+
+    def state(self):
+        return {"runtime": "docker"}
+
+    def collect(self, _artifacts):
+        self.events.append("collect")
+
+    def stop(self):
+        self.events.append("stop")
+
+
+def served_suite(name, script, prepare="true", kind="any"):
+    return catalog.Suite(name, f"Fake {name}.", (), (catalog.Step(("sh", "-c", script)),), fixture=kind,
+                         prepare=(catalog.Step(("sh", "-c", prepare)),))
+
+
+class FixtureSessionTests(RunTests):
+    def fake(self, reusable=None):
+        events = []
+        server = FakeFixture(events)
+
+        def start(runtime, _artifacts):
+            events.append(f"start {runtime}")
+            return server
+        return events, [patch.object(runner.fixture, "reusable", return_value=reusable and server),
+                        patch.object(runner.fixture, "start", side_effect=start),
+                        patch.object(runner.fixture, "save")]
+
+    def run_with(self, patches, *suites, **options):
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        return self.run_suites(*suites, **options)
+
+    def test_preparation_runs_before_servers_start_and_failures_still_stop_them(self):
+        events, patches = self.fake()
+        marker = Path(os.environ["CARGO_TARGET_DIR"]) / "prepared"
+        summary = self.run_with(patches, served_suite("first", "exit 1", prepare=f"touch {marker}"),
+                                served_suite("second", 'test "$QROW_E2E_PORT" = 4242'), runtime="auto")
+        self.assertTrue(marker.exists())
+        self.assertEqual(events, ["start auto", "collect", "stop"])
+        self.assertEqual([suite["status"] for suite in summary["suites"]], ["failed", "passed"])
+
+    def test_a_running_fixture_is_reused_and_not_stopped(self):
+        events, patches = self.fake(reusable=True)
+        summary = self.run_with(patches, served_suite("served", "exit 0"), runtime="auto")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(events, ["collect"])
+
+    def test_failed_preparation_starts_no_servers(self):
+        events, patches = self.fake()
+        summary = self.run_with(patches, served_suite("served", "exit 0", prepare="exit 7"), runtime="auto")
+        self.assertEqual(events, [])
+        self.assertIn("Preparation failed", summary["suites"][0]["reason"])
+
+    def test_a_docker_suite_starts_docker_servers(self):
+        events, patches = self.fake()
+        self.run_with(patches, served_suite("backend", "exit 0", kind="docker"), runtime="auto")
+        self.assertEqual(events[0], "start docker")
+
+    def test_cleanup_runs_after_a_failure(self):
+        marker = Path(os.environ["CARGO_TARGET_DIR"]) / "cleaned"
+        suite = catalog.Suite("cleaned", "Fake.", (), (catalog.Step(("sh", "-c", "exit 1")),),
+                              cleanup=(catalog.Step(("sh", "-c", f"touch {marker}")),))
+        summary = self.run_suites(suite)
+        self.assertEqual(summary["suites"][0]["status"], "failed")
+        self.assertTrue(marker.exists())
 
 
 class CommandLineTests(unittest.TestCase):
@@ -229,7 +311,8 @@ class CommandLineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tests/ui").mkdir(parents=True)
-            (root / "tests/ui/main.rs").write_text("//! UI tests.\nmod queries;\nmod support;\n")
+            (root / "tests/ui/main.rs").write_text(
+                '//! UI tests.\n#[path = "../support/mod.rs"]\nmod support;\n\nmod queries;\n')
             with patch.object(cli, "ROOT", root):
                 self.assertEqual(self.call("new", "ui", "connections", "keeps_form")[0], 0)
                 self.assertEqual(self.call("new", "ui", "connections", "keeps_form")[0], runner.EXIT_USAGE)
@@ -238,7 +321,8 @@ class CommandLineTests(unittest.TestCase):
             self.assertIn("fn keeps_form(cx: &mut TestAppContext)", suite)
             self.assertIn('panic!("Write the test keeps_form")', suite)
             self.assertEqual((root / "tests/ui/main.rs").read_text(),
-                             "//! UI tests.\nmod connections;\nmod queries;\nmod support;\n")
+                             '//! UI tests.\n#[path = "../support/mod.rs"]\nmod support;\n\n'
+                             "mod connections;\nmod queries;\n")
 
 
 if __name__ == "__main__":

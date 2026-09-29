@@ -10,7 +10,7 @@ tests. Build and package commands are in the [project README](../README.md#build
 | --- | --- |
 | `qtest/` | The [`./qtest`](../docs/testing.md) command: suite catalog, runner, and command line. |
 | `core/` | Shared prerequisite checks, the size check, and the dependency policy check. |
-| `e2e/` | Disposable servers, test orchestration, native driver entry point, and synthetic credential cleanup. |
+| `e2e/` | Disposable test servers and their downloads, the native driver entry point, and synthetic credential cleanup. |
 | `package/` | macOS packaging, icon conversion, and dependency notices. |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |
 | `generate/` | Reproducible Thrift binding generation. |

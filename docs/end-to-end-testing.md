@@ -1,8 +1,16 @@
 # End-to-end testing
 
-The end-to-end suite tests Qrow against real Kyuubi and Spark servers. It checks
-whether connection, query, result, and session behavior work together. The native
-suite also tests the application through real keyboard and pointer events.
+The end-to-end suites test Qrow against real Kyuubi and Spark servers. They
+check whether connection, query, result, and session behavior work together:
+
+- `backend` tests the connector and the worker without the UI.
+- `e2e` tests the real Qrow window, headless, through GPUI input. See
+  [Testing](testing.md#write-an-e2e-test) to write these tests.
+- `desktop` tests the packaged application through real keyboard and pointer
+  events.
+
+[Testing](testing.md#run-the-servers) describes how qtest starts, shares, and
+reuses the servers.
 
 These tests complement [local checks](development.md). Protocol fixtures can
 verify client messages, but cannot establish how a real server responds.
@@ -24,9 +32,18 @@ Run from the repository root:
 ./qtest run backend
 ```
 
-The command starts a disposable server stack, waits for an authenticated SQL
-response, runs the backend tests, collects artifacts, and removes the stack.
-Initial image downloads and builds are substantially larger than the application.
+The command builds the tests, starts a disposable server stack, waits for an
+authenticated SQL response, runs the backend tests one at a time, collects
+artifacts, and removes the stack. It uses the servers of `./qtest fixture up`
+when they answer. Initial image downloads and builds are substantially larger
+than the application.
+
+Run the headless window tests against the same servers with:
+
+```sh
+./qtest run e2e
+```
+
 
 Do not point the suite at an existing deployment. Failure tests stop fixture
 engines and restart servers. The suite must control disposable resources.
@@ -46,20 +63,16 @@ required by macOS, needs Accessibility and Screen Recording permissions.
 Grant access through System Settings if preflight reports missing permissions.
 Preflight does not change privacy settings or substitute a headless test.
 
-The default native suite uses Java 17 for the server fixture. Set `JAVA_HOME`
-to a Java 17 JDK, then run:
+Then run:
 
 ```sh
-./qtest run e2e
+./qtest run desktop
 ```
 
-To use Docker servers for the same native UI suite:
-
-```sh
-./qtest run e2e --runtime docker
-```
-
-The Docker mode requires a local daemon and does not require a host JDK.
+The servers use Docker when its daemon answers, and local Java processes
+otherwise. For local Java processes, set `JAVA_HOME` to a Java 17 JDK, or
+select them with `--runtime native`. The Docker runtime does not require a
+host JDK.
 Java is a server-fixture dependency. Qrow itself remains a native Rust application.
 
 To check the editor's active line without a server, build an isolated package and
@@ -271,32 +284,32 @@ sign-in screen closes and the driver sends a message. The waiting state and
 
 ## Inspect failures
 
-Each run prints an artifact path under:
+Each run prints its artifact directory, `target/qtest/runs/<run>/`. See
+[Testing](testing.md#read-results) for its summary and logs. The end-to-end
+suites add these directories:
 
-```text
-target/e2e/qrow-e2e-<run-id>/
-```
+| Path | Content |
+| --- | --- |
+| `fixture/` | Server logs, execution evidence, and the reference stack versions. |
+| `desktop/` | Application screenshots, accessibility snapshots, and driver logs. |
 
-Artifacts include test output, server logs, and execution evidence. Native UI
-runs also save application screenshots and accessibility snapshots. Driver
-preflight output is in `target/e2e-tools/preflight.log`.
+Driver preflight output is in `target/e2e-tools/preflight.log`.
 
 Start with the failed command or assertion. Use server logs to inspect connection
 and execution failures. Use screenshots and accessibility snapshots to inspect
 UI failures. Failed runs keep their artifacts after fixture cleanup.
 
-The E2E orchestrator prints each fixture phase. Native archive downloads report
-received bytes, total bytes, percentage, transfer rate, and estimated time left
-every 15 seconds. Long package, backend, and native-driver commands print a
-keep-alive every 30 seconds and stream their output to the run log. The saved
-command logs contain the same command output.
+The fixture prints each phase. Native archive downloads report received
+bytes, total bytes, percentage, transfer rate, and estimated time left every
+15 seconds.
 
 A missing fixture, failed assertion, deadline, or cleanup failure fails the run.
 The suite does not automatically rerun failed tests. Readiness checks can retry
 `SELECT 1` while waiting for servers to become available.
 
 An operating system crash or SIGKILL can interrupt Keychain cleanup. If that
-happens, set `QROW_E2E_ARTIFACTS` to the affected run directory and run:
+happens, set `QROW_E2E_ARTIFACTS` to the `desktop/` directory of the affected
+run and run:
 
 ```sh
 uv run --locked python scripts/e2e/keychain.py
@@ -308,17 +321,21 @@ profiles. `QROW_DATA_DIR` alone does not isolate Keychain.
 
 ## How the suite works
 
-The [orchestrator](../scripts/e2e/run.py) creates independent Docker projects,
+The [fixture](../scripts/e2e/fixture.py) creates independent Docker projects,
 networks, ports, and evidence volumes. Ports bind to loopback. Backend tests
-exercise the real [worker](../tests/live_kyuubi.rs) against this stack.
+exercise the real [worker](../tests/backend.rs) against these servers.
 
-For native runs, the [server manager](../scripts/e2e/servers.py) starts Java
-processes on temporary loopback ports. It packages the app before starting the
-servers to reduce peak resource use. It terminates server process groups,
-including Spark engines and executors, after the run.
+The native runtime starts Java processes on temporary loopback ports, with
+[verified downloads](../scripts/e2e/servers.py). qtest packages the app before
+it starts the servers to reduce peak resource use. The fixture terminates
+server process groups, including Spark engines and executors, when it stops.
 
-[Docker fixture sources](../tests/e2e/fixture/) pin base images by digest.
-[Native downloads](../tests/e2e/native-downloads.json) pin archive versions,
+The fixture keeps a Spark engine for 10 minutes after its last session, so
+tests that follow each other do not wait for an engine start. The Spark worker
+has room for one engine.
+
+[Docker fixture sources](../tests/fixture/server/) pin base images by digest.
+[Native downloads](../tests/fixture/native-downloads.json) pin archive versions,
 sizes, SHA-512 checksums, and an ordered list of sources. The Apache archives
 come first from the
 [Qrow E2E fixtures mirror](https://github.com/vsevolodbazhan/qrow-e2e-fixtures),
@@ -334,7 +351,7 @@ has a 2-hour limit. The macOS CI jobs allow 150 minutes,
 so a slow download from the last source still leaves time to start the fixture
 and run the native checks.
 
-The [native driver](../tests/e2e/native/Driver.swift) locates controls through
+The [native driver](../tests/desktop/Driver.swift) locates controls through
 the accessibility tree. It uses pointer and keyboard events to operate them
 and checks displayed values and enabled states. Server-side execution markers
 provide evidence for cancellation beyond a UI status change.
@@ -398,8 +415,9 @@ competing processes and lock release after a process is killed.
 The `test` workflow runs `e2e-backend` after `core-backend`, and `e2e-macos`
 after `core-macos` and `e2e-backend`. It runs them for pushes to `main`, manual dispatches, and non-draft pull
 requests from this repository. It skips fork pull requests. The backend job
-uses the disposable Docker fixture. The macOS job uses the hosted `macos-15`
-runner, Java 17, and the native accessibility driver.
+runs `backend` with Docker servers. The macOS job runs `e2e` and `desktop` on
+the hosted `macos-15` runner with local Java 17 servers. Both suites share the
+servers of the job.
 
 The macOS E2E job reuses the package artifact from `core-macos` by default. A
 manual `test` dispatch can set `reuse_macos_package` to `false` to build a fresh

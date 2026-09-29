@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import uuid
@@ -23,12 +24,19 @@ def fixture_profile_ids(profiles):
     return identifiers
 
 
+def isolated_run(artifacts, target):
+    """The desktop directory of one qtest run: <target>/qtest/runs/<run>/desktop."""
+    run = artifacts.parent
+    return (artifacts.name == "desktop" and run.parent == target / "qtest" / "runs"
+            and re.fullmatch(r"\d{8}-\d{6}-\d+", run.name) is not None)
+
+
 def main():
     if shutil.which("security") is None:
         raise RuntimeError("Missing required command: security")
     artifacts = Path(os.environ["QROW_E2E_ARTIFACTS"]).resolve()
-    root = Path(__file__).resolve().parents[2] / "target/e2e"
-    if artifacts.parent != root or not artifacts.name.startswith("qrow-e2e-"):
+    target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[2] / "target")).resolve()
+    if not isolated_run(artifacts, target):
         raise ValueError("Refusing to clean credentials outside an isolated E2E run")
     workspace = artifacts / "workspace/workspace.json"
     if workspace.exists():

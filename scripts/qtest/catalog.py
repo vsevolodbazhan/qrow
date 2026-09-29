@@ -3,7 +3,7 @@
 This file is the source of truth for the test catalog. docs/testing.md
 describes the same suites; scripts/tests/test_qtest.py keeps them in sync.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import platform
 import re
 
@@ -55,7 +55,13 @@ class Suite:
     # Suites that start disposable servers or take over the desktop run only
     # when you select them by name.
     explicit_only: bool = False
-    options: tuple[str, ...] = field(default=())
+    # "any" or "docker": the suite runs against the shared server fixture.
+    fixture: str | None = None
+    # Steps that run before the fixture starts, like builds, so that compilers
+    # and servers do not use memory at the same time.
+    prepare: tuple[Step, ...] = ()
+    # Steps that run after the suite, also when it failed.
+    cleanup: tuple[Step, ...] = ()
 
     @property
     def filterable(self):
@@ -111,14 +117,24 @@ SUITES = {
               (Step((PYTHON, "scripts/core/policy.py")),
                Step(("cargo", "machete")),
                Step(("cargo", "deny", "--locked", "check")))),
-        Suite("backend", "Connector and worker against disposable LDAP, Kyuubi, and Spark in Docker.",
-              ("uv", "cargo", "docker"),
-              (Step((PYTHON, "scripts/e2e/run.py", "backend"), timeout=40 * 60),),
-              explicit_only=True),
-        Suite("e2e", "The packaged app, driven through macOS accessibility, against real servers.",
+        Suite("backend", "Connector and worker against the real servers, without the UI.",
+              ("cargo", "cargo-nextest", "fixture-runtime"),
+              (nextest("binary(backend)", "--no-default-features", "--run-ignored", "only"),),
+              explicit_only=True, fixture="docker",
+              prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "backend")),)),
+        Suite("e2e", "The real Qrow window, headless, against the real servers.",
+              ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
+              (nextest("binary(e2e)", "--run-ignored", "only"),),
+              macos_only=True, explicit_only=True, fixture="any",
+              prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
+        Suite("desktop", "The packaged app, driven through macOS accessibility, against the real servers.",
               ("uv", "cargo", "macos", "xcode", "desktop", "fixture-runtime"),
-              (Step((PYTHON, "scripts/e2e/run.py", "macos", "--runtime", "{runtime}"), timeout=150 * 60),),
-              macos_only=True, explicit_only=True, options=("runtime",)),
+              (Step(("sh", "scripts/e2e/driver.sh", "--prepared"), timeout=90 * 60),),
+              macos_only=True, explicit_only=True, fixture="any",
+              prepare=(Step(("sh", "scripts/e2e/driver.sh", "--prepare"), timeout=30 * 60),),
+              # The driver removes its synthetic Keychain items on exit. This
+              # step also removes them when a time limit stopped the driver.
+              cleanup=(Step((PYTHON, "scripts/e2e/keychain.py")),)),
     ]
 }
 
@@ -164,5 +180,7 @@ REQUIREMENTS = {
     "desktop": "Use an unlocked, logged-in macOS session. Grant Accessibility and Screen Recording "
                "to the terminal; see target/e2e-tools/preflight.log.",
     "java": "Set JAVA_HOME to a Java 17 JDK, or use `--runtime docker`.",
+    "fixture-docker": "This suite stops engines and restarts Kyuubi, which needs the Docker runtime. "
+                      "Use `--runtime docker` or `--runtime auto` with Docker running.",
     **{name: f"Run `./qtest install {name}` (pinned: {tool.version})." for name, tool in TOOLS.items()},
 }

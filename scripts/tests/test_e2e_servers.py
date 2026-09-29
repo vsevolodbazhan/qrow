@@ -15,6 +15,15 @@ spec.loader.exec_module(native_fixture)
 
 
 class NativeFixtureTests(unittest.TestCase):
+    def test_progress_goes_to_stderr_so_json_output_stays_valid(self):
+        import contextlib
+        import io
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            native_fixture.announce("downloading")
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertIn("downloading", stderr.getvalue())
+
     def test_download_progress_reports_total_and_eta(self):
         with patch.object(native_fixture, "announce") as announce, patch.object(native_fixture.time, "monotonic", return_value=10):
             native_fixture.report_download_progress("spark", 100, 200, 0)
@@ -92,7 +101,7 @@ class NativeFixtureTests(unittest.TestCase):
             self.assertEqual(popen.call_count, 2)
 
     def test_manifest_sources_share_one_archive_name(self):
-        manifest = json.loads((native_fixture.ROOT / "tests/e2e/native-downloads.json").read_text())
+        manifest = json.loads((native_fixture.ROOT / "tests/fixture/native-downloads.json").read_text())
         for name, item in manifest.items():
             with self.subTest(dependency=name):
                 self.assertTrue(item["urls"])

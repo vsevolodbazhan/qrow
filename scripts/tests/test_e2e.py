@@ -1,87 +1,105 @@
-"""Acceptance orchestration must fail closed and isolate every server mutation."""
+"""The server fixture must fail closed and scope every mutation to disposable servers."""
 import importlib.util
-import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location("e2e", ROOT / "scripts/e2e/run.py")
-e2e = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(e2e)
+sys.path.insert(0, str(ROOT / "scripts/e2e"))
+spec = importlib.util.spec_from_file_location("fixture", ROOT / "scripts/e2e/fixture.py")
+fixture = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fixture)
 
 
-class AcceptanceTests(unittest.TestCase):
+class FakeServers:
+    def __init__(self, answers):
+        self.answers = answers
+        self.users = []
+
+    def check_alive(self):
+        pass
+
+    def beeline(self, user, _password):
+        self.users.append(user)
+        code, error = self.answers[user]
+        return subprocess.CompletedProcess([], code, "", error)
+
+
+class FixtureTests(unittest.TestCase):
     def test_native_evidence_uses_executor_and_driver_markers(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.assertEqual(e2e.native_evidence_count(root, "query.started"), 0)
+            native = fixture.NativeFixture("qrow-e2e-unit", 1, directory, [], [], {})
+            root = Path(directory) / "executor-evidence"
+            root.mkdir()
+            self.assertEqual(native.evidence_count("query.started"), 0)
             (root / "query.interrupted").write_text("1\n")
             (root / "query.task").write_text("app-123-4")
             (root / "app-123-4.ended").write_text("1\n")
-            self.assertEqual(e2e.native_evidence_count(root, "query.interrupted"), 1)
-            self.assertEqual(e2e.native_evidence_count(root, "query.ended"), 1)
+            self.assertEqual(native.evidence_count("query.interrupted"), 1)
+            self.assertEqual(native.evidence_count("query.ended"), 1)
             for token in ["../query.started", "query.task", "/query.ended"]:
                 with self.assertRaises(ValueError):
-                    e2e.native_evidence_count(root, token)
+                    native.evidence_count(token)
             (root / "query.task").write_text("../outside")
             with self.assertRaises(ValueError):
-                e2e.native_evidence_count(root, "query.ended")
+                native.evidence_count("query.ended")
 
-    def test_compose_rejects_unscoped_project_before_invoking_docker(self):
+    def test_docker_fixture_rejects_an_unscoped_project_before_invoking_docker(self):
         for name in ["", "production", "qrow-e2e-", "qrow-e2e-a;ls", "../qrow-e2e-x"]:
-            with self.subTest(name=name), patch.dict(os.environ, {"QROW_E2E_PROJECT": name}), patch.object(e2e, "run") as run:
+            with self.subTest(name=name), patch.object(fixture.subprocess, "run") as run:
                 with self.assertRaises(ValueError):
-                    e2e.compose("down", "--volumes")
+                    fixture.DockerFixture(name, 1, 1, "/tmp")
                 run.assert_not_called()
 
     def test_mutations_are_scoped_to_the_fixture_project(self):
-        with patch.dict(os.environ, {"QROW_E2E_PROJECT": "qrow-e2e-unit"}), patch.object(e2e, "run") as run:
-            e2e.observe("kill-engine", "unused")
-            args = run.call_args.args[0]
-            self.assertEqual(args[:7], ["docker", "compose", "-f", str(e2e.COMPOSE), "-p", "qrow-e2e-unit", "exec"])
-            self.assertIn("kyuubi", args)
+        docker = fixture.DockerFixture("qrow-e2e-unit", 23456, 1, "/tmp")
+        with patch.object(fixture.subprocess, "run") as run:
+            docker.kill_engine()
+        args = run.call_args.args[0]
+        self.assertEqual(args[:7], ["docker", "compose", "-f", str(fixture.COMPOSE), "-p", "qrow-e2e-unit", "exec"])
+        self.assertIn("kyuubi", args)
+        self.assertEqual(run.call_args.kwargs["env"]["QROW_E2E_PROJECT"], "qrow-e2e-unit")
 
-    def test_evidence_paths_cannot_escape_volume(self):
-        with patch.object(e2e, "compose") as compose:
+    def test_evidence_paths_cannot_escape_the_volume(self):
+        docker = fixture.DockerFixture("qrow-e2e-unit", 1, 1, "/tmp")
+        with patch.object(docker, "compose") as compose:
             for token in ["../../passwd", "valid.started;id", "valid.unknown", "x/../x.started"]:
                 with self.assertRaises(ValueError):
-                    e2e.observe("count", token)
+                    docker.evidence_count(token)
             compose.assert_not_called()
 
+    def test_local_processes_cannot_stop_engines(self):
+        native = fixture.NativeFixture("qrow-e2e-unit", 1, "/tmp", [], [], {})
+        with patch.object(fixture.subprocess, "run") as run:
+            for action in (native.kill_engine, native.restart_server):
+                with self.assertRaisesRegex(RuntimeError, "Docker runtime"):
+                    action()
+            run.assert_not_called()
+
     def test_authentication_failures_do_not_count_as_readiness(self):
-        failure = subprocess.CompletedProcess([], 1, "", "LDAP rejected")
-        with patch.object(e2e, "compose", return_value=failure), patch.object(e2e.time, "monotonic", side_effect=[0, 1, 181]), patch.object(e2e.time, "sleep"):
+        servers = FakeServers({"qrow": (1, "LDAP rejected"), "other": (0, "")})
+        with patch.object(fixture.time, "monotonic", side_effect=[0, 0, 0, 181]), patch.object(fixture.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "LDAP rejected"):
-                e2e.ready()
+                fixture.wait_ready(servers)
 
-    def test_timeout_kills_test_process_group(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(e2e.subprocess, "Popen") as popen, patch.object(e2e.os, "killpg") as kill:
-            popen.return_value.pid = 12345
-            popen.return_value.wait.side_effect = [subprocess.TimeoutExpired("cargo", 1), -9]
-            with self.assertRaises(subprocess.TimeoutExpired):
-                e2e.bounded_command(["cargo"], 1, Path(directory) / "test.log")
-            kill.assert_called_once_with(12345, e2e.signal.SIGKILL)
+    def test_readiness_starts_only_the_engine_of_the_test_user(self):
+        servers = FakeServers({"qrow": (0, ""), "other": (1, "no room for a second engine")})
+        fixture.wait_ready(servers)
+        self.assertEqual(servers.users, [fixture.TEST_USER])
 
-    def test_nonzero_test_exit_is_not_a_pass(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(e2e.subprocess, "Popen") as popen:
-            popen.return_value.wait.return_value = 101
-            with self.assertRaisesRegex(RuntimeError, "101"):
-                e2e.bounded_command(["cargo"], 1, Path(directory) / "test.log")
+    def test_state_round_trip_keeps_the_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "fixture.json"
+            fixture.save(fixture.DockerFixture("qrow-e2e-unit", 2, 3, directory), path)
+            loaded = fixture.load(path)
+        self.assertEqual((loaded.project, loaded.bind_port, loaded.port), ("qrow-e2e-unit", 2, 3))
+        self.assertEqual(loaded.env(), {"QROW_E2E_PROJECT": "qrow-e2e-unit", "QROW_E2E_PORT": "3"})
 
-    def test_failed_suite_still_collects_evidence_and_removes_volumes(self):
-        with tempfile.TemporaryDirectory() as directory, patch.object(e2e, "ROOT", Path(directory)), patch.dict(os.environ, {}, clear=True), patch.object(e2e.sys, "argv", ["e2e.py", "backend"]), patch.object(e2e, "require_commands"), patch.object(e2e, "free_port", return_value=23456), patch.object(e2e, "ready"), patch.object(e2e, "collect") as collect, patch.object(e2e, "compose", return_value=subprocess.CompletedProcess([], 0, "127.0.0.1:23456\n", "")) as compose, patch.object(e2e, "bounded_command", side_effect=RuntimeError("assertion failed")):
-            with self.assertRaisesRegex(RuntimeError, "assertion failed"):
-                e2e.main()
-            collect.assert_called_once()
-            self.assertIn(unittest.mock.call("down", "--volumes", "--remove-orphans", timeout=90), compose.call_args_list)
-            failures = list(Path(directory).glob("target/e2e/*/failure.txt"))
-            self.assertEqual(len(failures), 1)
-            self.assertIn("assertion failed", failures[0].read_text())
-
+class WorkflowTests(unittest.TestCase):
     def workflow_job(self, name, workflow_path=".github/workflows/test.yml"):
         workflow = (ROOT / workflow_path).read_text()
         match = re.search(rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)", workflow, re.MULTILINE | re.DOTALL)
@@ -115,9 +133,9 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn("sh scripts/package/macos.sh", package)
         self.assertIn("name: macos-package-and-performance\n", package)
         self.assertIn("name: macos-package-and-performance\n", native)
-        # The reused package needs no Rust toolchain or compiled dependency cache.
-        rust_steps = re.findall(r"- name: (?:Select Rust toolchain|Restore Rust cache)\n\s+if: (.+)", native)
-        self.assertEqual(rust_steps, ["github.event_name == 'workflow_dispatch' && !inputs.reuse_macos_package"] * 2)
+        # The headless E2E tests compile in the job, so Rust is always present.
+        self.assertIn("run: ./qtest run e2e desktop --runtime native", native)
+        self.assertEqual(len(re.findall(r"- name: (?:Select Rust toolchain|Restore Rust cache)\n\s+(?:run|uses):", native)), 2)
 
     def test_unified_workflow_handles_drafts_and_forks(self):
         workflow = (ROOT / ".github/workflows/test.yml").read_text()
@@ -156,7 +174,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn("./qtest run backend", backend)
         self.assertIn("- test-core-macos", native)
         self.assertIn("- test-e2e-backend", native)
-        self.assertIn("./qtest run e2e", native)
+        self.assertIn("./qtest run e2e desktop", native)
         self.assertIn("test-e2e-macos", package)
 
     def test_native_e2e_package_mode_validates_bundle(self):

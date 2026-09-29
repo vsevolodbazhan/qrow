@@ -1,4 +1,4 @@
-//! Real LDAP/Kyuubi/Spark acceptance tests. Run only through scripts/e2e/run.py.
+//! Real LDAP/Kyuubi/Spark acceptance tests. Run only through `./qtest run backend`.
 //! Ignored tests must fail, never silently skip, when explicitly requested without a fixture.
 use anyhow::{Context, Result, ensure};
 use qrow::{
@@ -115,7 +115,7 @@ fn scalar(page: &Page, expected: &str) {
 }
 fn observe(action: &str, token: &str) -> Result<String> {
     let output = Command::new("python3")
-        .args(["scripts/e2e/run.py", "observe", action, token])
+        .args(["scripts/e2e/fixture.py", "observe", action, token])
         .output()?;
     ensure!(
         output.status.success(),
