@@ -148,11 +148,42 @@ def command_hook(args):
     return summary["exit_code"]
 
 
+def command_ci(args):
+    """List the CI jobs, print the jobs for the changed paths, or run the suites of one job."""
+    if args.job is None:
+        for job in catalog.CI_JOBS.values():
+            suites = ", ".join([*job.suites, *(f"{name} (report only)" for name in job.report_only)])
+            needs = f"  waits for {', '.join(job.needs)}" if job.needs else ""
+            print(f"{job.name:<8} {job.runner:<13} {suites}{needs}")
+        return EXIT_PASSED
+    if args.job == "plan":
+        names = list(catalog.CI_JOBS) if args.all else catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
+        plan = json.dumps({name: name in names for name in catalog.CI_JOBS})
+        print(plan)
+        if args.github_output:
+            with open(args.github_output, "a") as output:
+                output.write(f"jobs={plan}\n")
+        return EXIT_PASSED
+    job = catalog.CI_JOBS[args.job]
+    names = [*job.suites, *job.report_only]
+    if args.install:
+        tools = [tool for tool in catalog.TOOLS if any(tool in catalog.SUITES[name].requires for name in names)]
+        if install_tools(tools):
+            return EXIT_FAILED
+    selected, _ = runner.resolve(names)
+    output = runner.Output(quiet=False)
+    output.note(f"CI job {job.name}: {', '.join(names)}")
+    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output, report_only=job.report_only)
+    print_summary(summary)
+    return summary["exit_code"]
+
+
 def print_summary(summary):
     print(f"\nqtest run {summary['run']}: {summary['status']}", file=sys.stderr)
     for suite in summary["suites"]:
         duration = f"{suite['duration_s']:.0f}s" if suite.get("duration_s") else ""
-        print(f"  {suite['status']:<8} {suite['name']:<10} {duration:>6}  {suite.get('reason', '')}",
+        note = " (report only)" if suite.get("report_only") else ""
+        print(f"  {suite['status']:<8} {suite['name']:<10} {duration:>6}  {suite.get('reason', '')}{note}",
               file=sys.stderr)
         for failure in suite.get("failures", []):
             print(f"           FAILED {failure['test']}", file=sys.stderr)
@@ -192,11 +223,50 @@ def command_install(args):
     unknown = [name for name in names if name not in catalog.TOOLS]
     if unknown:
         raise runner.UsageError(f"Unknown tool: {', '.join(unknown)}. Known: {', '.join(catalog.TOOLS)}")
+    return install_tools(names)
+
+
+def install_archive(tool, url, digest):
+    """Download a prebuilt tool archive, check its digest, and unpack it into the Cargo bin directory."""
+    import hashlib
+    import os
+    import tarfile
+    import tempfile
+    import urllib.request
+    from pathlib import Path
+    bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
+    print(f"[qtest] Downloading {url}", file=sys.stderr)
+    with tempfile.TemporaryDirectory() as directory:
+        archive = Path(directory) / "tool.tar.gz"
+        with urllib.request.urlopen(url, timeout=120) as response:
+            archive.write_bytes(response.read())
+        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+        if actual != digest:
+            print(f"[qtest] {tool.name}: SHA-256 {actual} does not match the pinned {digest}.", file=sys.stderr)
+            return False
+        with tarfile.open(archive) as bundle:
+            member = bundle.getmember(tool.name)
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            bundle.extract(member, bin_dir, filter="data")
+        (bin_dir / tool.name).chmod(0o755)
+    return True
+
+
+def install_tools(names):
     for name in names:
         tool = catalog.TOOLS[name]
         if runner.check_requirement(name, {}) is None:
             print(f"[qtest] {name} {tool.version} is installed.", file=sys.stderr)
             continue
+        archive = next(((url, digest) for target, url, digest in tool.archives
+                        if target == catalog.target_triple()), None)
+        if archive:
+            try:
+                if install_archive(tool, *archive) and runner.check_requirement(name, {}) is None:
+                    continue
+            except OSError as error:
+                print(f"[qtest] {name}: download failed ({error}).", file=sys.stderr)
+            print(f"[qtest] {name}: building it from source instead.", file=sys.stderr)
         for command in tool.install:
             print(f"[qtest] $ {subprocess.list2cmdline(command)}", file=sys.stderr)
             if subprocess.run(command, cwd=ROOT).returncode:
@@ -340,6 +410,7 @@ COMMANDS = {
     "list": command_list,
     "run": command_run,
     "hook": command_hook,
+    "ci": command_ci,
     "doctor": command_doctor,
     "install": command_install,
     "new": command_new,
@@ -382,6 +453,15 @@ def parser():
         description="The repository hooks call this command in a snapshot of the commit. "
                     "It runs the suites that the changed paths select and that the hook includes.")
     hook.add_argument("name", choices=list(catalog.HOOKS))
+
+    ci = commands.add_parser(
+        "ci", help="List the CI jobs, plan them for changed paths, or run one job.",
+        description="Without JOB, list the jobs of the checks workflow. `plan` prints the jobs that "
+                    "the changed paths select, as JSON. JOB runs the suites of that job, as CI does.")
+    ci.add_argument("job", nargs="?", choices=[*catalog.CI_JOBS, "plan"])
+    ci.add_argument("--all", action="store_true", help="plan: select every job.")
+    ci.add_argument("--github-output", metavar="FILE", help="plan: also write `jobs=JSON` to FILE.")
+    ci.add_argument("--install", action="store_true", help="Install the pinned tools of the job first.")
 
     doctor = commands.add_parser("doctor", help="Check prerequisites and print a fix for each gap.")
     doctor.add_argument("selectors", nargs="*", help="Check only these suites or groups.")
