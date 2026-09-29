@@ -72,8 +72,14 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: release-core
+      - name: setup-uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: install-test-tools
+        run: ./qtest install cargo-nextest
       - name: test-core-backend
-        run: sh scripts/check.sh core/backend
+        run: ./qtest run fmt clippy rustdoc unit
 
   test-core-macos:
     name: test-core-macos
@@ -95,8 +101,14 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: release-native
+      - name: setup-uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: install-test-tools
+        run: ./qtest install cargo-nextest
       - name: test-core-macos
-        run: sh scripts/check.sh core/macos
+        run: ./qtest run clippy unit ui
 
   test-e2e-backend:
     name: test-e2e-backend
@@ -123,7 +135,7 @@ jobs:
         with:
           shared-key: release-core
       - name: test-e2e-backend
-        run: sh scripts/check.sh e2e/backend
+        run: ./qtest run backend
       - name: upload-e2e-backend-evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -165,7 +177,7 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME_17_arm64" >> "$GITHUB_ENV"
           echo "$JAVA_HOME_17_arm64/bin" >> "$GITHUB_PATH"
       - name: Run native E2E
-        run: sh scripts/check.sh e2e/macos
+        run: ./qtest run e2e
       - name: upload-e2e-macos-evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Qrow's test and check CLI. Run `./qtest help` for the guide.
+set -eu
+cd "$(dirname "$0")"
+if ! command -v uv >/dev/null 2>&1; then
+    echo 'qtest needs uv: https://docs.astral.sh/uv/getting-started/installation/' >&2
+    exit 3
+fi
+exec uv run --locked --quiet python scripts/qtest "$@"

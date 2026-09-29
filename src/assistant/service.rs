@@ -505,6 +505,9 @@ mod tests {
     use super::*;
     use std::fs;
 
+    /// Covers the start of a fake app-server on a loaded machine.
+    const EVENT_TIMEOUT: Duration = Duration::from_secs(15);
+
     fn call(thread: &str, turn: &str, id: &str) -> ToolCall {
         ToolCall {
             request_id: serde_json::json!(0),
@@ -560,14 +563,14 @@ done
         );
         let mut service = Service::launch(executable.clone(), Arc::new(|| {})).unwrap();
         assert!(matches!(
-            service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            service.events.recv_timeout(EVENT_TIMEOUT).unwrap(),
             Event::Ready(_)
         ));
         service
             .send(Command::Create(super::super::tools::definitions()))
             .unwrap();
         assert!(
-            matches!(service.events.recv_timeout(Duration::from_secs(5)).unwrap(), Event::Created(Conversation { id, .. }) if id == "thread-1")
+            matches!(service.events.recv_timeout(EVENT_TIMEOUT).unwrap(), Event::Created(Conversation { id, .. }) if id == "thread-1")
         );
         service
             .send(Command::ReadOlder {
@@ -576,7 +579,7 @@ done
             })
             .unwrap();
         assert!(
-            matches!(service.events.recv_timeout(Duration::from_secs(5)).unwrap(), Event::HistoryPage(ConversationPage { thread_id, turns, older_cursor: None }) if thread_id == "thread-1" && turns.len() == 1)
+            matches!(service.events.recv_timeout(EVENT_TIMEOUT).unwrap(), Event::HistoryPage(ConversationPage { thread_id, turns, older_cursor: None }) if thread_id == "thread-1" && turns.len() == 1)
         );
         service
             .shutdown_and_delete(vec!["thread-1".into()], Duration::from_secs(3))
@@ -610,7 +613,7 @@ done
         );
         let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
         assert!(matches!(
-            service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            service.events.recv_timeout(EVENT_TIMEOUT).unwrap(),
             Event::Ready(_)
         ));
         let error = service
@@ -640,7 +643,7 @@ exit 0
         );
         let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
         assert!(matches!(
-            service.events.recv_timeout(Duration::from_secs(5)).unwrap(),
+            service.events.recv_timeout(EVENT_TIMEOUT).unwrap(),
             Event::Ready(_)
         ));
         service.shutdown_and_wait(Duration::from_secs(3)).unwrap();

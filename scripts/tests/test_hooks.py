@@ -26,7 +26,8 @@ class HookTests(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/hooks/snapshot.sh", self.repo / "scripts/hooks/snapshot.sh")
         (self.repo / "scripts/core").mkdir()
         shutil.copy2(ROOT / "scripts/core/preflight.sh", self.repo / "scripts/core/preflight.sh")
-        (self.repo / "scripts/check.sh").write_text('#!/bin/sh\nset -eu\ntest "$(cat payload)" = good\n')
+        # A stand-in for qtest: it passes only when the snapshot has the good payload.
+        (self.repo / "qtest").write_text('#!/bin/sh\nset -eu\ntest "$(cat payload)" = good\n')
         (self.repo / "payload").write_text("good")
         self.git("add", ".")
 

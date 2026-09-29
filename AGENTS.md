@@ -1,9 +1,9 @@
 - Consult relevant pages in [docs/](docs/) when needed. Do not read every page
   by default. Use the [README](README.md) for build and launch instructions.
 - Investigate disagreements between code and documentation before changing either.
-- Run the checks appropriate to the change. Follow
-  [Development](docs/development.md) for verification and maintenance procedures.
-  Do not weaken checks or bypass failing hooks.
+- Run the checks appropriate to the change with `./qtest` (see
+  [Testing](docs/testing.md)). Follow [Development](docs/development.md) for
+  maintenance procedures. Do not weaken checks or bypass failing hooks.
 - Use isolated workspaces and synthetic credentials for tests. Never overwrite
   the user's workspace or use their credentials as fixtures.
 - Preserve the user's working files and staged changes. Do not replace the

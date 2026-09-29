@@ -1,14 +1,15 @@
 # Scripts
 
-See [Development](../docs/development.md) for local checks, hooks, dependency
+See [Testing](../docs/testing.md) for `./qtest`, which runs all checks and tests.
+See [Development](../docs/development.md) for hooks, dependency
 maintenance, and binding generation. See
 [End-to-end testing](../docs/end-to-end-testing.md) for real-server and native UI
 tests. Build and package commands are in the [project README](../README.md#build).
 
 | Path | Purpose |
 | --- | --- |
-| `check.sh` | Select a local check or an explicit end-to-end suite. |
-| `core/` | Local checks, tool installation, coverage, performance, size, and dependency policy. |
+| `qtest/` | The [`./qtest`](../docs/testing.md) command: suite catalog, runner, and command line. |
+| `core/` | Shared prerequisite checks, the size check, and the dependency policy check. |
 | `e2e/` | Disposable servers, test orchestration, native driver entry point, and synthetic credential cleanup. |
 | `package/` | macOS packaging, icon conversion, and dependency notices. |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |

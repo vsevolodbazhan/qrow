@@ -153,10 +153,10 @@ class AcceptanceTests(unittest.TestCase):
         # The same waterfall as the test workflow: backend E2E runs beside core-macos.
         self.assertIn("- test-core-backend", backend)
         self.assertNotIn("- test-core-macos", backend)
-        self.assertIn("sh scripts/check.sh e2e/backend", backend)
+        self.assertIn("./qtest run backend", backend)
         self.assertIn("- test-core-macos", native)
         self.assertIn("- test-e2e-backend", native)
-        self.assertIn("sh scripts/check.sh e2e/macos", native)
+        self.assertIn("./qtest run e2e", native)
         self.assertIn("test-e2e-macos", package)
 
     def test_native_e2e_package_mode_validates_bundle(self):
