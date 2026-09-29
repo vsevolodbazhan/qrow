@@ -277,7 +277,11 @@ The suite builds a release package in the run directory. It does not replace
 passwords. The driver restores the clipboard after it types text. It sets the
 Qrow window to 992 by 652 points, the window size on a hosted macOS runner,
 so local and CI runs show the same layout. The main display must fit this
-window with 16 points of space on each side. The driver also records the
+window with 16 points of space on each side. The pixel checks read the
+pixels of the Qrow window alone, so other windows, their shadows, and
+notifications do not change the result. A check captures its region again
+until two captures in a row match, so it does not measure a frame of an
+animation. The driver also records the
 launch time and the memory and CPU use of Qrow. Its launch time ends when the
 **New Connection** control is accessible.
 

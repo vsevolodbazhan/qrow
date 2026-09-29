@@ -397,11 +397,53 @@ final class Driver {
     func snapshot(_ name: String) throws {
         let text = elements().map { "\(attribute($0, kAXRoleAttribute) ?? "?" as CFString) \(strings($0))" }.joined(separator: "\n")
         try text.write(toFile: "\(artifacts)/\(name)-accessibility.txt", atomically: true, encoding: .utf8)
+        let (number, _) = try qrowWindow()
+        _ = try command(["screencapture", "-x", "-l", "\(number)", "\(artifacts)/\(name).png"])
+    }
+    /// The number of the Qrow window and its frame in screen points.
+    func qrowWindow() throws -> (UInt32, CGRect) {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         guard let window = windows.first(where: {
             $0[kCGWindowOwnerPID as String] as? Int32 == process.processIdentifier && $0[kCGWindowLayer as String] as? Int == 0
-        }), let number = window[kCGWindowNumber as String] as? UInt32 else { throw Failure("No Qrow window to capture") }
-        _ = try command(["screencapture", "-x", "-l", "\(number)", "\(artifacts)/\(name).png"])
+        }), let number = window[kCGWindowNumber as String] as? UInt32,
+              let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds) else { throw Failure("No Qrow window to capture") }
+        return (number, frame)
+    }
+    /// Saves the pixels of `rect` ("x,y,width,height" in screen points) as a
+    /// PNG at `path`. The pixels come from the Qrow window alone, so other
+    /// windows, their shadows, and notifications do not change them. The
+    /// capture repeats until two captures in a row match, so a frame of an
+    /// animation or a scroll does not count.
+    func captureRegion(_ rect: String, to path: String) throws {
+        let parts = rect.split(separator: ",").compactMap { Double($0) }
+        try require(parts.count == 4, "Invalid capture region: \(rect)")
+        let region = CGRect(x: parts[0], y: parts[1], width: parts[2], height: parts[3])
+        let whole = "\(artifacts)/window-capture.png"
+        defer { try? FileManager.default.removeItem(atPath: whole) }
+        var previous: Data?
+        for _ in 0..<15 {
+            let (number, frame) = try qrowWindow()
+            _ = try command(["screencapture", "-x", "-o", "-l", "\(number)", whole])
+            guard let data = FileManager.default.contents(atPath: whole),
+                  let bitmap = NSBitmapImageRep(data: data), let image = bitmap.cgImage else {
+                throw Failure("Could not read the Qrow window capture")
+            }
+            let scale = CGFloat(bitmap.pixelsWide) / frame.width
+            let crop = CGRect(x: (region.minX - frame.minX) * scale, y: (region.minY - frame.minY) * scale,
+                              width: region.width * scale, height: region.height * scale).integral
+            guard let cropped = image.cropping(to: crop),
+                  let png = NSBitmapImageRep(cgImage: cropped).representation(using: .png, properties: [:]) else {
+                throw Failure("The capture region \(rect) is outside the Qrow window")
+            }
+            if png == previous {
+                try png.write(to: URL(fileURLWithPath: path))
+                return
+            }
+            previous = png
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        }
+        throw Failure("The Qrow window did not stop changing in \(rect)")
     }
     func start() throws {
         let bundle = env["QROW_E2E_BUNDLE"]!
@@ -451,7 +493,7 @@ final class Driver {
         let captureHeight = 90
         let path = "\(artifacts)/editor-highlight.png"
         let rect = "\(Int(origin.x + extent.width) - captureWidth),\(Int(origin.y)),\(captureWidth),\(captureHeight)"
-        _ = try command(["screencapture", "-x", "-R", rect, path])
+        try captureRegion(rect, to: path)
         guard let data = FileManager.default.contents(atPath: path),
               let bitmap = NSBitmapImageRep(data: data) else {
             throw Failure("Could not read editor highlight capture")
@@ -496,7 +538,7 @@ final class Driver {
         func ink(_ name: String, _ origin: CGPoint, _ extent: CGSize) throws -> (Double, Double) {
             let path = "\(artifacts)/results-text-\(name).png"
             let rect = "\(Int(origin.x)),\(Int(origin.y)),\(Int(min(extent.width, 120))),\(Int(extent.height))"
-            _ = try command(["screencapture", "-x", "-R", rect, path])
+            try captureRegion(rect, to: path)
             guard let data = FileManager.default.contents(atPath: path),
                   let bitmap = NSBitmapImageRep(data: data),
                   let background = bitmap.colorAt(x: 1, y: bitmap.pixelsHigh / 2)?.usingColorSpace(.deviceRGB) else {
@@ -711,7 +753,7 @@ final class Driver {
         // the surface behind the text, and its lightest color is the text.
         func capture(_ name: String) throws -> (surface: NSColor, text: NSColor) {
             let path = "\(artifacts)/\(name).png"
-            _ = try command(["screencapture", "-x", "-R", "\(Int(origin.x)),\(Int(origin.y)),\(Int(extent.width)),\(Int(extent.height))", path])
+            try captureRegion("\(Int(origin.x)),\(Int(origin.y)),\(Int(extent.width)),\(Int(extent.height))", to: path)
             guard let data = FileManager.default.contents(atPath: path),
                   let bitmap = NSBitmapImageRep(data: data) else {
                 throw Failure("Could not read the \(name) capture")
@@ -790,7 +832,7 @@ final class Driver {
         try snapshot(name)
         let path = "\(artifacts)/\(name)-edge.png"
         let rect = "\(Int(origin.x) + 1),\(Int(origin.y)),1,\(Int(extent.height))"
-        _ = try command(["screencapture", "-x", "-R", rect, path])
+        try captureRegion(rect, to: path)
         guard let data = FileManager.default.contents(atPath: path),
               let bitmap = NSBitmapImageRep(data: data),
               let top = bitmap.colorAt(x: 0, y: 2)?.usingColorSpace(.deviceRGB),
@@ -819,7 +861,7 @@ final class Driver {
         try require(bottom - origin.y > 100, "The bold reply is not on screen")
         let path = "\(artifacts)/assistant-bold-reply-edge.png"
         let rect = "\(Int(origin.x - 4)),\(Int(origin.y)),\(Int(extent.width) + 4),\(Int(bottom - origin.y))"
-        _ = try command(["screencapture", "-x", "-R", rect, path])
+        try captureRegion(rect, to: path)
         guard let data = FileManager.default.contents(atPath: path),
               let bitmap = NSBitmapImageRep(data: data),
               let background = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else {
@@ -846,7 +888,7 @@ final class Driver {
         let top = Int(composerOrigin.y) - 24
         let height = Int(sendOrigin.y + sendSize.height) + 24 - top
         let path = "\(artifacts)/assistant-composer-padding.png"
-        _ = try command(["screencapture", "-x", "-R", "\(Int(composerOrigin.x + composerSize.width) + 4),\(top),1,\(height)", path])
+        try captureRegion("\(Int(composerOrigin.x + composerSize.width) + 4),\(top),1,\(height)", to: path)
         guard let data = FileManager.default.contents(atPath: path),
               let bitmap = NSBitmapImageRep(data: data) else {
             throw Failure("Could not read the composer padding capture")
@@ -887,7 +929,7 @@ final class Driver {
         let left = Int(composerOrigin.x) + 2
         let width = Int(composerOrigin.x + composerSize.width) + 6 - left
         let path = "\(artifacts)/assistant-message-insets.png"
-        _ = try command(["screencapture", "-x", "-R", "\(left),\(Int(origin.y + extent.height / 2)),\(width),1", path])
+        try captureRegion("\(left),\(Int(origin.y + extent.height / 2)),\(width),1", to: path)
         guard let data = FileManager.default.contents(atPath: path),
               let bitmap = NSBitmapImageRep(data: data),
               let background = bitmap.colorAt(x: 0, y: 0)?.usingColorSpace(.deviceRGB) else {
