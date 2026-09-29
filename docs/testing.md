@@ -38,6 +38,9 @@ accept a test filter.
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL validation benchmark with enforced budgets. | Rust |
+| `perf-ui` * | Frame, scroll, and editor timings of the real window in a release-like build. | macOS, cargo-nextest |
+| `perf-e2e` * | Query and page latency of the real window against the real servers. | macOS, Docker or Java 17 |
+| `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
@@ -176,6 +179,41 @@ Two runtimes are available:
 
 The `backend` suite stops Spark engines and restarts Kyuubi, so it needs the
 Docker runtime. Its tests run one at a time.
+
+## Check performance
+
+The performance suites measure probes. A probe prints one `QROW_PERF` line
+with its name, value, unit, and budget, and fails above its budget. The
+budgets catch large regressions. The run summary lists the measurements of
+each suite in `metrics`, and the run directory has them in `perf.json`.
+
+| Suite | Probes |
+| --- | --- |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, and opening and typing into a tab with 1 MB of SQL. It builds with the `perf` Cargo profile, which optimizes like the release build. |
+| `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
+| `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The first launch after a build warms up, and the median of the next three counts. |
+
+To find smaller changes, compare the probes with another revision on the
+same machine:
+
+```sh
+./qtest compare main              # perf, perf-ui, and perf-app
+./qtest compare main perf-ui --rounds 5 --threshold 10
+```
+
+The command builds the revision in a worktree under `target/qtest/compare/`
+and runs the suites there and in your working tree. The two sides take turns
+in each round, so that slow changes of the machine affect both. It prints
+the median of each probe and its change, and exits with code 1 when a probe
+is slower than the threshold, 25% by default. The revision must have the
+performance suites.
+
+Add a probe as a test in [`tests/perf/`](../tests/perf/) or in the `perf`
+module of `tests/e2e/`, and mark it `#[ignore]`. Measure with
+`support::perf::sample`, and report with `support::perf::report`. Set the
+budget several times above the measured value, so that the probe fails only
+for a large regression.
 
 ## Write a UI test
 
@@ -330,3 +368,8 @@ events and release checks.
   starts.
 - The servers have room for one Spark engine. Tests connect only as `qrow`.
 - `--repeat` runs complete suites again. It does not run one test in a loop.
+- The UI probes run on GPUI's test platform, which lays out and paints
+  frames without the GPU. They do not measure Metal rendering. `perf-app`
+  measures the time until Qrow reports a ready UI, not until the first frame
+  is on the screen.
+- CI runs only the `perf` suite.

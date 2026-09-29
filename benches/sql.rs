@@ -27,6 +27,10 @@ fn main() {
             100_000 => 25.,
             _ => 250.,
         };
+        // qtest collects this line; see docs/testing.md.
+        println!(
+            "QROW_PERF {{\"probe\":\"sql.validate_single.{bytes}\",\"value\":{median},\"unit\":\"ms\",\"budget\":{budget_ms}}}"
+        );
         assert!(
             median < budget_ms,
             "SQL validation exceeded {budget_ms} ms: {median:.3} ms"

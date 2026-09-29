@@ -5,6 +5,7 @@
 
 pub mod assistant;
 pub mod fixture;
+pub mod perf;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
@@ -252,11 +253,31 @@ impl TestApp {
         Self::launch_in(cx, tempfile::tempdir().unwrap(), workspace, credentials)
     }
 
+    /// Opens Qrow with its built-in demo data, which saves nothing.
+    pub fn launch_demo(cx: &mut TestAppContext) -> Self {
+        Self::open(
+            cx,
+            tempfile::tempdir().unwrap(),
+            None,
+            MemoryCredentials::default(),
+        )
+    }
+
     /// Opens Qrow on `workspace`, saved in `directory`.
     pub fn launch_in(
         cx: &mut TestAppContext,
         directory: TempDir,
         workspace: Workspace,
+        credentials: MemoryCredentials,
+    ) -> Self {
+        Self::open(cx, directory, Some(workspace), credentials)
+    }
+
+    /// Opens Qrow on `workspace` in `directory`, or on the demo data.
+    fn open(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        workspace: Option<Workspace>,
         credentials: MemoryCredentials,
     ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
@@ -269,13 +290,18 @@ impl TestApp {
             cx.set_reduce_motion(true);
         });
         let path = directory.path().join("workspace.json");
-        let workspace = Workspace {
-            version: WORKSPACE_VERSION,
-            ..workspace
-        };
-        std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
         let credentials = Arc::new(credentials);
-        let environment = Environment::isolated(path.clone(), credentials.clone());
+        let environment = match workspace {
+            Some(workspace) => {
+                let workspace = Workspace {
+                    version: WORKSPACE_VERSION,
+                    ..workspace
+                };
+                std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
+                Environment::isolated(path.clone(), credentials.clone())
+            }
+            None => Environment::demo(),
+        };
         let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
             let view = cx.new(|cx| Qrow::new(environment, Instant::now(), window, cx));
             ui::root(view, window, cx)

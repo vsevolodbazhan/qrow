@@ -47,6 +47,10 @@ required-features = ["ui"]
 name = "e2e"
 required-features = ["ui"]
 
+[[test]]
+name = "perf"
+required-features = ["ui"]
+
 [patch.crates-io]
 # GPUI Base 0.6.6 with three Qrow fixes: the active-line paint covers the
 # editor's right padding, inline code lines keep one line when they fit, and
@@ -54,6 +58,13 @@ required-features = ["ui"]
 # vendor/gpui-base/QROW-PATCH.md. Remove this patch when a GPUI Kit release
 # includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
+
+# Performance probes build like the release, without link-time optimization,
+# so that they compile faster.
+[profile.perf]
+inherits = "release"
+lto = false
+incremental = false
 
 [profile.release]
 # Keep the optional GPUI assistant inside the macOS package size budget.
