@@ -121,6 +121,6 @@ a separate authenticated transport. This prevents cancellation from waiting
 behind a blocked fetch on the query transport.
 
 Cancellation depends on the server accepting the operation handle on that
-transport. The [end-to-end suite](end-to-end-testing.md) checks server-side
+transport. The [E2E tests](testing.md#suites) check server-side
 cancellation in its reference configuration. This evidence does not prove
 transaction rollback or cancellation compatibility with every Kyuubi deployment.
