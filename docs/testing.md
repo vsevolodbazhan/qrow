@@ -249,7 +249,7 @@ Then it runs these scenarios, each with a new workspace:
 | Scenario | Checks |
 | --- | --- |
 | `window-close-only` | The failed save before a window close, as for **⌘Q**. |
-| `assistant-layout-only` | Pixels of assistant messages at a scale of 1.1 and a pane width of 536: a message with inline code keeps one line, bold text wraps inside the reply, the user bubble ends at the right edge of the composer, and the composer has equal space above the field and below **Send**. |
+| `assistant-layout-only` | Pixels of assistant messages at a scale of 1.1 and a pane width of 536: a message with inline code keeps one line, a wrapped message with inline code shows all its lines, bold text wraps inside the reply, the user bubble ends at the right edge of the composer, and the composer has equal space above the field and below **Send**. |
 | `assistant-selection-only` | In One Dark, a selection in a user message changes the color of its bubble and keeps the color of its text. |
 | `editor-highlight-only` | In demo mode, the active line color reaches the right edge of the editor. |
 

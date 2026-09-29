@@ -6,7 +6,7 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
-    GlobalElementId, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
+    FontId, GlobalElementId, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
     LayoutId, LineFragment as WrapLineFragment, ObjectFit, ParentElement as _, Pixels,
     Refineable as _, ShapedLine, SharedString, Size, StatefulInteractiveElement as _, Styled,
     StyledImage as _, TextRun, TextStyle, WhiteSpace, Window, div, img, point,
@@ -732,7 +732,7 @@ fn layout_measured_flow(
     let mut max_width = Pixels::ZERO;
     let mut y = Pixels::ZERO;
 
-    for line_range in line_ranges {
+    for (line_range, wrapped_width) in line_ranges {
         let mut line_fragments = Vec::new();
         let mut line_width = Pixels::ZERO;
         // `LineLayout` is the metric source used by the text paint path. Its
@@ -888,7 +888,7 @@ fn layout_measured_flow(
             fragments.push(positioned);
         }
 
-        max_width = max_width.max(line_width);
+        max_width = max_width.max(line_width).max(wrapped_width);
         y += line_ascent + line_descent;
     }
 
@@ -898,6 +898,11 @@ fn layout_measured_flow(
     }
 }
 
+/// Returns each line's range and the width the line wrapper measured for the
+/// line. The wrapper adds per-character advances, which can be wider than the
+/// shaped text. The flow reports at least the wrapper's width, so a layout at
+/// the reported width keeps the same lines. Without wrapping, the width is
+/// zero.
 fn line_ranges(
     items: &[MeasureItem],
     image_sizes: &[Option<Size<Pixels>>],
@@ -905,7 +910,7 @@ fn line_ranges(
     text_style: &TextStyle,
     wrap_width: Option<Pixels>,
     window: &mut Window,
-) -> Vec<Range<usize>> {
+) -> Vec<(Range<usize>, Pixels)> {
     let total_len = items.iter().map(MeasureItem::len).sum::<usize>();
     let mut hard_lines = Vec::new();
     let mut line_start = 0;
@@ -924,10 +929,14 @@ fn line_ranges(
     hard_lines.push(line_start..total_len);
 
     let Some(wrap_width) = wrap_width else {
-        return hard_lines;
+        return hard_lines
+            .into_iter()
+            .map(|line| (line, Pixels::ZERO))
+            .collect();
     };
     let rem_size = window.rem_size();
     let font_size = text_style.font_size.to_pixels(rem_size);
+    let font_id = window.text_system().resolve_font(&text_style.font());
     let mut wrapper = window
         .text_system()
         .line_wrapper(text_style.font(), font_size);
@@ -980,23 +989,84 @@ fn line_ranges(
 
         let boundaries = wrapper
             .wrap_line(&wrap_fragments, wrap_width)
-            .map(|boundary| hard_line.start + boundary.ix.min(hard_line.len()))
+            .map(|boundary| {
+                (
+                    hard_line.start + boundary.ix.min(hard_line.len()),
+                    boundary.next_indent,
+                )
+            })
             .collect::<Vec<_>>();
+        let widths = wrapped_line_widths(
+            &wrap_fragments,
+            hard_line.start,
+            &boundaries,
+            font_id,
+            font_size,
+            window,
+        );
         let mut start = hard_line.start;
 
-        for end in boundaries {
+        for ((end, _), width) in boundaries.iter().copied().zip(&widths) {
             if start < end {
-                ranges.push(start..end);
+                ranges.push((start..end, *width));
             }
             start = end;
         }
 
         if start < hard_line.end || hard_line.is_empty() {
-            ranges.push(start..hard_line.end);
+            ranges.push((
+                start..hard_line.end,
+                widths.last().copied().unwrap_or_default(),
+            ));
         }
     }
 
     ranges
+}
+
+/// Adds the widths of `fragments` as the line wrapper does, one sum per line.
+/// `boundaries` are the wrapper's line ends and next-line indents. The result
+/// has one width more than `boundaries`, for the line after the last one.
+fn wrapped_line_widths(
+    fragments: &[WrapLineFragment],
+    start: usize,
+    boundaries: &[(usize, u32)],
+    font_id: FontId,
+    font_size: Pixels,
+    window: &Window,
+) -> Vec<Pixels> {
+    let text_system = window.text_system();
+    let mut widths = vec![Pixels::ZERO; boundaries.len() + 1];
+    let mut line = 0;
+    let mut ix = start;
+    let mut add = |ix: usize, width: Pixels, widths: &mut Vec<Pixels>| {
+        while boundaries.get(line).is_some_and(|(end, _)| ix >= *end) {
+            let indent = boundaries[line].1;
+            line += 1;
+            if indent > 0 {
+                widths[line] = text_system.layout_width(font_id, font_size, ' ') * indent as f32;
+            }
+        }
+        widths[line] += width;
+    };
+    for fragment in fragments {
+        match fragment {
+            WrapLineFragment::Text { text } => {
+                for character in text.chars() {
+                    if character != '\n' {
+                        let width = text_system.layout_width(font_id, font_size, character);
+                        add(ix, width, &mut widths);
+                    }
+                    ix += character.len_utf8();
+                }
+            }
+            WrapLineFragment::Element { width, len_utf8 } => {
+                add(ix, *width, &mut widths);
+                ix += len_utf8;
+            }
+        }
+    }
+    widths
 }
 
 /// Appends the wrap fragments for `range` of `text`. The line wrapper
@@ -1389,6 +1459,71 @@ mod tests {
         });
 
         assert_eq!(wrapped.size, unwrapped.size);
+    }
+
+    /// A wrapped flow laid out again at its own width keeps its lines. The
+    /// line wrapper adds glyph advances, which are wider than kerned shaped
+    /// text. If the flow reported the shaped width of its longest line, the
+    /// wrapper would break that line at that width. A chat bubble sized from
+    /// the first measurement would then clip the last line.
+    #[test]
+    fn wrapped_flow_at_its_own_width_keeps_its_lines() {
+        use super::super::inline::test_fonts::{BODY, KernedTextSystem, MONO};
+        use gpui::{AbsoluteLength, Empty, HighlightStyle, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(KernedTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+
+        let text_style = TextStyle {
+            font_family: SharedString::from(BODY),
+            font_size: AbsoluteLength::Pixels(px(10.)),
+            ..Default::default()
+        };
+        let text = "When was the last vacuum of integrations_bookings table?";
+        let code = text.find("integrations_bookings").unwrap();
+        let items = vec![MeasureItem::Text {
+            text: SharedString::from(text),
+            links: vec![],
+            highlights: vec![(
+                code..code + "integrations_bookings".len(),
+                InlineHighlight {
+                    style: HighlightStyle::default(),
+                    font_family: Some(SharedString::from(MONO)),
+                    font_size_scale: Some(0.9),
+                },
+            )],
+        }];
+        let image_sizes = vec![None];
+
+        window.update(|_, window, cx| {
+            let unwrapped = layout_flow(&items, &image_sizes, &text_style, None, window, cx);
+            let full_width = f32::from(unwrapped.size.width);
+            let mut wrap_width = full_width * 0.4;
+            while wrap_width < full_width {
+                let wrap_width_px = px(wrap_width);
+                let first = layout_flow(
+                    &items,
+                    &image_sizes,
+                    &text_style,
+                    Some(wrap_width_px),
+                    window,
+                    cx,
+                );
+                let again = layout_flow(
+                    &items,
+                    &image_sizes,
+                    &text_style,
+                    Some(first.size.width),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    again.size, first.size,
+                    "the flow wrapped at {wrap_width_px:?} changed its lines at its own width"
+                );
+                wrap_width += 0.25;
+            }
+        });
     }
 
     /// Line breaking must see the width of an inline code span in its own
