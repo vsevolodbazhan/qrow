@@ -2,7 +2,7 @@
 
 The application connects directly to Kyuubi through HiveServer2 Thrift. It does
 not need a local JVM, webview, or separately installed database driver. Java in
-the [end-to-end tests](end-to-end-testing.md) belongs to the server fixture.
+the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture.
 
 ## Main components
 

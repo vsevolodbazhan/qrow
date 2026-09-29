@@ -53,9 +53,26 @@ On Linux, `unit` and `clippy` use only the core library, and `ui`, `e2e`, and
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
 Spark servers. `desktop` also takes over the desktop. These suites run only
-when you select them by name. See [Run the servers](#run-the-servers), and see
-[End-to-end testing](end-to-end-testing.md) for the servers, evidence, and
-limits.
+when you select them by name. See [Run the servers](#run-the-servers) and
+[Run the desktop suite](#run-the-desktop-suite).
+
+The suites without servers check these parts:
+
+- Local protocol fixtures test the connector without a real Spark deployment.
+  They verify client messages, but they cannot show how a real server
+  responds. The `backend` suite does that.
+- Worker tests check session coordination and bounded fetching.
+- Property tests check SQL validation with arbitrary Unicode and quoting.
+  Keep the Proptest regression seeds that a fixed failure adds.
+- Storage tests check competing processes, and the release of the workspace
+  lock after a process is killed.
+- The core library must build with `--no-default-features`. `coverage`
+  excludes the GPUI frontend and the generated bindings.
+- Qrow forbids unsafe code in its own sources, including the generated
+  bindings. Third-party dependencies can contain unsafe code.
+
+The Keychain test uses the real macOS Keychain, so no suite runs it. Run it
+with `cargo test --test keychain -- --ignored`.
 
 ## Groups
 
@@ -110,6 +127,8 @@ prints its directory.
 | `summary.json` | The result of each suite, with the JSON schema of `--json`. |
 | `logs/<suite>.log` | The commands and the full output of the suite. |
 | `junit/<suite>.xml` | The nextest JUnit report of a failed suite. |
+| `fixture/` | Server logs, execution evidence, and the versions of the servers. |
+| `desktop/` | Screenshots, accessibility snapshots, and logs of the desktop driver. |
 
 The summary gives the status of each suite: `passed`, `failed`, `skipped`, or
 `missing`. A failed suite names its failed step. A failed nextest suite also
@@ -125,8 +144,13 @@ Exit codes:
 | 2 | Usage error, for example an unknown suite. |
 | 3 | A prerequisite is missing, and no suite failed. |
 
+Start with the failed step or assertion. Use the server logs for connection
+and query failures. Use the screenshots and accessibility snapshots for
+desktop failures. A failed run keeps its artifacts after the servers stop.
+
 qtest does not run a failed test again. A test must pass on its first run.
-Use `--repeat` to find unstable tests. Do not add retries.
+Use `--repeat` to find unstable tests. Do not add retries. Readiness checks
+can send `SELECT 1` again while the servers start.
 
 ## Check prerequisites
 
@@ -178,7 +202,103 @@ Two runtimes are available:
   in `JAVA_HOME`. Hosted macOS CI runners use it because they have no Docker.
 
 The `backend` suite stops Spark engines and restarts Kyuubi, so it needs the
-Docker runtime. Its tests run one at a time.
+Docker runtime. Its tests run one at a time. Do not point a suite at an
+existing deployment. The suites must control disposable servers.
+
+The servers are Kyuubi 1.12.0, Spark 3.5.3 in standalone mode, LDAP with
+synthetic users, and ZooKeeper. Let Docker use approximately 8 GB of memory
+for them. They also run on an M1 Mac with 8 GB of memory. The first image download and build are much larger than Qrow. Java
+belongs only to the servers. Qrow itself does not use a JVM.
+
+The servers keep the Spark engine of a user for 10 minutes after its last
+session, so tests that follow each other do not wait for an engine start.
+The Spark worker has room for one engine and two executor cores.
+
+The Docker runtime binds ports to loopback, and each run gets its own
+Compose project, network, and evidence volume. The [server
+sources](../tests/fixture/server/) pin base images by digest. The native
+runtime starts Java processes on temporary loopback ports and stops their
+process groups, with Spark engines and executors, at the end.
+
+The native runtime checks the size and SHA-512 checksum of each download,
+and keeps verified downloads in `target/e2e-downloads`. [The download
+list](../tests/fixture/native-downloads.json) gives an ordered list of
+sources for each archive. The first source is the
+[Qrow E2E fixtures mirror](https://github.com/vsevolodbazhan/qrow-e2e-fixtures),
+because the Apache archive service is slow. When a source fails, or stays
+below 256 KiB/s for 60 seconds, the download continues from the next source.
+The last source has no speed limit. To change an archive version, add the new
+archive to the mirror first, as its README tells.
+
+## Run the desktop suite
+
+The `desktop` suite operates the packaged app with real keyboard and pointer
+events. It checks only what needs the real operating system:
+
+1. **About Qrow** and **Settings…** open from the menu bar.
+2. A connection that you add through the form keeps its password in the real
+   Keychain, and a real query reads it.
+3. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
+   SQL. **Keep Editing** returns to it, and **Retry Save and Quit** saves and
+   quits.
+
+Then it runs these scenarios, each with a new workspace:
+
+| Scenario | Checks |
+| --- | --- |
+| `window-close-only` | The failed save before a window close, as for **⌘Q**. |
+| `assistant-layout-only` | Pixels of assistant messages at a scale of 1.1 and a pane width of 536: a message with inline code keeps one line, bold text wraps inside the reply, the user bubble ends at the right edge of the composer, and the composer has equal space above the field and below **Send**. |
+| `assistant-selection-only` | In One Dark, a selection in a user message changes the color of its bubble and keeps the color of its text. |
+| `editor-highlight-only` | In demo mode, the active line color reaches the right edge of the editor. |
+
+Use an unlocked, logged-in macOS session. The driver takes the focus, so save
+your work in other applications first. Check the automation permissions:
+
+```sh
+sh scripts/e2e/driver.sh --preflight
+./qtest run desktop
+```
+
+The driver at `target/e2e-tools/native-driver`, or the terminal that starts
+it, needs the Accessibility and Screen Recording permissions. Give them in
+System Settings when preflight reports that they are missing. Preflight
+writes `target/e2e-tools/preflight.log`. It does not change the settings.
+
+The suite builds a release package in the run directory. It does not replace
+`dist/Qrow.app`. It uses a temporary workspace and new synthetic Keychain
+passwords. The driver restores the clipboard after it types text. It sets the
+Qrow window to 992 by 652 points, the window size on a hosted macOS runner,
+so local and CI runs show the same layout. The main display must fit this
+window with 16 points of space on each side. The driver also records the
+launch time and the memory and CPU use of Qrow. Its launch time ends when the
+**New Connection** control is accessible.
+
+The assistant scenarios need no servers. To run one scenario, build an
+isolated package and start the driver:
+
+```sh
+qrow_scenario_dir=$(mktemp -d)
+mkdir -p "$qrow_scenario_dir/workspace"
+QROW_DIST_DIR="$qrow_scenario_dir/package" QROW_BUILD_PROFILE=debug sh scripts/package/macos.sh
+sh scripts/e2e/driver.sh --preflight
+QROW_E2E_ARTIFACTS="$qrow_scenario_dir" \
+QROW_DATA_DIR="$qrow_scenario_dir/workspace" \
+QROW_E2E_BUNDLE="$qrow_scenario_dir/package/Qrow.app" \
+target/e2e-tools/native-driver --assistant-layout-only
+```
+
+The driver saves its screenshots and pixel captures in that directory.
+
+A crash of the operating system or a SIGKILL can stop the removal of the
+synthetic Keychain passwords. To remove them, set `QROW_E2E_ARTIFACTS` to the
+`desktop/` directory of that run, and run:
+
+```sh
+uv run --locked python scripts/e2e/keychain.py
+```
+
+The script removes only the passwords of the synthetic connections in the
+saved workspace of the run. `QROW_DATA_DIR` does not isolate Keychain.
 
 ## Check performance
 
@@ -214,6 +334,24 @@ module of `tests/e2e/`, and mark it `#[ignore]`. Measure with
 `support::perf::sample`, and report with `support::perf::report`. Set the
 budget several times above the measured value, so that the probe fails only
 for a large regression.
+
+The [SQL benchmark](../benches/sql.rs) reports the median of 21 samples
+after a warm-up. Its budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms at
+1 MB. The release profile favors a small size, so run `perf` after you change
+it.
+
+After you package the app, check its size:
+
+```sh
+uv run --locked python scripts/core/size.py
+```
+
+The [size check](../scripts/core/size.py) allows 24 MiB for the executable
+and 10 MiB for the zipped bundle. Find the cause of an increase before you
+change a budget.
+
+When you publish performance results, give the build, the hardware, the
+method, and what you did not measure.
 
 ## Write a UI test
 
@@ -352,12 +490,19 @@ The [test workflow](../.github/workflows/test.yml) runs the same suites:
 | `e2e-backend` | `backend` with Docker |
 | `e2e-macos` | `e2e` and `desktop` with local Java servers |
 
-In CI, qtest uses the `ci` nextest profile. See
+In CI, qtest uses the `ci` nextest profile. The E2E jobs skip pull requests
+from forks. `e2e-macos` runs on the hosted `macos-15` runner, and its two
+suites share one set of servers. The native archives download from the mirror
+in each run, with a limit of 2 hours for each archive. CI keeps the E2E
+artifacts for one day. The release workflow runs the same E2E jobs before it
+packages a release. See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events and release checks.
 
 ## Limitations
 
+- A passing E2E run shows the behavior with the reference servers. It does
+  not show compatibility with every Kyuubi or Spark deployment.
 - UI and E2E tests send input through GPUI. They do not verify macOS input,
   the menu bar, the real Keychain, input methods, or rendered pixels. The
   `desktop` suite covers these parts of the packaged app.
@@ -372,4 +517,7 @@ events and release checks.
   frames without the GPU. They do not measure Metal rendering. `perf-app`
   measures the time until Qrow reports a ready UI, not until the first frame
   is on the screen.
+- Performance on an M1 Mac with 8 GB of memory is not verified. A pass on a
+  larger machine does not show performance on that machine.
+- The pixel checks of `desktop` depend on the main display and its scale.
 - CI runs only the `perf` suite.

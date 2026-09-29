@@ -12,6 +12,6 @@ For build and launch instructions, see the [project README](../README.md).
 | [Results](results.md) | Browse pages, copy values, and understand preview limits. |
 | [Workspace](workspace.md) | Change appearance settings and understand saved state. |
 | [Architecture](architecture.md) | Understand component responsibilities and data flow. |
-| [Development](development.md) | Set up local checks, use hooks, and maintain dependencies. |
-| [End-to-end testing](end-to-end-testing.md) | Run tests with real servers and the native application. |
+| [Development](development.md) | Set up the tools, use hooks and CI, and maintain dependencies. |
+| [Testing](testing.md) | Run and write checks and tests, including tests with real servers and the desktop. |
 | [Assistant](assistant.md) | Architecture and features of AI-based assistant. |

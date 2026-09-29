@@ -2,8 +2,7 @@
 
 Use local checks to verify code, scripts, and dependency policy before a commit.
 [Testing](testing.md) describes `./qtest`, the command for all checks and
-tests, including the real-server and native UI suites of the
-[end-to-end testing guide](end-to-end-testing.md).
+tests, including the suites with real servers and the desktop suite.
 
 For application prerequisites, builds, packaging, and demo launch commands, see
 the [project README](../README.md). Run the commands below from the repository
@@ -34,8 +33,7 @@ local suite. [Testing](testing.md#suites) lists each suite. Use `./qtest run
 include the UI.
 
 These checks do not run real Kyuubi queries or retrieve user credentials.
-The Keychain integration test remains opt-in. End-to-end tests run only when
-you select their suites.
+The suites with servers run only when you select them.
 
 ## Check the native UI
 
@@ -71,14 +69,8 @@ Hooks export snapshots into temporary directories and share a build cache under
 `target/hook-checks`. They do not stash, restage, or modify working files.
 They do not package the application.
 
-The UI and E2E tests use a synthetic Codex app server to check the assistant:
-opt-in, the docked pane, chat turns, appended and formatted SQL, Undo, query
-approval and automatic execution, statement targets, tab changes during a
-turn, generated titles and tab names, parallel conversations, and
-conversations that stay with their tabs. They do not use a Codex account.
-
 The release profile favors size so the optional assistant stays within the
-macOS package budget. Run `./qtest run perf` after a release-profile change.
+macOS package budget.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Markdown changes other than
@@ -113,7 +105,7 @@ size. The `e2e-macos` job reuses this package by default, and then does not set
 up Rust. A manual dispatch has the `reuse_macos_package` input. Set it to
 `false` to build the package in the E2E job. Native fixture archives download
 from a mirror in each run. For the download sources, see
-[End-to-end testing](end-to-end-testing.md#how-the-suite-works).
+[Run the servers](testing.md#run-the-servers).
 
 The workflow retains `core-coverage`, `macos-package-and-performance`,
 `backend-evidence`, and `macos-evidence` for one day. Configure these individual
@@ -185,44 +177,9 @@ custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
 See
-[End-to-end testing](end-to-end-testing.md#continuous-integration) for the
-real-server and native UI details. Local checks cannot verify GitHub event
+[Testing](testing.md#hooks-and-continuous-integration) for the suites of
+each job. Local checks cannot verify GitHub event
 filters, run cancellation, artifact transfer, or branch protection settings.
-
-## Test boundaries and budgets
-
-Local protocol fixtures test the connector without a real Spark deployment.
-Worker tests exercise session coordination and bounded fetching. Property tests
-exercise SQL validation with arbitrary Unicode and quoting. Preserve generated
-Proptest regression seeds when fixing a discovered failure.
-
-[UI integration tests](../tests/ui/) open the real Qrow window in a headless
-GPUI Kit window. Each test uses a new temporary workspace and an in-memory
-password store, so it does not use Keychain or the user's workspace.
-[Testing](testing.md#write-a-ui-test) describes how to write them.
-
-The core library must build with `--no-default-features`. Core coverage excludes
-the GPUI frontend and generated bindings. The line-coverage floor is 80%.
-Generated bindings are also excluded from normal style lint. Qrow forbids unsafe
-code in its own sources, including generated bindings. Third-party dependencies
-can contain unsafe code.
-
-The [SQL benchmark](../benches/sql.rs) measures validation after warmup and reports
-the median of 21 samples. Budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms
-at 1 MB. These are regression thresholds, not rendering or Spark latency targets.
-
-After packaging, check the release size:
-
-```sh
-uv run --locked python scripts/core/size.py
-```
-
-The [size checker](../scripts/core/size.py) allows 24 MiB for the executable and
-10 MiB for the zipped bundle. Investigate growth before changing a budget.
-
-The startup log measures UI initialization. It does not measure cold launch to
-the first visible frame. Report the build, hardware, measurement method, and
-verification gaps when publishing performance results.
 
 ## Dependency maintenance
 
