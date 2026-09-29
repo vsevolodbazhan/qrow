@@ -24,6 +24,13 @@ filter = "binary(backend)"
 test-group = "fixture-serial"
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# E2E tests that hold executors with `qrow_block` would starve each other on
+# the two executor cores of the fixture.
+[[profile.default.overrides]]
+filter = "binary(e2e) & test(/^blocking::/)"
+test-group = "fixture-serial"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 [[profile.default.overrides]]
 filter = "binary(e2e)"
 slow-timeout = { period = "60s", terminate-after = 3 }
