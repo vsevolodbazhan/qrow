@@ -62,9 +62,14 @@ if [ ! -d "$QROW_E2E_BUNDLE" ] || [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" 
     exit 1
 fi
 test "${1:-}" != --prepare || exit 0
+# Every run starts from empty workspaces. `./qtest run desktop --repeat N`
+# runs again only after a pass, so the previous workspaces are not needed.
+rm -rf "$QROW_DATA_DIR"
+mkdir -p "$QROW_DATA_DIR"
 target/e2e-tools/native-driver
 for scenario in window-close-only assistant-layout-only assistant-selection-only editor-highlight-only results-text-only; do
     scenario_dir="$QROW_E2E_ARTIFACTS/$scenario"
+    rm -rf "$scenario_dir/workspace"
     mkdir -p "$scenario_dir/workspace"
     echo "[e2e] Running $scenario with an isolated workspace."
     QROW_E2E_ARTIFACTS="$scenario_dir" \

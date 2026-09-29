@@ -776,14 +776,17 @@ final class Driver {
         try checkMessageInsets(message)
     }
     /// Sends `text`. Left of the text, the bottom of the message must have the
-    /// bubble color of its top.
-    func checkInlineCodeMessage(_ text: String, name: String) throws -> AXUIElement {
+    /// bubble color of its top. Returns the label of the message.
+    func checkInlineCodeMessage(_ text: String, name: String) throws -> String {
         try fill("Assistant Message", text)
         try press("Send")
-        let message = try wait("You: \(text)", timeout: 20)
+        let label = "You: \(text)"
+        _ = try wait(label, timeout: 20)
         _ = try wait("I can help with this query", timeout: 20)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
-        let (origin, extent) = try elementBounds(message)
+        // The reply rebuilds the transcript, so an element found before it can
+        // have no bounds. Find the message again.
+        let (origin, extent) = try elementBounds(try wait(label, timeout: 5))
         try snapshot(name)
         let path = "\(artifacts)/\(name)-edge.png"
         let rect = "\(Int(origin.x) + 1),\(Int(origin.y)),1,\(Int(extent.height))"
@@ -798,7 +801,7 @@ final class Driver {
                              abs(top.greenComponent - bottom.greenComponent),
                              abs(top.blueComponent - bottom.blueComponent))
         try require(difference < 0.02, "The message \(text) extends below its bubble")
-        return message
+        return label
     }
     /// A line that is wider than the reply is clipped at the reply's right
     /// edge, so glyphs touch that edge. A line that wraps correctly ends
@@ -806,9 +809,10 @@ final class Driver {
     func checkBoldReply() throws {
         try fill("Assistant Message", "Show a bold reply")
         try press("Send")
-        let reply = try wait("Assistant: There were **44,266,382 distinct searches**", timeout: 20)
+        let label = "Assistant: There were **44,266,382 distinct searches**"
+        _ = try wait(label, timeout: 20)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
-        let (origin, extent) = try elementBounds(reply)
+        let (origin, extent) = try elementBounds(try wait(label, timeout: 5))
         let (composerOrigin, _) = try elementBounds(try waitInput("Assistant Message"))
         try snapshot("assistant-bold-reply")
         let bottom = min(origin.y + extent.height, composerOrigin.y)
@@ -870,7 +874,7 @@ final class Driver {
     /// text starts at the left edge of the composer, and the user bubble ends
     /// at its right edge. A reply bubble without a visible surface adds its
     /// padding on the left only.
-    func checkMessageInsets(_ message: AXUIElement) throws {
+    func checkMessageInsets(_ message: String) throws {
         let reply = try wait("Assistant: **I can help with this query", timeout: 5)
         let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant Message"))
         let (replyOrigin, _) = try elementBounds(reply)
@@ -879,7 +883,7 @@ final class Driver {
 
         // Scan a row through the user bubble from the transcript background
         // on its left, and find the last point that has another color.
-        let (origin, extent) = try elementBounds(message)
+        let (origin, extent) = try elementBounds(try wait(message, timeout: 5))
         let left = Int(composerOrigin.x) + 2
         let width = Int(composerOrigin.x + composerSize.width) + 6 - left
         let path = "\(artifacts)/assistant-message-insets.png"
