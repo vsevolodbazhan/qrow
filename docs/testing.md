@@ -262,9 +262,20 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
 - `cell(window, row, column)` and `header(window, column)` read the result
   table. Column 0 holds the row number.
 - `app.type_sql` replaces the SQL of the active tab through the editor.
+  `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
+  status bar, and `app.wait_cell(row, column, text)` waits for a result.
+- `app.select_connection(profile)` selects a connection, and `app.logs()`
+  reads Logs through **Copy All Logs**.
+- `blocking(token, milliseconds)` makes a query that holds an executor
+  task. The fixture records the task, and `evidence(token, "started")` or
+  `app.wait_evidence(...)` reads that record. Register the function first
+  with `REGISTER_BLOCKING`.
+- `app.scroll_to(id)` scrolls a form to a field below its fold.
 - Tests run at the same time and share the Spark engine of `qrow`. Do not
-  change shared state, like global tables. A test that stops or restarts a
-  server belongs in the `backend` suite.
+  change shared state, like global tables. The fixture has two executor
+  cores, so put a test that holds executors in the `blocking` module, where
+  tests run one at a time. A test that stops or restarts a server belongs in
+  the `backend` suite.
 
 Add a test from the template with `./qtest new e2e SUITE NAME`. Run one test
 with `./qtest run e2e/query_rows`.

@@ -445,6 +445,66 @@ impl TestApp {
         self.wait_for(cx, "popup-menu");
     }
 
+    /// Scrolls the container of `target` with the wheel until `target` is
+    /// visible, like a user who scrolls a form to a field below its fold. The
+    /// wheel turns over a visible element of the same container.
+    pub fn scroll_to(&self, cx: &mut TestAppContext, target: &str) {
+        let mut positions = Vec::new();
+        for _ in 0..30 {
+            let position = self.update(cx, |window, _| {
+                let element = window.try_find(target.to_owned())?;
+                if element.visible() {
+                    return None;
+                }
+                let depth = element
+                    .path()
+                    .iter()
+                    .rposition(|id| format!("{id:?}").contains("Scrollable"))
+                    .expect("The target is not in a scroll container");
+                let container = &element.path()[..=depth];
+                // The smallest visible element is a control inside the scroll
+                // area, not a wrapper around it. Snapshots have no order, so
+                // the choice must not depend on it.
+                elements(window)
+                    .into_iter()
+                    .filter(|other| other.visible() && other.path().starts_with(container))
+                    .min_by(|a, b| {
+                        let area = |e: &ElementSnapshot| {
+                            f32::from(e.bounds().size.width) * f32::from(e.bounds().size.height)
+                        };
+                        area(a).total_cmp(&area(b))
+                    })
+                    .map(|other| other.bounds().center())
+            });
+            let Some(position) = position else {
+                let found =
+                    self.update(cx, |window, _| window.try_find(target.to_owned()).is_some());
+                assert!(found, "No element {target}");
+                return;
+            };
+            positions.push(position);
+            self.update(cx, |window, cx| {
+                window.dispatch_event(
+                    gpui_kit::ScrollWheelEvent {
+                        position,
+                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-120.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.render_frame(cx);
+            });
+            self.settle(cx);
+        }
+        let state = self.update(cx, |window, _| {
+            window
+                .try_find(target.to_owned())
+                .map(|e| format!("bounds {:?}, visible {}", e.bounds(), e.visible()))
+        });
+        panic!("{target} did not scroll into view: {state:?}. Wheel positions: {positions:?}");
+    }
+
     /// Moves the pointer over the element labelled exactly `text`, for
     /// controls that show on hover, like the close button of a tab.
     pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {

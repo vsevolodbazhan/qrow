@@ -124,6 +124,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
                 "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
             ),
             Select::new(&form.idle_behavior)
+                .id("connection-idle-behavior")
                 .w_full()
                 .disabled(saving)
                 .accessibility_label("When idle")

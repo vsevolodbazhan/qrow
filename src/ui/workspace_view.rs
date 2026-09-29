@@ -542,14 +542,19 @@ impl Qrow {
                     .child(self.panel_switcher(cx))
                     .child(
                         div()
+                            .id("result-count")
+                            .test_support()
+                            .role(Role::Label)
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
+                            .aria_label(count.clone())
                             .child(count),
                     )
                     .child(div().flex_1())
                     .child(
                         div()
                             .id("page-label")
+                            .test_support()
                             .role(Role::Label)
                             .text_xs()
                             .aria_label(page_label.clone())
@@ -598,6 +603,7 @@ impl Qrow {
             .child(
                 div()
                     .id("query-status")
+                    .test_support()
                     .role(Role::Status)
                     .flex_1()
                     .min_w_0()
@@ -608,6 +614,7 @@ impl Qrow {
             .child(
                 div()
                     .id("current-connection")
+                    .test_support()
                     .role(Role::Label)
                     .flex_1()
                     .min_w_0()
@@ -619,6 +626,7 @@ impl Qrow {
             .child(
                 div()
                     .id("workspace-status")
+                    .test_support()
                     .role(Role::Status)
                     .flex_1()
                     .min_w_0()
