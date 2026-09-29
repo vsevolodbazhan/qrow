@@ -1,5 +1,5 @@
 use crate::{
-    BoolExt, MacDisplay, NSRange, NSStringExt, TISCopyCurrentKeyboardInputSource,
+    BoolExt, FramePacing, MacDisplay, NSRange, NSStringExt, TISCopyCurrentKeyboardInputSource,
     TISGetInputSourceProperty, WindowFrameSource, events::platform_input_from_native,
     kTISPropertyInputSourceIsASCIICapable, kTISPropertyInputSourceType, kTISTypeKeyboardInputMode,
     ns_string, renderer,
@@ -77,7 +77,7 @@ use std::{
         Arc, Once, Weak,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const WINDOW_STATE_IVAR: &str = "windowState";
@@ -665,6 +665,7 @@ struct MacWindowState {
     cursor_style: CursorStyle,
     cursor_visible: Arc<AtomicBool>,
     frame_source: Option<WindowFrameSource>,
+    frame_pacing: FramePacing,
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
@@ -847,6 +848,7 @@ impl MacWindowState {
             return;
         };
         let data = self.native_view.as_ptr() as *mut c_void;
+        self.frame_pacing.started(Instant::now());
         self.frame_source
             .get_or_insert_with(|| WindowFrameSource::new(data, step))
             .start(display_id)
@@ -856,6 +858,22 @@ impl MacWindowState {
     fn stop_display_link(&mut self) {
         if let Some(frame_source) = self.frame_source.as_mut() {
             frame_source.stop();
+        }
+    }
+
+    /// Delivers a frame request from GPUI. Starts the display link if it
+    /// stopped because the window was idle.
+    ///
+    /// A window without a frame source is not visible yet, or GPUI released
+    /// it. The first visibility change starts the display link of a new window.
+    fn request_frame(&mut self) {
+        self.frame_pacing.request();
+        if self
+            .frame_source
+            .as_ref()
+            .is_some_and(|frame_source| !frame_source.is_running())
+        {
+            self.start_display_link();
         }
     }
 
@@ -1098,6 +1116,7 @@ impl MacWindow {
                 cursor_style: CursorStyle::Arrow,
                 cursor_visible,
                 frame_source: None,
+                frame_pacing: FramePacing::new(Instant::now()),
                 renderer: renderer::new_renderer(
                     renderer_context,
                     native_window as *mut _,
@@ -2009,6 +2028,28 @@ impl PlatformWindow for MacWindow {
                 .styleMask()
                 .contains(NSWindowStyleMask::NSFullScreenWindowMask)
         }
+    }
+
+    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
+        // The window's invalidator keeps the waker, and the request-frame
+        // callback keeps the invalidator. A strong reference to the state
+        // would make a cycle and leak the window.
+        let window_state = Arc::downgrade(&self.0);
+        let executor = self.0.lock().foreground_executor.clone();
+        Some(Rc::new(move || {
+            let Some(window_state) = window_state.upgrade() else {
+                return;
+            };
+            // GPUI does not call the waker while the platform holds the
+            // state. If a caller holds it, deliver the request after it returns.
+            if let Some(mut lock) = window_state.try_lock() {
+                lock.request_frame();
+            } else {
+                executor
+                    .spawn(async move { window_state.lock().request_frame() })
+                    .detach();
+            }
+        }))
     }
 
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
@@ -3303,11 +3344,18 @@ extern "C" fn step(view: *mut c_void) {
     let view = view as id;
     let window_state = unsafe { get_window_state(&*view) };
     let mut lock = window_state.lock();
+    let now = Instant::now();
+    lock.frame_pacing.begin_frame(now);
 
     if let Some(mut callback) = lock.request_frame_callback.take() {
         drop(lock);
         callback(Default::default());
-        window_state.lock().request_frame_callback = Some(callback);
+        lock = window_state.lock();
+        lock.request_frame_callback = Some(callback);
+    }
+
+    if lock.frame_pacing.is_idle(now) {
+        lock.stop_display_link();
     }
 }
 

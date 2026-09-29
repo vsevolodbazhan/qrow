@@ -60,6 +60,7 @@ use std::{
     collections::{BTreeMap, btree_map},
     ffi::c_void,
     sync::{Mutex, MutexGuard, PoisonError},
+    time::{Duration, Instant},
 };
 
 static REGISTRY: Mutex<Registry> = Mutex::new(Registry::new());
@@ -267,6 +268,59 @@ impl WindowFrameSource {
             unsubscribe(display_id, subscriber_id);
         }
     }
+
+    pub fn is_running(&self) -> bool {
+        self.registration.is_some()
+    }
+}
+
+/// The time without a frame request after which a window stops its display
+/// link. GPUI keeps presenting frames for one second after fast input, so that
+/// the display keeps its refresh rate. The display link runs for that time.
+pub(crate) const FRAME_IDLE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Decides when a window can stop its display link.
+///
+/// GPUI calls the window's frame waker when it wants a frame: when the window
+/// becomes dirty, when a callback waits for the next frame, and after a frame
+/// that left work for the next one. Without a request for
+/// [`FRAME_IDLE_TIMEOUT`], the window stops its display link, so that an idle
+/// window does not wake the main thread on every display refresh. The next
+/// request starts the display link again.
+pub(crate) struct FramePacing {
+    requested: bool,
+    last_request: Instant,
+}
+
+impl FramePacing {
+    pub fn new(now: Instant) -> Self {
+        Self {
+            requested: false,
+            last_request: now,
+        }
+    }
+
+    /// GPUI wants a frame.
+    pub fn request(&mut self) {
+        self.requested = true;
+    }
+
+    /// The display link started. It runs for at least [`FRAME_IDLE_TIMEOUT`].
+    pub fn started(&mut self, now: Instant) {
+        self.last_request = now;
+    }
+
+    /// A display link tick is about to request a frame from GPUI.
+    pub fn begin_frame(&mut self, now: Instant) {
+        if std::mem::take(&mut self.requested) {
+            self.last_request = now;
+        }
+    }
+
+    /// Whether the display link can stop after the frame that began at `now`.
+    pub fn is_idle(&self, now: Instant) -> bool {
+        !self.requested && now.duration_since(self.last_request) >= FRAME_IDLE_TIMEOUT
+    }
 }
 
 impl Drop for WindowFrameSource {
@@ -278,6 +332,66 @@ impl Drop for WindowFrameSource {
         // its context points at the window's native view, which may be
         // deallocated after this.
         self.frame_requests.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FRAME: Duration = Duration::from_millis(16);
+
+    #[test]
+    fn a_window_without_requests_stops_after_the_timeout() {
+        let start = Instant::now();
+        let pacing = FramePacing::new(start);
+        assert!(!pacing.is_idle(start + FRAME));
+        assert!(!pacing.is_idle(start + FRAME_IDLE_TIMEOUT - FRAME));
+        assert!(pacing.is_idle(start + FRAME_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn a_request_keeps_the_display_link_running_for_the_timeout() {
+        let start = Instant::now();
+        let mut pacing = FramePacing::new(start);
+        let request = start + FRAME_IDLE_TIMEOUT * 5;
+
+        pacing.request();
+        pacing.begin_frame(request);
+        assert!(!pacing.is_idle(request));
+        assert!(!pacing.is_idle(request + FRAME_IDLE_TIMEOUT - FRAME));
+        pacing.begin_frame(request + FRAME_IDLE_TIMEOUT);
+        assert!(pacing.is_idle(request + FRAME_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn a_request_during_a_frame_keeps_the_display_link_running() {
+        let start = Instant::now();
+        let mut pacing = FramePacing::new(start);
+        let now = start + FRAME_IDLE_TIMEOUT * 5;
+
+        // An animation asks for the next frame while GPUI draws this one.
+        pacing.begin_frame(now);
+        pacing.request();
+        assert!(!pacing.is_idle(now));
+
+        // The next frame serves the request and starts a new timeout.
+        pacing.begin_frame(now + FRAME);
+        assert!(!pacing.is_idle(now + FRAME));
+        assert!(pacing.is_idle(now + FRAME + FRAME_IDLE_TIMEOUT));
+    }
+
+    #[test]
+    fn a_started_display_link_runs_for_the_timeout() {
+        let start = Instant::now();
+        let mut pacing = FramePacing::new(start);
+        let shown = start + FRAME_IDLE_TIMEOUT * 5;
+
+        // The window becomes visible again, with no frame request.
+        pacing.started(shown);
+        pacing.begin_frame(shown + FRAME);
+        assert!(!pacing.is_idle(shown + FRAME));
+        assert!(pacing.is_idle(shown + FRAME_IDLE_TIMEOUT));
     }
 }
 
