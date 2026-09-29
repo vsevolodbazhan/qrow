@@ -36,7 +36,7 @@ use gpui_kit::component::{
     dialog::DialogFooter,
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{PopupMenu, PopupMenuItem},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -1633,7 +1633,7 @@ impl Qrow {
     }
     /// Open a context menu at the pointer. Callers defer this from their right
     /// mouse down so an already open menu dismisses itself first.
-    fn open_context_menu(
+    pub(crate) fn open_context_menu(
         &mut self,
         position: Point<Pixels>,
         items: impl FnOnce(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
@@ -1770,6 +1770,60 @@ impl Qrow {
                     ),
                     None => menu,
                 }
+            },
+            window,
+            cx,
+        );
+    }
+    /// The menu of a connection row. Qrow owns it like the tab menu; GPUI Kit's
+    /// `context_menu` keeps each dismissed menu alive through a reference cycle.
+    pub(crate) fn open_profile_menu(
+        &mut self,
+        id: Uuid,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self
+            .profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        let busy = self.profile_busy(id);
+        let in_use = self.profile_in_use(id);
+        let edited = profile.clone();
+        let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.edit_profile(edited.clone(), false, window, cx)
+        });
+        let duplicate = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            let mut profile = profile.clone();
+            profile.id = Uuid::new_v4();
+            profile.name = crate::model::copied_profile_name(&profile.name, |name| {
+                this.profiles.iter().any(|existing| existing.name == name)
+            });
+            this.edit_profile(profile, true, window, cx);
+        });
+        let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.confirm_delete_profile(id, window, cx)
+        });
+        self.open_context_menu(
+            position,
+            move |menu, _, _| {
+                menu.item(
+                    PopupMenuItem::new("Edit Connection…")
+                        .on_click(edit)
+                        .disabled(busy),
+                )
+                .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                .separator()
+                .item(
+                    PopupMenuItem::new("Delete")
+                        .on_click(delete)
+                        .disabled(in_use),
+                )
             },
             window,
             cx,

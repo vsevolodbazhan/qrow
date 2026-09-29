@@ -203,6 +203,28 @@ The template fails until you write the test. The
 - `app.saved()` reads the saved workspace, and `app.credentials` holds the
   synthetic passwords.
 
+More helpers operate controls that GPUI Kit owns:
+
+- `app.context_menu(id)` and `app.context_menu_labelled(label)` open a
+  context menu. `app.choose("popup-menu", item)` and
+  `app.choose_in_submenu(parent, item)` click a menu item by its label.
+- `app.select(id, option)` chooses an option of a select.
+  `app.stepper(id)` and `app.step(id, "increment", expected)` read and change
+  a number field of Settings.
+- `app.click_labelled(label)` clicks an element that has no ID, like the
+  search field of Settings. Use it only for elements that GPUI Kit names.
+- `app.dispatch(action)` sends an action, like `OpenSettings`, as its menu
+  item does. The menu bar itself is part of the `desktop` suite.
+
+Assistant tests use the synthetic Codex server in
+[`tests/desktop/fake-codex.py`](../tests/desktop/fake-codex.py).
+`FakeCodex::new()` gives a workspace directory and a Codex executable for
+it. `codex.workspace(...)` turns on the assistant with this executable.
+Some messages make the server wait for a marker file, which
+`codex.mark(name)` creates. The
+[assistant support](../tests/support/assistant.rs) sends messages and reads
+the transcript, the editor, and the approval card.
+
 Follow these rules:
 
 - Find controls by element ID. Do not find them by the text that they show.
@@ -290,5 +312,10 @@ events and release checks.
 - UI and E2E tests send input through GPUI. They do not verify macOS input,
   the menu bar, the real Keychain, input methods, or rendered pixels. The
   `desktop` suite covers these parts of the packaged app.
+- GPUI's leak detector fails a UI test that ends with a leaked entity. GPUI
+  Kit's `context_menu` keeps each dismissed menu alive, so Qrow opens its
+  context menus itself.
+- An assistant test waits about 5 seconds while the synthetic Codex server
+  starts.
 - The servers have room for one Spark engine. Tests connect only as `qrow`.
 - `--repeat` runs complete suites again. It does not run one test in a loop.

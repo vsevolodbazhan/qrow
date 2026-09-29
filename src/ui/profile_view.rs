@@ -164,6 +164,7 @@ impl Qrow {
                 el.child(
                     div()
                         .id("connection-form-error-accessibility")
+                        .test_support()
                         .role(Role::Alert)
                         .aria_label(error.clone())
                         .child(Alert::error("connection-form-error", error)),

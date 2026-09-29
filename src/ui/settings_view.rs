@@ -867,6 +867,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 &["assistant", "codex", "path", "binary"],
                 move |_: &mut Window, _: &mut App| {
                     Input::new(&executable)
+                        .id(setting_id("Codex Executable"))
                         .w_full()
                         .aria_label("Codex Executable")
                 },
@@ -951,12 +952,32 @@ fn theme_field(
     select_field(&form.theme, "Theme")
 }
 
+/// The element ID of the control of a setting, for example `setting-ui-scale`.
+pub(crate) fn setting_id(label: &str) -> SharedString {
+    let slug: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("setting-{}", slug.trim_matches('-')).into()
+}
+
 fn select_field(
     select: &SettingSelect,
     label: &'static str,
 ) -> impl Fn(&mut Window, &mut App) -> Select<SearchableVec<String>> + 'static {
     let select = select.clone();
-    move |_: &mut Window, _: &mut App| Select::new(&select).w_full().accessibility_label(label)
+    move |_: &mut Window, _: &mut App| {
+        Select::new(&select)
+            .id(setting_id(label))
+            .w_full()
+            .accessibility_label(label)
+    }
 }
 
 /// Retain Kit's spinbutton behavior while grouping the value and unit in one
@@ -986,6 +1007,7 @@ fn setting_stepper(
     let hover = cx.theme().secondary;
     let focused = input.read(cx).focus_handle(cx).is_focused(window);
     div()
+        .id(setting_id(label))
         .w_full()
         .h(rems(2.))
         .rounded(cx.theme().radius)
@@ -1016,6 +1038,7 @@ fn setting_stepper(
                         .child(
                             div().w(value_width + px(2.)).min_w(px(4.)).h_full().child(
                                 Input::new(input)
+                                    .id("value")
                                     .appearance(false)
                                     .px_0()
                                     .h_full()

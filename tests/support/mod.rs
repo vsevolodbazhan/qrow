@@ -3,13 +3,18 @@
 //! The `ui` and `e2e` test binaries share this module; each uses a part of it.
 #![allow(dead_code)]
 
+pub mod assistant;
 pub mod fixture;
 use anyhow::Result;
+use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, App, AppContext, ElementId, TestAppContext, Window, px, size};
+use gpui_kit::{
+    Action, AnyWindowHandle, App, AppContext, Bounds, ElementId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, TestAppContext, Window, px, size,
+};
 use qrow::{
-    model::{WORKSPACE_VERSION, Workspace},
+    model::{Profile, WORKSPACE_VERSION, Workspace},
     storage::{self, Credentials},
     ui::{self, Environment, Qrow},
 };
@@ -39,6 +44,9 @@ impl MemoryCredentials {
     }
     pub fn reads(&self) -> usize {
         self.reads.load(Ordering::SeqCst)
+    }
+    pub fn count(&self) -> usize {
+        self.passwords.lock().unwrap().len()
     }
 }
 
@@ -72,6 +80,145 @@ pub fn find_in(
         .find(|element| element.path().last() == Some(&id) && element.path().contains(&scope))
 }
 
+/// Whether `id` is an observed element, or the scope of one, in the last frame.
+pub fn present(window: &Window, id: &ElementId) -> bool {
+    window.try_find(id.clone()).is_some()
+        || elements(window)
+            .iter()
+            .any(|element| element.path().contains(id))
+}
+
+/// Every observed element of the last frame.
+pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
+    gpui_kit::base::test_support::snapshots(window)
+}
+
+/// The labels of every observed element, for failure messages.
+pub fn labels(window: &Window) -> Vec<String> {
+    let mut labels: Vec<_> = elements(window)
+        .iter()
+        .filter_map(|element| element.label().map(str::to_owned))
+        .filter(|label| !label.is_empty())
+        .collect();
+    labels.sort();
+    labels
+}
+
+/// Whether an observed element has a label that contains `text`.
+pub fn shows(window: &Window, text: &str) -> bool {
+    elements(window)
+        .iter()
+        .any(|element| element.label().is_some_and(|label| label.contains(text)))
+}
+
+/// The label of the observed element `id`.
+pub fn label(window: &Window, id: impl Into<ElementId>) -> Option<String> {
+    window
+        .try_find(id)
+        .and_then(|element| element.label().map(str::to_owned))
+}
+
+/// The accessibility value of the observed element `id`.
+pub fn value(window: &Window, id: impl Into<ElementId>) -> Option<String> {
+    window
+        .try_find(id)
+        .and_then(|element| element.value().map(str::to_owned))
+}
+
+/// The index of the item labelled `item` in the open menu `scope`
+/// ("popup-menu" or "submenu").
+pub fn menu_item(window: &mut Window, scope: &str, item: &str) -> Option<usize> {
+    if window.try_find(scope.to_owned()).is_none()
+        && find_in(window, scope.to_owned(), 0usize).is_none()
+    {
+        return None;
+    }
+    let scoped = window.within(scope.to_owned());
+    (0..64).find(|index| {
+        scoped
+            .try_find(*index)
+            .is_some_and(|entry| entry.label() == Some(item))
+    })
+}
+
+/// The observed element labelled exactly `text`.
+pub fn labelled(window: &Window, text: &str) -> Option<ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .find(|element| element.label() == Some(text))
+}
+
+/// The observed elements whose labels start with `prefix`.
+pub fn labelled_starting(window: &Window, prefix: &str) -> Vec<ElementSnapshot> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            element
+                .label()
+                .is_some_and(|label| label.starts_with(prefix))
+        })
+        .collect()
+}
+
+/// The bounds of the observed element `id`, or of the element labelled
+/// `id` when no element has that ID.
+pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
+    window
+        .try_find(id.to_owned())
+        .or_else(|| labelled(window, id))
+        .unwrap_or_else(|| panic!("No element {id}. Labels: {:?}", labels(window)))
+        .bounds()
+}
+
+/// Clicks the center of an observed element, as `TestWindowExt::click` does
+/// for an ID. Use it for elements that GPUI Kit owns and does not name, like
+/// the search field of Settings. Prefer IDs for Qrow's own controls.
+pub fn click_element(window: &mut Window, element: &ElementSnapshot, cx: &mut App) {
+    pointer_click(window, element, MouseButton::Left, cx);
+}
+
+/// Presses and releases `button` at the center of an observed element.
+pub fn pointer_click(
+    window: &mut Window,
+    element: &ElementSnapshot,
+    button: MouseButton,
+    cx: &mut App,
+) {
+    assert!(element.visible(), "{:?} is not visible", element.path());
+    let position = element.bounds().center();
+    window.dispatch_event(
+        MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.dispatch_event(
+        MouseDownEvent {
+            button,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.dispatch_event(
+        MouseUpEvent {
+            button,
+            position,
+            modifiers: Default::default(),
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
 /// The label of a result cell. Column 0 holds the row number.
 pub fn cell(window: &Window, row: usize, column: usize) -> Option<String> {
     find_in(window, ("row", row), ("cell", column)).and_then(|cell| cell.label().map(str::to_owned))
@@ -102,6 +249,16 @@ impl TestApp {
         workspace: Workspace,
         credentials: MemoryCredentials,
     ) -> Self {
+        Self::launch_in(cx, tempfile::tempdir().unwrap(), workspace, credentials)
+    }
+
+    /// Opens Qrow on `workspace`, saved in `directory`.
+    pub fn launch_in(
+        cx: &mut TestAppContext,
+        directory: TempDir,
+        workspace: Workspace,
+        credentials: MemoryCredentials,
+    ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
         cx.executor().allow_parking();
@@ -111,7 +268,6 @@ impl TestApp {
             // control. Reduced motion settles dialogs on their first frame.
             cx.set_reduce_motion(true);
         });
-        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("workspace.json");
         let workspace = Workspace {
             version: WORKSPACE_VERSION,
@@ -143,13 +299,260 @@ impl TestApp {
             .expect("Qrow window closed")
     }
 
+    pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.update(cx, |window, cx| window.click(id, cx));
+    }
+
+    pub fn press(&self, cx: &mut TestAppContext, key: &str) {
+        self.update(cx, |window, cx| window.press(key, cx));
+    }
+
+    /// Dispatches an action as a key binding or a menu item does.
+    pub fn dispatch(&self, cx: &mut TestAppContext, action: impl Action) {
+        self.update(cx, |window, cx| {
+            window.dispatch_action(action.boxed_clone(), cx)
+        });
+    }
+
+    /// Waits until the element `id` is in the frame.
+    pub fn wait_for(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        let what = format!("{id:?}");
+        self.wait_until(cx, &what, Duration::from_secs(10), |window, _| {
+            present(window, &id)
+        });
+    }
+
+    /// Waits until the element `id` has left the frame.
+    pub fn wait_gone(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        let what = format!("{id:?} to close");
+        self.wait_until(cx, &what, Duration::from_secs(10), |window, _| {
+            !present(window, &id)
+        });
+    }
+
+    /// Clicks the element labelled exactly `text`.
+    pub fn click_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled(window, text).unwrap();
+            click_element(window, &element, cx);
+        });
+    }
+
+    /// Replaces the text of the focused input after clicking the element
+    /// labelled `text`.
+    pub fn fill_labelled(&self, cx: &mut TestAppContext, text: &str, value: &str) {
+        self.click_labelled(cx, text);
+        self.update(cx, |window, cx| {
+            window.press("cmd-a", cx);
+            if value.is_empty() {
+                window.press("backspace", cx);
+            } else {
+                window.input(value, cx);
+            }
+        });
+    }
+
+    /// Opens the select `id` and chooses `option`. A searchable select filters
+    /// to the option; another select moves down its list with the keyboard.
+    pub fn select(&self, cx: &mut TestAppContext, id: &str, option: &str) {
+        let chosen = |app: &Self, cx: &mut TestAppContext| {
+            app.settle(cx);
+            app.update(cx, |window, _| {
+                value(window, id.to_owned()).as_deref() == Some(option)
+            })
+        };
+        self.update(cx, |window, cx| {
+            window.within(id.to_owned()).click("input", cx)
+        });
+        self.settle(cx);
+        self.update(cx, |window, cx| window.input(option, cx));
+        self.settle(cx);
+        self.press(cx, "enter");
+        if chosen(self, cx) {
+            return;
+        }
+        for downs in 1..10 {
+            self.update(cx, |window, cx| {
+                window.within(id.to_owned()).click("input", cx)
+            });
+            self.settle(cx);
+            for _ in 0..downs {
+                self.press(cx, "down");
+            }
+            self.press(cx, "enter");
+            if chosen(self, cx) {
+                return;
+            }
+        }
+        panic!("{id} has no option {option}");
+    }
+
+    /// Runs the queued work of the UI, like deferred updates of a select.
+    pub fn settle(&self, cx: &mut TestAppContext) {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+        self.update(cx, |window, cx| window.render_frame(cx));
+    }
+
+    /// The value of the stepper `id` of Settings.
+    pub fn stepper(&self, cx: &mut TestAppContext, id: &str) -> String {
+        self.update(cx, |window, _| {
+            window
+                .within(id.to_owned())
+                .find("value")
+                .value()
+                .unwrap_or_default()
+                .to_owned()
+        })
+    }
+
+    /// Clicks `button` ("increment" or "decrement") of the stepper `id` and
+    /// waits for `expected`.
+    pub fn step(&self, cx: &mut TestAppContext, id: &str, button: &str, expected: &str) {
+        self.update(cx, |window, cx| {
+            window.within(id.to_owned()).click(button.to_owned(), cx)
+        });
+        self.wait_until(
+            cx,
+            &format!("{id} to show {expected}"),
+            Duration::from_secs(10),
+            |window, _| {
+                window
+                    .within(id.to_owned())
+                    .try_find("value")
+                    .and_then(|v| v.value().map(str::to_owned))
+                    .as_deref()
+                    == Some(expected)
+            },
+        );
+    }
+
+    /// Right-clicks the element labelled exactly `text` and waits for its menu.
+    pub fn context_menu_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled(window, text).unwrap();
+            pointer_click(window, &element, MouseButton::Right, cx);
+        });
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Moves the pointer over the element labelled exactly `text`, for
+    /// controls that show on hover, like the close button of a tab.
+    pub fn hover_labelled(&self, cx: &mut TestAppContext, text: &str) {
+        self.wait_until(cx, text, Duration::from_secs(10), |window, _| {
+            labelled(window, text).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let position = labelled(window, text).unwrap().bounds().center();
+            window.dispatch_event(
+                MouseMoveEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: Default::default(),
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+    }
+
+    /// Right-clicks the one element whose label starts with `prefix`.
+    pub fn context_menu_starting(&self, cx: &mut TestAppContext, prefix: &str) {
+        self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
+            labelled_starting(window, prefix).len() == 1
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled_starting(window, prefix).remove(0);
+            pointer_click(window, &element, MouseButton::Right, cx);
+        });
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Clicks the first element whose label starts with `prefix`.
+    pub fn click_starting(&self, cx: &mut TestAppContext, prefix: &str) {
+        self.wait_until(cx, prefix, Duration::from_secs(10), |window, _| {
+            !labelled_starting(window, prefix).is_empty()
+        });
+        self.update(cx, |window, cx| {
+            let element = labelled_starting(window, prefix).remove(0);
+            click_element(window, &element, cx);
+        });
+    }
+
+    /// Closes the window, which saves and releases the workspace, and opens
+    /// Qrow again on the same workspace directory.
+    pub fn relaunch(self, cx: &mut TestAppContext) -> Self {
+        let Self {
+            window,
+            credentials,
+            _directory: directory,
+            ..
+        } = self;
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .unwrap();
+        cx.run_until_parked();
+        let copy = MemoryCredentials::default();
+        for (id, password) in credentials.passwords.lock().unwrap().iter() {
+            copy.set_password(*id, password).unwrap();
+        }
+        let workspace = storage::load(&directory.path().join("workspace.json")).unwrap();
+        Self::launch_in(cx, directory, workspace, copy)
+    }
+
+    /// Opens the submenu `parent` of the open menu and clicks its `item`.
+    pub fn choose_in_submenu(&self, cx: &mut TestAppContext, parent: &str, item: &str) {
+        self.wait_until(cx, parent, Duration::from_secs(10), |window, _| {
+            menu_item(window, "popup-menu", parent).is_some()
+        });
+        self.update(cx, |window, cx| {
+            let index = menu_item(window, "popup-menu", parent).unwrap();
+            window.within("popup-menu").hover(index, cx);
+        });
+        self.choose(cx, "submenu", item);
+    }
+
+    /// Right-clicks `id` and waits for its context menu.
+    pub fn context_menu(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
+        self.update(cx, |window, cx| window.right_click(id, cx));
+        self.wait_for(cx, "popup-menu");
+    }
+
+    /// Clicks the item labelled `item` in the open menu `scope`.
+    pub fn choose(&self, cx: &mut TestAppContext, scope: &str, item: &str) {
+        self.wait_until(
+            cx,
+            &format!("{item} in {scope}"),
+            Duration::from_secs(10),
+            |window, _| menu_item(window, scope, item).is_some(),
+        );
+        self.update(cx, |window, cx| {
+            let index = menu_item(window, scope, item).unwrap();
+            window.within(scope.to_owned()).click(index, cx);
+        });
+    }
+
     /// Clicks `id`, selects its text, and types `text` in its place. Masked
     /// inputs do not publish their value, so only unmasked values are checked.
     pub fn fill(&self, cx: &mut TestAppContext, id: &'static str, text: &str) {
         self.update(cx, |window, cx| {
             window.click(id, cx);
             window.press("cmd-a", cx);
-            window.input(text, cx);
+            if text.is_empty() {
+                window.press("backspace", cx);
+            } else {
+                window.input(text, cx);
+            }
             let input = window.find(id);
             assert_eq!(input.focused(), Some(true), "{id} did not take focus");
             if let Some(value) = input.value() {
@@ -220,4 +623,21 @@ impl TestApp {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+}
+
+/// A synthetic connection that no test connects to.
+pub fn offline_profile(name: &str) -> Profile {
+    Profile {
+        name: name.into(),
+        host: "example.invalid".into(),
+        port: 10009,
+        username: "synthetic".into(),
+        database: "default".into(),
+        ..Profile::default()
+    }
+}
+
+/// The element ID of the sidebar row of a connection.
+pub fn connection_row(id: Uuid) -> ElementId {
+    ElementId::Name(format!("profile-{id}").into())
 }
