@@ -85,6 +85,10 @@ example `-- Paid bookings by gate`. When the assistant changes a query, it keeps
 the comment correct. Qrow selects only the statement below the comment, so the
 assistant runs the statement without the comment. The assistant can select a
 specific statement in a tab with several queries before it runs that statement.
+When the appended statement is still selected, the assistant can omit the
+editor revision in the same turn. Qrow uses the revision from the append.
+For other runs, the assistant must give the current editor revision. It must
+also give the revision if the selected statement, tab, or connection changes.
 A rename keeps the tab ID. Read tools can use another open tab. If a read tool
 uses an ID that is not in the open tabs, Qrow uses the tab of the conversation
 and returns its ID. Qrow always changes and runs SQL in the tab of the

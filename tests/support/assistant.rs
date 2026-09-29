@@ -25,7 +25,9 @@ impl FakeCodex {
     /// synthetic server.
     pub fn new() -> (TempDir, Self) {
         let directory = tempfile::tempdir().unwrap();
-        let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/desktop/fake-codex.py");
+        // Hook snapshots disappear while their cached test binaries remain.
+        let script = directory.path().join("fake-codex.py");
+        std::fs::write(&script, include_str!("../desktop/fake-codex.py")).unwrap();
         let executable = directory.path().join("codex");
         std::fs::write(
             &executable,

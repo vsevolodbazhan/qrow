@@ -1,5 +1,5 @@
 //! The assistant edits, formats, and requests SQL in its tab.
-use crate::support::assistant::FakeCodex;
+use crate::support::assistant::{FakeCodex, approval};
 use crate::support::{MemoryCredentials, TestApp, label, offline_profile, present};
 use gpui_kit::{ElementId, TestAppContext};
 use qrow::model::{AssistantTitleSource::Codex, SavedTab, Workspace};
@@ -139,4 +139,16 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
     app.wait_gone(cx, "save-settings");
     app.send(cx, "Report the SQL style");
     app.wait_reply(cx, "SQL style: uppercase, 5 spaces");
+
+    // A later selection cannot reuse the revision of the appended query.
+    app.send(cx, "Append then retarget and run without revision");
+    app.wait_approval(cx, "Run in Query 1 · Synthetic? SELECT 0;");
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(cx, "Implicit run rejected: invalid_arguments");
+    app.update(cx, |window, _| {
+        assert!(
+            approval(window).is_none(),
+            "An implicit run targeted another statement"
+        );
+    });
 }

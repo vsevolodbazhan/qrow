@@ -163,8 +163,9 @@ def hold_turn(thread, turn, label, tab):
             "version": 1,
             "tab_id": result["tab_id"],
             "connection_id": tab["connection_id"],
-            "editor_revision": result["editor_revision"],
         }
+        if label == "Beta":
+            arguments["editor_revision"] = result["editor_revision"]
         call_tool(thread, turn, "run_selected_tab_query", arguments, ran, replay=True)
 
     def ran(success, result):
@@ -357,6 +358,31 @@ for line in sys.stdin:
                 target=hold_turn, args=(thread_id, turn_id, label, context["selected_tab"]), daemon=True
             ).start()
             continue
+        if message.startswith("Append and run SQL without revision"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+
+            def ran_append_query(success, result):
+                finish_turn(thread_id, turn_id, "I ran the appended query." if success else f"Tool failed: {result}")
+
+            def appended_for_run(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                    "version": 1,
+                    "tab_id": result["tab_id"],
+                    "connection_id": tab["connection_id"],
+                }, ran_append_query)
+
+            call_tool(thread_id, turn_id, "append_selected_tab_sql", {
+                "version": 1,
+                "tab_id": tab["id"],
+                "connection_id": tab["connection_id"],
+                "editor_revision": tab["editor_revision"],
+                "sql": "-- Assistant value\nSELECT 3 AS assistant_value",
+            }, appended_for_run)
+            continue
         if message.startswith("Title before first reply"):
             open(os.path.join(state_dir, "first-reply-pending"), "w").close()
 
@@ -464,6 +490,43 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Append then retarget and run without revision"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+
+            def rejected_implicit_run(success, result):
+                code = result.get("error", {}).get("code")
+                finish_turn(thread_id, turn_id, f"Implicit run rejected: {code}" if not success else "Implicit run unexpectedly accepted")
+
+            def retargeted_run(success, result):
+                if success or result.get("error", {}).get("code") != "approval_cancelled":
+                    finish_turn(thread_id, turn_id, f"Retarget failed: {result}")
+                    return
+                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                    "version": 1,
+                    "tab_id": tab["id"],
+                    "connection_id": tab["connection_id"],
+                }, rejected_implicit_run)
+
+            def appended_before_retarget(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Append failed: {result}")
+                    return
+                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                    "version": 1,
+                    "tab_id": tab["id"],
+                    "connection_id": tab["connection_id"],
+                    "editor_revision": result["editor_revision"],
+                    "statement_range": tab["statement_ranges"][0],
+                }, retargeted_run)
+
+            call_tool(thread_id, turn_id, "append_selected_tab_sql", {
+                "version": 1,
+                "tab_id": tab["id"],
+                "connection_id": tab["connection_id"],
+                "editor_revision": tab["editor_revision"],
+                "sql": "-- Third statement\nSELECT 3",
+            }, appended_before_retarget)
         elif message.startswith("Rewrite the last statement with edit tool"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]

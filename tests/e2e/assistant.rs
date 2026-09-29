@@ -1,4 +1,4 @@
-use crate::support::assistant::{FakeCodex, approval};
+use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{TestApp, bounds_of, label};
 use gpui_kit::TestAppContext;
@@ -53,5 +53,14 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
         );
         crate::support::cell(window, 0, 1).as_deref() == Some("2")
     });
+    app.wait_idle(cx);
+
+    app.send(cx, "Append and run SQL without revision");
+    app.wait_reply(cx, "I ran the appended query.");
+    app.wait_until(cx, "the appended query", QUERY_TIMEOUT, |window, _| {
+        editor_text(window)
+            .is_some_and(|sql| sql.contains("-- Assistant value\nSELECT 3 AS assistant_value"))
+    });
+    app.wait_cell(cx, 0, 1, "3");
     app.wait_idle(cx);
 }
