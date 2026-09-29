@@ -12,6 +12,13 @@ Qrow changes these files:
   which are wider than kerned text, and broke the line. A chat bubble sized for
   one line then hid the last word. `src/text/inline.rs` adds a kerned test font
   for the regression test.
+- `src/text/inline_flow.rs`: a wrapped Markdown flow reports at least the
+  width that the line wrapper measured for each line. Before, the flow
+  reported the shaped width of its longest line, which is narrower. A chat
+  bubble sized from that width wrapped the text again into more lines and hid
+  the last line. `src/text/inline.rs` makes the kerned test font kern only
+  text of two or more characters, as the wrapper measures one character at a
+  time.
 - `src/text/inline_flow.rs`: the line wrapper measures bold and italic text in
   its own face. Before, the wrapper measured it in the regular body face, which
   is narrower. A line with bold text then became wider than the column, and

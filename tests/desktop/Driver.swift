@@ -711,19 +711,28 @@ final class Driver {
                     "The selection changes the color of the selected text from \(before.text) to \(after.text)")
         print("PASS: A selection in a user message shows in One Dark and keeps the text color")
     }
-    /// At this width the message fits on one line. If the text breaks before
-    /// the last word, the bubble keeps its one-line height and hides the
-    /// second line, and the message extends below the bubble. Left of the
-    /// text, the bottom of the message must have the bubble color of its top.
-    func checkInlineCodeMessage() throws {
-        try fill("Assistant Message", "How many tables are in `sandbox_vbazhan` schema?")
+    /// At this width the first message fits on one line, and the second
+    /// message wraps. If a layout at the bubble's own width breaks a line
+    /// again, the bubble keeps the height of the first layout and hides the
+    /// last line, and the message extends below the bubble.
+    func checkInlineCodeMessages() throws {
+        let message = try checkInlineCodeMessage(
+            "How many tables are in `sandbox_vbazhan` schema?", name: "assistant-inline-code-message")
+        _ = try checkInlineCodeMessage(
+            "When did the latest vacuum complete on `integrations.bookings`?", name: "assistant-wrapped-inline-code-message")
+        try checkMessageInsets(message)
+    }
+    /// Sends `text`. Left of the text, the bottom of the message must have the
+    /// bubble color of its top.
+    func checkInlineCodeMessage(_ text: String, name: String) throws -> AXUIElement {
+        try fill("Assistant Message", text)
         try press("Send")
+        let message = try wait("You: \(text)", timeout: 20)
         _ = try wait("I can help with this query", timeout: 20)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
-        let message = try wait("You: How many tables are in", timeout: 5)
         let (origin, extent) = try elementBounds(message)
-        try snapshot("assistant-inline-code-message")
-        let path = "\(artifacts)/assistant-inline-code-message-edge.png"
+        try snapshot(name)
+        let path = "\(artifacts)/\(name)-edge.png"
         let rect = "\(Int(origin.x) + 1),\(Int(origin.y)),1,\(Int(extent.height))"
         _ = try command(["screencapture", "-x", "-R", rect, path])
         guard let data = FileManager.default.contents(atPath: path),
@@ -735,8 +744,8 @@ final class Driver {
         let difference = max(abs(top.redComponent - bottom.redComponent),
                              abs(top.greenComponent - bottom.greenComponent),
                              abs(top.blueComponent - bottom.blueComponent))
-        try require(difference < 0.02, "The message with inline code extends below its bubble")
-        try checkMessageInsets(message)
+        try require(difference < 0.02, "The message \(text) extends below its bubble")
+        return message
     }
     /// A line that is wider than the reply is clipped at the reply's right
     /// edge, so glyphs touch that edge. A line that wraps correctly ends
@@ -858,7 +867,7 @@ final class Driver {
             try press("Toggle Conversation List")
             try waitGone("Search Conversations", timeout: 5)
         }
-        try checkInlineCodeMessage()
+        try checkInlineCodeMessages()
         try checkBoldReply()
         try checkComposerPadding()
         print("PASS: Assistant messages with inline code show every line, bold text wraps inside the reply, and the composer padding is even")

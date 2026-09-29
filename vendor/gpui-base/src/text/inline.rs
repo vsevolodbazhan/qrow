@@ -1486,9 +1486,10 @@ pub(super) mod test_fonts {
         }
     }
 
-    /// Like [`WideMonoTextSystem`], but shaped lines are 1% narrower than the
-    /// sum of glyph advances, as with kerning. The line wrapper adds advances,
-    /// so it sees a wider line than the shaped layout reports.
+    /// Like [`WideMonoTextSystem`], but text of two or more characters is 1%
+    /// narrower than the sum of glyph advances, as with kerning. The line
+    /// wrapper adds the widths of single characters, so it sees a wider line
+    /// than the shaped layout reports.
     pub(crate) struct KernedTextSystem;
 
     impl PlatformTextSystem for KernedTextSystem {
@@ -1542,6 +1543,9 @@ pub(super) mod test_fonts {
         fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
             const KERNING: f32 = 0.99;
             let mut layout = WideMonoTextSystem.layout_line(text, font_size, runs);
+            if text.chars().count() < 2 {
+                return layout;
+            }
             for run in &mut layout.runs {
                 for glyph in &mut run.glyphs {
                     glyph.position.x *= KERNING;
