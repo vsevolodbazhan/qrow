@@ -595,12 +595,19 @@ final class Driver {
         try require(savedSQL(finalSQL, at: workspace), "Quit completed without saving the final SQL edit")
         print("PASS: failed save preserves edits, Keep Editing, retry and durable save before \(closeWindow ? "window close" : "Quit")")
     }
-    /// A version line reads `0.1.0` or `0.1.0 (dcc75d4fd874)`.
+    /// A version line reads `0.1.0`, `0.1.0 (dcc75d4fd874)`, or, for a release
+    /// channel, `0.1.0-nightly.20260921.7 (dcc75d4fd874)`.
     func isVersion(_ text: String) -> Bool {
         let parts = text.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
         guard let first = parts.first else { return false }
-        let numbers = first.split(separator: ".", omittingEmptySubsequences: false)
+        let release = first.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let numbers = release[0].split(separator: ".", omittingEmptySubsequences: false)
         guard numbers.count == 3, numbers.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) else { return false }
+        if release.count == 2 {
+            let labels = release[1].split(separator: ".", omittingEmptySubsequences: false)
+            guard labels.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") } })
+            else { return false }
+        }
         if parts.count == 1 { return true }
         let commit = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
         return commit.count == 12 && commit.allSatisfy { $0.isHexDigit && !$0.isUppercase }
