@@ -279,6 +279,48 @@ class FixtureSessionTests(RunTests):
         self.assertTrue(marker.exists())
 
 
+import compare  # noqa: E402
+
+
+class PerformanceTests(unittest.TestCase):
+    def test_metrics_come_from_probe_lines_in_the_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "perf.log"
+            log.write_text('noise\nQROW_PERF {"probe": "a", "value": 1.5, "unit": "ms", "budget": 5}\n'
+                           '    QROW_PERF {"probe": "b", "value": 2, "unit": "MB", "budget": 3}\nQROW_PERF {broken\n')
+            self.assertEqual([m["probe"] for m in runner.metrics_in(log)], ["a", "b"])
+
+    def test_a_probe_is_slower_above_the_threshold(self):
+        base = {"fast": ("ms", [10, 11, 12]), "slow": ("ms", [10, 10, 10]), "only-base": ("ms", [1])}
+        head = {"fast": ("ms", [9, 10, 11]), "slow": ("ms", [13, 13, 14])}
+        rows = {row["probe"]: row for row in compare.summarize(base, head, 25)}
+        self.assertEqual(set(rows), {"fast", "slow"})
+        self.assertFalse(rows["fast"]["regression"])
+        self.assertTrue(rows["slow"]["regression"])
+        self.assertAlmostEqual(rows["slow"]["change_percent"], 30.0)
+
+    def test_rounds_alternate_the_side_that_runs_first(self):
+        calls = []
+
+        def fake_run(tree, suites, target, output):
+            calls.append("head" if tree == runner.ROOT else "base")
+            return {"p": ("ms", [1.0])}
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(compare, "base_tree", return_value=(Path(directory), "a" * 40)), \
+                patch.object(compare, "run_once", side_effect=fake_run):
+            (Path(directory) / "qtest").write_text("")
+            report, code = compare.compare("main", ["perf"], 3, 25, lambda _: None)
+        self.assertEqual(calls, ["base", "head", "head", "base", "base", "head"])
+        self.assertEqual(code, runner.EXIT_PASSED)
+        self.assertEqual(report["probes"][0]["base"], 1.0)
+
+    def test_a_revision_without_qtest_cannot_be_compared(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(compare, "base_tree", return_value=(Path(directory), "a" * 40)):
+            self.assertEqual(compare.compare("old", ["perf"], 1, 25, lambda _: None), (None, runner.EXIT_MISSING))
+
+
 class CommandLineTests(unittest.TestCase):
     def call(self, *argv):
         stdout, stderr = io.StringIO(), io.StringIO()
