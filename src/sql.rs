@@ -1,5 +1,5 @@
-//! Small SQL lexer for highlighting, single-statement validation, and checked
-//! formatting, not SQL parsing.
+//! Small SQL lexer for highlighting, statement ranges, single-statement
+//! validation, and checked formatting, not SQL parsing.
 use serde::{Deserialize, Serialize};
 use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;

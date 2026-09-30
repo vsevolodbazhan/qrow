@@ -37,9 +37,9 @@ requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
 name or the Connection Lifecycle fields. The worker applies the new lifecycle
-policy after active query, fetch, or keep-alive work finishes. A shorter
-keep-alive interval starts from the policy update. Switching to Disconnect
-starts a new idle timeout from the policy update.
+policy after active query, fetch, or keep-alive work finishes. The idle timer
+and the keep-alive interval of these sessions then start again from the policy
+update.
 
 Changing the host, port, username, database, session parameters, or password
 releases the matching sessions. Their SQL and downloaded results remain
@@ -64,11 +64,15 @@ Use the **When idle** picker to control each session:
 
 | Choice | Behavior |
 | --- | --- |
-| **Disconnect after** | Releases the session after the specified idle time. The default is 900 seconds. Reading results and editing SQL do not reset the timer. Running work is not interrupted. |
-| **Keep connected** | Sends periodic keep-alive query while the session is idle. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
+| **Disconnect after** | Releases the session after the specified idle time. The default is 900 seconds. Running work is not interrupted. |
+| **Keep connected** | Sends a keep-alive query after each interval without other session work. The form suggests 300 seconds and `SELECT 1`. Both values can be changed. This mode is off by default. |
+
+The idle timer and the keep-alive interval start again when a query, a fetch
+of more rows from the server, a policy update, or a keep-alive finishes.
+Paging through downloaded rows and editing SQL do not reset them.
 
 Use a lightweight, read-only statement for keep-alive query. Qrow checks that the
-text contains one statement, but does not enforce read-only behavior. keep-alives
+text contains one statement, but does not enforce read-only behavior. Keep-alives
 use the existing session and preserve its result cursor. A failed keep-alive
 disconnects the session and stops background queries until the next explicit Run.
 
@@ -119,6 +123,11 @@ tunneling are not implemented.
 Passwords are stored in macOS Keychain. They are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
+
+Each attempt to connect to one address of the host has a 10-second timeout.
+If the host has more than one address, Qrow tries the next address after a
+failure. Each network write has a 15-second timeout. For the read timeout, see
+[Cancel work](queries.md#cancel-work).
 
 Qrow discards a failed connection and reports the error. This includes recognized
 Kyuubi errors that wrap an engine transport failure. The next explicit Run can

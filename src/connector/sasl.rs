@@ -11,6 +11,13 @@ use thrift::protocol::TBinaryOutputProtocol;
 use zeroize::Zeroizing;
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
+/// The limit for one TCP connection attempt to one resolved address.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// The limit for one socket read. The connector polls the status of a running
+/// query, so this does not limit the query duration.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
+/// The limit for one socket write.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 pub type Client = TCLIServiceSyncClient<
     ResponseProtocol<TcpStream>,
     TBinaryOutputProtocol<FrameWriter<TcpStream>>,
@@ -23,7 +30,7 @@ pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<
     let mut last_error = None;
     let mut connection = None;
     for address in addresses {
-        match TcpStream::connect_timeout(&address, Duration::from_secs(10)) {
+        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
             Ok(stream) => {
                 connection = Some(stream);
                 break;
@@ -38,8 +45,8 @@ pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<
         )
     })?;
     stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(Duration::from_secs(120)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(15)))?;
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     negotiate(&mut stream, username, password)?;
     let reader = FrameReader::new(stream.try_clone()?);
     let writer = FrameWriter::new(stream);
