@@ -6841,15 +6841,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
-]
-
-[[package]]
 name = "thrift"
 version = "0.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6857,9 +6848,7 @@ checksum = "2b29bdae81cc2dbc498a720e2734e08f26e388c791fca6e95464d41001913714"
 dependencies = [
  "byteorder",
  "integer-encoding",
- "log",
  "ordered-float",
- "threadpool",
  "uuid",
 ]
 
