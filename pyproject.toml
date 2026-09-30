@@ -1,7 +1,7 @@
 [project]
-name = "qrow-packaging"
+name = "qrow-scripts"
 version = "0.1.0"
-description = "Reproducible packaging helpers for Qrow"
+description = "Qrow automation: qtest, script checks and tests, E2E helpers, and packaging"
 requires-python = ">=3.11"
 dependencies = [
     "pillow==12.3.0",

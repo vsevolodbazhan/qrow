@@ -49,8 +49,9 @@ accept a test filter.
 | `package` | The release app package in `target/package/`, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
-On Linux, `unit` and `clippy` use only the core library, and `ui`, `e2e`, and
-`desktop` are not available.
+On Linux, `unit` and `clippy` use only the core library. These suites need
+macOS and are not available on Linux: `ui`, `e2e`, `perf-ui`, `perf-e2e`,
+`perf-app`, `package`, and `desktop`.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
 Spark servers. `desktop` also takes over the desktop. These suites, the
@@ -112,11 +113,11 @@ Options:
 
 `--changed` reads `QROW_CHANGED_FILES` when it is set. Otherwise it uses your
 uncommitted and untracked files and the commits since `origin/main`. Changes
-to Rust sources, tests, and Cargo files select `fmt`, `clippy`, `rustdoc`,
-`unit`, and `ui`. Changes to Cargo files or dependency policy files also
-select `deps`. Changes to dependency policy files or workflows select
-`policy`. Changes to scripts, hooks, workflows, `qtest`, or this page select
-`scripts`.
+to Rust sources, tests, Cargo files, `vendor/`, themes, and embedded icons
+select `fmt`, `clippy`, `rustdoc`, `unit`, and `ui`. Changes to Cargo files or
+dependency policy files also select `deps`. Changes to Cargo files, dependency
+policy files, or workflows select `policy`. Changes to scripts, hooks,
+workflows, `qtest`, the Python dependencies, or this page select `scripts`.
 
 To list the tests of a suite, run `./qtest list ui --tests`.
 
@@ -540,9 +541,11 @@ measurements go into the run summary. Its failure does not fail the job.
 
 A `plan` job selects the jobs of a pull request from its changed files. It
 always selects `static`. Changes to Rust sources select all jobs. Changes to
-the server fixture or the E2E scripts select `backend` and `e2e`. Changes to
-the packaging or probe scripts select `package`. Changes to the workflows,
-`qtest`, `scripts/core/`, or the Python dependencies select all jobs. A
+the server fixture or the E2E scripts select `backend` and `e2e`. Changes
+under `tests/desktop/` select `e2e`. Changes to the packaging or probe
+scripts, `assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
+workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
+jobs. A
 selected job also selects the jobs that it waits for. A job that the plan does
 not select shows as skipped. Pushes, manual runs, and releases run all jobs.
 To see the plan of your changes, run `./qtest ci plan`.

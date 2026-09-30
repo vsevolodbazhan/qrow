@@ -73,17 +73,23 @@ The release profile favors size so the optional assistant stays within the
 macOS package budget.
 
 Stage required code and configuration together. A passing working-copy check
-does not prove that the staged snapshot passes. Markdown changes other than
-`docs/testing.md` do not trigger hook checks. Changes under `scripts/`
-trigger script checks, including changes to its README.
+does not prove that the staged snapshot passes. Changes under `scripts/`
+trigger script checks, including changes to its README. Changes under
+`vendor/` trigger the Rust suites, including changes to its Markdown files,
+for example `QROW-PATCH.md`. Other Markdown changes, except `docs/testing.md`,
+do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
 manual dispatches, and pull requests into any branch with the `opened`,
 `reopened`, `synchronize`, `ready_for_review`, and `converted_to_draft`
 actions. Pull requests in a stack get checks before their base merges. The
-workflow runs all jobs for a non-draft pull request. A draft pull request,
-including a `converted_to_draft` event, starts no jobs. To run the checks of a
-draft pull request, mark it as ready for review.
+test workflow calls the [checks workflow](../.github/workflows/checks.yml),
+which has the jobs. For a non-draft pull request, the `plan` job selects the
+jobs from the changed paths and always selects `static`. Pushes and manual
+runs start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
+gives the paths that select each job. A draft pull request, including a
+`converted_to_draft` event, starts no jobs. To run the checks of a draft pull
+request, mark it as ready for review.
 
 Every job checks out the same commit: the pull request merge result, or the
 pushed commit. A newer run cancels an older run for the same pull request or
