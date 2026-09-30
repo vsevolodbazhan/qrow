@@ -119,7 +119,9 @@ to Rust sources, tests, Cargo files, `vendor/`, themes, and embedded icons
 select `fmt`, `clippy`, `rustdoc`, `unit`, and `ui`. Changes to Cargo files or
 dependency policy files also select `deps`. Changes to Cargo files, dependency
 policy files, or workflows select `policy`. Changes to scripts, hooks,
-workflows, `qtest`, the Python dependencies, or this page select `scripts`.
+workflows, `qtest`, the Python dependencies, this page, or the Python and
+shell files in `tests/desktop/` select `scripts`. The `scripts` suite also
+lints these files.
 
 To list the tests of a suite, run `./qtest list ui --tests`.
 

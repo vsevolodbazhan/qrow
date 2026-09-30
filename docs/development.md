@@ -74,10 +74,11 @@ macOS package budget.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Changes under `scripts/`
-trigger script checks, including changes to its README. Changes under
-`vendor/` trigger the Rust suites, including changes to its Markdown files,
-for example `QROW-PATCH.md`. Other Markdown changes, except `docs/testing.md`,
-do not trigger hook checks.
+trigger script checks, including changes to its README. Changes to the
+Python and shell files in `tests/desktop/` also trigger script checks.
+Changes under `vendor/` trigger the Rust suites, including changes to its
+Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
+`docs/testing.md`, do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
 manual dispatches, and pull requests into any branch with the `opened`,

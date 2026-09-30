@@ -174,10 +174,11 @@ SUITES = {
               (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),)),
         Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
               ("uv", "shellcheck", "actionlint"),
-              (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + && shellcheck .githooks/* qtest")),
+              (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
+                           "&& shellcheck .githooks/* qtest tests/desktop/*.sh")),
                # Name the files: hook snapshots have no Git repository to search.
                Step(("sh", "-c", "actionlint .github/workflows/*.yml")),
-               Step((PYTHON, "-m", "ruff", "check", "scripts")),
+               Step((PYTHON, "-m", "ruff", "check", "scripts", "tests/desktop")),
                Step((PYTHON, "-m", "unittest", "discover", "-s", "scripts/tests")))),
         Suite("policy", "Dependency waiver dates and pinned CI actions.", ("uv",),
               (Step((PYTHON, "scripts/core/policy.py")),)),
@@ -245,7 +246,9 @@ CHANGE_RULES = (
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml|scripts/core/policy\.py|\.github/workflows/)",
      ("policy",)),
     (r"^(Cargo\.toml|Cargo\.lock|deny\.toml|dependency-reviews\.toml)", ("deps",)),
-    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest$|docs/testing\.md$)",
+    # The scripts suite also lints the Python and shell helpers of the desktop driver.
+    (r"^(\.githooks/|\.github/workflows/|pyproject\.toml$|uv\.lock$|scripts/|qtest$|docs/testing\.md$"
+     r"|tests/desktop/[^/]+\.(py|sh)$)",
      ("scripts",)),
     (r"^scripts/core/preflight\.sh$", (*RUST_SUITES, "policy")),
 )

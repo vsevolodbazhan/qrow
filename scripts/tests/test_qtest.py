@@ -78,6 +78,9 @@ class ChangeRuleTests(unittest.TestCase):
             "docs/testing.md": ["scripts"],
             "docs/queries.md": [],
             "scripts/core/preflight.sh": [*rust, "scripts", "policy"],
+            "tests/desktop/fake-codex.py": [*rust, "scripts"],
+            "tests/desktop/fake-codex.sh": [*rust, "scripts"],
+            "tests/desktop/Driver.swift": rust,
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
