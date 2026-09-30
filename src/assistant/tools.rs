@@ -9,8 +9,11 @@ pub fn definitions() -> Vec<ToolDefinition> {
             "type": "object", "properties": {"version": {"const": 1}},
             "required": ["version"], "additionalProperties": false
         })),
-        ("read_tab_sql", "Read the current SQL, editor revision, and statement byte ranges of one query tab. Tool results return the new revision and selection after a change, so do not call this tool only to read them.", json!({
-            "type": "object", "properties": {"version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"}},
+        ("read_tab_sql", "Read the current SQL, editor revision, and statement byte ranges of one query tab. It returns at most 32768 bytes of SQL from offset, with sql_offset, the total sql_bytes, and next_offset for the next part, or null at the end. statement_ranges lists the statements in the returned part, with byte offsets in the complete SQL. Tool results return the new revision and selection after a change, so do not call this tool only to read them.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "tab_id": {"type": "string", "format": "uuid"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 32768}},
             "required": ["version", "tab_id"], "additionalProperties": false
         })),
         ("append_selected_tab_sql", "Append one new SQL statement to the query tab of this conversation (selected_tab in the workspace context), preserving existing queries. Use this when writing a new query. Start the SQL with one -- comment line of a few words that describes the query. The appended statement becomes selected, without its comment. The result returns the new editor_revision and the statement_range of the appended statement. To run it, call run_selected_tab_query with that revision and without statement_range. Write the SQL in sql_style from the workspace context: keywords, built-in function names, and type names in keyword_case, one clause per line, and indent_spaces spaces for each indent level. Qrow formats a statement longer than 80 characters in this style; formatted is then true, and statement_range refers to the formatted text.", json!({
@@ -101,6 +104,18 @@ mod tests {
             tools
                 .iter()
                 .all(|tool| tool.input_schema["additionalProperties"] == false)
+        );
+    }
+
+    #[test]
+    fn read_tab_sql_limit_matches_the_page_limit() {
+        let read = definitions()
+            .into_iter()
+            .find(|tool| tool.name == "read_tab_sql")
+            .unwrap();
+        assert_eq!(
+            read.input_schema["properties"]["limit"]["maximum"],
+            crate::assistant::broker::MAX_SQL_PAGE_BYTES
         );
     }
 

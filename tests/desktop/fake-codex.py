@@ -354,6 +354,10 @@ for line in sys.stdin:
         turn_number += 1
         turn_id = f"synthetic-turn-{turn_number}"
         message = params["input"][0]["text"]
+        if message.startswith("Reject this message"):
+            # Qrow puts a message that Codex rejects back in the message field.
+            send({"id": request_id, "error": {"code": -32600, "message": "Synthetic rejection"}})
+            continue
         pending_message = message
         send(
             {
@@ -583,6 +587,30 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Read the tab SQL in pages"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            pages = []
+
+            def read_sql(offset):
+                def received(success, result):
+                    if not success:
+                        finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                        return
+                    pages.append(result["sql"])
+                    if result["next_offset"] is not None:
+                        read_sql(result["next_offset"])
+                    else:
+                        total = len("".join(pages).encode())
+                        finish_turn(
+                            thread_id,
+                            turn_id,
+                            f"Read {total} of {result['sql_bytes']} bytes in {len(pages)} pages.",
+                        )
+
+                call_tool(thread_id, turn_id, "read_tab_sql", {"version": 1, "tab_id": tab["id"], "offset": offset}, received)
+
+            read_sql(0)
         elif message.startswith("Run 170 rows and read results"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
@@ -659,7 +687,12 @@ for line in sys.stdin:
             if message.startswith(("Report the SQL style", "Report the tab SQL")):
                 context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
                 style = context["sql_style"]
+                tab = context["selected_tab"]
             answer = (
+                f"SQL window: offset {tab['sql_offset']}, {len(tab['sql'].encode())} of "
+                f"{tab['sql_bytes']} bytes, truncated {tab['sql_truncated']}"
+                if message.startswith("Report the tab SQL window")
+                else 
                 f"SQL style: {style['keyword_case']}, {style['indent_spaces']} spaces"
                 if message.startswith("Report the SQL style")
                 else f"Tab SQL: {context['selected_tab']['sql']}"

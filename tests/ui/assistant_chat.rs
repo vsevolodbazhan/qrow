@@ -280,3 +280,51 @@ fn the_transcript_jumps_to_the_latest_message(cx: &mut TestAppContext) {
     app.dispatch(cx, ToggleAssistant);
     app.wait_gone(cx, "assistant-toggle-threads");
 }
+
+#[gpui_kit::test]
+fn a_message_that_codex_does_not_take_stays_in_the_message_field(cx: &mut TestAppContext) {
+    let (app, _codex) = launch(cx, with_connection());
+    app.open_assistant(cx);
+    app.send(cx, "Say hello");
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_idle(cx);
+
+    // Codex rejects the message. The text goes back to the message field.
+    app.type_message(cx, "Reject this message");
+    app.click(cx, "assistant-send");
+    app.wait_reply(cx, "Synthetic rejection");
+    app.wait_until(cx, "the rejected message", REPLY_TIMEOUT, |window, _| {
+        composer_text(window).as_deref() == Some("Reject this message")
+    });
+    app.update(cx, |window, _| {
+        assert!(
+            !crate::support::assistant::transcript(window)
+                .iter()
+                .any(|entry| entry.contains("Reject this message")),
+            "The rejected message stayed in the conversation"
+        );
+    });
+
+    // Qrow does not send a message over 64 KB, and keeps its text.
+    // Qrow pastes the text, because typing each character is slow.
+    let long = format!(
+        "{}x",
+        "Synthetic line of text.\n".repeat(64 * 1024 / 24 + 1)
+    );
+    app.click(cx, "assistant-composer");
+    app.press(cx, "cmd-a");
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(long.clone()));
+    app.press(cx, "cmd-v");
+    let pasted = long.clone();
+    app.wait_until(cx, "the pasted message", REPLY_TIMEOUT, |window, _| {
+        composer_text(window).as_deref() == Some(pasted.as_str())
+    });
+    app.click(cx, "assistant-send");
+    app.wait_until(cx, "the size notice", REPLY_TIMEOUT, |window, _| {
+        label(window, "assistant-notice-accessibility").as_deref()
+            == Some("The message is too large. The limit is 64 KB.")
+    });
+    app.update(cx, |window, _| {
+        assert_eq!(composer_text(window).as_deref(), Some(long.as_str()));
+    });
+}

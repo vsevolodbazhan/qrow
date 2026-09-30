@@ -32,6 +32,12 @@ cannot send or cancel. Type a follow-up and press **Enter** to steer the current
 **Cancel** interrupts the Codex turn. It does not cancel a database query that
 already started. The Send button returns when the turn ends.
 
+A message can have up to 64 KB of text. The workspace context that Qrow adds
+to a message has a separate limit of 1 MB. If your text is larger than 64 KB,
+Qrow does not send it. Qrow shows a notice and keeps the text in the message
+field. If Codex does not accept a message, Qrow puts its text back in the
+message field and shows the Codex error in the conversation.
+
 You can draft a message while Codex starts. The model, reasoning, service tier,
 and Send controls stay disabled until Codex is ready. The pane does not show
 routine status text above the message field.
@@ -74,6 +80,11 @@ tool call cards.
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
 Logs.
+Each message includes the SQL of the tab of the conversation. If this SQL is
+larger than 32 KB, Qrow sends only a 32 KB part around the selection or the
+cursor. Codex uses **Read query** to read the other parts, up to 32 KB at a
+time. The statement ranges in the message include only the statements in the
+part that Qrow sends.
 When an assistant query or row fetch ends, Qrow sends its first downloaded rows
 to Codex with the result: up to 20 rows and 16 KB. Codex then does not need a
 separate request to read them. Codex can use **Read results** to read later
@@ -162,7 +173,10 @@ limit of 60 characters. If another tab on the same connection has the name,
 Qrow adds a copy suffix. This request uses the selected model. It does not
 include workspace context. If Codex cannot make a title, the tab keeps its
 default name, the conversation shows **New conversation**, and Qrow tries
-again when you send another message. You can continue to work while Qrow makes a title.
+again when you send another message. Qrow stops a title request that does not
+end in 60 seconds and handles it as a failed request. Qrow makes up to 8
+titles at the same time. A request that a rename or a delete cancels does
+not count toward this limit. You can continue to work while Qrow makes a title.
 The conversation title shimmers during the request. The tab name also shimmers
 when it follows the conversation title. The shimmer stops when the request
 ends, including when it fails. If you reduce motion in macOS, the titles stay
@@ -189,7 +203,12 @@ If Codex cannot find a saved conversation, Qrow keeps its entry. If you restore
 the Codex history, you can try to open it again. You can also delete the entry
 from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
 conversation text from its workspace.
-Select **Load older messages** to read earlier conversation text. Select **Jump
+Select **Load older messages** to read earlier conversation text.
+Codex sends each message to Qrow on one line of up to 8 MB. Qrow discards a
+larger line and continues to use Codex. Only the request that the line
+answers fails. If a page of conversation history is too large, Qrow reads
+smaller pages. If the start of a large line does not identify its request,
+that request fails when its time limit ends. Select **Jump
 to Latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a
 new reply. New text in that reply follows the bottom while you stay near it.

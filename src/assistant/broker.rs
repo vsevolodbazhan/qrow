@@ -14,6 +14,11 @@ pub const MAX_TOOL_ROWS: usize = 100;
 pub const MAX_PREVIEW_ROWS: usize = 20;
 pub const MAX_PREVIEW_BYTES: usize = 16 * 1024;
 pub const MAX_CONTEXT_STATEMENTS: usize = 100;
+/// The largest part of the tab SQL in the workspace context. `read_tab_sql`
+/// reads the other parts.
+pub const MAX_CONTEXT_SQL_BYTES: usize = 32 * 1024;
+/// The largest part of the tab SQL that one `read_tab_sql` call returns.
+pub const MAX_SQL_PAGE_BYTES: usize = 32 * 1024;
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 pub const MAX_HARNESS_ID_BYTES: usize = 256;
 const TOOL_OUTPUT_ENVELOPE_BYTES: usize = 1024;
@@ -65,9 +70,18 @@ pub struct ResultSummary {
 pub struct SelectedTabContext {
     #[serde(flatten)]
     pub tab: TabSummary,
+    /// The SQL of the tab, or the part of it around the selection when the
+    /// SQL is longer than `MAX_CONTEXT_SQL_BYTES`.
     pub sql: String,
+    /// The byte offset of `sql` in the SQL of the tab.
+    pub sql_offset: usize,
+    /// The length of the SQL of the tab in bytes.
+    pub sql_bytes: usize,
+    /// Whether `sql` holds only a part of the SQL of the tab.
+    pub sql_truncated: bool,
     pub selected_range: Option<Range<usize>>,
     /// Byte ranges that `run_selected_tab_query` accepts as `statement_range`.
+    /// When `sql_truncated` is true, only the statements in `sql`.
     pub statement_ranges: Vec<Range<usize>>,
     pub statement_ranges_truncated: bool,
     pub editor_revision: u64,
@@ -86,12 +100,52 @@ pub struct WorkspaceContext {
     pub selected_tab: Option<SelectedTabContext>,
 }
 
-/// Returns up to `MAX_CONTEXT_STATEMENTS` statement ranges and whether more exist.
-pub fn context_statement_ranges(sql: &str) -> (Vec<Range<usize>>, bool) {
-    let mut ranges = sql::statement_ranges(sql);
-    let truncated = ranges.len() > MAX_CONTEXT_STATEMENTS;
-    ranges.truncate(MAX_CONTEXT_STATEMENTS);
+/// Returns up to `MAX_CONTEXT_STATEMENTS` ranges of the statements that
+/// overlap `part` of `sql`, and whether more statements exist.
+pub fn context_statement_ranges(sql: &str, part: &Range<usize>) -> (Vec<Range<usize>>, bool) {
+    let ranges = sql::statement_ranges(sql);
+    let total = ranges.len();
+    let ranges: Vec<_> = ranges
+        .into_iter()
+        .filter(|range| range.start < part.end && part.start < range.end)
+        .take(MAX_CONTEXT_STATEMENTS)
+        .collect();
+    let truncated = ranges.len() < total;
     (ranges, truncated)
+}
+
+/// The byte range of at most `limit` bytes of `sql` around `focus`, for
+/// example the selection. The range starts and ends on character boundaries.
+/// It holds all of `sql` when `sql` is not longer than `limit`.
+pub fn sql_window(sql: &str, focus: &Range<usize>, limit: usize) -> Range<usize> {
+    if sql.len() <= limit {
+        return 0..sql.len();
+    }
+    let focus_start = focus.start.min(sql.len());
+    let focus_end = focus.end.clamp(focus_start, sql.len());
+    let spare = limit.saturating_sub(focus_end - focus_start);
+    let mut start = focus_start.saturating_sub(spare / 2);
+    let mut end = start + limit;
+    if end > sql.len() {
+        end = sql.len();
+        start = end - limit;
+    }
+    sql.ceil_char_boundary(start)..sql.floor_char_boundary(end)
+}
+
+/// The byte range of the part of `sql` that starts at `offset` and has at
+/// most `limit` bytes. The part ends on a character boundary, and it has at
+/// least one character when `offset` is before the end. Returns `None` when
+/// `offset` is past the end or inside a character.
+pub fn sql_page(sql: &str, offset: usize, limit: usize) -> Option<Range<usize>> {
+    if offset > sql.len() || !sql.is_char_boundary(offset) {
+        return None;
+    }
+    let mut end = sql.floor_char_boundary(offset.saturating_add(limit).min(sql.len()));
+    if end == offset && offset < sql.len() {
+        end = sql.ceil_char_boundary(offset + 1);
+    }
+    Some(offset..end)
 }
 
 impl WorkspaceContext {
@@ -1025,6 +1079,9 @@ mod tests {
                     state: QueryState::Idle,
                 },
                 sql: "SELECT 1".into(),
+                sql_offset: 0,
+                sql_bytes: 8,
+                sql_truncated: false,
                 selected_range: None,
                 statement_ranges: sql::statement_ranges("SELECT 1"),
                 statement_ranges_truncated: false,
@@ -1496,12 +1553,54 @@ mod tests {
 
     #[test]
     fn context_lists_a_bounded_number_of_statement_ranges() {
-        let (ranges, truncated) = context_statement_ranges("SELECT 1;\nSELECT 2");
+        let sql = "SELECT 1;\nSELECT 2";
+        let (ranges, truncated) = context_statement_ranges(sql, &(0..sql.len()));
         assert_eq!(ranges, [0..9, 10..18]);
         assert!(!truncated);
         let many = "SELECT 1;".repeat(MAX_CONTEXT_STATEMENTS + 1);
-        let (ranges, truncated) = context_statement_ranges(&many);
+        let (ranges, truncated) = context_statement_ranges(&many, &(0..many.len()));
         assert_eq!(ranges.len(), MAX_CONTEXT_STATEMENTS);
         assert!(truncated);
+        // A part lists only the statements that overlap it.
+        let sql = "SELECT 1;\nSELECT 2;\nSELECT 3";
+        let (ranges, truncated) = context_statement_ranges(sql, &(12..14));
+        assert_eq!(ranges, vec![Range { start: 10, end: 19 }]);
+        assert!(truncated);
+        let (ranges, truncated) = context_statement_ranges(sql, &(5..12));
+        assert_eq!(ranges, [0..9, 10..19]);
+        assert!(truncated);
+        let (ranges, truncated) = context_statement_ranges(sql, &(9..10));
+        assert!(ranges.is_empty());
+        assert!(truncated);
+    }
+
+    #[test]
+    fn sql_page_reads_whole_characters_from_a_boundary() {
+        let sql = "abécd";
+        assert_eq!(sql_page(sql, 0, 3), Some(0..2));
+        assert_eq!(sql_page(sql, 2, 3), Some(2..5));
+        // A limit that is smaller than one character still reads it.
+        assert_eq!(sql_page(sql, 2, 1), Some(2..4));
+        assert_eq!(sql_page(sql, 4, 100), Some(4..6));
+        assert_eq!(sql_page(sql, 6, 10), Some(6..6));
+        assert_eq!(sql_page(sql, 3, 10), None);
+        assert_eq!(sql_page(sql, 7, 10), None);
+    }
+
+    #[test]
+    fn sql_window_keeps_the_focus_within_the_limit_on_character_boundaries() {
+        assert_eq!(sql_window("SELECT 1", &(3..3), 64), 0..8);
+        let sql = "é".repeat(100);
+        // The window centers on the caret and does not split a character.
+        let window = sql_window(&sql, &(100..100), 21);
+        assert_eq!(window, 90..110);
+        assert!(sql.is_char_boundary(window.start) && sql.is_char_boundary(window.end));
+        // Near an end, the window uses the whole limit.
+        assert_eq!(sql_window(&sql, &(0..0), 20), 0..20);
+        assert_eq!(sql_window(&sql, &(200..200), 20), 180..200);
+        // A selection longer than the limit shows its start.
+        assert_eq!(sql_window(&sql, &(40..160), 20), 40..60);
+        // A stale focus past the end shows the end.
+        assert_eq!(sql_window(&sql, &(500..600), 20), 180..200);
     }
 }

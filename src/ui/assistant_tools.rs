@@ -8,8 +8,8 @@ use crate::assistant::{
     ToolCall, ToolResult,
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
-        MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker, bound_rows_after,
-        bound_text, context_statement_ranges, preview_rows,
+        MAX_SQL_PAGE_BYTES, MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker,
+        bound_rows_after, bound_text, context_statement_ranges, preview_rows, sql_page,
     },
     service::Command as AssistantCommand,
 };
@@ -59,6 +59,20 @@ struct VersionInput {
 struct TabInput {
     version: u32,
     tab_id: Uuid,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SqlPageInput {
+    version: u32,
+    tab_id: Uuid,
+    /// The byte offset of the first byte to read. The default is 0.
+    #[serde(default)]
+    offset: usize,
+    /// The largest number of bytes to read. The default and maximum is
+    /// `MAX_SQL_PAGE_BYTES`.
+    #[serde(default)]
+    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -354,7 +368,7 @@ impl Qrow {
     }
 
     fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
-        let mut args: TabInput = parse(call.arguments.clone())?;
+        let mut args: SqlPageInput = parse(call.arguments.clone())?;
         version(args.version)?;
         args.tab_id = self.tool_tab_id(call, args.tab_id);
         let tab = self
@@ -371,12 +385,33 @@ impl Qrow {
         if sql.len() > MAX_SQL_BYTES {
             return Err(failure("limit_reached", "The SQL text is too large."));
         }
-        let (statement_ranges, statement_ranges_truncated) = context_statement_ranges(&sql);
-        Ok(success(
-            json!({"version": 1, "tab_id": args.tab_id, "connection_id": tab.saved.profile,
-            "editor_revision": tab.revision, "sql": sql, "statement_ranges": statement_ranges,
-            "statement_ranges_truncated": statement_ranges_truncated}),
-        ))
+        let mut limit = args
+            .limit
+            .unwrap_or(MAX_SQL_PAGE_BYTES)
+            .clamp(1, MAX_SQL_PAGE_BYTES);
+        loop {
+            let page = sql_page(&sql, args.offset, limit).ok_or_else(|| {
+                failure(
+                    "invalid_arguments",
+                    "The offset is past the end of the SQL or inside a character. Use 0 or next_offset.",
+                )
+            })?;
+            let (statement_ranges, statement_ranges_truncated) =
+                context_statement_ranges(&sql, &page);
+            let next_offset = (page.end < sql.len()).then_some(page.end);
+            let value = json!({"version": 1, "tab_id": args.tab_id,
+                "connection_id": tab.saved.profile, "editor_revision": tab.revision,
+                "sql": &sql[page.clone()], "sql_offset": page.start, "sql_bytes": sql.len(),
+                "next_offset": next_offset, "statement_ranges": statement_ranges,
+                "statement_ranges_truncated": statement_ranges_truncated});
+            // Escaped characters make the JSON of a page larger than its SQL.
+            let fits =
+                serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= MAX_TOOL_OUTPUT_BYTES);
+            if fits || sql[page.clone()].chars().nth(1).is_none() {
+                return Ok(success(value));
+            }
+            limit = page.len() / 2;
+        }
     }
 
     fn tool_edit(

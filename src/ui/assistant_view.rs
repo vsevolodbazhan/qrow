@@ -1,11 +1,12 @@
 use super::*;
 use crate::{
     assistant::{
-        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, TitleRequest, ToolCall,
-        TurnRequest, WORKSPACE_CONTEXT_SEPARATOR,
+        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, MAX_MESSAGE_BYTES, TitleRequest,
+        ToolCall, TurnRequest,
         broker::{
-            ActionTarget, ConnectionContext, ConnectionState, QueryState, ResultSummary,
-            SelectedTabContext, TabSummary, WorkspaceContext, bound_text, context_statement_ranges,
+            ActionTarget, ConnectionContext, ConnectionState, MAX_CONTEXT_SQL_BYTES, QueryState,
+            ResultSummary, SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
+            context_statement_ranges, sql_window,
         },
         history_item_text,
         service::{
@@ -181,6 +182,7 @@ impl SignIn {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::assistant::WORKSPACE_CONTEXT_SEPARATOR;
 
     #[::core::prelude::v1::test]
     fn sign_in_failures_apply_only_to_the_sign_in_on_screen() {
@@ -628,6 +630,9 @@ pub(super) struct ThreadRun {
     pub pending_query: Option<PendingQuery>,
     pub unread: Option<Unread>,
     pub loading_older: bool,
+    /// The texts of the sent messages that Codex has not started or steered
+    /// yet, oldest first. A failed send puts its text back in the message field.
+    pub sent_messages: VecDeque<String>,
 }
 
 /// The conversation state that the thread list, the tab strip, and the
@@ -1192,6 +1197,7 @@ impl Qrow {
             run.target = None;
             run.pending_query = None;
             run.loading_older = false;
+            run.sent_messages.clear();
         }
         self.assistant_panel.loaded_threads.clear();
         self.assistant_panel.pending_titles.clear();
@@ -1206,27 +1212,67 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = ComposerTarget::Tab(first.tab_id);
+        self.restore_draft(ComposerTarget::Tab(first.tab_id), first.text, window, cx);
+        self.assistant_panel
+            .draft_modes
+            .insert(first.tab_id, first.mode);
+    }
+
+    /// Puts the text of a message that Codex did not take before the draft
+    /// of `target`.
+    fn restore_draft(
+        &mut self,
+        target: ComposerTarget,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.assistant_panel.composer_target.as_ref() == Some(&target) {
             let current = self.assistant_panel.composer.read(cx).value().to_string();
             let text = if current.is_empty() {
-                first.text
+                text
             } else {
-                format!("{}\n{current}", first.text)
+                format!("{text}\n{current}")
             };
             self.assistant_panel
                 .composer
                 .update(cx, |composer, cx| composer.set_value(text, window, cx));
         } else {
             let text = match self.assistant_panel.drafts.remove(&target) {
-                Some(draft) if !draft.is_empty() => format!("{}\n{draft}", first.text),
-                _ => first.text,
+                Some(draft) if !draft.is_empty() => format!("{text}\n{draft}"),
+                _ => text,
             };
             self.assistant_panel.drafts.insert(target, text);
         }
-        self.assistant_panel
-            .draft_modes
-            .insert(first.tab_id, first.mode);
+    }
+
+    /// Puts the oldest sent message of a conversation back in its message
+    /// field after Codex rejects it.
+    fn restore_sent_message(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.thread_run_mut(thread_id).sent_messages.pop_front() else {
+            return;
+        };
+        if let Some(entries) = self.assistant_panel.transcripts.get_mut(thread_id)
+            && let Some(position) = entries
+                .iter()
+                .rposition(|entry| entry.speaker == Speaker::User && entry.text == text)
+        {
+            entries.remove(position);
+        }
+        let target = match self
+            .assistant
+            .conversation(thread_id)
+            .and_then(|conversation| conversation.tab_id)
+        {
+            Some(tab) => ComposerTarget::Tab(tab),
+            None => ComposerTarget::Detached(thread_id.to_owned()),
+        };
+        self.restore_draft(target, text, window, cx);
     }
 
     fn load_older_assistant_messages(&mut self, cx: &mut Context<Self>) {
@@ -2035,6 +2081,15 @@ impl Qrow {
         if text.trim().is_empty() {
             return;
         }
+        if text.len() > MAX_MESSAGE_BYTES {
+            // The message stays in the message field, so you can make it shorter.
+            self.assistant_panel.notice = Some(AssistantNotice::warning(format!(
+                "The message is too large. The limit is {} KB.",
+                MAX_MESSAGE_BYTES / 1024
+            )));
+            cx.notify();
+            return;
+        }
         if let Some(thread_id) = self.displayed_thread() {
             let sent = if self.assistant_panel.browsed_thread.as_deref() == Some(thread_id.as_str())
             {
@@ -2143,7 +2198,8 @@ impl Qrow {
             AssistantCommand::Steer {
                 thread_id: thread_id.to_owned(),
                 turn_id,
-                text: format!("{text}{WORKSPACE_CONTEXT_SEPARATOR}{context}"),
+                text: text.clone(),
+                context,
             }
         } else {
             AssistantCommand::Start(TurnRequest {
@@ -2162,6 +2218,7 @@ impl Qrow {
         run.target = new_target;
         run.unread = None;
         run.pending_reply = true;
+        run.sent_messages.push_back(text.clone());
         let replaced = run
             .pending_query
             .as_ref()
@@ -2268,11 +2325,18 @@ impl Qrow {
                 .output
                 .latest_error()
                 .map(|entry| bound_text(&entry.text).0);
-            let sql = tab.input.read(cx).value().to_string();
-            let (statement_ranges, statement_ranges_truncated) = context_statement_ranges(&sql);
+            let value = tab.input.read(cx).value();
+            let sql: &str = &value;
+            // A long tab sends only the part around the selection.
+            let part = sql_window(sql, &selection, MAX_CONTEXT_SQL_BYTES);
+            let (statement_ranges, statement_ranges_truncated) =
+                context_statement_ranges(sql, &part);
             SelectedTabContext {
                 tab: tabs[index].clone(),
-                sql,
+                sql: sql[part.clone()].to_owned(),
+                sql_offset: part.start,
+                sql_bytes: sql.len(),
+                sql_truncated: part.len() < sql.len(),
                 selected_range: (!selection.is_empty()).then_some(selection),
                 statement_ranges,
                 statement_ranges_truncated,
@@ -2464,7 +2528,11 @@ impl Qrow {
                     .or_default()
                     .splice(0..0, older);
             }
+            AssistantServiceEvent::Steered(thread_id) => {
+                self.thread_run_mut(&thread_id).sent_messages.pop_front();
+            }
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
+                self.thread_run_mut(&thread_id).sent_messages.pop_front();
                 if let Some(entry) =
                     self.assistant_panel
                         .transcripts
@@ -2769,6 +2837,11 @@ impl Qrow {
                             self.assistant_panel.loaded_cursors.remove(thread);
                         }
                     }
+                }
+                if let Some(thread) = id.as_ref()
+                    && matches!(operation, Operation::Start | Operation::Steer)
+                {
+                    self.restore_sent_message(thread, window, cx);
                 }
                 if let Some(thread) = id.as_ref() {
                     let run = self.thread_run_mut(thread);
@@ -3408,18 +3481,27 @@ impl Qrow {
                     )
             )
             .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
-                let alert = match notice {
+                let (alert, message) = match notice {
                     AssistantNotice::Info(message) => {
-                        Alert::info("assistant-notice", message.clone())
+                        (Alert::info("assistant-notice", message.clone()), message)
                     }
                     AssistantNotice::Warning(message) => {
-                        Alert::warning("assistant-notice", message.clone())
+                        (Alert::warning("assistant-notice", message.clone()), message)
                     }
                     AssistantNotice::Error(message) => {
-                        Alert::error("assistant-notice", message.clone())
+                        (Alert::error("assistant-notice", message.clone()), message)
                     }
                 };
-                panel.child(div().px_3().py_1().child(alert.small()))
+                panel.child(
+                    div()
+                        .id("assistant-notice-accessibility")
+                        .test_support()
+                        .role(Role::Alert)
+                        .aria_label(message.clone())
+                        .px_3()
+                        .py_1()
+                        .child(alert.small()),
+                )
             })
             .when(signed_out, |panel| panel.child(
                 div()
