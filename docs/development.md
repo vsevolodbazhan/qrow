@@ -230,8 +230,10 @@ sh scripts/generate/thrift.sh
 
 The [generation script](../scripts/generate/thrift.sh) uses the
 [vendored interface](../vendor/TCLIService.thrift) and applies corrections to the
-Rust generator output. Change the interface and script when needed. Do not make
-binding edits that cannot be reproduced by generation.
+Rust generator output. It also removes the server processor, because Qrow is
+only a client. Thus Qrow uses the `thrift` crate without its default `server`
+feature. Change the interface and script when needed. Do not make binding edits
+that cannot be reproduced by generation.
 
 ## Probe an existing connection
 
