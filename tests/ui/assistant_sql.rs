@@ -152,3 +152,17 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
         );
     });
 }
+
+#[gpui_kit::test]
+fn a_long_tab_sends_a_bounded_part_and_the_assistant_reads_the_rest(cx: &mut TestAppContext) {
+    // 4,000 statements of 14 bytes: longer than the 32 KB part in the context.
+    let sql: String = (0..4000).map(|n| format!("SELECT {n:05};\n")).collect();
+    let (app, _codex) = launch(cx, &sql, |_| {});
+    app.open_assistant(cx);
+    app.send(cx, "Report the tab SQL window");
+    app.wait_reply(cx, ", 32768 of 56000 bytes, truncated True");
+    app.wait_idle(cx);
+    // read_tab_sql returns the SQL in parts of at most 32 KB.
+    app.send(cx, "Read the tab SQL in pages");
+    app.wait_reply(cx, "Read 56000 of 56000 bytes in 2 pages.");
+}

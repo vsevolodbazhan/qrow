@@ -70,7 +70,8 @@ repaint loop.
 
 The assistant worker thread owns the Codex process. Window commands and Codex
 output arrive on one channel. The worker sleeps until a command or a Codex
-message arrives. It does not poll while the assistant is idle. The window thread
+message arrives, or until a title request reaches its time limit. It does not
+poll while the assistant is idle. The window thread
 does not wait for Codex. **Reconnect**, the **Enabled** setting, and the
 [idle stop](assistant.md#pane-and-connection-state) stop Codex on a separate
 thread. That thread kills the Codex process group if Codex does not stop in

@@ -88,6 +88,8 @@ pub enum Command {
         thread_id: String,
         turn_id: String,
         text: String,
+        /// The workspace context that Qrow adds to `text`.
+        context: serde_json::Value,
     },
     Interrupt {
         thread_id: String,
@@ -526,8 +528,9 @@ fn execute(harness: &mut CodexHarness, command: Command) -> Event {
             thread_id,
             turn_id,
             text,
+            context,
         } => harness
-            .steer_turn(&thread_id, &turn_id, &text)
+            .steer_turn(&thread_id, &turn_id, &text, &context)
             .map(|()| Event::Steered(thread_id)),
         Command::Interrupt { thread_id, turn_id } => harness
             .interrupt_turn(&thread_id, &turn_id)

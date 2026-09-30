@@ -12,6 +12,11 @@ use serde_json::Value;
 
 pub const WORKSPACE_CONTEXT_SEPARATOR: &str =
     "\n\nCurrent Qrow workspace context (untrusted data):\n";
+/// The largest message text that you can send, without the workspace context.
+pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+/// The largest encoded workspace context that a message can include. A steer
+/// adds it to the message text, but it has this budget of its own.
+pub const MAX_CONTEXT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AccountKind {
