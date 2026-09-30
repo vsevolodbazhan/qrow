@@ -25,6 +25,9 @@ const EVENT_CAPACITY: usize = 1_024;
 const EVENT_POLL: Duration = Duration::from_millis(50);
 /// Codex is silent while it waits for a tool result, so a short poll sends the answer sooner.
 const TOOL_ANSWER_POLL: Duration = Duration::from_millis(5);
+/// The only `AssistantEvent::Other` methods that the assistant panel reads.
+/// The worker drops other notifications so that they do not wake the window.
+const UI_NOTIFICATIONS: [&str; 2] = ["account/login/completed", "account/updated"];
 
 /// The tool calls of each thread's current turn. Codex sends a call again
 /// that waits for its answer when a client resumes the thread. Qrow runs each
@@ -318,6 +321,11 @@ impl Service {
                                 AssistantEvent::ToolCall(call) if !tool_calls.receive(call) => {
                                     continue;
                                 }
+                                AssistantEvent::Other { method, .. }
+                                    if !UI_NOTIFICATIONS.contains(&method.as_str()) =>
+                                {
+                                    continue;
+                                }
                                 AssistantEvent::TurnCompleted { thread_id, .. } => {
                                     tool_calls.end_turn(thread_id);
                                 }
@@ -591,6 +599,52 @@ done
                 .shutdown_and_delete(vec!["thread-2".into()], Duration::from_millis(1))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn only_notifications_that_the_ui_reads_reach_the_event_channel() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fake-codex");
+        crate::assistant::write_test_executable(
+            &executable,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"account/read"'*) printf '{"id":%s,"result":{"account":null,"requiresOpenaiAuth":true}}\n' "$id" ;;
+    *'"method":"model/list"'*)
+      printf '%s\n' '{"method":"account/rateLimits/updated","params":{}}'
+      printf '%s\n' '{"method":"account/login/completed","params":{"loginId":"login-1","success":true}}'
+      printf '%s\n' '{"method":"mcpServer/startupStatus/updated","params":{}}'
+      printf '%s\n' '{"method":"account/updated","params":{"authMode":"chatgpt"}}'
+      printf '%s\n' '{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":null}}'
+      printf '%s\n' '{"method":"thread/name/updated","params":{"threadId":"thread-1","threadName":"Orders"}}'
+      printf '{"id":%s,"result":{"data":[],"nextCursor":null}}\n' "$id" ;;
+  esac
+done
+"#,
+        );
+        let mut service = Service::launch(executable, Arc::new(|| {})).unwrap();
+        assert!(matches!(
+            service.events.recv_timeout(EVENT_TIMEOUT).unwrap(),
+            Event::Ready(_)
+        ));
+        let mut methods = Vec::new();
+        // The title change is the last message, so every earlier notification
+        // was either sent or dropped when it arrives.
+        loop {
+            match service.events.recv_timeout(EVENT_TIMEOUT).unwrap() {
+                Event::Harness(AssistantEvent::Other { method, .. }) => methods.push(method),
+                Event::Harness(AssistantEvent::TitleChanged { title, .. }) => {
+                    assert_eq!(title, "Orders");
+                    break;
+                }
+                event => panic!("unexpected event: {event:?}"),
+            }
+        }
+        assert_eq!(methods, UI_NOTIFICATIONS);
+        service.shutdown_and_wait(Duration::from_secs(3)).unwrap();
     }
 
     #[test]
