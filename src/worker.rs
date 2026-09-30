@@ -548,24 +548,6 @@ impl Runner {
             self.rows += count;
             self.bytes += bytes;
             self.emit(Event::Rows(batch.rows));
-            if !batch.more {
-                self.session.as_mut().unwrap().close_operation()?;
-                *self.target.lock().unwrap() = None;
-                self.fetch_completed(FetchSummary {
-                    execution_id,
-                    started: fetch_started,
-                    page,
-                    start_row,
-                    fetched,
-                    more: false,
-                    limited: false,
-                });
-                self.emit(Event::Ready {
-                    more: false,
-                    limited: false,
-                });
-                return Ok(());
-            }
         }
         self.fetch_completed(FetchSummary {
             execution_id,

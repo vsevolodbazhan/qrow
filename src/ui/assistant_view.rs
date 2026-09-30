@@ -34,7 +34,6 @@ use gpui_kit::component::{
     input::{Textarea, TextareaState},
     menu::DropdownMenu,
     message::{Message, MessageAlignment, MessageContent},
-    select::{SearchableVec, SelectEvent, SelectState},
     shimmer::ShimmerText,
     spinner::Spinner,
     text::{TextView, TextViewStyle},
@@ -780,11 +779,6 @@ pub(super) struct AssistantPanelState {
     thread_list_override: Option<bool>,
     /// A closed conversation shown without opening a query tab.
     browsed_thread: Option<String>,
-    mode_select: Entity<SelectState<SearchableVec<String>>>,
-    model_select: Entity<SelectState<SearchableVec<String>>>,
-    reasoning_select: Entity<SelectState<SearchableVec<String>>>,
-    tier_select: Entity<SelectState<SearchableVec<String>>>,
-    _select_subscriptions: Vec<Subscription>,
     pub transcripts: BTreeMap<String, Vec<TranscriptEntry>>,
     pub older_cursors: BTreeMap<String, String>,
     pub loaded_cursors: BTreeMap<String, BTreeSet<String>>,
@@ -845,63 +839,6 @@ impl AssistantPanelState {
                     cx.notify();
                 }
             });
-        let mut make_select = |cx: &mut Context<Qrow>| {
-            cx.new(|cx| SelectState::new(SearchableVec::new(vec![]), None, window, cx))
-        };
-        let model_select = make_select(cx);
-        let reasoning_select = make_select(cx);
-        let tier_select = make_select(cx);
-        let mode_select = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(vec!["Ask".to_owned(), "Run".to_owned()]),
-                Some(gpui_kit::component::IndexPath::default().row(0)),
-                window,
-                cx,
-            )
-        });
-        let select_subscriptions = vec![
-            cx.subscribe_in(
-                &mode_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        let automatic =
-                            this.displayed_mode() == AssistantExecutionMode::RunAutomatically;
-                        if (label == "Run") != automatic {
-                            this.toggle_assistant_mode(window, cx);
-                            this.sync_assistant_selectors(window, cx);
-                        }
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &model_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_model(label, window, cx);
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &reasoning_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_reasoning(label, window, cx);
-                    }
-                },
-            ),
-            cx.subscribe_in(
-                &tier_select,
-                window,
-                |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
-                    if let SelectEvent::Confirm(Some(label)) = event {
-                        this.select_assistant_tier(label, window, cx);
-                    }
-                },
-            ),
-        ];
         Self {
             open: false,
             status: Status::Idle,
@@ -913,11 +850,6 @@ impl AssistantPanelState {
             _thread_search_subscription: thread_search_subscription,
             thread_list_override: None,
             browsed_thread: None,
-            mode_select,
-            model_select,
-            reasoning_select,
-            tier_select,
-            _select_subscriptions: select_subscriptions,
             transcripts: BTreeMap::new(),
             older_cursors: BTreeMap::new(),
             loaded_cursors: BTreeMap::new(),
@@ -1131,7 +1063,6 @@ impl Qrow {
             }
             self.load_assistant_thread(&thread, cx);
         }
-        self.sync_assistant_selectors(window, cx);
     }
 
     /// Keeps an unsent message with the tab or closed conversation that owns it.
@@ -1520,19 +1451,8 @@ impl Qrow {
         }
     }
 
-    fn sync_assistant_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mode_index = self.displayed_mode() == AssistantExecutionMode::RunAutomatically;
-        self.assistant_panel.mode_select.update(cx, |state, cx| {
-            state.set_selected_value(
-                &if mode_index {
-                    "Run".to_owned()
-                } else {
-                    "Ask".to_owned()
-                },
-                window,
-                cx,
-            );
-        });
+    /// Replaces saved assistant settings that the Codex snapshot does not offer.
+    fn reconcile_assistant_settings(&mut self, cx: &mut Context<Self>) {
         let Some(snapshot) = self.assistant_panel.snapshot.clone() else {
             return;
         };
@@ -1569,17 +1489,6 @@ impl Qrow {
             .as_deref()
             .and_then(|id| models.iter().find(|model| model.id() == id))
             .or(default_model);
-        let model_labels: Vec<_> = models
-            .iter()
-            .map(|model| model.display_name().to_owned())
-            .collect();
-        let selected_model_label = model.map(|model| model.display_name().to_owned());
-        self.assistant_panel.model_select.update(cx, |state, cx| {
-            state.set_items(SearchableVec::new(model_labels), window, cx);
-            if let Some(label) = selected_model_label {
-                state.set_selected_value(&label, window, cx);
-            }
-        });
         let efforts = model.map(|model| model.reasoning_efforts()).unwrap_or(&[]);
         if self
             .settings
@@ -1594,27 +1503,6 @@ impl Qrow {
             ));
             self.changed(cx);
         }
-        let effort_labels: Vec<_> = efforts
-            .iter()
-            .map(|effort| reasoning_effort_label(effort.id()))
-            .collect();
-        let selected_effort = self
-            .settings
-            .assistant
-            .reasoning_effort
-            .as_deref()
-            .or_else(|| model.map(|model| model.default_reasoning_effort()))
-            .and_then(|id| efforts.iter().find(|effort| effort.id() == id))
-            .or_else(|| efforts.first())
-            .map(|effort| reasoning_effort_label(effort.id()));
-        self.assistant_panel
-            .reasoning_select
-            .update(cx, |state, cx| {
-                state.set_items(SearchableVec::new(effort_labels), window, cx);
-                if let Some(selected) = selected_effort {
-                    state.set_selected_value(&selected, window, cx);
-                }
-            });
         let tiers = model.map(|model| model.service_tiers()).unwrap_or(&[]);
         if self
             .settings
@@ -1629,20 +1517,6 @@ impl Qrow {
             ));
             self.changed(cx);
         }
-        let mut tier_labels = vec!["Default".to_owned()];
-        tier_labels.extend(tiers.iter().map(|tier| tier.name().to_owned()));
-        let selected_tier = self
-            .settings
-            .assistant
-            .service_tier
-            .as_ref()
-            .and_then(|id| tiers.iter().find(|tier| tier.id() == id))
-            .map(|tier| tier.name().to_owned())
-            .unwrap_or_else(|| "Default".to_owned());
-        self.assistant_panel.tier_select.update(cx, |state, cx| {
-            state.set_items(SearchableVec::new(tier_labels), window, cx);
-            state.set_selected_value(&selected_tier, window, cx);
-        });
     }
 
     /// Shows a conversation. A closed conversation stays detached until its
@@ -1663,7 +1537,6 @@ impl Qrow {
                 self.thread_run_mut(id).unread = None;
             }
             self.load_assistant_thread(id, cx);
-            self.sync_assistant_selectors(window, cx);
         }
         self.assistant_panel.thread_list_override =
             thread_list_after_selection(self.assistant_panel.thread_list_override);
@@ -1672,7 +1545,7 @@ impl Qrow {
         self.changed(cx);
     }
 
-    fn select_assistant_model(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_assistant_model(&mut self, label: &str, cx: &mut Context<Self>) {
         let Some(model_id) = self
             .assistant_panel
             .snapshot
@@ -1690,16 +1563,10 @@ impl Qrow {
         self.settings.assistant.model = Some(model_id);
         self.settings.assistant.reasoning_effort = None;
         self.settings.assistant.service_tier = None;
-        self.sync_assistant_selectors(window, cx);
         self.changed(cx);
     }
 
-    fn select_assistant_reasoning(
-        &mut self,
-        label: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_assistant_reasoning(&mut self, label: &str, cx: &mut Context<Self>) {
         self.settings.assistant.reasoning_effort = self
             .assistant_panel
             .snapshot
@@ -1720,11 +1587,10 @@ impl Qrow {
                     .find(|effort| reasoning_effort_label(effort.id()) == label)
             })
             .map(|effort| effort.id().to_owned());
-        self.sync_assistant_selectors(window, cx);
         self.changed(cx);
     }
 
-    fn select_assistant_tier(&mut self, label: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_assistant_tier(&mut self, label: &str, cx: &mut Context<Self>) {
         let tier = if label == "Default" {
             None
         } else {
@@ -1748,7 +1614,6 @@ impl Qrow {
             Some(tier)
         };
         self.settings.assistant.service_tier = tier;
-        self.sync_assistant_selectors(window, cx);
         self.changed(cx);
     }
     pub(super) fn toggle_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1856,7 +1721,6 @@ impl Qrow {
                         .on_click(move |_, window, cx| {
                             let _ = confirm.update(cx, |this, cx| {
                                 this.set_mode(&target, AssistantExecutionMode::RunAutomatically, cx);
-                                this.sync_assistant_selectors(window, cx);
                             });
                             window.close_dialog(cx);
                         })))
@@ -2352,7 +2216,6 @@ impl Qrow {
         &mut self,
         snapshot: HarnessSnapshot,
         initial: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.assistant_panel.status = if matches!(
@@ -2367,7 +2230,7 @@ impl Qrow {
             self.assistant_panel.sign_in = SignIn::Idle;
         }
         self.assistant_panel.snapshot = Some(snapshot);
-        self.sync_assistant_selectors(window, cx);
+        self.reconcile_assistant_settings(cx);
         if initial {
             // A new Codex process cannot resume conversations without a turn.
             let unstarted = std::mem::take(&mut self.assistant_panel.unstarted_threads);
@@ -2376,7 +2239,6 @@ impl Qrow {
                 self.assistant_panel
                     .transcripts
                     .retain(|thread, _| !unstarted.contains(thread));
-                self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
             }
         }
@@ -2396,10 +2258,10 @@ impl Qrow {
     ) {
         match event {
             AssistantServiceEvent::Ready(snapshot) => {
-                self.update_assistant_snapshot(snapshot, true, window, cx)
+                self.update_assistant_snapshot(snapshot, true, cx)
             }
             AssistantServiceEvent::Snapshot(snapshot) => {
-                self.update_assistant_snapshot(snapshot, false, window, cx)
+                self.update_assistant_snapshot(snapshot, false, cx)
             }
             AssistantServiceEvent::Created(conversation) => {
                 // Codex creates conversations in the order of the requests.
@@ -2429,7 +2291,6 @@ impl Qrow {
                 if self.displayed_thread().as_deref() == Some(id.as_str()) {
                     self.scroll_assistant_to_bottom(window, cx);
                 }
-                self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
             }
             AssistantServiceEvent::Resumed(conversation) => {
@@ -2606,7 +2467,6 @@ impl Qrow {
                     let mut conversation = self.assistant.conversations.remove(position);
                     conversation.last_activity = unix_now_seconds();
                     self.assistant.conversations.insert(0, conversation);
-                    self.sync_assistant_selectors(window, cx);
                     self.changed(cx);
                 }
                 if let Some(error) = error {
@@ -2638,7 +2498,6 @@ impl Qrow {
                     }
                     self.changed(cx);
                 }
-                self.sync_assistant_selectors(window, cx);
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
                 self.assistant_panel.pending_titles.remove(&thread_id);
@@ -2696,7 +2555,6 @@ impl Qrow {
                     if let Some(tab_id) = tab_to_name {
                         self.name_assistant_tab(tab_id, &title);
                     }
-                    self.sync_assistant_selectors(window, cx);
                     self.changed(cx);
                 }
             }
@@ -2725,7 +2583,6 @@ impl Qrow {
                 self.assistant_panel.pending_titles.remove(&id);
                 self.assistant_panel.title_history_reads.remove(&id);
                 // The tab stays open without a conversation.
-                self.sync_assistant_selectors(window, cx);
                 self.changed(cx);
             }
             AssistantServiceEvent::Disconnected(error) => {
@@ -3257,26 +3114,33 @@ impl Qrow {
                 .or_else(|| snapshot.models().iter().find(|model| model.is_default()))
                 .or_else(|| snapshot.models().first())
         });
-        let model_label = self
-            .assistant_panel
-            .model_select
-            .read(cx)
-            .selected_value()
-            .cloned()
+        let model_label = model
+            .map(|model| model.display_name().to_owned())
             .unwrap_or_default();
-        let reasoning_label = self
-            .assistant_panel
-            .reasoning_select
-            .read(cx)
-            .selected_value()
-            .cloned()
+        let reasoning_label = model
+            .and_then(|model| {
+                let efforts = model.reasoning_efforts();
+                let find = |id: &str| efforts.iter().find(|effort| effort.id() == id);
+                self.settings
+                    .assistant
+                    .reasoning_effort
+                    .as_deref()
+                    .and_then(find)
+                    .or_else(|| find(model.default_reasoning_effort()))
+                    .or_else(|| efforts.first())
+            })
+            .map(|effort| reasoning_effort_label(effort.id()))
             .unwrap_or_default();
-        let tier_label = self
-            .assistant_panel
-            .tier_select
-            .read(cx)
-            .selected_value()
-            .cloned()
+        let tier_label = model
+            .map(|model| {
+                self.settings
+                    .assistant
+                    .service_tier
+                    .as_deref()
+                    .and_then(|id| model.service_tiers().iter().find(|tier| tier.id() == id))
+                    .map_or("Default", |tier| tier.name())
+                    .to_owned()
+            })
             .unwrap_or_default();
         // Names a composer control with its value. Codex supplies the values,
         // so the controls wait for Codex before they show one.
@@ -3693,9 +3557,9 @@ impl Qrow {
                                                     let label = label.clone();
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
-                                                        move |_, window, cx| {
+                                                        move |_, _, cx| {
                                                             assistant_entity.update(cx, |this, cx| {
-                                                                this.select_assistant_model(&label, window, cx);
+                                                                this.select_assistant_model(&label, cx);
                                                             });
                                                         },
                                                     ))
@@ -3715,9 +3579,9 @@ impl Qrow {
                                                     let label = label.clone();
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
-                                                        move |_, window, cx| {
+                                                        move |_, _, cx| {
                                                             assistant_entity.update(cx, |this, cx| {
-                                                                this.select_assistant_reasoning(&label, window, cx);
+                                                                this.select_assistant_reasoning(&label, cx);
                                                             });
                                                         },
                                                     ))
@@ -3737,9 +3601,9 @@ impl Qrow {
                                                     let label = label.clone();
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
-                                                        move |_, window, cx| {
+                                                        move |_, _, cx| {
                                                             assistant_entity.update(cx, |this, cx| {
-                                                                this.select_assistant_tier(&label, window, cx);
+                                                                this.select_assistant_tier(&label, cx);
                                                             });
                                                         },
                                                     ))

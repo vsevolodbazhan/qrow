@@ -25,32 +25,22 @@ pub enum AccountKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountStatus {
     kind: AccountKind,
-    requires_openai_auth: bool,
 }
 
 impl AccountStatus {
     pub fn kind(&self) -> &AccountKind {
         &self.kind
     }
-
-    pub fn requires_openai_auth(&self) -> bool {
-        self.requires_openai_auth
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReasoningEffort {
     id: String,
-    description: String,
 }
 
 impl ReasoningEffort {
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    pub fn description(&self) -> &str {
-        &self.description
     }
 }
 
@@ -58,7 +48,6 @@ impl ReasoningEffort {
 pub struct ServiceTier {
     id: String,
     name: String,
-    description: String,
 }
 
 impl ServiceTier {
@@ -69,21 +58,15 @@ impl ServiceTier {
     pub fn name(&self) -> &str {
         &self.name
     }
-
-    pub fn description(&self) -> &str {
-        &self.description
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Model {
     id: String,
     display_name: String,
-    description: String,
     is_default: bool,
     default_reasoning_effort: String,
     reasoning_efforts: Vec<ReasoningEffort>,
-    default_service_tier: Option<String>,
     service_tiers: Vec<ServiceTier>,
 }
 
@@ -96,10 +79,6 @@ impl Model {
         &self.display_name
     }
 
-    pub fn description(&self) -> &str {
-        &self.description
-    }
-
     pub fn is_default(&self) -> bool {
         self.is_default
     }
@@ -110,10 +89,6 @@ impl Model {
 
     pub fn reasoning_efforts(&self) -> &[ReasoningEffort] {
         &self.reasoning_efforts
-    }
-
-    pub fn default_service_tier(&self) -> Option<&str> {
-        self.default_service_tier.as_deref()
     }
 
     pub fn service_tiers(&self) -> &[ServiceTier] {

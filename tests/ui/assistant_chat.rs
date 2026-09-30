@@ -87,6 +87,43 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(Workspace::default());
+    workspace.settings.assistant.service_tier = Some("retired".into());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    // Codex no longer offers the saved tier, so its default replaces it.
+    app.update(cx, |window, _| {
+        for (id, expected) in [
+            ("assistant-model", "Model: Synthetic Model"),
+            ("assistant-reasoning", "Reasoning: Medium"),
+            ("assistant-tier", "Service tier: Default"),
+        ] {
+            assert_eq!(label(window, id).as_deref(), Some(expected));
+        }
+    });
+    app.wait_until(cx, "the replaced tier", Duration::from_secs(10), |_, _| {
+        let saved = app.saved().settings.assistant;
+        saved.model.as_deref() == Some("synthetic-model") && saved.service_tier.is_none()
+    });
+    app.click(cx, "assistant-tier");
+    app.choose(cx, "popup-menu", "Fast");
+    app.wait_until(cx, "the Fast tier", Duration::from_secs(10), |window, _| {
+        label(window, "assistant-tier").as_deref() == Some("Service tier: Fast")
+    });
+    app.wait_until(cx, "the saved tier", Duration::from_secs(10), |_, _| {
+        app.saved().settings.assistant.service_tier.as_deref() == Some("fast")
+    });
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "assistant-model").as_deref(),
+            Some("Model: Synthetic Model")
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
     let (app, codex) = launch(cx, Workspace::default());
     app.open_assistant(cx);
