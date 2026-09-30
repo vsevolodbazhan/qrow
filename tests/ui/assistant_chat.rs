@@ -1,5 +1,5 @@
 //! Assistant chat in the docked pane, with the synthetic Codex server.
-use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text};
+use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, composer_text, jump_to_latest};
 use crate::support::{
     MemoryCredentials, TestApp, bounds_of, label, labelled, labels, offline_profile, present,
 };
@@ -237,9 +237,7 @@ fn the_append_tool_writes_sql_and_undo_removes_it_in_one_step(cx: &mut TestAppCo
 }
 
 fn jump_visible(app: &TestApp, cx: &mut TestAppContext) -> bool {
-    app.update(cx, |window, _| {
-        window.try_find("assistant-jump-latest").is_some()
-    })
+    app.update(cx, |window, _| window.try_find(jump_to_latest()).is_some())
 }
 
 fn scroll_transcript(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
@@ -262,20 +260,20 @@ fn the_transcript_jumps_to_the_latest_message(cx: &mut TestAppContext) {
     app.wait_idle(cx);
     assert!(!jump_visible(&app, cx));
     scroll_transcript(&app, cx, 1200.);
-    app.wait_for(cx, "assistant-jump-latest");
-    app.click(cx, "assistant-jump-latest");
-    app.wait_gone(cx, "assistant-jump-latest");
+    app.wait_for(cx, jump_to_latest());
+    app.click(cx, jump_to_latest());
+    app.wait_gone(cx, jump_to_latest());
 
     // A new message returns to the end of the transcript.
     scroll_transcript(&app, cx, 1200.);
-    app.wait_for(cx, "assistant-jump-latest");
+    app.wait_for(cx, jump_to_latest());
     app.send(cx, "Return to the latest message");
     app.wait_for(cx, "assistant-working");
     codex.mark("latest-release");
     app.wait_idle(cx);
     // Only this reply has this text in the conversation.
     app.wait_reply(cx, "I can help with this query");
-    app.wait_gone(cx, "assistant-jump-latest");
+    app.wait_gone(cx, jump_to_latest());
 
     app.dispatch(cx, ToggleAssistant);
     app.wait_gone(cx, "assistant-toggle-threads");

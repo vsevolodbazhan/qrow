@@ -56,7 +56,7 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
         if position != nil && size != nil { break }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
     } while clock.now < deadline
-    guard let position, let size else { throw Failure("Element has no bounds") }
+    guard let position, let size else { throw Failure("Element has no bounds: \(strings(element))") }
     var point = CGPoint.zero
     var extent = CGSize.zero
     try require(CFGetTypeID(position) == AXValueGetTypeID() && CFGetTypeID(size) == AXValueGetTypeID(), "Invalid element bounds")

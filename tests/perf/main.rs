@@ -4,7 +4,9 @@
 mod support;
 
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{InputEvent as _, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px};
+use gpui_kit::{
+    InputEvent as _, Keystroke, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
+};
 use qrow::model::{SavedTab, Workspace};
 use std::time::Instant;
 use support::assistant::FakeCodex;
@@ -66,9 +68,8 @@ fn results_scroll(cx: &mut TestAppContext) {
     report("ui.results.scroll_horizontal", right, "ms", 50.);
 }
 
-#[gpui_kit::test]
-#[ignore = "a performance probe: ./qtest run perf-ui"]
-fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
+/// A workspace with one tab of 1 MB of SQL.
+fn one_megabyte_of_sql() -> Workspace {
     let line = "SELECT route, COUNT(*) FROM flights WHERE note = '日本語; safe' GROUP BY route;\n";
     let sql = line.repeat(1_000_000 / line.len() + 1);
     let profile = offline_profile("Synthetic");
@@ -76,11 +77,17 @@ fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
         sql,
         ..SavedTab::new(1, Some(profile.id))
     };
-    let workspace = Workspace {
+    Workspace {
         profiles: vec![profile],
         tabs: vec![tab],
         ..Workspace::default()
-    };
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
+    let workspace = one_megabyte_of_sql();
     let started = Instant::now();
     let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
     report(
@@ -123,4 +130,33 @@ fn assistant_transcript(cx: &mut TestAppContext) {
     app.wait_idle(cx);
     let samples = app.update(cx, |window, cx| sample(5, 40, || window.render_frame(cx)));
     report("ui.assistant.frame", median_ms(&samples), "ms", 50.);
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn assistant_composer_keystroke(cx: &mut TestAppContext) {
+    // A tab with 1 MB of SQL and two long replies are on screen. Each sample
+    // types one character into the message field and draws the next frame
+    // like the window does: only the views that changed render again.
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(one_megabyte_of_sql());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    for reply in 1..=2 {
+        let message = format!("Stream a long reply {reply}");
+        app.send(cx, &message);
+        app.wait_reply(cx, &format!("End of {message}"));
+    }
+    app.wait_idle(cx);
+    app.click(cx, "assistant-composer");
+    let samples = app.update(cx, |window, cx| {
+        window.draw(cx).clear(cx);
+        sample(5, 40, || {
+            let mut key = Keystroke::parse("x").expect("x is a keystroke");
+            key.key_char = Some("x".into());
+            window.dispatch_keystroke(key, cx);
+            window.draw(cx).clear(cx);
+        })
+    });
+    report("ui.assistant.keystroke", median_ms(&samples), "ms", 50.);
 }

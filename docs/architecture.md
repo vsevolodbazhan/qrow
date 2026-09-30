@@ -83,6 +83,13 @@ its display link 1 second after the last frame request, so an idle window does
 not wake the main thread at the refresh rate of the display. See the
 [macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
 
+The assistant pane is a separate view. Typing in its message field or a
+streamed reply renders the pane again, but not the workspace. The transcript
+renders only the messages on screen. GPUI does not keep the accessibility
+nodes of a view that it does not render again. Thus, while an accessibility
+client such as VoiceOver reads the window, the workspace and the pane render
+again in each frame.
+
 Result rendering virtualizes both dimensions. Stored values remain separate
 from shortened cell previews. Restoring the workspace does not restore sessions
 or results. It does not restore Logs history, so database connections do not

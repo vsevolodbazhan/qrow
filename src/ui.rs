@@ -322,7 +322,9 @@ fn panel_empty_state(message: &'static str, cx: &App) -> Div {
 pub struct Qrow {
     settings: Settings,
     assistant: AssistantWorkspace,
-    assistant_panel: assistant_view::AssistantPanelState,
+    assistant_state: assistant_view::AssistantState,
+    /// The assistant pane view. Qrow renders it beside the workspace.
+    assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
     about_open: bool,
@@ -348,6 +350,7 @@ pub struct Qrow {
     focus: FocusHandle,
     _quit: Subscription,
     _appearance: Subscription,
+    _assistant_submit: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
     quit_warning_open: bool,
     quit_work_confirmed: bool,
@@ -454,7 +457,21 @@ impl Qrow {
             this.finish(cx);
             async {}
         });
-        let assistant_panel = assistant_view::AssistantPanelState::new(window, cx);
+        let assistant_state = assistant_view::AssistantState::new(cx);
+        let assistant_pane = {
+            let qrow = cx.entity();
+            cx.new(|cx| assistant_view::AssistantPane::new(&qrow, window, cx))
+        };
+        let composer = assistant_pane.read(cx).composer().clone();
+        let assistant_submit = cx.subscribe_in(
+            &composer,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { shift: false, .. } = event {
+                    this.send_assistant(window, cx);
+                }
+            },
+        );
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.theme == SYSTEM_THEME {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
@@ -465,7 +482,8 @@ impl Qrow {
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
-            assistant_panel,
+            assistant_state,
+            assistant_pane,
             fonts,
             settings_open: false,
             about_open: false,
@@ -490,6 +508,7 @@ impl Qrow {
             focus: cx.focus_handle(),
             _quit: quit,
             _appearance: appearance,
+            _assistant_submit: assistant_submit,
             pending_quit: None,
             quit_warning_open: false,
             quit_work_confirmed: false,
@@ -510,7 +529,7 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
-        this.assistant_panel.composer_target = this
+        this.assistant_state.composer_target = this
             .tabs
             .get(this.active)
             .map(|tab| assistant_view::ComposerTarget::Tab(tab.saved.id));
@@ -609,7 +628,7 @@ impl Qrow {
             settings: self.settings.clone(),
             assistant: {
                 let mut assistant = self.assistant.clone();
-                assistant.remove_unstarted(&self.assistant_panel.unstarted_threads);
+                assistant.remove_unstarted(&self.assistant_state.unstarted_threads);
                 assistant
             },
             profiles: self.profiles.clone(),
@@ -632,7 +651,7 @@ impl Qrow {
         }
         self.finished = true;
         if self.demo {
-            self.assistant_panel.shutdown_demo(
+            self.assistant_state.shutdown_demo(
                 self.assistant
                     .conversations
                     .iter()
@@ -640,7 +659,7 @@ impl Qrow {
                     .collect(),
             );
         } else {
-            self.assistant_panel.shutdown();
+            self.assistant_state.shutdown();
         }
         if let Some(mut saver) = self.saver.take() {
             let result = if self.quit_confirmed {
@@ -1224,7 +1243,7 @@ impl Qrow {
             || self.settings_open
             || self.about_open
             || self.tab_form.is_some()
-            || self.assistant_panel.rename_form.is_some()
+            || self.assistant_state.rename_form.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1975,7 +1994,7 @@ impl Qrow {
             {
                 conversation.title_follows_conversation = false;
             }
-            self.assistant_panel.new_conversation_tabs.remove(&tab);
+            self.assistant_state.new_conversation_tabs.remove(&tab);
         }
         self.tab_form = None;
         // Programmatic close_dialog does not invoke Dialog::on_close.

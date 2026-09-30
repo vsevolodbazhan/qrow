@@ -53,6 +53,13 @@ impl FakeCodex {
         std::fs::write(self.state.join(name), "").unwrap();
     }
 
+    /// Saves the history of `thread`, so that the server can resume it.
+    pub fn save_rollout(&self, thread: &str) {
+        let rollouts = self.state.join("rollouts");
+        std::fs::create_dir_all(&rollouts).unwrap();
+        std::fs::write(rollouts.join(thread), "").unwrap();
+    }
+
     /// Whether the server wrote the marker `name`.
     pub fn marked(&self, name: &str) -> bool {
         self.state.join(name).exists()
@@ -96,9 +103,10 @@ impl FakeCodex {
     }
 }
 
-/// The transcript of the shown conversation: "You: …", "Assistant: …".
+/// The rendered rows of the shown transcript, top to bottom: "You: …",
+/// "Assistant: …". The transcript renders only the rows near the screen.
 pub fn transcript(window: &Window) -> Vec<String> {
-    elements(window)
+    let mut entries: Vec<_> = elements(window)
         .into_iter()
         .filter(|element| {
             element
@@ -106,8 +114,22 @@ pub fn transcript(window: &Window) -> Vec<String> {
                 .last()
                 .is_some_and(|id| format!("{id:?}").contains("assistant-entry-"))
         })
+        .collect();
+    entries.sort_by(|a, b| f32::from(a.bounds().top()).total_cmp(&f32::from(b.bounds().top())));
+    entries
+        .into_iter()
         .filter_map(|element| element.label().map(str::to_owned))
         .collect()
+}
+
+/// The jump button of the transcript. GPUI Kit's MessageScroller names it
+/// after the scroller.
+pub fn jump_to_latest() -> gpui_kit::ElementId {
+    (
+        gpui_kit::ElementId::from("assistant-messages"),
+        "jump-to-latest",
+    )
+        .into()
 }
 
 /// The text of the input inside the element `scope`, like the SQL editor.

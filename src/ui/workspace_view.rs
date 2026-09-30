@@ -748,7 +748,7 @@ impl Qrow {
                     .left(self.ui_px(2.))
                     .w(self.ui_px(1.))
                     .h_full()
-                    .bg(if self.assistant_panel.resizing.is_some() {
+                    .bg(if self.assistant_state.resizing.is_some() {
                         cx.theme().primary
                     } else {
                         cx.theme().border
@@ -757,7 +757,7 @@ impl Qrow {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.assistant_panel.resizing = Some((
+                    this.assistant_state.resizing = Some((
                         event.position,
                         this.ui_px(this.settings.assistant.panel_width),
                     ));
@@ -767,24 +767,44 @@ impl Qrow {
     }
 }
 
-impl Render for Qrow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Split positions are measured window geometry. Clamp without mutating retained state during render.
-        let editor_height = self
-            .editor_height
-            .min(window.viewport_size().height - self.ui_px(294.))
-            .max(self.ui_px(100.));
-        let available = window.viewport_size().width
+/// A view that renders again only when it changes. GPUI does not keep the
+/// accessibility nodes of a view that it does not render again, so the view
+/// renders in each frame while an accessibility client, like VoiceOver, reads
+/// the window.
+fn changed_view(view: AnyView, window: &Window) -> AnyElement {
+    if window.is_a11y_active() {
+        view.into_any_element()
+    } else {
+        view.cached(StyleRefinement::default().size_full())
+            .into_any_element()
+    }
+}
+
+impl Qrow {
+    /// The width of the assistant pane in a window that is `viewport` wide.
+    pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        let available = viewport
             - self.ui_px(420.)
             - if self.sidebar {
                 self.sidebar_width
             } else {
                 px(0.)
             };
-        let assistant_width = self
-            .ui_px(self.settings.assistant.panel_width)
+        self.ui_px(self.settings.assistant.panel_width)
             .min(available)
-            .max(self.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH));
+            .max(self.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH))
+    }
+
+    /// The window around the workspace and the assistant pane: the title bar,
+    /// the menus, the status bar, and the commands of the window. The window
+    /// renders it for each frame. The workspace and the pane are views of
+    /// their own, so each renders again only when it changes.
+    pub(super) fn render_shell(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let assistant_width = self.assistant_width(window.viewport_size().width);
         v_flex()
             .relative()
             .size_full()
@@ -815,9 +835,9 @@ impl Render for Qrow {
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
-                if let Some((start, initial)) = this.assistant_panel.resizing {
+                if let Some((start, initial)) = this.assistant_state.resizing {
                     if e.pressed_button != Some(MouseButton::Left) {
-                        this.assistant_panel.resizing = None;
+                        this.assistant_state.resizing = None;
                         return;
                     }
                     let available = window.viewport_size().width
@@ -859,7 +879,7 @@ impl Render for Qrow {
                 MouseButton::Left,
                 cx.listener(|this, _, _, _| {
                     this.resize = None;
-                    this.assistant_panel.resizing = None;
+                    this.assistant_state.resizing = None;
                 }),
             )
             .child(
@@ -879,54 +899,20 @@ impl Render for Qrow {
                     .items_stretch()
                     .flex_1()
                     .min_h_0()
-                    .when(self.sidebar, |el| {
-                        el.child(
-                            div()
-                                .w(self.sidebar_width)
-                                .flex_shrink_0()
-                                .child(self.connections(cx)),
-                        )
-                        .child(self.splitter(true, cx))
-                    })
                     .child(
-                        v_flex()
+                        div()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
-                            .overflow_hidden()
-                            .child(self.query_tabs(cx))
-                            .child(self.query_toolbar(cx))
-                            .child(
-                                // GPUI Kit's Editor has no ID setter; tests find the
-                                // editor through its container.
-                                div()
-                                    .id("sql-editor")
-                                    .test_support()
-                                    .h(editor_height)
-                                    .flex_shrink_0()
-                                    .min_w_0()
-                                    .line_height(relative(self.settings.editor_line_height))
-                                    .child(
-                                        Editor::new(&self.tabs[self.active].input)
-                                            .appearance(false)
-                                            .font_family(self.settings.editor_font_family.clone())
-                                            .text_size(self.ui_px(self.settings.editor_font_size))
-                                            .size_full()
-                                            .aria_label("SQL Editor"),
-                                    ),
-                            )
-                            .child(self.splitter(false, cx))
-                            .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+                            .child(changed_view(cx.entity().into(), window)),
                     )
                     .when(
-                        self.settings.assistant.enabled && self.assistant_panel.open,
+                        self.settings.assistant.enabled && self.assistant_state.open,
                         |el| {
                             el.child(self.assistant_splitter(cx)).child(
-                                div()
-                                    .w(assistant_width)
-                                    .flex_shrink_0()
-                                    .min_h_0()
-                                    .child(self.assistant_panel(assistant_width, cx)),
+                                div().w(assistant_width).flex_shrink_0().min_h_0().child(
+                                    changed_view(self.assistant_pane.clone().into(), window),
+                                ),
                             )
                         },
                     ),
@@ -957,6 +943,59 @@ impl Render for Qrow {
             .child(self.status_bar())
     }
 }
+impl Render for Qrow {
+    /// The workspace: the connections, the query tabs, the editor, and the
+    /// results. The window shell around it has the assistant pane.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Split positions are measured window geometry. Clamp without mutating retained state during render.
+        let editor_height = self
+            .editor_height
+            .min(window.viewport_size().height - self.ui_px(294.))
+            .max(self.ui_px(100.));
+        h_flex()
+            .size_full()
+            .items_stretch()
+            .when(self.sidebar, |el| {
+                el.child(
+                    div()
+                        .w(self.sidebar_width)
+                        .flex_shrink_0()
+                        .child(self.connections(cx)),
+                )
+                .child(self.splitter(true, cx))
+            })
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.query_tabs(cx))
+                    .child(self.query_toolbar(cx))
+                    .child(
+                        // GPUI Kit's Editor has no ID setter; tests find the
+                        // editor through its container.
+                        div()
+                            .id("sql-editor")
+                            .test_support()
+                            .h(editor_height)
+                            .flex_shrink_0()
+                            .min_w_0()
+                            .line_height(relative(self.settings.editor_line_height))
+                            .child(
+                                Editor::new(&self.tabs[self.active].input)
+                                    .appearance(false)
+                                    .font_family(self.settings.editor_font_family.clone())
+                                    .text_size(self.ui_px(self.settings.editor_font_size))
+                                    .size_full()
+                                    .aria_label("SQL Editor"),
+                            ),
+                    )
+                    .child(self.splitter(false, cx))
+                    .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+            )
+    }
+}
 
 /// Own window overlays outside Qrow so their builders can read its retained state.
 pub struct WindowView {
@@ -970,6 +1009,9 @@ impl WindowView {
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::Root;
+        let shell = self.content.update(cx, |content, cx| {
+            content.render_shell(window, cx).into_any_element()
+        });
         div()
             .size_full()
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
@@ -993,7 +1035,7 @@ impl Render for WindowView {
                 cx.stop_propagation();
                 window.prevent_default();
             }))
-            .child(self.content.clone())
+            .child(shell)
             .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))

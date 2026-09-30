@@ -1,7 +1,7 @@
 //! Geometry of the transcript at a scale and width where replies were cut
 //! off. Pixel checks, like text that reaches the edge of a reply, stay in the
 //! desktop suite.
-use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT};
+use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, jump_to_latest};
 use crate::support::{MemoryCredentials, TestApp, bounds_of, labelled_starting};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Bounds, Pixels, ScrollDelta, TestAppContext, point, px};
@@ -31,9 +31,7 @@ fn composer(app: &TestApp, cx: &mut TestAppContext) -> Bounds<Pixels> {
 
 fn jump_visible(app: &TestApp, cx: &mut TestAppContext) -> bool {
     app.settle(cx);
-    app.update(cx, |window, _| {
-        window.try_find("assistant-jump-latest").is_some()
-    })
+    app.update(cx, |window, _| window.try_find(jump_to_latest()).is_some())
 }
 
 #[gpui_kit::test]
@@ -55,7 +53,7 @@ fn a_reply_starts_at_the_left_edge_of_the_composer(cx: &mut TestAppContext) {
 
 fn check_wide_table(app: &TestApp, cx: &mut TestAppContext) {
     if jump_visible(app, cx) {
-        app.click(cx, "assistant-jump-latest");
+        app.click(cx, jump_to_latest());
     }
     assert!(
         !jump_visible(app, cx),
@@ -84,13 +82,13 @@ fn check_wide_table(app: &TestApp, cx: &mut TestAppContext) {
     };
     over_table(app, cx, 300.);
     app.wait_until(cx, "the scroll up", REPLY_TIMEOUT, |window, _| {
-        window.try_find("assistant-jump-latest").is_some()
+        window.try_find(jump_to_latest()).is_some()
     });
     for _ in 0..3 {
         over_table(app, cx, -1200.);
     }
     app.wait_until(cx, "the scroll to the end", REPLY_TIMEOUT, |window, _| {
-        window.try_find("assistant-jump-latest").is_none()
+        window.try_find(jump_to_latest()).is_none()
     });
 }
 

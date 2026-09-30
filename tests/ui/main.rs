@@ -8,6 +8,7 @@ mod assistant_layout;
 mod assistant_sql;
 mod assistant_tabs;
 mod assistant_threads;
+mod assistant_transcript;
 mod connections;
 mod dialogs;
 mod queries;
