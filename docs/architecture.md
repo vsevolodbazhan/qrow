@@ -68,6 +68,13 @@ input, focus, or window activation. Then the caret stays visible and does not
 blink, because each blink repaints the window. There is no continuous idle
 repaint loop.
 
+The assistant worker thread owns the Codex process. Window commands and Codex
+output arrive on one channel. The worker sleeps until a command or a Codex
+message arrives. It does not poll while the assistant is idle. The window thread
+does not wait for Codex. **Reconnect** and the **Enabled** setting stop Codex
+on a separate thread. That thread kills the Codex process group if Codex does
+not stop in 1.5 seconds. Quit waits up to 2 seconds for these threads.
+
 A window gets display refresh ticks only while GPUI requests frames. It stops
 its display link 1 second after the last frame request, so an idle window does
 not wake the main thread at the refresh rate of the display. See the

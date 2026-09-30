@@ -1,8 +1,10 @@
 use super::{
-    AccountKind, AccountStatus, AssistantEvent, AssistantHarness, Conversation,
-    ConversationHistory, ConversationPage, HarnessSnapshot, HistoryTurn, LoginStart, Model,
-    ReasoningEffort, ServiceTier, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn,
-    TurnRequest, history_item_text,
+    AccountKind, AccountStatus, AssistantEvent, Conversation, ConversationHistory,
+    ConversationPage, HarnessSnapshot, HistoryTurn, LoginStart, Model, ReasoningEffort,
+    ServiceTier, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn, TurnRequest,
+    history_item_text,
+    inbox::{Inbox, Message, OutputSender, SendError},
+    service,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -51,16 +53,22 @@ pub struct CodexHarness {
     child: Child,
     writer: Option<SyncSender<WriteCommand>>,
     writer_thread: Option<JoinHandle<()>>,
-    messages: Receiver<Result<Value, String>>,
+    inbox: Inbox,
     stdout_thread: Option<JoinHandle<()>>,
     stderr_thread: Option<JoinHandle<()>>,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
     reader_overflowed: Arc<AtomicBool>,
     request_timeout: Duration,
     next_id: u64,
-    pending_messages: VecDeque<Value>,
     pid_update: Box<dyn Fn(u32) + Send>,
     title_jobs: Vec<TitleJob>,
+}
+
+/// The next work for the assistant worker.
+pub(crate) enum Input {
+    Command(service::Command),
+    Event(AssistantEvent),
+    Stop,
 }
 
 /// An ephemeral Codex thread that generates a title for `target`.
@@ -137,12 +145,16 @@ impl CodexHarness {
         })
     }
     pub fn launch(executable: impl AsRef<OsStr>, cwd: &Path) -> Result<Self> {
-        Self::launch_with_pid(executable, cwd, |_| {})
+        let (_commands, inbox) = Inbox::channel(0);
+        Self::launch_with_inbox(executable, cwd, inbox, |_| {})
     }
 
-    pub(crate) fn launch_with_pid(
+    /// Starts Codex. Its output and the commands for `inbox` arrive on one
+    /// channel, which `next_input` reads.
+    pub(crate) fn launch_with_inbox(
         executable: impl AsRef<OsStr>,
         cwd: &Path,
+        mut inbox: Inbox,
         on_spawn: impl Fn(u32) + Send + 'static,
     ) -> Result<Self> {
         anyhow::ensure!(cwd.is_dir(), "Codex working directory does not exist");
@@ -206,13 +218,13 @@ impl CodexHarness {
             .stderr
             .take()
             .context("Codex app-server did not provide standard error")?;
-        let (message_tx, messages) = mpsc::sync_channel(MAX_PENDING_MESSAGES + 1);
+        let output = inbox.output_sender(MAX_PENDING_MESSAGES + 1);
         let reader_overflowed = Arc::new(AtomicBool::new(false));
         let stdout_thread = thread::Builder::new()
             .name("qrow-codex-stdout".into())
             .spawn({
                 let overflowed = Arc::clone(&reader_overflowed);
-                move || read_protocol_stream(BufReader::new(stdout), &message_tx, &overflowed)
+                move || read_protocol_stream(BufReader::new(stdout), &output, &overflowed)
             })
             .context("Could not start Codex output reader")?;
         let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_BYTES)));
@@ -233,14 +245,13 @@ impl CodexHarness {
             child: child.into_inner(),
             writer: Some(writer),
             writer_thread: Some(writer_thread),
-            messages,
+            inbox,
             stdout_thread: Some(stdout_thread),
             stderr_thread: Some(stderr_thread),
             stderr_tail,
             reader_overflowed,
             request_timeout: REQUEST_TIMEOUT,
             next_id: 1,
-            pending_messages: VecDeque::new(),
             pid_update: Box::new(on_spawn),
             title_jobs: Vec::new(),
         };
@@ -266,12 +277,6 @@ impl CodexHarness {
             }),
         )?;
         self.notify("initialized", json!({}))
-    }
-
-    /// Takes protocol notifications and server requests received while Qrow
-    /// waited for a response.
-    pub fn take_pending_messages(&mut self) -> Vec<Value> {
-        self.pending_messages.drain(..).collect()
     }
 
     fn ensure_identifier(id: &str) -> Result<()> {
@@ -512,15 +517,7 @@ impl CodexHarness {
             .checked_add(self.request_timeout)
             .context("Codex request deadline overflowed")?;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                bail!(
-                    "Codex app-server did not respond within {} seconds{}",
-                    self.request_timeout.as_secs_f32(),
-                    self.diagnostic_suffix()
-                );
-            }
-            let message = self.read_message(remaining)?;
+            let message = self.read_message(deadline)?;
             let response_id = message.get("id").and_then(Value::as_u64);
             if message.get("method").is_none() && response_id == Some(id) {
                 if let Some(error) = message.get("error") {
@@ -548,10 +545,10 @@ impl CodexHarness {
                     _ => bail!("Codex app-server returned an unexpected response identifier"),
                 }
             }
-            if self.pending_messages.len() == MAX_PENDING_MESSAGES {
+            if self.inbox.held_output() == MAX_PENDING_MESSAGES {
                 bail!("Codex app-server sent too many unsolicited messages");
             }
-            self.pending_messages.push_back(message);
+            self.inbox.hold(Message::Codex(Ok(message)));
         }
     }
 
@@ -591,29 +588,60 @@ impl CodexHarness {
         }
     }
 
-    fn read_message(&mut self, timeout: Duration) -> Result<Value> {
-        if self.reader_overflowed.load(Ordering::Acquire) {
-            bail!("Codex app-server sent too many queued messages");
-        }
-        match self.messages.recv_timeout(timeout) {
-            Ok(Ok(message)) => Ok(message),
-            Ok(Err(error)) => bail!("{error}{}", self.diagnostic_suffix()),
-            Err(RecvTimeoutError::Timeout) => {
-                bail!(
+    /// Waits for a Codex message until `deadline`. Holds the commands that
+    /// arrive in the meantime for `next_input`.
+    fn read_message(&mut self, deadline: Instant) -> Result<Value> {
+        loop {
+            if self.reader_overflowed.load(Ordering::Acquire) {
+                bail!("Codex app-server sent too many queued messages");
+            }
+            match self.inbox.receive(Some(deadline)) {
+                Some(Message::Codex(Ok(message))) => return Ok(message),
+                Some(command @ Message::Command(_)) => self.inbox.hold(command),
+                Some(Message::Codex(Err(error))) => return Err(self.output_error(&error)),
+                Some(Message::CodexClosed) => return Err(self.closed_error()),
+                Some(Message::Stop) => bail!("Assistant is stopping"),
+                None => bail!(
                     "Codex app-server did not respond within {} seconds{}",
                     self.request_timeout.as_secs_f32(),
                     self.diagnostic_suffix()
-                )
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                let status = self.child.try_wait().ok().flatten();
-                let reason = match status {
-                    Some(status) => format!("exited with {status}"),
-                    None => "closed its output".to_owned(),
-                };
-                bail!("Codex app-server {reason}{}", self.diagnostic_suffix())
+                ),
             }
         }
+    }
+
+    /// Waits for the next command, Codex event, or stop request. Returns
+    /// `None` at `deadline`. Messages from title threads produce no event.
+    pub(crate) fn next_input(&mut self, deadline: Option<Instant>) -> Result<Option<Input>> {
+        loop {
+            if self.reader_overflowed.load(Ordering::Acquire) {
+                bail!("Codex app-server sent too many queued messages");
+            }
+            let message = match self.inbox.next(deadline) {
+                None => return Ok(None),
+                Some(Message::Command(command)) => return Ok(Some(Input::Command(*command))),
+                Some(Message::Stop) => return Ok(Some(Input::Stop)),
+                Some(Message::Codex(Ok(message))) => message,
+                Some(Message::Codex(Err(error))) => return Err(self.output_error(&error)),
+                Some(Message::CodexClosed) => return Err(self.closed_error()),
+            };
+            if let Some(event) = self.event(message)? {
+                return Ok(Some(Input::Event(event)));
+            }
+        }
+    }
+
+    fn output_error(&self, error: &str) -> anyhow::Error {
+        anyhow!("{error}{}", self.diagnostic_suffix())
+    }
+
+    fn closed_error(&mut self) -> anyhow::Error {
+        let status = self.child.try_wait().ok().flatten();
+        let reason = match status {
+            Some(status) => format!("exited with {status}"),
+            None => "closed its output".to_owned(),
+        };
+        anyhow!("Codex app-server {reason}{}", self.diagnostic_suffix())
     }
 
     fn diagnostic_suffix(&self) -> String {
@@ -752,7 +780,7 @@ fn write_protocol_stream(mut stdin: ChildStdin, commands: &Receiver<WriteCommand
 
 fn read_protocol_stream(
     mut stdout: impl BufRead,
-    messages: &SyncSender<Result<Value, String>>,
+    messages: &OutputSender,
     overflowed: &AtomicBool,
 ) {
     loop {
@@ -792,23 +820,24 @@ fn read_protocol_stream(
     }
 }
 
+/// Sends Codex output to the worker. Under backpressure it drops streamed
+/// fragments only, because a completed turn reloads its history.
 fn send_protocol_message(
-    messages: &SyncSender<Result<Value, String>>,
+    messages: &OutputSender,
     message: Result<Value, String>,
     overflowed: &AtomicBool,
 ) -> bool {
-    match messages.try_send(message) {
+    let delta = message.as_ref().is_ok_and(|value| {
+        value.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta")
+    });
+    match messages.send(message) {
         Ok(()) => true,
-        Err(TrySendError::Full(Ok(value)))
-            if value.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta") =>
-        {
-            true
-        }
-        Err(TrySendError::Full(_)) => {
+        Err(SendError::Full) if delta => true,
+        Err(SendError::Full) => {
             overflowed.store(true, Ordering::Release);
             false
         }
-        Err(TrySendError::Disconnected(_)) => false,
+        Err(SendError::Disconnected) => false,
     }
 }
 
@@ -880,15 +909,15 @@ pub(crate) fn terminate_process_tree(pid: u32) -> std::io::Result<()> {
     }
 }
 
-impl AssistantHarness for CodexHarness {
-    fn snapshot(&mut self) -> Result<HarnessSnapshot> {
+impl CodexHarness {
+    pub fn snapshot(&mut self) -> Result<HarnessSnapshot> {
         Ok(HarnessSnapshot {
             account: self.account()?,
             models: self.models()?,
         })
     }
 
-    fn begin_login(&mut self) -> Result<LoginStart> {
+    pub fn begin_login(&mut self) -> Result<LoginStart> {
         let response: Value = self.request("account/login/start", json!({"type":"chatgpt"}))?;
         let url = response
             .get("authUrl")
@@ -908,13 +937,13 @@ impl AssistantHarness for CodexHarness {
         })
     }
 
-    fn cancel_login(&mut self, login_id: &str) -> Result<()> {
+    pub fn cancel_login(&mut self, login_id: &str) -> Result<()> {
         // Codex answers "notFound" if the sign-in already ended. Either way it is over.
         let _: Value = self.request("account/login/cancel", json!({ "loginId": login_id }))?;
         Ok(())
     }
 
-    fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation> {
+    pub fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation> {
         anyhow::ensure!(!tools.is_empty(), "Assistant tools are unavailable");
         let dynamic_tools: Vec<_> = tools
             .iter()
@@ -940,7 +969,7 @@ impl AssistantHarness for CodexHarness {
         Ok(response.thread.into())
     }
 
-    fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation> {
+    pub fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation> {
         Self::ensure_identifier(thread_id)?;
         let response: ThreadResponse = self
             .request(
@@ -962,7 +991,7 @@ impl AssistantHarness for CodexHarness {
         Ok(response.thread.into())
     }
 
-    fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory> {
+    pub fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory> {
         Self::ensure_identifier(thread_id)?;
         let response: ThreadResponse = self
             .request(
@@ -1015,7 +1044,7 @@ impl AssistantHarness for CodexHarness {
         })
     }
 
-    fn read_older_conversation(
+    pub fn read_older_conversation(
         &mut self,
         thread_id: &str,
         cursor: &str,
@@ -1023,7 +1052,7 @@ impl AssistantHarness for CodexHarness {
         self.read_items_page(thread_id, Some(cursor))
     }
 
-    fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()> {
+    pub fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()> {
         Self::ensure_identifier(thread_id)?;
         anyhow::ensure!(
             !title.trim().is_empty() && title.chars().count() <= 120,
@@ -1034,7 +1063,7 @@ impl AssistantHarness for CodexHarness {
         self.set_thread_name(thread_id, title.trim())
     }
 
-    fn generate_title(&mut self, request: TitleRequest) -> Result<()> {
+    pub fn generate_title(&mut self, request: TitleRequest) -> Result<()> {
         Self::ensure_identifier(&request.thread_id)?;
         if self
             .title_jobs
@@ -1092,7 +1121,7 @@ impl AssistantHarness for CodexHarness {
         Ok(())
     }
 
-    fn delete_conversation(&mut self, thread_id: &str) -> Result<()> {
+    pub fn delete_conversation(&mut self, thread_id: &str) -> Result<()> {
         Self::ensure_identifier(thread_id)?;
         self.cancel_title_jobs(thread_id);
         match self.request::<Value>("thread/delete", json!({ "threadId": thread_id })) {
@@ -1102,7 +1131,7 @@ impl AssistantHarness for CodexHarness {
         }
     }
 
-    fn start_turn(&mut self, request: TurnRequest) -> Result<Turn> {
+    pub fn start_turn(&mut self, request: TurnRequest) -> Result<Turn> {
         Self::ensure_identifier(&request.thread_id)?;
         anyhow::ensure!(!request.text.trim().is_empty(), "Message is empty");
         anyhow::ensure!(request.text.len() <= 64 * 1024, "Message is too large");
@@ -1129,7 +1158,7 @@ impl AssistantHarness for CodexHarness {
         Ok(response.turn.into())
     }
 
-    fn steer_turn(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<()> {
+    pub fn steer_turn(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<()> {
         Self::ensure_identifier(thread_id)?;
         Self::ensure_identifier(turn_id)?;
         anyhow::ensure!(!text.trim().is_empty(), "Message is empty");
@@ -1146,7 +1175,7 @@ impl AssistantHarness for CodexHarness {
         Ok(())
     }
 
-    fn interrupt_turn(&mut self, thread_id: &str, turn_id: &str) -> Result<()> {
+    pub fn interrupt_turn(&mut self, thread_id: &str, turn_id: &str) -> Result<()> {
         Self::ensure_identifier(thread_id)?;
         Self::ensure_identifier(turn_id)?;
         let _: Value = self.request(
@@ -1156,25 +1185,9 @@ impl AssistantHarness for CodexHarness {
         Ok(())
     }
 
-    fn next_event(&mut self, timeout: Duration) -> Result<Option<AssistantEvent>> {
-        if self.reader_overflowed.load(Ordering::Acquire) {
-            bail!("Codex app-server sent too many queued messages");
-        }
-        let message = if let Some(message) = self.pending_messages.pop_front() {
-            message
-        } else {
-            match self.messages.recv_timeout(timeout) {
-                Ok(Ok(message)) => message,
-                Ok(Err(error)) => bail!("{error}{}", self.diagnostic_suffix()),
-                Err(RecvTimeoutError::Timeout) => return Ok(None),
-                Err(RecvTimeoutError::Disconnected) => {
-                    bail!(
-                        "Codex app-server closed its output{}",
-                        self.diagnostic_suffix()
-                    )
-                }
-            }
-        };
+    /// Turns a Codex message into an event. Stale responses and title-thread
+    /// messages produce no event.
+    fn event(&mut self, message: Value) -> Result<Option<AssistantEvent>> {
         if message.get("method").is_none() {
             if message
                 .get("id")
@@ -1205,7 +1218,7 @@ impl AssistantHarness for CodexHarness {
         Ok(Some(event))
     }
 
-    fn answer_tool_call(&mut self, call: &ToolCall, result: ToolResult) -> Result<()> {
+    pub fn answer_tool_call(&mut self, call: &ToolCall, result: ToolResult) -> Result<()> {
         Self::ensure_identifier(&call.call_id)?;
         let text = serde_json::to_string(&result.content)?;
         anyhow::ensure!(text.len() <= 64 * 1024, "Tool result is too large");
@@ -1218,7 +1231,7 @@ impl AssistantHarness for CodexHarness {
         })
     }
 
-    fn shutdown(&mut self) -> Result<()> {
+    pub fn shutdown(&mut self) -> Result<()> {
         self.writer.take();
         let checks = SHUTDOWN_GRACE_PERIOD.as_millis() / 10;
         for _ in 0..checks {
@@ -1467,6 +1480,35 @@ mod tests {
         crate::assistant::write_test_executable(path, script);
     }
 
+    fn next_event(harness: &mut CodexHarness, timeout: Duration) -> Option<AssistantEvent> {
+        match harness.next_input(Some(Instant::now() + timeout)).unwrap() {
+            Some(Input::Event(event)) => Some(event),
+            None => None,
+            Some(Input::Command(_) | Input::Stop) => panic!("expected a Codex event"),
+        }
+    }
+
+    /// Takes `count` events, then checks that no other event follows.
+    fn take_events(harness: &mut CodexHarness, count: usize) -> Vec<AssistantEvent> {
+        let events: Vec<_> = (0..count)
+            .map(|_| next_event(harness, REQUEST_TIMEOUT).expect("expected an event"))
+            .collect();
+        assert_eq!(next_event(harness, Duration::from_millis(100)), None);
+        events
+    }
+
+    fn output_channel(capacity: usize) -> (OutputSender, Inbox) {
+        let (_commands, mut inbox) = Inbox::channel(0);
+        (inbox.output_sender(capacity), inbox)
+    }
+
+    fn received(inbox: &mut Inbox) -> Option<Result<Value, String>> {
+        match inbox.receive(Some(Instant::now())) {
+            Some(Message::Codex(output)) => Some(output),
+            _ => None,
+        }
+    }
+
     #[test]
     fn handshake_reads_account_and_paginated_model_capabilities() {
         let directory = tempfile::tempdir().unwrap();
@@ -1577,7 +1619,7 @@ sleep 30
     }
 
     #[test]
-    fn server_request_is_available_to_the_caller() {
+    fn server_request_during_a_request_is_the_next_event() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-codex");
         write_executable(
@@ -1586,7 +1628,7 @@ sleep 30
 while IFS= read -r line; do
     case "$line" in
         *'"method":"initialize"'*)
-            printf '%s\n' '{"id":1,"method":"item/tool/call","params":{"name":"read_context"}}'
+            printf '%s\n' '{"id":1,"method":"item/tool/call","params":{"arguments":{},"callId":"call-1","threadId":"thread-1","turnId":"turn-1","tool":"read_tab_sql"}}'
             printf '%s\n' '{"id":1,"result":{}}'
             ;;
     esac
@@ -1595,11 +1637,12 @@ done
         );
 
         let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
-        let pending = harness.take_pending_messages();
-
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0]["id"], 1);
-        assert_eq!(pending[0]["method"], "item/tool/call");
+        assert_eq!(harness.inbox.held_output(), 1);
+        let Some(AssistantEvent::ToolCall(call)) = next_event(&mut harness, Duration::ZERO) else {
+            panic!("expected the held tool call");
+        };
+        assert_eq!(call.request_id, json!(1));
+        assert_eq!(call.name, "read_tab_sql");
     }
 
     #[test]
@@ -1692,9 +1735,9 @@ done
         );
         let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
         harness
-            .pending_messages
-            .push_back(json!({"id": 1, "result": {}}));
-        assert_eq!(harness.next_event(Duration::from_millis(1)).unwrap(), None);
+            .inbox
+            .hold(Message::Codex(Ok(json!({"id": 1, "result": {}}))));
+        assert_eq!(next_event(&mut harness, Duration::from_millis(1)), None);
     }
 
     #[test]
@@ -1755,13 +1798,6 @@ done
         assert_eq!(title_prompt(&[("user", " ".into())]), None);
     }
 
-    fn drain_events(harness: &mut CodexHarness) -> Vec<AssistantEvent> {
-        // Hidden title-thread messages also produce `None`, so poll a fixed number of times.
-        (0..20)
-            .filter_map(|_| harness.next_event(Duration::from_millis(20)).unwrap())
-            .collect()
-    }
-
     #[test]
     fn title_generation_reports_a_reply_without_a_title() {
         let directory = tempfile::tempdir().unwrap();
@@ -1796,7 +1832,7 @@ done
             })
             .unwrap();
         assert_eq!(
-            drain_events(&mut harness),
+            take_events(&mut harness, 1),
             vec![AssistantEvent::TitleFailed {
                 thread_id: "thread-1".into()
             }]
@@ -1848,7 +1884,7 @@ done
             reasoning_effort: Some("low".into()),
         };
         harness.generate_title(request.clone()).unwrap();
-        let events = drain_events(&mut harness);
+        let events = take_events(&mut harness, 2);
         let expected = AssistantEvent::TitleChanged {
             thread_id: "thread-1".into(),
             title: "Recent orders".into(),
@@ -1858,7 +1894,7 @@ done
         // A title from the user wins over a title that is still generating.
         harness.generate_title(request).unwrap();
         harness.rename_conversation("thread-1", "Mine").unwrap();
-        let events = drain_events(&mut harness);
+        let events = take_events(&mut harness, 1);
         assert_eq!(
             events,
             vec![AssistantEvent::TitleChanged {
@@ -2089,21 +2125,21 @@ while :; do sleep 1; done
     fn protocol_reader_rejects_oversized_and_incomplete_messages() {
         let mut oversized = vec![b'x'; MAX_PROTOCOL_LINE_BYTES + 1];
         oversized.push(b'\n');
-        let (tx, rx) = mpsc::sync_channel(2);
+        let (tx, mut inbox) = output_channel(2);
         let overflowed = AtomicBool::new(false);
         read_protocol_stream(Cursor::new(oversized), &tx, &overflowed);
         assert!(
-            rx.recv()
+            received(&mut inbox)
                 .unwrap()
                 .unwrap_err()
                 .contains("oversized or incomplete")
         );
 
-        let (tx, rx) = mpsc::sync_channel(2);
+        let (tx, mut inbox) = output_channel(2);
         let overflowed = AtomicBool::new(false);
         read_protocol_stream(Cursor::new(br#"{"id":1}"#), &tx, &overflowed);
         assert!(
-            rx.recv()
+            received(&mut inbox)
                 .unwrap()
                 .unwrap_err()
                 .contains("oversized or incomplete")
@@ -2113,7 +2149,7 @@ while :; do sleep 1; done
     #[test]
     fn protocol_reader_records_idle_queue_overflow() {
         let input = b"{\"method\":\"one\"}\n{\"method\":\"two\"}\n";
-        let (tx, _rx) = mpsc::sync_channel(1);
+        let (tx, _inbox) = output_channel(1);
         let overflowed = AtomicBool::new(false);
 
         read_protocol_stream(Cursor::new(input), &tx, &overflowed);
@@ -2124,18 +2160,18 @@ while :; do sleep 1; done
     #[test]
     fn streaming_delta_overflow_keeps_protocol_reader_alive() {
         let input = b"{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"turn/completed\"}\n";
-        let (tx, rx) = mpsc::sync_channel(1);
+        let (tx, mut inbox) = output_channel(1);
         let overflowed = AtomicBool::new(false);
         read_protocol_stream(Cursor::new(input), &tx, &overflowed);
         // The final event is not safe to discard. The queue is bounded, so
         // overload is still reported, but a delta alone does not cause it.
         assert!(overflowed.load(Ordering::Acquire));
         assert_eq!(
-            rx.try_recv().unwrap().unwrap()["method"],
+            received(&mut inbox).unwrap().unwrap()["method"],
             "item/agentMessage/delta"
         );
 
-        let (tx, _rx) = mpsc::sync_channel(1);
+        let (tx, _inbox) = output_channel(1);
         let overflowed = AtomicBool::new(false);
         let deltas =
             b"{\"method\":\"item/agentMessage/delta\"}\n{\"method\":\"item/agentMessage/delta\"}\n";
@@ -2241,15 +2277,14 @@ done
             .unwrap();
         assert_eq!(turn.id, "turn-1");
         assert_eq!(
-            harness.next_event(Duration::from_secs(1)).unwrap(),
+            next_event(&mut harness, Duration::from_secs(1)),
             Some(AssistantEvent::MessageDelta {
                 thread_id: "thread-1".into(),
                 turn_id: "turn-1".into(),
                 text: "Hello".into(),
             })
         );
-        let Some(AssistantEvent::ToolCall(call)) =
-            harness.next_event(Duration::from_secs(1)).unwrap()
+        let Some(AssistantEvent::ToolCall(call)) = next_event(&mut harness, Duration::from_secs(1))
         else {
             panic!("expected a tool call");
         };
@@ -2264,7 +2299,7 @@ done
             )
             .unwrap();
         assert!(matches!(
-            harness.next_event(Duration::from_secs(1)).unwrap(),
+            next_event(&mut harness, Duration::from_secs(1)),
             Some(AssistantEvent::TurnCompleted { .. })
         ));
         harness.steer_turn("thread-1", "turn-1", "More").unwrap();
