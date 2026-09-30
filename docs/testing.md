@@ -61,7 +61,11 @@ Spark servers. `desktop` also takes over the desktop. These suites, the
 `package` does not replace `dist/Qrow.app`. See [Run the servers](#run-the-servers) and
 [Run the desktop suite](#run-the-desktop-suite).
 
-The suites without servers check these parts:
+The suites without servers check these parts. The integration tests of the
+core library are modules of one test binary,
+[`tests/integration/`](../tests/integration/), so a change to the library
+links one binary. The `backend` suite runs the `backend::` module of this
+binary.
 
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server
@@ -77,7 +81,7 @@ The suites without servers check these parts:
   bindings. Third-party dependencies can contain unsafe code.
 
 The Keychain test uses the real macOS Keychain, so no suite runs it. Run it
-with `cargo test --test keychain -- --ignored`.
+with `cargo test --test integration keychain:: -- --ignored`.
 
 ## Groups
 

@@ -14,7 +14,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-#[path = "support/evidence.rs"]
+#[path = "../support/evidence.rs"]
 mod evidence;
 
 const TIMEOUT: Duration = Duration::from_secs(150);

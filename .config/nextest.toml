@@ -20,7 +20,7 @@ path = "junit.xml"
 fixture-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = "binary(backend)"
+filter = "binary(integration) & test(/^backend::/)"
 test-group = "fixture-serial"
 slow-timeout = { period = "60s", terminate-after = 5 }
 
