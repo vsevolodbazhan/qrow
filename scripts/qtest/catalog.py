@@ -197,7 +197,7 @@ SUITES = {
               (nextest("binary(e2e) & not test(/^perf::/)", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(E2E_BUILD,)),
-        Suite("perf-ui", "Frame, scroll, and editor timings of the real window in a release-like build.",
+        Suite("perf-ui", "Frame, scroll, editor, and assistant timings of the real window in a release-like build.",
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True),

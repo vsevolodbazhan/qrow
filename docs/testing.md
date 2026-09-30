@@ -39,7 +39,7 @@ accept a test filter.
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
 | `perf` | SQL validation benchmark with enforced budgets. | Rust |
-| `perf-ui` * | Frame, scroll, and editor timings of the real window in a release-like build. | macOS, cargo-nextest |
+| `perf-ui` * | Frame, scroll, editor, and assistant timings of the real window in a release-like build. | macOS, cargo-nextest |
 | `perf-e2e` * | Query and page latency of the real window against the real servers. | macOS, Docker or Java 17 |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
@@ -343,7 +343,7 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | Suite | Probes |
 | --- | --- |
 | `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, and opening and typing into a tab with 1 MB of SQL. It builds with the `perf` Cargo profile, which optimizes like the release build. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, and an assistant reply of 800 streamed parts and a frame of the transcript after three such replies. It builds with the `perf` Cargo profile, which optimizes like the release build. |
 | `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The app idles for 12 seconds before the measurement, so the caret no longer blinks. The first launch after a build warms up, and the median of the next three counts. |
 
