@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -43,6 +44,15 @@ class CatalogTests(unittest.TestCase):
             with self.subTest(suite=suite.name):
                 marked = f"| `{suite.name}` * |" in GUIDE
                 self.assertEqual(marked, suite.filterable)
+
+    def test_clippy_app_is_the_application_pass_of_clippy(self):
+        clippy, app = catalog.SUITES["clippy"], catalog.SUITES["clippy-app"]
+        self.assertEqual(app.steps, (catalog.CLIPPY_APP,))
+        self.assertTrue(app.macos_only)
+        self.assertEqual(clippy.steps, (catalog.CLIPPY_CORE, catalog.CLIPPY_APP) if catalog.MACOS
+                         else (catalog.CLIPPY_CORE,))
+        self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
+        self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
 
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
@@ -201,6 +211,22 @@ class RunTests(unittest.TestCase):
         self.assertEqual(check["status"], "passed")
         self.assertNotIn("report_only", check)
 
+    def test_a_missing_prerequisite_stops_a_run_that_requires_all(self):
+        marker = Path(os.environ["CARGO_TARGET_DIR"]) / "ran"
+        selected = [runner.Selected(fake_suite("first", f"touch {marker}")),
+                    runner.Selected(fake_suite("needs", "exit 0", requires=("desktop",)))]
+        with patch.object(runner, "check_requirement", side_effect=lambda name, _: "Grant it." if name == "desktop" else None):
+            summary = runner.run(selected, {"repeat": 1}, [], runner.Output(quiet=True), require_all=True)
+        self.assertFalse(marker.exists())
+        self.assertEqual((summary["status"], summary["exit_code"]), ("missing", runner.EXIT_MISSING))
+        self.assertEqual([suite["status"] for suite in summary["suites"]], ["skipped", "missing"])
+
+    def test_ci_jobs_stop_before_they_build_when_a_prerequisite_is_missing(self):
+        with patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
+                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["ci", "e2e"])
+        self.assertTrue(run.call_args.kwargs["require_all"])
+
     def test_step_environment_names_the_target_directory(self):
         step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
         summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
@@ -230,6 +256,11 @@ class RunTests(unittest.TestCase):
         with patch.object(runner.shutil, "which", return_value=None):
             fix = runner.check_requirement("fixture-runtime", {"runtime": "docker"})
         self.assertEqual(fix, catalog.REQUIREMENTS["docker"])
+
+    def test_the_desktop_requirement_runs_the_driver_preflight(self):
+        with patch.object(runner, "_succeeds", return_value=False) as succeeds:
+            self.assertEqual(runner.check_requirement("desktop", {}), catalog.REQUIREMENTS["desktop"])
+        self.assertEqual(succeeds.call_args.args[0], ["sh", "scripts/e2e/driver.sh", "--preflight"])
 
     def test_suites_that_stop_engines_reject_local_processes(self):
         fix = runner.check_requirement("fixture-runtime", {"runtime": "native", "fixture": "docker"})
@@ -293,6 +324,27 @@ class FixtureSessionTests(RunTests):
         summary = self.run_with(patches, served_suite("served", "exit 0"), runtime="auto")
         self.assertEqual(summary["status"], "passed")
         self.assertEqual(events, ["collect"])
+
+    def test_suites_that_share_a_preparation_step_run_it_once(self):
+        _, patches = self.fake()
+        counter = Path(os.environ["CARGO_TARGET_DIR"]) / "builds"
+        build = f"echo build >> {counter}"
+        summary = self.run_with(patches, served_suite("first", "exit 0", prepare=build),
+                                served_suite("second", "exit 0", prepare=build), runtime="auto")
+        self.assertEqual(summary["status"], "passed")
+        self.assertEqual(counter.read_text().splitlines(), ["build"])
+
+    def test_a_failed_shared_preparation_step_blocks_every_suite_that_needs_it(self):
+        events, patches = self.fake()
+        summary = self.run_with(patches, served_suite("first", "exit 0", prepare="exit 7"),
+                                served_suite("second", "exit 0", prepare="exit 7"), runtime="auto")
+        self.assertEqual(events, [])
+        self.assertEqual([(suite["name"], suite["status"]) for suite in summary["suites"]],
+                         [("first", "failed"), ("second", "failed")])
+        self.assertIn("Preparation failed", summary["suites"][1]["reason"])
+
+    def test_e2e_and_perf_e2e_share_the_build_of_the_test_binary(self):
+        self.assertEqual(catalog.SUITES["e2e"].prepare, catalog.SUITES["perf-e2e"].prepare)
 
     def test_failed_preparation_starts_no_servers(self):
         events, patches = self.fake()
@@ -359,27 +411,81 @@ class PerformanceTests(unittest.TestCase):
 class ToolArchiveTests(unittest.TestCase):
     def test_pinned_archives_have_digests(self):
         for tool in catalog.TOOLS.values():
-            for target, url, digest in tool.archives:
-                with self.subTest(tool=tool.name, target=target):
-                    self.assertTrue(url.startswith("https://") and tool.version in url and target in url)
-                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            for archive in tool.archives:
+                with self.subTest(tool=tool.name, platform=archive.platform):
+                    self.assertTrue(archive.url.startswith("https://github.com/"))
+                    self.assertIn(tool.version, archive.url)
+                    self.assertTrue(archive.member.endswith(tool.name))
+                    self.assertRegex(archive.sha256, r"^[0-9a-f]{64}$")
+            platforms = [archive.platform for archive in tool.archives]
+            self.assertEqual(len(platforms), len(set(platforms)), tool.name)
 
-    def test_an_archive_installs_only_with_its_pinned_digest(self):
+    def test_every_tool_has_an_archive_for_the_ci_runners(self):
+        for tool in catalog.TOOLS.values():
+            for platform in ("linux-x86_64", "macos-aarch64"):
+                with self.subTest(tool=tool.name, platform=platform):
+                    self.assertIn(platform, [archive.platform for archive in tool.archives])
+
+    def test_host_platform_names_the_system_and_the_processor(self):
+        cases = {("Darwin", "arm64"): "macos-aarch64", ("Darwin", "x86_64"): "macos-x86_64",
+                 ("Linux", "x86_64"): "linux-x86_64", ("Linux", "aarch64"): "linux-aarch64",
+                 ("Linux", "AMD64"): "linux-x86_64", ("Windows", "AMD64"): None}
+        for (system, machine), expected in cases.items():
+            with self.subTest(system=system, machine=machine), \
+                    patch.object(catalog.platform, "system", return_value=system), \
+                    patch.object(catalog.platform, "machine", return_value=machine):
+                self.assertEqual(catalog.host_platform(), expected)
+
+    def make_archive(self, root, member):
         import hashlib
         import tarfile
+        source = root / "source"
+        (source / member).parent.mkdir(parents=True, exist_ok=True)
+        (source / member).write_text("#!/bin/sh\n")
+        (source / "README.md").write_text("Not the tool.\n")
+        path = root / "tool.tar.gz"
+        with tarfile.open(path, "w:gz") as bundle:
+            bundle.add(source / member, arcname=member)
+            bundle.add(source / "README.md", arcname="README.md")
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def test_an_archive_installs_only_with_its_pinned_digest(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "cargo-nextest").write_text("#!/bin/sh\n")
-            archive = root / "tool.tar.gz"
-            with tarfile.open(archive, "w:gz") as bundle:
-                bundle.add(root / "cargo-nextest", arcname="cargo-nextest")
-            digest = hashlib.sha256(archive.read_bytes()).hexdigest()
-            tool = catalog.TOOLS["cargo-nextest"]
+            member = "cargo-deny-0.20.2-aarch64-apple-darwin/cargo-deny"
+            path, digest = self.make_archive(root, member)
+            tool = catalog.TOOLS["cargo-deny"]
             with patch.dict(os.environ, {"CARGO_HOME": str(root / "home")}), contextlib.redirect_stderr(io.StringIO()):
-                self.assertFalse(cli.install_archive(tool, archive.as_uri(), "0" * 64))
-                self.assertFalse((root / "home/bin/cargo-nextest").exists())
-                self.assertTrue(cli.install_archive(tool, archive.as_uri(), digest))
-            self.assertTrue(os.access(root / "home/bin/cargo-nextest", os.X_OK))
+                wrong = catalog.Archive("macos-aarch64", path.as_uri(), "0" * 64, member)
+                self.assertFalse(cli.install_archive(tool, wrong))
+                self.assertFalse((root / "home/bin/cargo-deny").exists())
+                self.assertTrue(cli.install_archive(tool, catalog.Archive("macos-aarch64", path.as_uri(), digest, member)))
+            self.assertTrue(os.access(root / "home/bin/cargo-deny", os.X_OK))
+            self.assertEqual(sorted(item.name for item in (root / "home/bin").iterdir()), ["cargo-deny"])
+
+    def run_install(self, tool, installs, checks):
+        """Run install_tools for one fake tool. Returns the commands that it ran."""
+        commands = []
+
+        def run(command, **_options):
+            commands.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.dict(catalog.TOOLS, {tool.name: tool}), \
+                patch.object(catalog, "host_platform", return_value="linux-x86_64"), \
+                patch.object(cli, "install_archive", return_value=installs), \
+                patch.object(runner, "check_requirement", side_effect=checks), \
+                patch.object(cli.subprocess, "run", side_effect=run), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.install_tools([tool.name]), runner.EXIT_PASSED)
+        return commands
+
+    def test_setup_runs_after_an_archive_and_a_build_runs_only_without_one(self):
+        archive = catalog.Archive("linux-x86_64", "https://github.com/x/y/tool-1.0.tar.gz", "0" * 64, "tool")
+        tool = catalog.Tool("tool", "1.0", ("tool", "--version"), "tool 1.0", (("build", "tool"),),
+                            (archive,), setup=(("setup", "tool"),))
+        self.assertEqual(self.run_install(tool, True, ["missing", None]), [("setup", "tool")])
+        self.assertEqual(self.run_install(tool, False, ["missing"]), [("build", "tool"), ("setup", "tool")])
+        self.assertEqual(self.run_install(tool, True, [None]), [])
 
 
 class CommandLineTests(unittest.TestCase):

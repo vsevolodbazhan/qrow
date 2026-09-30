@@ -33,6 +33,7 @@ accept a test filter.
 | --- | --- | --- |
 | `fmt` | Rust formatting. | Rust |
 | `clippy` | Clippy for the core library and, on macOS, the application. | Rust |
+| `clippy-app` | Clippy for the application with all features. | macOS |
 | `rustdoc` | Rust API documentation without warnings. | Rust |
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
@@ -50,8 +51,9 @@ accept a test filter.
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
-macOS and are not available on Linux: `ui`, `e2e`, `perf-ui`, `perf-e2e`,
-`perf-app`, `package`, and `desktop`.
+macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
+`perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
+pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
 Spark servers. `desktop` also takes over the desktop. These suites, the
@@ -166,10 +168,12 @@ a prerequisite is missing.
 `./qtest install` installs the pinned Cargo tools: cargo-nextest,
 cargo-deny, cargo-machete, and cargo-llvm-cov with its LLVM component. Give
 tool names to install only those tools. The [catalog](../scripts/qtest/catalog.py)
-holds the pinned versions. On macOS and Linux, cargo-nextest comes from its
-prebuilt release archive, which takes seconds. qtest checks the archive
-against the SHA-256 digest in the catalog, and builds the tool from source
-when the download fails. The other tools build from source.
+holds the pinned versions and the prebuilt release archives of each tool.
+On Apple silicon Macs and on x86_64 Linux, each tool comes from its archive,
+which takes seconds. qtest checks the archive against the SHA-256 digest in
+the catalog. When the download or the check fails, qtest builds the tool from
+source. On other computers, the tools that have no archive for the computer
+build from source.
 
 Install the script linters separately:
 
@@ -184,9 +188,11 @@ When Docker is installed but its daemon is not running, `backend` and
 
 The `backend`, `e2e`, and `desktop` suites share one set of disposable
 servers in a run. qtest builds the test programs and the app package first,
-then starts the servers. The servers are ready when the synthetic user `qrow`
-gets an answer to `SELECT 1`. This answer also starts the Spark engine of the
-user, so the first test does not wait for an engine start.
+then starts the servers. When two suites use the same test program, for
+example `e2e` and `perf-e2e`, qtest builds it once. The servers are ready
+when the synthetic user `qrow` gets an answer to `SELECT 1`. This answer also
+starts the Spark engine of the user, so the first test does not wait for an
+engine start.
 
 To keep the servers running between runs, start them yourself:
 
@@ -272,6 +278,10 @@ The driver at `target/e2e-tools/native-driver`, or the terminal that starts
 it, needs the Accessibility and Screen Recording permissions. Give them in
 System Settings when preflight reports that they are missing. Preflight
 writes `target/e2e-tools/preflight.log`. It does not change the settings.
+`./qtest run desktop` runs the preflight before it builds the package. The
+driver also checks the permissions each time it starts. `./qtest ci JOB`
+stops before it builds or starts servers when a prerequisite of a suite is
+missing, so the `e2e` job fails at once without the permissions.
 
 The suite builds a release package in the run directory. It does not replace
 `dist/Qrow.app`. It uses a temporary workspace and new synthetic Keychain
@@ -528,7 +538,7 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | --- | --- | --- | --- |
 | `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
-| `ui` | macOS | `clippy`, `unit`, `ui` | `core` |
+| `ui` | macOS | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS | `package`, and `perf-app` (report only) | `core` |
 | `backend` | Linux | `backend` with Docker | `core` |
 | `e2e` | macOS | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
@@ -536,8 +546,10 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 
 The failures of `core` predict the failures of the macOS and server jobs, so
 these jobs wait for it. `e2e` also waits for the package that it tests. A
-failed job skips the jobs that wait for it. A report-only suite runs, and its
-measurements go into the run summary. Its failure does not fail the job.
+failed job skips the jobs that wait for it. `static` lints the core library,
+and `ui` lints the application, so each Clippy pass runs in one job. A
+report-only suite runs, and its measurements go into the run summary. Its
+failure does not fail the job.
 
 A `plan` job selects the jobs of a pull request from its changed files. It
 always selects `static`. Changes to Rust sources select all jobs. Changes to
@@ -554,9 +566,11 @@ In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
 accessibility APIs. `e2e` runs on the hosted `macos-15` runner, and its
 suites share one set of servers. The native archives download from the
-mirror in each run, with a limit of 2 hours for each archive. Runs on `main`
-save the Rust build caches. Other runs only restore them. CI keeps its
-artifacts for one day. Runs on `main` also keep the measurements of the
+mirror in each run, with a limit of 2 hours for each archive. Each Rust build
+cache belongs to one job, and only that job saves it. `e2e` also restores the
+cache of `ui`, because `ui` also builds the E2E test binary. Runs on `main`
+save the build caches. Other runs only restore them. CI keeps its artifacts
+for one day. Runs on `main` also keep the measurements of the
 `package`, `e2e`, and `perf` jobs for 90 days, in the `performance-JOB`
 artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow

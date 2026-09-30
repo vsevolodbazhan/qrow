@@ -146,6 +146,25 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(caches), checks.count("rust-cache@"))
         self.assertTrue(all(value in ("${{ github.ref == 'refs/heads/main' }}", "false") for value in caches))
 
+    def test_each_rust_cache_has_one_job_that_saves_it(self):
+        caches = {}
+        for name in catalog.CI_JOBS:
+            match = re.search(r"shared-key: (\S+)\n\s+save-if: (.*)\n", job(name))
+            if match:
+                caches.setdefault(match.group(1), []).append((name, match.group(2) != "false"))
+        for key, users in caches.items():
+            with self.subTest(key=key):
+                self.assertEqual(sum(saves for _, saves in users), 1, users)
+        # Core builds only under cargo-llvm-cov, so its cache does not have the backend build.
+        self.assertIn("backend", [name for name, _ in caches["backend"]])
+
+    def test_the_no_default_features_lint_runs_in_one_job(self):
+        self.assertIn("clippy", catalog.CI_JOBS["static"].suites)
+        self.assertEqual(catalog.CI_JOBS["static"].runner, catalog.LINUX)
+        linted = [name for name, ci_job in catalog.CI_JOBS.items() if "clippy" in ci_job.suites]
+        self.assertEqual(linted, ["static"])
+        self.assertIn("clippy-app", catalog.CI_JOBS["ui"].suites)
+
     def test_artifacts_expire_and_main_keeps_performance_history(self):
         checks = read(CHECKS)
         uploads = re.findall(r"upload-artifact@.*\n((?:\s{8,}.*\n)+)", checks)
@@ -160,6 +179,12 @@ class WorkflowTests(unittest.TestCase):
         for name in ("package", "e2e", "perf"):
             self.assertIn(f"name: performance-{name}\n", job(name))
             self.assertIn("if: github.ref == 'refs/heads/main'", job(name))
+
+    def test_the_desktop_suite_runs_the_only_permission_preflight(self):
+        # `./qtest ci e2e` checks the permissions before it builds or starts servers.
+        self.assertNotIn("driver.sh", job("e2e"))
+        self.assertIn("desktop", catalog.SUITES["desktop"].requires)
+        self.assertIn("e2e", [name for name, ci_job in catalog.CI_JOBS.items() if "desktop" in ci_job.suites])
 
     def test_native_e2e_downloads_come_from_the_mirror_without_an_actions_cache(self):
         # The mirror downloads the archives faster than an Actions cache restores them.

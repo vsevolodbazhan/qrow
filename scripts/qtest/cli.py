@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+import tarfile
 
 import catalog
 import runner  # Adds scripts/e2e to the import path for fixture.
@@ -173,7 +174,10 @@ def command_ci(args):
     selected, _ = runner.resolve(names)
     output = runner.Output(quiet=False)
     output.note(f"CI job {job.name}: {', '.join(names)}")
-    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output, report_only=job.report_only)
+    # A CI job stops at once when a prerequisite is missing, for example the
+    # automation permissions of the desktop suite, so it builds nothing.
+    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output,
+                         report_only=job.report_only, require_all=True)
     print_summary(summary)
     return summary["exit_code"]
 
@@ -203,7 +207,7 @@ def command_doctor(args):
     for suite in suites:
         for requirement in suite.requires:
             if requirement not in results:
-                results[requirement] = runner.check_requirement(requirement, options, thorough=True)
+                results[requirement] = runner.check_requirement(requirement, options)
     report = [{"requirement": name, "ok": fix is None, "fix": fix,
                "suites": [suite.name for suite in suites if name in suite.requires]}
               for name, fix in results.items()]
@@ -226,28 +230,30 @@ def command_install(args):
     return install_tools(names)
 
 
-def install_archive(tool, url, digest):
-    """Download a prebuilt tool archive, check its digest, and unpack it into the Cargo bin directory."""
+def install_archive(tool, archive):
+    """Download a prebuilt tool archive, check its digest, and unpack the tool into the Cargo bin directory."""
     import hashlib
     import os
-    import tarfile
+    import shutil
     import tempfile
     import urllib.request
     from pathlib import Path
     bin_dir = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo")) / "bin"
-    print(f"[qtest] Downloading {url}", file=sys.stderr)
+    print(f"[qtest] Downloading {archive.url}", file=sys.stderr)
     with tempfile.TemporaryDirectory() as directory:
-        archive = Path(directory) / "tool.tar.gz"
-        with urllib.request.urlopen(url, timeout=120) as response:
-            archive.write_bytes(response.read())
-        actual = hashlib.sha256(archive.read_bytes()).hexdigest()
-        if actual != digest:
-            print(f"[qtest] {tool.name}: SHA-256 {actual} does not match the pinned {digest}.", file=sys.stderr)
+        bundle_path = Path(directory) / "tool.tar.gz"
+        with urllib.request.urlopen(archive.url, timeout=120) as response:
+            bundle_path.write_bytes(response.read())
+        actual = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
+        if actual != archive.sha256:
+            print(f"[qtest] {tool.name}: SHA-256 {actual} does not match the pinned {archive.sha256}.",
+                  file=sys.stderr)
             return False
-        with tarfile.open(archive) as bundle:
-            member = bundle.getmember(tool.name)
-            bin_dir.mkdir(parents=True, exist_ok=True)
-            bundle.extract(member, bin_dir, filter="data")
+        unpacked = Path(directory) / "unpacked"
+        with tarfile.open(bundle_path) as bundle:
+            bundle.extract(bundle.getmember(archive.member), unpacked, filter="data")
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(unpacked / archive.member, bin_dir / tool.name)
         (bin_dir / tool.name).chmod(0o755)
     return True
 
@@ -258,16 +264,16 @@ def install_tools(names):
         if runner.check_requirement(name, {}) is None:
             print(f"[qtest] {name} {tool.version} is installed.", file=sys.stderr)
             continue
-        archive = next(((url, digest) for target, url, digest in tool.archives
-                        if target == catalog.target_triple()), None)
+        archive = next((archive for archive in tool.archives if archive.platform == catalog.host_platform()), None)
+        installed = False
         if archive:
             try:
-                if install_archive(tool, *archive) and runner.check_requirement(name, {}) is None:
-                    continue
-            except OSError as error:
-                print(f"[qtest] {name}: download failed ({error}).", file=sys.stderr)
-            print(f"[qtest] {name}: building it from source instead.", file=sys.stderr)
-        for command in tool.install:
+                installed = install_archive(tool, archive) and runner.check_requirement(name, {}) is None
+            except (OSError, KeyError, tarfile.TarError) as error:
+                print(f"[qtest] {name}: the archive did not install ({error}).", file=sys.stderr)
+            if not installed:
+                print(f"[qtest] {name}: building it from source instead.", file=sys.stderr)
+        for command in (() if installed else tool.install) + tool.setup:
             print(f"[qtest] $ {subprocess.list2cmdline(command)}", file=sys.stderr)
             if subprocess.run(command, cwd=ROOT).returncode:
                 return EXIT_FAILED

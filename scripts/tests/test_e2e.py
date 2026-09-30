@@ -104,3 +104,13 @@ class DriverTests(unittest.TestCase):
         self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE", driver)
         self.assertIn("ditto -x -k", driver)
         self.assertIn("QROW_E2E_BUNDLE/Contents/MacOS/qrow", driver)
+
+    def test_only_preflight_mode_checks_permissions_and_only_the_driver_run_cleans_up(self):
+        driver = (ROOT / "scripts/e2e/driver.sh").read_text()
+        preflight = driver.index('if [ "${1:-}" = --preflight ]; then')
+        self.assertEqual(driver.count("native-driver --preflight"), 1)
+        self.assertLess(preflight, driver.index("native-driver --preflight"))
+        self.assertLess(driver.index("native-driver --preflight"), driver.index("    exit 0\nfi\n", preflight))
+        prepare_exit = driver.index('test "${1:-}" != --prepare || exit 0')
+        self.assertLess(prepare_exit, driver.index("trap cleanup 0"))
+        self.assertEqual(driver.count("trap cleanup 0"), 1)

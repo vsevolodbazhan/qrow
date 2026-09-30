@@ -10,14 +10,21 @@ import re
 MACOS = platform.system() == "Darwin"
 
 
-def target_triple():
-    """The target of the prebuilt tool archives for this computer, or None."""
-    if MACOS:
-        return "universal-apple-darwin"
-    if platform.system() == "Linux":
-        machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
-        return f"{machine}-unknown-linux-gnu"
-    return None
+def host_platform():
+    """The platform of the prebuilt tool archives for this computer, like `macos-aarch64`, or None."""
+    system = {"Darwin": "macos", "Linux": "linux"}.get(platform.system())
+    machine = {"amd64": "x86_64", "arm64": "aarch64"}.get(platform.machine().lower(), platform.machine().lower())
+    return f"{system}-{machine}" if system else None
+
+
+@dataclass(frozen=True)
+class Archive:
+    """A prebuilt release archive of a tool, pinned by its SHA-256 digest."""
+    platform: str
+    url: str
+    sha256: str
+    # The path of the executable in the archive.
+    member: str
 
 
 @dataclass(frozen=True)
@@ -28,30 +35,65 @@ class Tool:
     version_command: tuple[str, ...]
     version_prefix: str
     install: tuple[tuple[str, ...], ...]
-    # Prebuilt archives by target: (URL, SHA-256). `qtest install` downloads
-    # the archive for this computer, checks its digest, and falls back to
-    # `install` when there is none. A download takes seconds, a build minutes.
-    archives: tuple[tuple[str, str, str], ...] = ()
+    # `qtest install` downloads the archive for this computer, checks its
+    # digest, and falls back to `install` when there is none. A download takes
+    # seconds, a build minutes.
+    archives: tuple[Archive, ...] = ()
+    # Commands that run after either kind of installation.
+    setup: tuple[tuple[str, ...], ...] = ()
 
 
+def github_archives(repository, tag, member, platforms):
+    """Archives of a GitHub release. `platforms` maps a platform to (asset name, SHA-256)."""
+    return tuple(Archive(key, f"https://github.com/{repository}/releases/download/{tag}/{asset}", digest,
+                         member.format(asset=asset.removesuffix(".tar.gz")))
+                 for key, (asset, digest) in platforms.items())
+
+
+# The digests are the SHA-256 digests of the release assets, calculated from
+# the downloaded files. CI uses linux-x86_64 and macos-aarch64.
+NEXTEST_MACOS = ("cargo-nextest-0.9.146-universal-apple-darwin.tar.gz",
+                 "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8")
+LLVM_COV_MACOS = ("cargo-llvm-cov-universal-apple-darwin.tar.gz",
+                  "cc00420e3a5500e4d603399fde223d76d84c1446102d1b60a9fbbbce1c1c2b52")
 TOOLS = {
     tool.name: tool
     for tool in [
         Tool("cargo-nextest", "0.9.146", ("cargo", "nextest", "--version"), "cargo-nextest 0.9.146",
              (("cargo", "install", "--locked", "cargo-nextest", "--version", "0.9.146"),),
-             tuple((target, "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.146/"
-                    f"cargo-nextest-0.9.146-{target}.tar.gz", digest) for target, digest in [
-                 ("universal-apple-darwin", "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8"),
-                 ("x86_64-unknown-linux-gnu", "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
-                 ("aarch64-unknown-linux-gnu", "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
-             ])),
+             github_archives("nextest-rs/nextest", "cargo-nextest-0.9.146", "cargo-nextest", {
+                 "macos-aarch64": NEXTEST_MACOS,
+                 "macos-x86_64": NEXTEST_MACOS,
+                 "linux-x86_64": ("cargo-nextest-0.9.146-x86_64-unknown-linux-gnu.tar.gz",
+                                  "682c21b777c333e96fd532e114d3a5a894e0729ab88d94c0a9f20f8419695428"),
+                 "linux-aarch64": ("cargo-nextest-0.9.146-aarch64-unknown-linux-gnu.tar.gz",
+                                   "b2e33d7c72de7ade0ff7b3a948ac37516b24f8a836b7a8870c1f634a94be9de9"),
+             })),
         Tool("cargo-deny", "0.20.2", ("cargo", "deny", "--version"), "cargo-deny 0.20.2",
-             (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),)),
+             (("cargo", "install", "--locked", "cargo-deny", "--version", "0.20.2"),),
+             github_archives("EmbarkStudios/cargo-deny", "0.20.2", "{asset}/cargo-deny", {
+                 "macos-aarch64": ("cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz",
+                                   "fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"),
+                 "linux-x86_64": ("cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz",
+                                  "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"),
+             })),
         Tool("cargo-machete", "0.9.2", ("cargo", "machete", "--version"), "0.9.2",
-             (("cargo", "install", "--locked", "cargo-machete", "--version", "0.9.2"),)),
+             (("cargo", "install", "--locked", "cargo-machete", "--version", "0.9.2"),),
+             github_archives("bnjbvr/cargo-machete", "v0.9.2", "{asset}/cargo-machete", {
+                 "macos-aarch64": ("cargo-machete-v0.9.2-aarch64-apple-darwin.tar.gz",
+                                   "63e28fee386d82d33f2d12406c857f98e2d4697f3f7df7f71f34dff07fca0fde"),
+                 "linux-x86_64": ("cargo-machete-v0.9.2-x86_64-unknown-linux-musl.tar.gz",
+                                  "48200087f54c55aabcd4db4af1e25742b49846c02a1b1bfa134711945b35b2e9"),
+             })),
         Tool("cargo-llvm-cov", "0.9.1", ("cargo", "llvm-cov", "--version"), "cargo-llvm-cov 0.9.1",
-             (("cargo", "install", "--locked", "cargo-llvm-cov", "--version", "0.9.1"),
-              ("rustup", "component", "add", "llvm-tools-preview"))),
+             (("cargo", "install", "--locked", "cargo-llvm-cov", "--version", "0.9.1"),),
+             github_archives("taiki-e/cargo-llvm-cov", "v0.9.1", "cargo-llvm-cov", {
+                 "macos-aarch64": LLVM_COV_MACOS,
+                 "macos-x86_64": LLVM_COV_MACOS,
+                 "linux-x86_64": ("cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz",
+                                  "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a"),
+             }),
+             setup=(("rustup", "component", "add", "llvm-tools-preview"),)),
     ]
 }
 
@@ -94,6 +136,11 @@ def nextest(expression, *arguments):
 
 PYTHON = "{python}"  # Replaced with the interpreter that runs qtest.
 
+CLIPPY_CORE = Step(("cargo", "clippy", "--locked", "--no-default-features", "--all-targets", "--", "-D", "warnings"))
+CLIPPY_APP = Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"))
+# The e2e and perf-e2e suites use the same test binary. A run builds it once.
+E2E_BUILD = Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e"))
+
 _UNIT = (
     (nextest("not binary(ui)"), Step(("cargo", "test", "--locked", "--doc")))
     if MACOS else
@@ -107,8 +154,10 @@ SUITES = {
         Suite("fmt", "Rust formatting.", ("cargo",),
               (Step(("cargo", "fmt", "--all", "--", "--check")),)),
         Suite("clippy", "Clippy for the core library and, on macOS, the application.", ("cargo",),
-              (Step(("cargo", "clippy", "--locked", "--no-default-features", "--all-targets", "--", "-D", "warnings")),
-               *((Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings")),) if MACOS else ()))),
+              (CLIPPY_CORE, *((CLIPPY_APP,) if MACOS else ()))),
+        # The ui CI job lints the application. The static job lints the core library.
+        Suite("clippy-app", "Clippy for the application with all features.", ("cargo", "macos"),
+              (CLIPPY_APP,), macos_only=True),
         Suite("rustdoc", "Rust API documentation without warnings.", ("cargo",),
               (Step(("cargo", "doc", "--locked", "--no-default-features", "--no-deps"),
                     env=(("RUSTDOCFLAGS", "-D warnings"),)),)),
@@ -146,7 +195,7 @@ SUITES = {
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
               (nextest("binary(e2e) & not test(/^perf::/)", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
-              prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
+              prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, and editor timings of the real window in a release-like build.",
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
@@ -155,7 +204,7 @@ SUITES = {
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
               (nextest("binary(e2e) & test(/^perf::/)", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True, fixture="any",
-              prepare=(Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e")),)),
+              prepare=(E2E_BUILD,)),
         Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
               ("cargo", "uv", "macos"),
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
@@ -251,7 +300,7 @@ CI_JOBS = {
               ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
         CiJob("core", "Core unit tests with line coverage.", LINUX, ("coverage",), paths=RUST_PATHS),
         CiJob("ui", "Lint of the application, unit tests, and the headless window.", MACOS_RUNNER,
-              ("clippy", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+              ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
         CiJob("package", "The release package, its size, and the launch and idle probes of the app.",
               MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),

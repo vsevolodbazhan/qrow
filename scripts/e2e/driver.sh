@@ -19,11 +19,15 @@ mkdir -p target/e2e-tools
 if [ ! -x target/e2e-tools/native-driver ] || [ -n "$(find tests/desktop/Driver.swift -newer target/e2e-tools/native-driver -print)" ]; then
     swiftc -warnings-as-errors tests/desktop/Driver.swift -o target/e2e-tools/native-driver
 fi
-if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log 2>&1; then
-    cat target/e2e-tools/preflight.log >&2
-    exit 1
+# Only this mode runs the permission check. In the other modes, the driver
+# checks the permissions when it starts.
+if [ "${1:-}" = --preflight ]; then
+    if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log 2>&1; then
+        cat target/e2e-tools/preflight.log >&2
+        exit 1
+    fi
+    exit 0
 fi
-test "${1:-}" != --preflight || exit 0
 export QROW_DATA_DIR="$QROW_E2E_ARTIFACTS/workspace"
 export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
@@ -34,12 +38,6 @@ case "$QROW_E2E_REUSE_MACOS_PACKAGE" in
     *) echo "QROW_E2E_REUSE_MACOS_PACKAGE must be true or false." >&2; exit 1 ;;
 esac
 mkdir -p "$QROW_DATA_DIR"
-cleanup() {
-    uv run --locked python scripts/e2e/keychain.py
-}
-trap cleanup 0
-trap 'exit 130' INT
-trap 'exit 143' TERM
 if [ "${1:-}" != --prepared ]; then
     if [ "$QROW_E2E_REUSE_MACOS_PACKAGE" = true ]; then
         if [ ! -f "$QROW_MACOS_PACKAGE" ]; then
@@ -62,6 +60,13 @@ if [ ! -d "$QROW_E2E_BUNDLE" ] || [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" 
     exit 1
 fi
 test "${1:-}" != --prepare || exit 0
+# Only the driver adds synthetic Keychain items, so the preparation needs no cleanup.
+cleanup() {
+    uv run --locked python scripts/e2e/keychain.py
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # Every run starts from empty workspaces. `./qtest run desktop --repeat N`
 # runs again only after a pass, so the previous workspaces are not needed.
 rm -rf "$QROW_DATA_DIR"
