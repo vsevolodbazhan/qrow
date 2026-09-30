@@ -425,11 +425,19 @@ def new_run_dir():
     return path
 
 
-def run(selected, options, extra, output, fail_fast=False, report_only=()):
-    """Run the selected suites. A failure of a `report_only` suite does not fail the run."""
+def run(selected, options, extra, output, fail_fast=False, report_only=(), require_all=False):
+    """Run the selected suites. A failure of a `report_only` suite does not fail the run.
+
+    With `require_all`, a missing prerequisite of a suite that is not
+    report-only stops the run before any suite, build, or server starts.
+    """
     run_dir = new_run_dir()
     results = [None] * len(selected)
     blocked = [precheck(item, options) for item in selected]
+    if require_all and any(result and result.status == "missing" and result.name not in report_only
+                           for result in blocked):
+        blocked = [result or SuiteResult(item.suite.name, "skipped", reason="A prerequisite of the run is missing.")
+                   for item, result in zip(selected, blocked)]
     served = [index for index, item in enumerate(selected) if item.suite.fixture and blocked[index] is None]
     session = FixtureSession(options, run_dir, output,
                              any(selected[index].suite.fixture == "docker" for index in served)) if served else None

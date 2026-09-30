@@ -180,6 +180,12 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(f"name: performance-{name}\n", job(name))
             self.assertIn("if: github.ref == 'refs/heads/main'", job(name))
 
+    def test_the_desktop_suite_runs_the_only_permission_preflight(self):
+        # `./qtest ci e2e` checks the permissions before it builds or starts servers.
+        self.assertNotIn("driver.sh", job("e2e"))
+        self.assertIn("desktop", catalog.SUITES["desktop"].requires)
+        self.assertIn("e2e", [name for name, ci_job in catalog.CI_JOBS.items() if "desktop" in ci_job.suites])
+
     def test_native_e2e_downloads_come_from_the_mirror_without_an_actions_cache(self):
         # The mirror downloads the archives faster than an Actions cache restores them.
         body = job("e2e")

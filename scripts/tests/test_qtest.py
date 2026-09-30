@@ -211,6 +211,22 @@ class RunTests(unittest.TestCase):
         self.assertEqual(check["status"], "passed")
         self.assertNotIn("report_only", check)
 
+    def test_a_missing_prerequisite_stops_a_run_that_requires_all(self):
+        marker = Path(os.environ["CARGO_TARGET_DIR"]) / "ran"
+        selected = [runner.Selected(fake_suite("first", f"touch {marker}")),
+                    runner.Selected(fake_suite("needs", "exit 0", requires=("desktop",)))]
+        with patch.object(runner, "check_requirement", side_effect=lambda name, _: "Grant it." if name == "desktop" else None):
+            summary = runner.run(selected, {"repeat": 1}, [], runner.Output(quiet=True), require_all=True)
+        self.assertFalse(marker.exists())
+        self.assertEqual((summary["status"], summary["exit_code"]), ("missing", runner.EXIT_MISSING))
+        self.assertEqual([suite["status"] for suite in summary["suites"]], ["skipped", "missing"])
+
+    def test_ci_jobs_stop_before_they_build_when_a_prerequisite_is_missing(self):
+        with patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
+                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(["ci", "e2e"])
+        self.assertTrue(run.call_args.kwargs["require_all"])
+
     def test_step_environment_names_the_target_directory(self):
         step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
         summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))

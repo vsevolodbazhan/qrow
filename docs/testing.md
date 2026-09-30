@@ -279,7 +279,9 @@ it, needs the Accessibility and Screen Recording permissions. Give them in
 System Settings when preflight reports that they are missing. Preflight
 writes `target/e2e-tools/preflight.log`. It does not change the settings.
 `./qtest run desktop` runs the preflight before it builds the package. The
-driver also checks the permissions each time it starts.
+driver also checks the permissions each time it starts. `./qtest ci JOB`
+stops before it builds or starts servers when a prerequisite of a suite is
+missing, so the `e2e` job fails at once without the permissions.
 
 The suite builds a release package in the run directory. It does not replace
 `dist/Qrow.app`. It uses a temporary workspace and new synthetic Keychain

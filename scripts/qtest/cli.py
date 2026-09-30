@@ -174,7 +174,10 @@ def command_ci(args):
     selected, _ = runner.resolve(names)
     output = runner.Output(quiet=False)
     output.note(f"CI job {job.name}: {', '.join(names)}")
-    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output, report_only=job.report_only)
+    # A CI job stops at once when a prerequisite is missing, for example the
+    # automation permissions of the desktop suite, so it builds nothing.
+    summary = runner.run(selected, {"runtime": job.runtime, "repeat": 1}, [], output,
+                         report_only=job.report_only, require_all=True)
     print_summary(summary)
     return summary["exit_code"]
 

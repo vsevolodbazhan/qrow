@@ -238,10 +238,6 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
-      # Fail before the Java setup and the package download. The desktop suite
-      # checks the permissions again before it starts.
-      - name: Check native automation permissions
-        run: sh scripts/e2e/driver.sh --preflight
       - name: Select Java 17
         run: |
           echo "JAVA_HOME=$JAVA_HOME_17_arm64" >> "$GITHUB_ENV"
