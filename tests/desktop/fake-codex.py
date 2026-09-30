@@ -133,9 +133,18 @@ def call_tool(thread, turn, tool, arguments, handler, replay=False):
         send(call)
 
 
-def finish_turn(thread, turn, text, delay=0):
+def wait_for_marker(name, seconds=60):
+    """Waits until the test creates the marker file `name`, or for `seconds`."""
+    marker = os.path.join(state_dir, name)
+    deadline = time.monotonic() + seconds
+    while not os.path.exists(marker) and time.monotonic() < deadline:
+        time.sleep(0.05)
+
+
+def finish_turn(thread, turn, text, marker=None):
     def finish():
-        time.sleep(delay)
+        if marker:
+            wait_for_marker(marker)
         send({"method": "item/agentMessage/delta", "params": {"threadId": thread, "turnId": turn, "delta": text}})
         send(
             {
@@ -149,10 +158,7 @@ def finish_turn(thread, turn, text, delay=0):
 
 def hold_turn(thread, turn, label, tab):
     """Waits for the driver, appends a query to the conversation tab, and asks to run it."""
-    marker = os.path.join(state_dir, f"release-{label}")
-    deadline = time.monotonic() + 60
-    while not os.path.exists(marker) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_for_marker(f"release-{label}")
     sql = {"Alpha": "SELECT 11", "Beta": "SELECT 22"}[label]
 
     def appended(success, result):
@@ -170,8 +176,8 @@ def hold_turn(thread, turn, label, tab):
 
     def ran(success, result):
         outcome = "ran" if success else result.get("error", {}).get("code", "failed")
-        # The driver selects another conversation before this turn ends.
-        finish_turn(thread, turn, f"Finished {label}: {outcome}", delay=2)
+        # The test selects another conversation before the Beta turn ends.
+        finish_turn(thread, turn, f"Finished {label}: {outcome}", marker="finish-Beta" if label == "Beta" else None)
 
     arguments = {
         "version": 1,
@@ -185,10 +191,7 @@ def hold_turn(thread, turn, label, tab):
 
 def sign_in_elsewhere():
     # Like a sign-in in another Codex client after a failed sign-in in Qrow.
-    marker = os.path.join(state_dir, "sign-in-elsewhere")
-    deadline = time.monotonic() + 30
-    while not os.path.exists(marker) and time.monotonic() < deadline:
-        time.sleep(0.05)
+    wait_for_marker("sign-in-elsewhere", 30)
     os.remove(signed_out_path)
     send({"method": "account/updated", "params": {"authMode": "chatgpt", "planType": "plus"}})
 
@@ -209,7 +212,9 @@ for line in sys.stdin:
         handler(result["success"], json.loads(result["contentItems"][0]["text"]))
         continue
     if method == "initialize":
-        time.sleep(5)  # Keep the startup controls visible through the UI checks.
+        if os.path.exists(os.path.join(state_dir, "hold-initialize")):
+            # Keep the startup controls visible through the UI checks.
+            wait_for_marker("initialize-release")
         send({"id": request_id, "result": {}})
     elif method == "account/read":
         signed_out = os.path.exists(signed_out_path)
@@ -271,10 +276,7 @@ for line in sys.stdin:
         prompt = params["input"][0]["text"]
         if "Hold title generation" in prompt:
             open(os.path.join(state_dir, "title-generation-pending"), "w").close()
-            release = os.path.join(state_dir, "title-generation-release")
-            deadline = time.monotonic() + 60
-            while not os.path.exists(release) and time.monotonic() < deadline:
-                time.sleep(0.05)
+            wait_for_marker("title-generation-release")
         fail_once = os.path.join(state_dir, "title-failure-once")
         if "Fail title generation" in prompt and not os.path.exists(fail_once):
             open(fail_once, "w").close()
@@ -387,17 +389,14 @@ for line in sys.stdin:
             open(os.path.join(state_dir, "first-reply-pending"), "w").close()
 
             def release_first_reply():
-                marker = os.path.join(state_dir, "first-reply-release")
-                deadline = time.monotonic() + 60
-                while not os.path.exists(marker) and time.monotonic() < deadline:
-                    time.sleep(0.05)
+                wait_for_marker("first-reply-release")
                 finish_turn(thread_id, turn_id, "I can help with this query.")
 
             threading.Thread(target=release_first_reply, daemon=True).start()
             continue
         if message.startswith("Return to the latest message"):
-            # Keep the turn open long enough to observe the working indicator.
-            time.sleep(8)
+            # Keep the turn open until the test observed the working indicator.
+            wait_for_marker("latest-release")
         if message.startswith("Disconnect Codex"):
             # Stop during the turn, like a Codex crash.
             sys.exit(0)
@@ -405,10 +404,7 @@ for line in sys.stdin:
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
             other = next(item for item in context["tabs"] if item["id"] != tab["id"])
-            marker = os.path.join(state_dir, "wrong-tab-ready")
-            deadline = time.monotonic() + 15
-            while not os.path.exists(marker) and time.monotonic() < deadline:
-                time.sleep(0.05)
+            wait_for_marker("wrong-tab-ready", 15)
             pending_edit = turn_id
             send(
                 {
@@ -562,10 +558,7 @@ for line in sys.stdin:
                 }
             )
         elif message.startswith("Run tab selected after rename"):
-            marker = os.path.join(state_dir, "retarget-ready")
-            deadline = time.monotonic() + 15
-            while not os.path.exists(marker) and time.monotonic() < deadline:
-                time.sleep(0.05)
+            wait_for_marker("retarget-ready", 15)
             pending_read_retry = turn_id
             send(
                 {

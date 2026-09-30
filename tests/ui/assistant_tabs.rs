@@ -180,6 +180,8 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     app.wait_editor(cx, "SELECT 11");
     app.wait_approval(cx, "Run in Query 1 · Alpha? SELECT 11");
+    // The Beta turn ends only now, while another conversation is shown.
+    codex.mark("finish-Beta");
     app.show_threads(cx);
     app.wait_label_containing(cx, "Beta, assistant reply ready");
     app.show_conversation(cx);

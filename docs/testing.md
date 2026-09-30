@@ -436,7 +436,9 @@ Assistant tests use the synthetic Codex server in
 `FakeCodex::new()` gives a workspace directory and a Codex executable for
 it. `codex.workspace(...)` turns on the assistant with this executable.
 Some messages make the server wait for a marker file, which
-`codex.mark(name)` creates. The
+`codex.mark(name)` creates. Without the marker files, the server answers at
+once. For example, it answers `initialize` only after `initialize-release`
+when the test creates `hold-initialize` before the launch. The
 [assistant support](../tests/support/assistant.rs) sends messages and reads
 the transcript, the editor, and the approval card.
 
@@ -592,8 +594,6 @@ events, required checks, and releases.
 - GPUI's leak detector fails a UI test that ends with a leaked entity. GPUI
   Kit's `context_menu` keeps each dismissed menu alive, so Qrow opens its
   context menus itself.
-- An assistant test waits about 5 seconds while the synthetic Codex server
-  starts.
 - The servers have room for one Spark engine. Tests connect only as `qrow`.
 - `--repeat` runs complete suites again. It does not run one test in a loop.
 - The UI probes run on GPUI's test platform, which lays out and paints
