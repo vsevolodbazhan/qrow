@@ -92,9 +92,9 @@ impl WorkspaceFile {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
+        let json = serde_json::to_vec_pretty(workspace)?;
         let mut file = options.open(&temporary.0)?;
-        serde_json::to_writer_pretty(&mut file, workspace)?;
-        file.flush()?;
+        file.write_all(&json)?;
         file.sync_all()?;
         fs::rename(&temporary.0, &self.path)?;
         fs::File::open(parent)?.sync_all()?;
