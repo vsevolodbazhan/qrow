@@ -50,7 +50,9 @@ If an incoming batch would exceed either limit, Qrow discards that batch and
 closes the cursor. Previously downloaded rows remain available. The memory
 limit measures retained row storage, not the total application memory.
 
-Qrow fetches batches of up to 250 rows. It does not add a SQL `LIMIT` clause.
+Qrow asks for each page of 1,000 rows in one request. When the server sends
+fewer rows, Qrow asks for the remaining rows of the page. It does not add a
+SQL `LIMIT` clause.
 Client preview limits do not guarantee less server work. Each server response
 has a 64 MiB byte limit across all transport frames. Each frame also has a
 64 MiB limit. Before the decoder allocates strings or containers, it checks

@@ -683,6 +683,14 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Stream a long reply"):
+            # About 16 KB in 800 deltas, like a long streamed answer. Qrow
+            # buffers at most 1,024 events and drops the deltas after that.
+            for number in range(800):
+                delta = f"word{number} synthetic text " + ("\n\n" if number % 40 == 39 else "")
+                send({"method": "item/agentMessage/delta",
+                      "params": {"threadId": thread_id, "turnId": turn_id, "delta": delta}})
+            finish_turn(thread_id, turn_id, f"End of {message}")
         else:
             if message.startswith(("Report the SQL style", "Report the tab SQL")):
                 context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])

@@ -1,5 +1,5 @@
-//! Small SQL lexer for highlighting, statement ranges, single-statement
-//! validation, and checked formatting, not SQL parsing.
+//! Small SQL lexer for statement ranges, single-statement validation, and
+//! checked formatting, not SQL parsing.
 use serde::{Deserialize, Serialize};
 use sqlformat::{Dialect, FormatOptions, Indent, QueryParams};
 use std::ops::Range;
@@ -32,8 +32,10 @@ impl Default for SqlStyle {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
+    /// A keyword or a name without quotes, a run of ASCII whitespace, or
+    /// one byte of another symbol. `>=` is two tokens, so that formatting
+    /// can find symbols that join.
     Plain,
-    Keyword,
     String,
     Comment,
     Number,
@@ -41,6 +43,7 @@ pub enum Kind {
     Separator,
 }
 
+/// Splits `sql` into tokens that cover all of it, in order.
 pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
     let bytes = sql.as_bytes();
     let mut tokens = vec![];
@@ -106,10 +109,12 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
                 }
                 i += c.len_utf8();
             }
-            let word = sql[start..i].to_ascii_uppercase();
-            if "SELECT FROM WHERE GROUP BY ORDER HAVING LIMIT OFFSET AS WITH UNION ALL DISTINCT JOIN LEFT RIGHT FULL OUTER INNER CROSS ON AND OR NOT NULL IS IN EXISTS BETWEEN LIKE RLIKE CASE WHEN THEN ELSE END ASC DESC TRUE FALSE USE SET SHOW DESCRIBE EXPLAIN CREATE ALTER DROP INSERT INTO OVERWRITE TABLE VIEW DATABASE IF CAST TRY_CAST OVER PARTITION ROWS RANGE CURRENT ROW UNBOUNDED PRECEDING FOLLOWING WINDOW LATERAL VALUES DATE TIMESTAMP INTERVAL FETCH FIRST ONLY SEMI ANTI REPLACE".split_whitespace().any(|s| s == word) {
-                Kind::Keyword
-            } else { Kind::Plain }
+            Kind::Plain
+        } else if bytes[i].is_ascii_whitespace() {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            Kind::Plain
         } else {
             i += 1;
             if bytes[start] == b';' {
@@ -491,9 +496,7 @@ fn case_other_keywords(sql: &str, case: KeywordCase) -> String {
         .collect();
     let text = |i: usize| words.get(i).map_or("", |(range, _)| &sql[range.clone()]);
     let is_word = |i: usize| {
-        words
-            .get(i)
-            .is_some_and(|(_, kind)| matches!(kind, Kind::Plain | Kind::Keyword))
+        words.get(i).is_some_and(|(_, kind)| *kind == Kind::Plain)
             && text(i).starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
     };
     let mut result = sql.to_owned();
@@ -588,7 +591,7 @@ fn same_tokens(original: &str, formatted: &str) -> bool {
     let is_symbol = |t: &Significant| {
         t.kind == Kind::Plain && !starts_word(t) && !t.text.starts_with(|c| ",()[]".contains(c))
     };
-    let is_word = |t: &Significant| matches!(t.kind, Kind::Plain | Kind::Keyword) && starts_word(t);
+    let is_word = |t: &Significant| t.kind == Kind::Plain && starts_word(t);
     original.len() == formatted.len()
         && original
             .iter()
@@ -788,6 +791,27 @@ where pdate >= date '2026-09-26' and pdate < date '2026-09-28';"
         ] {
             assert_eq!(format_statement(&sql, SqlStyle::default()), None, "{sql}");
         }
+    }
+
+    #[test]
+    fn tokens_merge_whitespace_runs_and_keep_one_byte_symbols() {
+        let sql = "SELECT  \n a>=1;";
+        let texts: Vec<_> = tokens(sql)
+            .into_iter()
+            .map(|(range, kind)| (&sql[range], kind))
+            .collect();
+        assert_eq!(
+            texts,
+            [
+                ("SELECT", Kind::Plain),
+                ("  \n ", Kind::Plain),
+                ("a", Kind::Plain),
+                (">", Kind::Plain),
+                ("=", Kind::Plain),
+                ("1", Kind::Number),
+                (";", Kind::Separator),
+            ]
+        );
     }
 
     #[test]

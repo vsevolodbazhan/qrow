@@ -1,7 +1,10 @@
-use super::{Cancellation, Connector, QueryError, QueryState, Session, sasl, t_c_l_i_service::*};
+use super::{
+    Cancellation, Completion, Connector, QueryError, QueryState, Session, sasl, t_c_l_i_service::*,
+    wait_for_completion,
+};
 use crate::model::{Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row};
 use anyhow::{Context, Result, ensure};
-use std::{sync::Arc, thread, time::Duration};
+use std::sync::Arc;
 use zeroize::Zeroizing;
 
 pub struct HiveConnector;
@@ -111,14 +114,8 @@ impl Connector for HiveConnector {
                 "Kyuubi does not support columnar results (HiveServer2 protocol V6)"
             );
             connection.execute(&format!("USE `{}`", profile.database.replace('`', "``")))?;
-            loop {
-                match connection.poll()? {
-                    QueryState::Running => thread::sleep(Duration::from_millis(100)),
-                    QueryState::Finished { .. } => break,
-                    QueryState::Cancelled => {
-                        anyhow::bail!("Initial database selection was cancelled")
-                    }
-                }
+            if wait_for_completion(&mut connection, None)? == Completion::Cancelled {
+                anyhow::bail!("Initial database selection was cancelled");
             }
             connection.close_operation()?;
             Ok(())

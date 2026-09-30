@@ -7,6 +7,7 @@ use gpui_kit::test::TestWindowExt;
 use gpui_kit::{InputEvent as _, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px};
 use qrow::model::{SavedTab, Workspace};
 use std::time::Instant;
+use support::assistant::FakeCodex;
 use support::perf::{median_ms, report, sample};
 use support::{MemoryCredentials, TestApp, cell, elements, offline_profile};
 
@@ -93,4 +94,33 @@ fn editor_with_one_megabyte_of_sql(cx: &mut TestAppContext) {
     app.press(cx, "cmd-down");
     let samples = app.update(cx, |window, cx| sample(3, 20, || window.input("x", cx)));
     report("ui.editor.keystroke_1mb", median_ms(&samples), "ms", 50.);
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn assistant_transcript(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(Workspace::default());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    // Each reply streams about 16 KB in 800 deltas.
+    let samples: Vec<_> = (1..=3)
+        .map(|reply| {
+            let message = format!("Stream a long reply {reply}");
+            app.type_message(cx, &message);
+            let started = Instant::now();
+            app.click(cx, "assistant-send");
+            app.wait_reply(cx, &format!("End of {message}"));
+            started.elapsed()
+        })
+        .collect();
+    report(
+        "ui.assistant.stream_reply",
+        median_ms(&samples),
+        "ms",
+        5000.,
+    );
+    app.wait_idle(cx);
+    let samples = app.update(cx, |window, cx| sample(5, 40, || window.render_frame(cx)));
+    report("ui.assistant.frame", median_ms(&samples), "ms", 50.);
 }

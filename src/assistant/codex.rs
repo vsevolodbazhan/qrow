@@ -326,19 +326,19 @@ impl CodexHarness {
         Ok(())
     }
 
-    fn event_from_message(message: Value) -> Result<AssistantEvent> {
+    fn event_from_message(mut message: Value) -> Result<AssistantEvent> {
         let method = message
             .get("method")
             .and_then(Value::as_str)
             .context("Codex event has no method")?
             .to_owned();
-        let params = message.get("params").cloned().unwrap_or(Value::Null);
-        if let Some(request_id) = message.get("id") {
+        let mut params = message.get_mut("params").map_or(Value::Null, Value::take);
+        if let Some(request_id) = message.get_mut("id").map(Value::take) {
             if method == "item/tool/call" {
                 let call: DynamicToolCall = serde_json::from_value(params)
                     .context("Codex tool call has an invalid shape")?;
                 return Ok(AssistantEvent::ToolCall(ToolCall {
-                    request_id: request_id.clone(),
+                    request_id,
                     call_id: call.call_id,
                     thread_id: call.thread_id,
                     turn_id: call.turn_id,
@@ -346,10 +346,7 @@ impl CodexHarness {
                     arguments: call.arguments,
                 }));
             }
-            return Ok(AssistantEvent::UnsupportedRequest {
-                request_id: request_id.clone(),
-                method,
-            });
+            return Ok(AssistantEvent::UnsupportedRequest { request_id, method });
         }
         match method.as_str() {
             "item/agentMessage/delta" => Ok(AssistantEvent::MessageDelta {
@@ -361,8 +358,8 @@ impl CodexHarness {
                 let thread_id = required_string(&params, "threadId")?.to_owned();
                 let turn: CodexTurn = serde_json::from_value(
                     params
-                        .get("turn")
-                        .cloned()
+                        .get_mut("turn")
+                        .map(Value::take)
                         .context("Codex turn is absent")?,
                 )?;
                 let error = turn
@@ -1278,45 +1275,43 @@ impl CodexHarness {
             response.thread.id == thread_id,
             "Codex read the wrong thread"
         );
-        let paginated = all_paginated
-            || response
-                .thread
-                .turns
-                .iter()
-                .any(|turn| turn.items_view != "full");
-        let mut turns: Vec<HistoryTurn> = response
-            .thread
-            .turns
-            .iter()
-            .map(|turn| HistoryTurn {
-                id: turn.id.clone(),
-                status: turn.status.clone(),
-                items: turn.items.clone(),
+        let mut thread = response.thread;
+        let paginated = all_paginated || thread.turns.iter().any(|turn| turn.items_view != "full");
+        // Whether each turn of the read has all its items.
+        let mut full = Vec::with_capacity(thread.turns.len());
+        let mut turns: Vec<HistoryTurn> = std::mem::take(&mut thread.turns)
+            .into_iter()
+            .map(|turn| {
+                full.push(turn.items_view == "full");
+                HistoryTurn {
+                    id: turn.id,
+                    status: turn.status,
+                    items: turn.items,
+                }
             })
             .collect();
-        let page = if paginated {
+        let mut older_cursor = None;
+        if paginated {
             let page = self.read_items_page(thread_id, None)?;
-            for page_turn in &page.turns {
+            for page_turn in page.turns {
                 if let Some((index, turn)) = turns
                     .iter_mut()
                     .enumerate()
                     .find(|(_, turn)| turn.id == page_turn.id)
                 {
-                    if response.thread.turns[index].items_view != "full" {
-                        turn.items = page_turn.items.clone();
+                    if !full[index] {
+                        turn.items = page_turn.items;
                     }
                 } else {
-                    turns.push(page_turn.clone());
+                    turns.push(page_turn);
                 }
             }
-            Some(page)
-        } else {
-            None
-        };
+            older_cursor = page.older_cursor;
+        }
         Ok(ConversationHistory {
-            conversation: response.thread.into(),
+            conversation: thread.into(),
             turns,
-            older_cursor: page.and_then(|page| page.older_cursor),
+            older_cursor,
         })
     }
 

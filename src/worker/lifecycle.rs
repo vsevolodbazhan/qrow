@@ -1,8 +1,8 @@
-use super::{ActivityEvent, ActivityKind, Event, QueryState, Runner, Severity, format_duration};
+use super::{ActivityEvent, ActivityKind, Event, Runner, Severity, format_duration};
+use crate::connector::{Completion, wait_for_completion};
 use anyhow::Result;
 use std::{
     sync::atomic::Ordering,
-    thread,
     time::{Duration, Instant},
 };
 
@@ -95,12 +95,9 @@ impl Runner {
             if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
                 cancellation.cancel()?;
             }
-            loop {
-                match self.session.as_mut().unwrap().poll()? {
-                    QueryState::Running => thread::sleep(Duration::from_millis(100)),
-                    QueryState::Finished { .. } => return Ok(()),
-                    QueryState::Cancelled => anyhow::bail!("Keep-alive was cancelled"),
-                }
+            match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
+                Completion::Finished { .. } => Ok(()),
+                Completion::Cancelled => anyhow::bail!("Keep-alive was cancelled"),
             }
         })();
         let closed = self.session.as_mut().unwrap().close_keep_alive();

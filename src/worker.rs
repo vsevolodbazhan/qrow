@@ -1,6 +1,9 @@
 use crate::{
     activity::{ActivityEvent, ActivityKind, ExecutionId, Severity},
-    connector::{Cancellation, Connector, QueryError, QueryState, Session, hive::HiveConnector},
+    connector::{
+        Cancellation, Completion, Connector, QueryError, Session, hive::HiveConnector,
+        wait_for_completion,
+    },
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
     storage::Credentials,
 };
@@ -426,54 +429,51 @@ impl Runner {
         if self.cancelled.load(Ordering::SeqCst) {
             cancellation.cancel()?;
         }
-        loop {
-            match self.session.as_mut().unwrap().poll()? {
-                QueryState::Running => thread::sleep(Duration::from_millis(100)),
-                QueryState::Cancelled => {
+        match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
+            Completion::Cancelled => {
+                self.session.as_mut().unwrap().close_operation()?;
+                *self.target.lock().unwrap() = None;
+                self.activity(
+                    Some(execution_id),
+                    Severity::Info,
+                    ActivityKind::Cancelled,
+                    "Query cancelled by the server",
+                    self.execution_duration(),
+                );
+                self.emit(Event::Cancelled);
+                Ok(())
+            }
+            Completion::Finished { has_results } => {
+                if self.cancelled.load(Ordering::SeqCst) {
                     self.session.as_mut().unwrap().close_operation()?;
                     *self.target.lock().unwrap() = None;
                     self.activity(
                         Some(execution_id),
                         Severity::Info,
                         ActivityKind::Cancelled,
-                        "Query cancelled by the server",
+                        "Query finished after cancellation was requested",
                         self.execution_duration(),
                     );
-                    self.emit(Event::Cancelled);
+                    self.emit(Event::Ready {
+                        more: false,
+                        limited: false,
+                    });
                     return Ok(());
                 }
-                QueryState::Finished { has_results } => {
-                    if self.cancelled.load(Ordering::SeqCst) {
-                        self.session.as_mut().unwrap().close_operation()?;
-                        *self.target.lock().unwrap() = None;
-                        self.activity(
-                            Some(execution_id),
-                            Severity::Info,
-                            ActivityKind::Cancelled,
-                            "Query finished after cancellation was requested",
-                            self.execution_duration(),
-                        );
-                        self.emit(Event::Ready {
-                            more: false,
-                            limited: false,
-                        });
-                        return Ok(());
-                    }
-                    if !has_results {
-                        self.session.as_mut().unwrap().close_operation()?;
-                        *self.target.lock().unwrap() = None;
-                        self.complete_execution(false);
-                        self.emit(Event::Ready {
-                            more: false,
-                            limited: false,
-                        });
-                        return Ok(());
-                    }
-                    let columns = self.session.as_mut().unwrap().columns()?;
-                    self.complete_execution(true);
-                    self.emit(Event::Columns(columns));
-                    return self.fetch_preview();
+                if !has_results {
+                    self.session.as_mut().unwrap().close_operation()?;
+                    *self.target.lock().unwrap() = None;
+                    self.complete_execution(false);
+                    self.emit(Event::Ready {
+                        more: false,
+                        limited: false,
+                    });
+                    return Ok(());
                 }
+                let columns = self.session.as_mut().unwrap().columns()?;
+                self.complete_execution(true);
+                self.emit(Event::Columns(columns));
+                self.fetch_preview()
             }
         }
     }
@@ -506,14 +506,14 @@ impl Runner {
                 .session
                 .as_mut()
                 .context("Session is disconnected")?
-                .fetch((PREVIEW_ROWS - fetched).min(250))?;
+                .fetch(PREVIEW_ROWS - fetched)?;
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
                 return Ok(());
             }
             let count = batch.rows.len();
             anyhow::ensure!(
-                count <= (PREVIEW_ROWS - fetched).min(250),
+                count <= PREVIEW_ROWS - fetched,
                 "Connector returned more rows than requested"
             );
             let bytes: usize = batch

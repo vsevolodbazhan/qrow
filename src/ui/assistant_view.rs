@@ -43,7 +43,8 @@ use gpui_kit::component::{
 use serde_json::{Value, json};
 use std::ops::Range;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     path::PathBuf,
     rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
@@ -233,7 +234,7 @@ mod tests {
         assert_eq!(edit.text, "Edit query");
         assert_eq!(ToolKind::from_name("unknown_tool"), ToolKind::Other);
         assert!(
-            TranscriptEntry::new(Speaker::Error, "Failed".into(), None)
+            TranscriptEntry::new(Speaker::Error, "Failed", None)
                 .tool
                 .is_none()
         );
@@ -242,8 +243,8 @@ mod tests {
     #[::core::prelude::v1::test]
     fn history_keeps_distinct_messages_from_one_turn() {
         let mut entries = vec![
-            TranscriptEntry::new(Speaker::User, "draft".into(), Some("turn-1".into())),
-            TranscriptEntry::new(Speaker::Assistant, "streamed".into(), Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::User, "draft", Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::Assistant, "streamed", Some("turn-1".into())),
         ];
         merge_history(
             &mut entries,
@@ -266,8 +267,8 @@ mod tests {
     #[::core::prelude::v1::test]
     fn history_merge_keeps_steered_message_visible_without_workspace_context() {
         let mut entries = vec![
-            TranscriptEntry::new(Speaker::User, "First".into(), Some("turn-1".into())),
-            TranscriptEntry::new(Speaker::User, "Follow-up".into(), Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::User, "First", Some("turn-1".into())),
+            TranscriptEntry::new(Speaker::User, "Follow-up", Some("turn-1".into())),
         ];
         let steered = format!(
             "Follow-up{WORKSPACE_CONTEXT_SEPARATOR}{}",
@@ -511,7 +512,10 @@ impl ToolActivity {
 pub(super) struct TranscriptEntry {
     id: Uuid,
     pub speaker: Speaker,
-    pub text: String,
+    /// Shared strings, so that each frame passes the text and the label
+    /// without a copy. A change replaces them.
+    text: SharedString,
+    label: SharedString,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -519,22 +523,58 @@ pub(super) struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    pub fn new(speaker: Speaker, text: String, turn_id: Option<String>) -> Self {
-        Self {
+    pub fn new(speaker: Speaker, text: impl Into<SharedString>, turn_id: Option<String>) -> Self {
+        let mut entry = Self {
             id: Uuid::new_v4(),
             speaker,
-            text,
+            text: SharedString::default(),
+            label: SharedString::default(),
             turn_id,
             tool: None,
             detail: None,
             expanded: false,
-        }
+        };
+        entry.set_text(text);
+        entry
     }
 
     pub fn tool(tool: ToolActivity, turn_id: String) -> Self {
         let mut entry = Self::new(Speaker::Activity, tool.label(), Some(turn_id));
         entry.tool = Some(tool);
+        entry.set_text(entry.text.clone());
         entry
+    }
+
+    pub fn text(&self) -> &SharedString {
+        &self.text
+    }
+
+    /// The accessible label: the speaker and the text.
+    pub fn label(&self) -> &SharedString {
+        &self.label
+    }
+
+    pub fn set_text(&mut self, text: impl Into<SharedString>) {
+        self.text = text.into();
+        let speaker = if self.tool.is_some() {
+            "Tool call"
+        } else {
+            match self.speaker {
+                Speaker::User => "You",
+                Speaker::Assistant => "Assistant",
+                Speaker::Activity => "Assistant activity",
+                Speaker::Error => "Assistant error",
+            }
+        };
+        self.label = format!("{speaker}: {}", self.text).into();
+    }
+
+    /// Appends a streamed part. This copies the text once for each part.
+    pub fn push_text(&mut self, part: &str) {
+        let mut text = String::with_capacity(self.text.len() + part.len());
+        text.push_str(&self.text);
+        text.push_str(part);
+        self.set_text(text);
     }
 
     pub fn with_detail(mut self, detail: String) -> Self {
@@ -546,7 +586,8 @@ impl TranscriptEntry {
     pub fn set_tool_state(&mut self, state: ToolState) {
         if let Some(tool) = &mut self.tool {
             tool.state = state;
-            self.text = tool.label();
+            let text = tool.label();
+            self.set_text(text);
         }
     }
 }
@@ -573,7 +614,7 @@ fn merge_history(entries: &mut Vec<TranscriptEntry>, turns: Vec<HistoryTurn>) {
                 })
                 .map(|(index, _)| index)
             {
-                entries[index].text = text;
+                entries[index].set_text(text);
                 matched.insert(index);
             } else {
                 entries.push(TranscriptEntry::new(speaker, text, Some(turn.id.clone())));
@@ -787,7 +828,9 @@ pub(super) struct AssistantPanelState {
     pub composer: Entity<TextareaState>,
     _composer_subscription: Subscription,
     thread_search: Entity<InputState>,
-    _thread_search_subscription: Subscription,
+    /// Lowercase conversation titles and connection names for the search.
+    /// The render clears it when the search is empty.
+    lowercase: RefCell<HashMap<String, String>>,
     thread_list_override: Option<bool>,
     /// A closed conversation shown without opening a query tab.
     browsed_thread: Option<String>,
@@ -840,21 +883,15 @@ impl AssistantPanelState {
             &composer,
             window,
             |this, _, event: &InputEvent, window, cx| {
+                // The input redraws itself and so its ancestor views when
+                // its text changes.
                 if let InputEvent::PressEnter { shift: false, .. } = event {
                     this.send_assistant(window, cx);
-                } else if matches!(event, InputEvent::Change) {
-                    cx.notify();
                 }
             },
         );
         let thread_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
-        let thread_search_subscription =
-            cx.subscribe_in(&thread_search, window, |_, _, event: &InputEvent, _, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            });
         Self {
             open: false,
             status: Status::Idle,
@@ -863,7 +900,7 @@ impl AssistantPanelState {
             composer,
             _composer_subscription: subscription,
             thread_search,
-            _thread_search_subscription: thread_search_subscription,
+            lowercase: RefCell::default(),
             thread_list_override: None,
             browsed_thread: None,
             transcripts: BTreeMap::new(),
@@ -1260,7 +1297,7 @@ impl Qrow {
         if let Some(entries) = self.assistant_panel.transcripts.get_mut(thread_id)
             && let Some(position) = entries
                 .iter()
-                .rposition(|entry| entry.speaker == Speaker::User && entry.text == text)
+                .rposition(|entry| entry.speaker == Speaker::User && *entry.text() == text)
         {
             entries.remove(position);
         }
@@ -2030,8 +2067,8 @@ impl Qrow {
             .into_iter()
             .flatten()
             .filter_map(|entry| match entry.speaker {
-                Speaker::User => Some(("user", entry.text.clone())),
-                Speaker::Assistant => Some(("assistant", entry.text.clone())),
+                Speaker::User => Some(("user", entry.text().to_string())),
+                Speaker::Assistant => Some(("assistant", entry.text().to_string())),
                 Speaker::Activity | Speaker::Error => None,
             })
             .collect();
@@ -2572,7 +2609,7 @@ impl Qrow {
                     entry.speaker == Speaker::Assistant
                         && entry.turn_id.as_deref() == Some(&turn_id)
                 }) {
-                    last.text.push_str(&text);
+                    last.push_text(&text);
                     false
                 } else {
                     entries.push(TranscriptEntry::new(
@@ -2902,7 +2939,7 @@ impl Qrow {
     ) -> AnyElement {
         let muted = cx.theme().muted_foreground;
         let destructive = cx.theme().semantic_tokens().colors.destructive;
-        let accessible_label = format!("Tool call: {}", entry.text);
+        let accessible_label = entry.label().clone();
         let summary = h_flex()
             .flex_1()
             .min_w_0()
@@ -3080,6 +3117,18 @@ impl Qrow {
         }
     }
 
+    /// Whether the lowercase `text` contains `search`, which is lowercase.
+    fn assistant_search_matches(&self, text: &str, search: &str) -> bool {
+        let mut lowercase = self.assistant_panel.lowercase.borrow_mut();
+        if let Some(cached) = lowercase.get(text) {
+            return cached.contains(search);
+        }
+        let cached = text.to_lowercase();
+        let matches = cached.contains(search);
+        lowercase.insert(text.to_owned(), cached);
+        matches
+    }
+
     fn assistant_thread_list(
         &self,
         narrow: bool,
@@ -3094,6 +3143,9 @@ impl Qrow {
             .read(cx)
             .value()
             .to_lowercase();
+        if search.is_empty() {
+            self.assistant_panel.lowercase.borrow_mut().clear();
+        }
         let displayed = self.displayed_thread();
         v_flex()
             .w(if narrow { width } else { self.ui_px(230.) })
@@ -3151,8 +3203,9 @@ impl Qrow {
                                 (conversation, self.conversation_place(conversation))
                             })
                             .filter(|(conversation, place)| {
-                                conversation.title.to_lowercase().contains(&search)
-                                    || place.to_lowercase().contains(&search)
+                                search.is_empty()
+                                    || self.assistant_search_matches(&conversation.title, &search)
+                                    || self.assistant_search_matches(place, &search)
                             })
                             .map(|(conversation, place)| {
                                 let id = conversation.thread_id.clone();
@@ -3538,7 +3591,7 @@ impl Qrow {
                                 table_style.overflow.x = Some(Overflow::Scroll);
                                 let content = TextView::markdown(
                                     format!("assistant-markdown-{}", entry.id),
-                                    entry.text.clone(),
+                                    entry.text().clone(),
                                 )
                                 .style(TextViewStyle::default().table(table_style))
                                 .font_family(self.settings.assistant_font_family.clone())
@@ -3581,16 +3634,7 @@ impl Qrow {
                                             .id(format!("assistant-entry-{}", entry.id))
                                             .test_support()
                                             .role(Role::Paragraph)
-                                            .aria_label(format!(
-                                                "{}: {}",
-                                                match entry.speaker {
-                                                    Speaker::User => "You",
-                                                    Speaker::Assistant => "Assistant",
-                                                    Speaker::Activity => "Assistant activity",
-                                                    Speaker::Error => "Assistant error",
-                                                },
-                                                entry.text
-                                            ))
+                                            .aria_label(entry.label().clone())
                                             .whitespace_normal()
                                             .child(content)),
                                     ),
