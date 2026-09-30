@@ -39,10 +39,12 @@ impl Qrow {
             name.to_owned()
         }
     }
+}
 
+impl AssistantPane {
     /// Whether the lowercase `text` contains `search`, which is lowercase.
-    pub(super) fn assistant_search_matches(&self, text: &str, search: &str) -> bool {
-        let mut lowercase = self.assistant_panel.lowercase.borrow_mut();
+    fn search_matches(&self, text: &str, search: &str) -> bool {
+        let mut lowercase = self.lowercase.borrow_mut();
         if let Some(cached) = lowercase.get(text) {
             return cached.contains(search);
         }
@@ -52,26 +54,22 @@ impl Qrow {
         matches
     }
 
-    pub(super) fn assistant_thread_list(
+    pub(super) fn thread_list(
         &self,
+        qrow: &Qrow,
         narrow: bool,
         width: Pixels,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> impl IntoElement {
-        let mut conversations: Vec<_> = self.assistant.conversations.iter().collect();
+        let mut conversations: Vec<_> = qrow.assistant.conversations.iter().collect();
         conversations.sort_by_key(|conversation| std::cmp::Reverse(conversation.last_activity));
-        let search = self
-            .assistant_panel
-            .thread_search
-            .read(cx)
-            .value()
-            .to_lowercase();
+        let search = self.thread_search.read(cx).value().to_lowercase();
         if search.is_empty() {
-            self.assistant_panel.lowercase.borrow_mut().clear();
+            self.lowercase.borrow_mut().clear();
         }
-        let displayed = self.displayed_thread();
+        let displayed = qrow.displayed_thread();
         v_flex()
-            .w(if narrow { width } else { self.ui_px(230.) })
+            .w(if narrow { width } else { qrow.ui_px(230.) })
             .max_w_full()
             .h_full()
             .flex_shrink_0()
@@ -80,7 +78,7 @@ impl Qrow {
             .border_color(cx.theme().border)
             .child(
                 h_flex()
-                    .h(self.ui_px(36.))
+                    .h(qrow.ui_px(36.))
                     .flex_shrink_0()
                     .items_center()
                     .gap_1()
@@ -95,14 +93,14 @@ impl Qrow {
                                 .icon(IconName::ArrowLeft)
                                 .accessibility_label("Back to Conversation")
                                 .tooltip("Back to Conversation")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.assistant_panel.thread_list_override = Some(false);
+                                .on_click(cx.listener(|pane, _, _, cx| {
+                                    pane.thread_list_override = Some(false);
                                     cx.notify();
                                 })),
                         )
                     })
                     .child(
-                        Input::new(&self.assistant_panel.thread_search)
+                        Input::new(&self.thread_search)
                             .small()
                             .flex_1()
                             .min_w_0()
@@ -123,24 +121,24 @@ impl Qrow {
                         conversations
                             .into_iter()
                             .map(|conversation| {
-                                (conversation, self.conversation_place(conversation))
+                                (conversation, qrow.conversation_place(conversation))
                             })
                             .filter(|(conversation, place)| {
                                 search.is_empty()
-                                    || self.assistant_search_matches(&conversation.title, &search)
-                                    || self.assistant_search_matches(place, &search)
+                                    || self.search_matches(&conversation.title, &search)
+                                    || self.search_matches(place, &search)
                             })
                             .map(|(conversation, place)| {
                                 let id = conversation.thread_id.clone();
-                                let status = self.thread_status(&id);
+                                let status = qrow.thread_status(&id);
                                 let row = h_flex()
                                     .id(SharedString::from(format!("assistant-thread-row-{id}")))
                                     .w_full()
-                                    .h(self.ui_px(48.))
+                                    .h(qrow.ui_px(48.))
                                     .flex_shrink_0();
                                 let selected = displayed.as_deref() == Some(id.as_str());
                                 let label = conversation.title.clone();
-                                let generating = self.assistant_title_generating(&id);
+                                let generating = qrow.assistant_title_generating(&id);
                                 let accessible = format!(
                                     "{label}, {place}{}{}",
                                     status.accessible_suffix(),
@@ -192,7 +190,7 @@ impl Qrow {
                                                     ),
                                             )
                                             .when_some(
-                                                self.assistant_status_icon(status, cx),
+                                                qrow.assistant_status_icon(status, cx),
                                                 |row, icon| {
                                                     row.child(div().flex_none().child(icon))
                                                 },
@@ -204,13 +202,13 @@ impl Qrow {
                                             .bg(cx.theme().sidebar_accent)
                                             .text_color(cx.theme().sidebar_accent_foreground)
                                     })
-                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                    .on_click(on_qrow(&self.qrow, move |this, _, window, cx| {
                                         this.select_assistant_thread(&id, window, cx);
                                     }));
                                 row.child(button)
                                     .on_mouse_down(
                                         MouseButton::Right,
-                                        cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                                        on_qrow(&self.qrow, move |_, event: &MouseDownEvent, window, cx| {
                                             let (thread, position) = (menu_thread.clone(), event.position);
                                             cx.defer_in(window, move |this, window, cx| {
                                                 this.open_thread_menu(&thread, position, window, cx)

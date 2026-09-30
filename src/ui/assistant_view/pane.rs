@@ -1,5 +1,12 @@
-//! The assistant pane: header, transcript, approval card, and message field.
+//! The assistant pane view: header, transcript, approval card, and message
+//! field.
+//!
+//! The pane is its own view, so that typing in the message field or a streamed
+//! reply renders the pane again, and not the whole window. It reads the
+//! assistant state from Qrow and renders again when Qrow changes. Commands go
+//! to Qrow through [`on_qrow`].
 use super::*;
+use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
 pub(super) fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
     override_visibility.unwrap_or(!narrow)
@@ -54,47 +61,217 @@ impl Qrow {
                 .into_any_element(),
         })
     }
+}
 
-    pub(in crate::ui) fn assistant_panel(
-        &self,
-        width: Pixels,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let narrow = width < self.ui_px(600.);
-        let show_threads = show_thread_list(narrow, self.assistant_panel.thread_list_override);
-        let action_size = self.ui_px(28.);
-        let controls_ready = matches!(self.assistant_panel.status, Status::Ready);
-        let disconnected_error = match &self.assistant_panel.status {
+/// A click or other event handler that runs `handler` on Qrow. The pane uses
+/// it for Qrow commands. Qrow can then update the pane, because the pane is
+/// not in an update of its own when the handler runs.
+pub(super) fn on_qrow<E: ?Sized + 'static>(
+    qrow: &WeakEntity<Qrow>,
+    handler: impl Fn(&mut Qrow, &E, &mut Window, &mut Context<Qrow>) + 'static,
+) -> impl Fn(&E, &mut Window, &mut App) + 'static {
+    let qrow = qrow.clone();
+    move |event, window, cx| {
+        let _ = qrow.update(cx, |qrow, cx| handler(qrow, event, window, cx));
+    }
+}
+
+/// The settings that change the height of transcript rows.
+#[derive(Clone, PartialEq)]
+struct Typography {
+    family: String,
+    size: f32,
+    line_height: f32,
+    scale: f32,
+}
+
+impl Typography {
+    fn of(qrow: &Qrow) -> Self {
+        let settings = &qrow.settings;
+        Self {
+            family: settings.assistant_font_family.clone(),
+            size: settings.assistant_font_size,
+            line_height: settings.assistant_line_height,
+            scale: settings.ui_scale,
+        }
+    }
+}
+
+/// The assistant pane of a window. It keeps the state that only the pane
+/// shows: the message field, the conversation search, and the transcript list.
+pub(in crate::ui) struct AssistantPane {
+    pub(super) qrow: WeakEntity<Qrow>,
+    composer: Entity<TextareaState>,
+    pub(super) thread_search: Entity<InputState>,
+    /// Lowercase conversation titles and connection names for the search.
+    /// The render clears it when the search is empty.
+    pub(super) lowercase: RefCell<HashMap<String, String>>,
+    pub(super) thread_list_override: Option<bool>,
+    transcript: Entity<MessageScrollerState>,
+    /// The rows that `transcript` has.
+    rows: TranscriptRows,
+    /// The settings that change the height of the rows.
+    typography: Option<Typography>,
+    _subscriptions: [Subscription; 2],
+}
+
+impl AssistantPane {
+    /// Qrow creates the pane while Qrow itself is not ready, so this does not
+    /// read Qrow.
+    pub fn new(qrow: &Entity<Qrow>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let composer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Ask about your data or describe a query…")
+                .submit_on_enter(true)
+        });
+        let thread_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+        let transcript = cx.new(|cx| MessageScrollerState::new(0, cx));
+        let subscriptions = [
+            // The pane reads the assistant state of Qrow.
+            cx.observe(qrow, |pane, qrow, cx| {
+                let qrow = qrow.read(cx);
+                let (rows, typography) = (qrow.assistant_rows(), Typography::of(qrow));
+                pane.sync_rows(rows, cx);
+                if pane.typography.as_ref() != Some(&typography) {
+                    pane.typography = Some(typography);
+                    pane.transcript.update(cx, |list, cx| list.remeasure(cx));
+                }
+                cx.notify();
+            }),
+            // The jump button follows the scroll position.
+            cx.observe(&transcript, |_, _, cx| cx.notify()),
+        ];
+        Self {
+            qrow: qrow.downgrade(),
+            composer,
+            thread_search,
+            lowercase: RefCell::default(),
+            thread_list_override: None,
+            transcript,
+            rows: TranscriptRows::default(),
+            typography: None,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    pub fn composer(&self) -> &Entity<TextareaState> {
+        &self.composer
+    }
+
+    /// Shows the end of the transcript and follows new text there.
+    pub fn scroll_to_end(&mut self, cx: &mut Context<Self>) {
+        self.transcript
+            .update(cx, |list, cx| list.scroll_to_end(cx));
+    }
+
+    /// Closes the thread list of a narrow pane after you select a conversation.
+    pub fn thread_selected(&mut self, cx: &mut Context<Self>) {
+        self.thread_list_override = thread_list_after_selection(self.thread_list_override);
+        cx.notify();
+    }
+
+    /// Gives the transcript list the rows of the shown transcript. A new
+    /// conversation starts at its end. In the same conversation, the rows
+    /// around a change keep their place.
+    pub fn sync_rows(&mut self, rows: TranscriptRows, cx: &mut Context<Self>) {
+        if rows == self.rows {
+            return;
+        }
+        let old = std::mem::replace(&mut self.rows, rows);
+        let new = &self.rows;
+        self.transcript.update(cx, |list, cx| {
+            if old.source != new.source {
+                list.reset(new.rows.len(), cx);
+                return;
+            }
+            let change = row_change(&old.rows, &new.rows);
+            if !change.replaced.is_empty() || change.inserted > 0 {
+                list.splice(change.replaced, change.inserted, cx);
+            }
+            for index in change.remeasure {
+                list.remeasure_items(index..index + 1, cx);
+            }
+        });
+        cx.notify();
+    }
+}
+
+impl Render for AssistantPane {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(qrow) = self.qrow.upgrade() else {
+            return div().into_any_element();
+        };
+        let qrow = qrow.read(cx);
+        let width = qrow.assistant_width(window.viewport_size().width);
+        self.panel(qrow, width, cx).into_any_element()
+    }
+}
+
+impl AssistantPane {
+    /// The messages of the shown conversation. Only the rows on screen render.
+    fn transcript(&self, cx: &Context<Self>) -> impl IntoElement {
+        let qrow = self.qrow.clone();
+        let pane = cx.weak_entity();
+        // GPUI Kit's MessageScroller does not register its root for tests;
+        // tests find the transcript through this container.
+        div()
+            .id("assistant-transcript")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .child(
+                MessageScroller::new(
+                    "assistant-messages",
+                    self.transcript.clone(),
+                    move |index, _, cx| {
+                        let (Some(qrow_entity), Some(pane)) = (qrow.upgrade(), pane.upgrade())
+                        else {
+                            return div().into_any_element();
+                        };
+                        let Some(row) = pane.read(cx).rows.rows.get(index).copied() else {
+                            return div().into_any_element();
+                        };
+                        transcript_row(qrow_entity.read(cx), &qrow, row, index, cx)
+                    },
+                )
+                // Like the transcript before it, the list has no scrollbar.
+                .scrollbar(false)
+                .with_jump_button_label("Jump to Latest")
+                .with_jump_button_renderer(|button| button.accessibility_label("Jump to Latest"))
+                // The same insets as the message field: 12 pixels at the
+                // sides, and 12 pixels above, between, and below the rows.
+                .with_list_style(StyleRefinement::default().pt_3().pb_0())
+                .with_row_style(StyleRefinement::default().pb_3()),
+            )
+    }
+}
+
+impl AssistantPane {
+    fn panel(&self, qrow: &Qrow, width: Pixels, cx: &Context<Self>) -> impl IntoElement {
+        let narrow = width < qrow.ui_px(600.);
+        let show_threads = show_thread_list(narrow, self.thread_list_override);
+        let action_size = qrow.ui_px(28.);
+        let controls_ready = matches!(qrow.assistant_state.status, Status::Ready);
+        let disconnected_error = match &qrow.assistant_state.status {
             Status::Disconnected(error) => Some(error.clone()),
             _ => None,
         };
         let disconnected = disconnected_error.is_some();
-        let signed_out = matches!(self.assistant_panel.status, Status::SignInRequired);
-        let displayed = self.displayed_thread();
+        let signed_out = matches!(qrow.assistant_state.status, Status::SignInRequired);
+        let shown = qrow.shown_conversation();
+        let displayed = shown.thread.clone();
         let selected = displayed.as_deref().unwrap_or("");
-        let run = displayed
-            .as_deref()
-            .and_then(|thread| self.thread_run(thread));
+        let run = shown.run;
         let active_turn = run.is_some_and(|run| run.active_turn.is_some());
-        let active_tab = self.active_tab_id();
-        let first_message = self.assistant_panel.first_messages.iter().find(|first| {
-            self.assistant_panel.browsed_thread.is_none() && Some(first.tab_id) == active_tab
-        });
-        let pending_approval = run
-            .and_then(|run| run.pending_query.as_ref())
-            .filter(|pending| !pending.approved);
-        // Codex owes a reply from the send until the turn ends. A query that
-        // waits for approval waits for you instead.
-        let waiting_for_agent = first_message.is_some()
-            || (run.is_some_and(|run| run.pending_reply || run.active_turn.is_some())
-                && pending_approval.is_none());
-        let entries = self.assistant_panel.transcripts.get(selected);
+        let first_message = shown.first_message;
+        let pending_approval = shown.pending_approval;
         let busy = displayed
             .as_deref()
-            .is_some_and(|thread| self.thread_status(thread).busy());
-        let mode_is_run = self.displayed_mode() == AssistantExecutionMode::RunAutomatically;
-        let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
-            self.settings
+            .is_some_and(|thread| qrow.thread_status(thread).busy());
+        let mode_is_run = qrow.displayed_mode() == AssistantExecutionMode::RunAutomatically;
+        let model = qrow.assistant_state.snapshot.as_ref().and_then(|snapshot| {
+            qrow.settings
                 .assistant
                 .model
                 .as_deref()
@@ -109,7 +286,7 @@ impl Qrow {
             .and_then(|model| {
                 let efforts = model.reasoning_efforts();
                 let find = |id: &str| efforts.iter().find(|effort| effort.id() == id);
-                self.settings
+                qrow.settings
                     .assistant
                     .reasoning_effort
                     .as_deref()
@@ -121,7 +298,7 @@ impl Qrow {
             .unwrap_or_default();
         let tier_label = model
             .map(|model| {
-                self.settings
+                qrow.settings
                     .assistant
                     .service_tier
                     .as_deref()
@@ -142,8 +319,8 @@ impl Qrow {
         let model_width = assistant_select_width(&model_label);
         let reasoning_width = assistant_select_width(&reasoning_label);
         let tier_width = assistant_select_width(&tier_label);
-        let model_options = self
-            .assistant_panel
+        let model_options = qrow
+            .assistant_state
             .snapshot
             .as_ref()
             .map(|snapshot| {
@@ -153,7 +330,7 @@ impl Qrow {
                     .map(|candidate| {
                         (
                             candidate.display_name().to_owned(),
-                            self.settings.assistant.model.as_deref() == Some(candidate.id()),
+                            qrow.settings.assistant.model.as_deref() == Some(candidate.id()),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -176,19 +353,19 @@ impl Qrow {
             .map(|model| {
                 let mut options = vec![(
                     "Default".to_owned(),
-                    self.settings.assistant.service_tier.is_none(),
+                    qrow.settings.assistant.service_tier.is_none(),
                 )];
                 options.extend(model.service_tiers().iter().map(|tier| {
                     (
                         tier.name().to_owned(),
-                        self.settings.assistant.service_tier.as_deref() == Some(tier.id()),
+                        qrow.settings.assistant.service_tier.as_deref() == Some(tier.id()),
                     )
                 }));
                 options
             })
             .unwrap_or_default();
-        let assistant_entity = cx.entity();
-        let conversation_width = width.as_f32() / self.settings.ui_scale
+        let assistant_entity = self.qrow.clone();
+        let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
         let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
             (conversation_width - 196.).max(0.),
@@ -196,12 +373,12 @@ impl Qrow {
         );
         let displayed_title = displayed
             .as_deref()
-            .and_then(|thread| self.assistant.conversation(thread))
+            .and_then(|thread| qrow.assistant.conversation(thread))
             .map_or_else(
                 || "New conversation".to_owned(),
                 |conversation| conversation.title.clone(),
             );
-        let title_generating = self.assistant_title_generating(selected);
+        let title_generating = qrow.assistant_title_generating(selected);
         h_flex()
             .size_full()
             .min_w_0()
@@ -212,7 +389,7 @@ impl Qrow {
             .h_full()
             .child(
                 h_flex()
-                    .h(self.ui_px(36.))
+                    .h(qrow.ui_px(36.))
                     .flex_shrink_0()
                     .items_center()
                     .pl_3()
@@ -253,7 +430,7 @@ impl Qrow {
                             .icon(IconName::Plus)
                             .accessibility_label("New Conversation")
                             .tooltip("New Conversation")
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                 this.create_assistant_conversation(window, cx);
                             })),
                     )
@@ -268,7 +445,7 @@ impl Qrow {
                             .tooltip("Conversation Actions")
                             .disabled(displayed.is_none() || busy)
                             .dropdown_menu({
-                                let menu = self.conversation_menu(selected, cx);
+                                let menu = qrow.conversation_menu(selected, &self.qrow);
                                 move |popup, _, _| menu.build(popup)
                             }),
                     )
@@ -282,13 +459,13 @@ impl Qrow {
                             .icon(IconName::Menu)
                             .accessibility_label("Toggle Conversation List")
                             .tooltip("Toggle Conversation List")
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.assistant_panel.thread_list_override = Some(!show_threads);
+                            .on_click(cx.listener(move |pane, _, _, cx| {
+                                pane.thread_list_override = Some(!show_threads);
                                 cx.notify();
                             })),
                     )
             )
-            .when_some(self.assistant_panel.notice.as_ref(), |panel, notice| {
+            .when_some(qrow.assistant_state.notice.as_ref(), |panel, notice| {
                 let (alert, message) = match notice {
                     AssistantNotice::Info(message) => {
                         (Alert::info("assistant-notice", message.clone()), message)
@@ -317,134 +494,16 @@ impl Qrow {
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scroll()
-                    .child(self.assistant_sign_in(cx))))
-            .when(!signed_out, |panel| panel.child(
-                div().relative().flex_1().min_h_0().child(v_flex()
-                    .id("assistant-transcript")
-                    .test_support()
-                    .size_full()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.assistant_panel.scroll)
-                    .px_3()
-                    .py_3()
-                    .gap_3()
-                    .when(self.assistant_panel.older_cursors.contains_key(selected), |transcript| transcript.child(
-                        Button::new("assistant-load-older").ghost().small().label("Load older messages")
-                            .disabled(run.is_some_and(|run| run.loading_older || run.active_turn.is_some() || run.pending_query.is_some()))
-                            .on_click(cx.listener(|this, _, _, cx| this.load_older_assistant_messages(cx)))))
-                    .children(
-                        entries
-                            .into_iter()
-                            .flatten()
-                            .chain(first_message.map(|first| &first.entry))
-                            .enumerate()
-                            .map(|(index, entry)| {
-                                if let Some(tool) = &entry.tool {
-                                    return self.assistant_tool_entry(selected, index, entry, tool, cx);
-                                }
-                                let mut table_style = StyleRefinement::default();
-                                table_style.overflow.x = Some(Overflow::Scroll);
-                                let content = TextView::markdown(
-                                    format!("assistant-markdown-{}", entry.id),
-                                    entry.text().clone(),
-                                )
-                                .style(TextViewStyle::default().table(table_style))
-                                .font_family(self.settings.assistant_font_family.clone())
-                                .text_size(self.ui_px(self.settings.assistant_font_size))
-                                .line_height(relative(self.settings.assistant_line_height))
-                                .min_w_0()
-                                .max_w_full()
-                                .when(entry.speaker == Speaker::Error, |view| {
-                                    view.text_color(
-                                        cx.theme().semantic_tokens().colors.destructive,
-                                    )
-                                });
-                                let alignment = if entry.speaker == Speaker::User {
-                                    MessageAlignment::End
-                                } else {
-                                    MessageAlignment::Start
-                                };
-                                let variant = match entry.speaker {
-                                    Speaker::User => BubbleVariant::Tinted,
-                                    Speaker::Assistant => BubbleVariant::Ghost,
-                                    Speaker::Activity => BubbleVariant::Outline,
-                                    Speaker::Error => BubbleVariant::Destructive,
-                                };
-                                // Give every level a definite width before Markdown measures
-                                // its wrapped height. A shrink-to-fit bubble measures a table at
-                                // one width and draws it at another, so the transcript clips it.
-                                // Replies use the full width, as tool cards do.
-                                let full_width = entry.speaker != Speaker::User;
-                                Message::new().flex_shrink_0().alignment(alignment).content(
-                                    MessageContent::new()
-                                        .map(|content| if full_width { content.w_full() } else { content.w(relative(0.8)) })
-                                        .bubble(
-                                        Bubble::new()
-                                            .with_variant(variant)
-                                            .max_w_full()
-                                            .when(full_width, |bubble| bubble.w_full())
-                                            .content(BubbleContent::new().text_base().when(full_width, |content| content.w_full()))
-                                            .child(
-                                        div()
-                                            .id(format!("assistant-entry-{}", entry.id))
-                                            .test_support()
-                                            .role(Role::Paragraph)
-                                            .aria_label(entry.label().clone())
-                                            .whitespace_normal()
-                                            .child(content)),
-                                    ),
-                                )
-                                .into_any_element()
-                            }),
-                    )
-                    .when(waiting_for_agent, |transcript| {
-                            transcript.child(
-                                Message::new()
-                                    .flex_shrink_0()
-                                    .alignment(MessageAlignment::Start)
-                                    .content(MessageContent::new().bubble(
-                                        Bubble::new().with_variant(BubbleVariant::Ghost).child(
-                                            div()
-                                                .id("assistant-working")
-                                                .test_support()
-                                                .role(Role::Status)
-                                                .aria_label("Assistant is working")
-                                                .child(
-                                                    ShimmerText::new("Working…")
-                                                        .text_color(cx.theme().muted_foreground),
-                                                ),
-                                        ),
-                                    )),
-                            )
-                    }))
-            .when(
-                entries.is_some_and(|entries| !entries.is_empty())
-                    && !self.assistant_transcript_near_bottom(),
-                |transcript| {
-                    transcript.child(
-                        Button::new("assistant-jump-latest")
-                            .small()
-                            .absolute()
-                            .bottom_2()
-                            .right_3()
-                            .icon(IconName::ArrowDown)
-                            .accessibility_label("Jump to Latest")
-                            .tooltip("Jump to Latest")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.assistant_panel.scroll.scroll_to_bottom();
-                                cx.notify();
-                            })),
-                    )
-                },
-            )))
+                    .child(self.sign_in(qrow, cx))))
+            .when(!signed_out, |panel| panel.child(self.transcript(cx)))
             .when_some(
                 pending_approval,
                 |panel, pending| {
-                    let tab = self.tabs.iter().find(|tab| tab.saved.id == pending.tab_id);
+                    let tab = qrow.tabs.iter().find(|tab| tab.saved.id == pending.tab_id);
                     let tab_title = tab.map_or("Query tab", |tab| tab.saved.title.as_str());
                     let connection = tab
                         .and_then(|tab| tab.saved.profile)
-                        .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+                        .and_then(|id| qrow.profiles.iter().find(|profile| profile.id == id))
                         .map_or("No connection", |profile| profile.name.as_str());
                     panel.child(
                         v_flex()
@@ -467,7 +526,7 @@ impl Qrow {
                             .child(
                                 div()
                                     .id("assistant-approval-sql")
-                                    .font_family(self.settings.editor_font_family.clone())
+                                    .font_family(qrow.settings.editor_font_family.clone())
                                     .text_xs()
                                     .max_h_32()
                                     .overflow_y_scroll()
@@ -487,7 +546,7 @@ impl Qrow {
                                             .primary()
                                             .small()
                                             .label("Run")
-                                            .on_click(cx.listener({
+                                            .on_click(on_qrow(&self.qrow, {
                                                 let thread = selected.to_owned();
                                                 move |this, _, window, cx| {
                                                     this.approve_assistant_query(&thread, window, cx)
@@ -498,7 +557,7 @@ impl Qrow {
                                         Button::new("assistant-cancel-query")
                                             .small()
                                             .label("Cancel")
-                                            .on_click(cx.listener({
+                                            .on_click(on_qrow(&self.qrow, {
                                                 let thread = selected.to_owned();
                                                 move |this, _, _, cx| {
                                                     this.cancel_assistant_approval(&thread, cx)
@@ -520,7 +579,7 @@ impl Qrow {
                         // GPUI Kit's Textarea has no ID setter; tests find the
                         // message field through its container.
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
-                            Textarea::new(&self.assistant_panel.composer)
+                            Textarea::new(&self.composer)
                                 .h_20()
                                 .w_full()
                                 .aria_label("Assistant Message")),
@@ -546,7 +605,7 @@ impl Qrow {
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
                                                         move |_, _, cx| {
-                                                            assistant_entity.update(cx, |this, cx| {
+                                                            let _ = assistant_entity.update(cx, |this, cx| {
                                                                 this.select_assistant_model(&label, cx);
                                                             });
                                                         },
@@ -568,7 +627,7 @@ impl Qrow {
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
                                                         move |_, _, cx| {
-                                                            assistant_entity.update(cx, |this, cx| {
+                                                            let _ = assistant_entity.update(cx, |this, cx| {
                                                                 this.select_assistant_reasoning(&label, cx);
                                                             });
                                                         },
@@ -590,7 +649,7 @@ impl Qrow {
                                                     let assistant_entity = assistant_entity.clone();
                                                     menu.item(PopupMenuItem::new(label.clone()).checked(*selected).on_click(
                                                         move |_, _, cx| {
-                                                            assistant_entity.update(cx, |this, cx| {
+                                                            let _ = assistant_entity.update(cx, |this, cx| {
                                                                 this.select_assistant_tier(&label, cx);
                                                             });
                                                         },
@@ -606,7 +665,7 @@ impl Qrow {
                                     .label("Reconnect")
                                     .accessibility_label("Reconnect to Codex")
                                     .tooltip(error)
-                                    .on_click(cx.listener(|this, _, window, cx| this.reconnect_assistant(window, cx))),
+                                    .on_click(on_qrow(&self.qrow, |this, _, window, cx| this.reconnect_assistant(window, cx))),
                             ))
                             .when(!disconnected && active_turn, |row| row.child(
                                 Button::new("assistant-stop")
@@ -614,7 +673,7 @@ impl Qrow {
                                     .label("Cancel")
                                     .accessibility_label("Cancel Assistant Turn")
                                     .tooltip("Cancel Assistant Turn")
-                                    .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
+                                    .on_click(on_qrow(&self.qrow, |this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(!disconnected && !active_turn, |row| row.child(
                                 DropdownButton::new("assistant-send-mode")
@@ -630,17 +689,17 @@ impl Qrow {
                                             } else {
                                                 "Send Message · Ask before running"
                                             })
-                                            .on_click(cx.listener(|this, _, window, cx| {
+                                            .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                                 this.send_assistant(window, cx)
                                             })),
                                     )
                                     .dropdown_menu({
-                                        let ask = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        let ask = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
                                             if this.displayed_mode() == AssistantExecutionMode::RunAutomatically {
                                                 this.toggle_assistant_mode(window, cx);
                                             }
                                         }));
-                                        let run = std::rc::Rc::new(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                        let run = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
                                             if this.displayed_mode() == AssistantExecutionMode::AskBeforeRunning {
                                                 this.toggle_assistant_mode(window, cx);
                                             }
@@ -656,7 +715,7 @@ impl Qrow {
                             )),
                     ),
             )))
-            .when(show_threads, |panel| panel.child(self.assistant_thread_list(narrow, width, cx)))
+            .when(show_threads, |panel| panel.child(self.thread_list(qrow, narrow, width, cx)))
     }
 }
 

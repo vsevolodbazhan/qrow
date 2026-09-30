@@ -50,7 +50,7 @@ pub(super) fn discover_codex(configured: Option<&str>) -> Result<PathBuf, String
 impl Qrow {
     /// Replaces saved assistant settings that the Codex snapshot does not offer.
     pub(super) fn reconcile_assistant_settings(&mut self, cx: &mut Context<Self>) {
-        let Some(snapshot) = self.assistant_panel.snapshot.clone() else {
+        let Some(snapshot) = self.assistant_state.snapshot.clone() else {
             return;
         };
         let models = snapshot.models();
@@ -64,7 +64,7 @@ impl Qrow {
             self.settings.assistant.model = None;
             self.settings.assistant.reasoning_effort = None;
             self.settings.assistant.service_tier = None;
-            self.assistant_panel.notice = Some(AssistantNotice::info(
+            self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved model is unavailable. Codex default model selected.",
             ));
             self.changed(cx);
@@ -95,7 +95,7 @@ impl Qrow {
             .is_some_and(|id| !efforts.iter().any(|effort| effort.id() == id))
         {
             self.settings.assistant.reasoning_effort = None;
-            self.assistant_panel.notice = Some(AssistantNotice::info(
+            self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved reasoning level is unavailable. Codex default is in use.",
             ));
             self.changed(cx);
@@ -109,7 +109,7 @@ impl Qrow {
             .is_some_and(|id| !tiers.iter().any(|tier| tier.id() == id))
         {
             self.settings.assistant.service_tier = None;
-            self.assistant_panel.notice = Some(AssistantNotice::info(
+            self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved service tier is unavailable. Codex default is in use.",
             ));
             self.changed(cx);
@@ -118,7 +118,7 @@ impl Qrow {
 
     pub(super) fn select_assistant_model(&mut self, label: &str, cx: &mut Context<Self>) {
         let Some(model_id) = self
-            .assistant_panel
+            .assistant_state
             .snapshot
             .as_ref()
             .and_then(|snapshot| {
@@ -139,7 +139,7 @@ impl Qrow {
 
     pub(super) fn select_assistant_reasoning(&mut self, label: &str, cx: &mut Context<Self>) {
         self.settings.assistant.reasoning_effort = self
-            .assistant_panel
+            .assistant_state
             .snapshot
             .as_ref()
             .and_then(|snapshot| {
@@ -165,7 +165,7 @@ impl Qrow {
         let tier = if label == "Default" {
             None
         } else {
-            let Some(tier) = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
+            let Some(tier) = self.assistant_state.snapshot.as_ref().and_then(|snapshot| {
                 let model = self
                     .settings
                     .assistant
@@ -192,22 +192,21 @@ impl Qrow {
         if !self.settings.assistant.enabled {
             return;
         }
-        self.assistant_panel.open = !self.assistant_panel.open;
-        if self.assistant_panel.open {
-            self.assistant_panel.previous_focus = window.focused(cx);
+        self.assistant_state.open = !self.assistant_state.open;
+        if self.assistant_state.open {
+            self.assistant_state.previous_focus = window.focused(cx);
             if let Some(thread) = self.displayed_thread() {
                 self.thread_run_mut(&thread).unread = None;
             }
-            self.assistant_panel.idle_stop = None;
+            self.assistant_state.idle_stop = None;
             self.start_assistant(cx);
-            self.assistant_panel
-                .composer
+            self.assistant_composer(cx)
                 .update(cx, |composer, cx| composer.focus(window, cx));
         } else {
-            if let Some(focus) = self.assistant_panel.previous_focus.take() {
+            if let Some(focus) = self.assistant_state.previous_focus.take() {
                 focus.focus(window, cx);
             }
-            if self.assistant_panel.service.is_some() {
+            if self.assistant_state.service.is_some() {
                 self.note_codex_activity(cx);
                 self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT, window, cx);
             }
@@ -217,7 +216,7 @@ impl Qrow {
 
     /// Starts the idle period again after a Codex command or event.
     pub(super) fn note_codex_activity(&mut self, cx: &App) {
-        self.assistant_panel.idle_since = cx.background_executor().now();
+        self.assistant_state.idle_since = cx.background_executor().now();
     }
 
     pub(super) fn schedule_idle_codex_stop(
@@ -226,7 +225,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_panel.idle_stop = Some(cx.spawn_in(window, async move |this, cx| {
+        self.assistant_state.idle_stop = Some(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(delay).await;
             let _ = this.update_in(cx, |this, window, cx| this.stop_idle_codex(window, cx));
         }));
@@ -235,9 +234,9 @@ impl Qrow {
     /// Stops Codex after `CODEX_IDLE_TIMEOUT` with the pane closed and without
     /// Codex activity. Work that a new process would lose delays the stop.
     pub(super) fn stop_idle_codex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let panel = &self.assistant_panel;
+        let panel = &self.assistant_state;
         if panel.open || panel.service.is_none() {
-            self.assistant_panel.idle_stop = None;
+            self.assistant_state.idle_stop = None;
             return;
         }
         let idle = cx
@@ -251,22 +250,22 @@ impl Qrow {
             // period again.
             self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT, window, cx);
         } else {
-            self.assistant_panel.stop();
+            self.assistant_state.stop();
             self.reset_assistant_runs(window, cx);
             // The next open starts Codex like the first open, without an error.
-            self.assistant_panel.status = Status::Idle;
+            self.assistant_state.status = Status::Idle;
             cx.notify();
         }
     }
 
     pub(super) fn start_assistant(&mut self, cx: &mut Context<Self>) {
-        if self.assistant_panel.service.is_some() {
+        if self.assistant_state.service.is_some() {
             return;
         }
         let executable = match discover_codex(self.settings.assistant.codex_executable.as_deref()) {
             Ok(path) => path,
             Err(error) => {
-                self.assistant_panel.status = Status::Disconnected(error);
+                self.assistant_state.status = Status::Disconnected(error);
                 cx.notify();
                 return;
             }
@@ -279,16 +278,16 @@ impl Qrow {
             }),
         ) {
             Ok(service) => {
-                self.assistant_panel.service = Some(service);
-                self.assistant_panel.status = Status::Starting;
-                self.assistant_panel.sign_in = SignIn::Idle;
+                self.assistant_state.service = Some(service);
+                self.assistant_state.status = Status::Starting;
+                self.assistant_state.sign_in = SignIn::Idle;
                 // A new Codex process has no title requests from the old one.
-                self.assistant_panel.regenerating_titles.clear();
-                self.assistant_panel.pending_titles.clear();
-                self.assistant_panel.title_history_reads.clear();
+                self.assistant_state.regenerating_titles.clear();
+                self.assistant_state.pending_titles.clear();
+                self.assistant_state.title_history_reads.clear();
             }
             Err(error) => {
-                self.assistant_panel.status =
+                self.assistant_state.status =
                     Status::Disconnected(format!("Could not start assistant: {error}"))
             }
         }
@@ -300,7 +299,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_panel.stop();
+        self.assistant_state.stop();
         self.reset_assistant_runs(window, cx);
         self.start_assistant(cx);
     }
@@ -364,7 +363,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> bool {
         let result = self
-            .assistant_panel
+            .assistant_state
             .service
             .as_ref()
             .map(|service| service.send(command));
@@ -374,7 +373,7 @@ impl Qrow {
                 true
             }
             Some(Err(error)) => {
-                self.assistant_panel.status = Status::Disconnected(error.into());
+                self.assistant_state.status = Status::Disconnected(error.into());
                 cx.notify();
                 false
             }

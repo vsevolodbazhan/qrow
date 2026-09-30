@@ -3,16 +3,16 @@ use super::*;
 
 impl Qrow {
     pub(in crate::ui) fn send_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !matches!(self.assistant_panel.status, Status::Ready) {
+        if !matches!(self.assistant_state.status, Status::Ready) {
             return;
         }
-        let text = self.assistant_panel.composer.read(cx).value().to_string();
+        let text = self.assistant_composer(cx).read(cx).value().to_string();
         if text.trim().is_empty() {
             return;
         }
         if text.len() > MAX_MESSAGE_BYTES {
             // The message stays in the message field, so you can make it shorter.
-            self.assistant_panel.notice = Some(AssistantNotice::warning(format!(
+            self.assistant_state.notice = Some(AssistantNotice::warning(format!(
                 "The message is too large. The limit is {} KB.",
                 MAX_MESSAGE_BYTES / 1024
             )));
@@ -20,7 +20,7 @@ impl Qrow {
             return;
         }
         if let Some(thread_id) = self.displayed_thread() {
-            let sent = if self.assistant_panel.browsed_thread.as_deref() == Some(thread_id.as_str())
+            let sent = if self.assistant_state.browsed_thread.as_deref() == Some(thread_id.as_str())
             {
                 self.send_detached_assistant_message(&thread_id, text, window, cx)
             } else {
@@ -34,7 +34,7 @@ impl Qrow {
                 return;
             };
             if self
-                .assistant_panel
+                .assistant_state
                 .first_messages
                 .iter()
                 .any(|first| first.tab_id == tab_id)
@@ -43,18 +43,17 @@ impl Qrow {
                 return;
             }
             let mode = self.displayed_mode();
-            self.assistant_panel.draft_modes.remove(&tab_id);
-            self.assistant_panel.first_messages.push_back(FirstMessage {
+            self.assistant_state.draft_modes.remove(&tab_id);
+            self.assistant_state.first_messages.push_back(FirstMessage {
                 tab_id,
                 entry: TranscriptEntry::new(Speaker::User, text.clone(), None),
                 text,
                 mode,
             });
         }
-        self.assistant_panel
-            .composer
+        self.assistant_composer(cx)
             .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.scroll_assistant_to_bottom(window, cx);
+        self.scroll_assistant_to_bottom(cx);
         cx.notify();
     }
 
@@ -100,8 +99,7 @@ impl Qrow {
             self.tabs.remove(index);
             return false;
         }
-        self.assistant_panel
-            .composer
+        self.assistant_composer(cx)
             .update(cx, |composer, cx| composer.set_value("", window, cx));
         self.activate(index, window, cx);
         true
@@ -161,12 +159,12 @@ impl Qrow {
             );
             self.answer_assistant_call(pending.call, false, json!({"version":1,"error":{"code":"approval_cancelled","message":"A new instruction replaced this approval request."}}), cx);
         }
-        self.assistant_panel.unstarted_threads.remove(thread_id);
+        self.assistant_state.unstarted_threads.remove(thread_id);
         if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
             conversation.last_activity = unix_now_seconds();
             self.changed(cx);
         }
-        self.assistant_panel
+        self.assistant_state
             .transcripts
             .entry(thread_id.to_owned())
             .or_default()

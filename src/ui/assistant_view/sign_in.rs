@@ -4,23 +4,25 @@ use super::*;
 impl Qrow {
     pub(super) fn begin_assistant_sign_in(&mut self, cx: &mut Context<Self>) {
         if self.assistant_command(AssistantCommand::Login, cx) {
-            self.assistant_panel.sign_in = SignIn::Starting;
+            self.assistant_state.sign_in = SignIn::Starting;
             cx.notify();
         }
     }
 
     pub(super) fn cancel_assistant_sign_in(&mut self, cx: &mut Context<Self>) {
-        if let SignIn::Waiting { login_id, .. } = std::mem::take(&mut self.assistant_panel.sign_in)
+        if let SignIn::Waiting { login_id, .. } = std::mem::take(&mut self.assistant_state.sign_in)
         {
             self.assistant_command(AssistantCommand::CancelLogin(login_id), cx);
         }
         cx.notify();
     }
+}
 
+impl AssistantPane {
     /// Replaces the transcript while Codex has no account.
-    pub(super) fn assistant_sign_in(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn sign_in(&self, qrow: &Qrow, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        let sign_in = &self.assistant_panel.sign_in;
+        let sign_in = &qrow.assistant_state.sign_in;
         Empty::new()
             .size_full()
             .border_0()
@@ -64,7 +66,7 @@ impl Qrow {
                                     Button::new("assistant-sign-in-cancel")
                                         .label("Cancel")
                                         .accessibility_label("Cancel Sign-In")
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                        .on_click(on_qrow(&self.qrow, |this, _, _, cx| {
                                             this.cancel_assistant_sign_in(cx)
                                         })),
                                 ),
@@ -76,7 +78,7 @@ impl Qrow {
                             .label("Sign in with ChatGPT…")
                             .loading(*sign_in == SignIn::Starting)
                             .disabled(*sign_in == SignIn::Starting)
-                            .on_click(cx.listener(|this, _, _, cx| {
+                            .on_click(on_qrow(&self.qrow, |this, _, _, cx| {
                                 this.begin_assistant_sign_in(cx)
                             })),
                     )

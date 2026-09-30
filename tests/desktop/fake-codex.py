@@ -192,6 +192,22 @@ def hold_turn(thread, turn, label, tab):
     call_tool(thread, turn, "append_selected_tab_sql", arguments, appended)
 
 
+# A saved conversation named synthetic-history-* has six turns in three
+# pages, newest first, like the history of a long conversation.
+HISTORY_PAGES = {None: (5, "page-2"), "page-2": (3, "page-3"), "page-3": (1, None)}
+
+
+def history_page(cursor):
+    first, next_cursor = HISTORY_PAGES[cursor]
+    data = []
+    for turn in (first + 1, first):
+        turn_id = f"history-turn-{turn}"
+        data.append({"turnId": turn_id, "item": {"type": "agentMessage", "text": f"History reply {turn}"}})
+        question = {"type": "text", "text": f"History question {turn}"}
+        data.append({"turnId": turn_id, "item": {"type": "userMessage", "content": [question]}})
+    return {"data": data, "nextCursor": next_cursor}
+
+
 def sign_in_elsewhere():
     # Like a sign-in in another Codex client after a failed sign-in in Qrow.
     wait_for_marker("sign-in-elsewhere", 30)
@@ -322,6 +338,12 @@ for line in sys.stdin:
         else:
             thread_id = request["params"]["threadId"]
             live_threads.add(thread_id)
+        # The turns of a long conversation come without their items. Qrow
+        # reads the items in pages.
+        turns = [
+            {"id": f"history-turn-{turn}", "status": "completed", "items": [], "itemsView": "notLoaded"}
+            for turn in range(1, 7)
+        ] if method == "thread/read" and thread_id.startswith("synthetic-history") else []
         send(
             {
                 "id": request_id,
@@ -330,7 +352,7 @@ for line in sys.stdin:
                         "id": thread_id,
                         "name": None,
                         "updatedAt": 1,
-                        "turns": [],
+                        "turns": turns,
                     }
                 },
             }
@@ -341,7 +363,9 @@ for line in sys.stdin:
     elif method == "turn/interrupt":
         send({"id": request_id, "result": {}})
     elif method == "thread/items/list":
-        send({"id": request_id, "result": {"data": [], "nextCursor": None}})
+        thread = request["params"]["threadId"]
+        page = history_page(request["params"].get("cursor")) if thread.startswith("synthetic-history") else None
+        send({"id": request_id, "result": page or {"data": [], "nextCursor": None}})
     elif method == "turn/steer":
         send({"id": request_id, "result": {"turnId": f"synthetic-turn-{turn_number}"}})
     elif method == "turn/start":

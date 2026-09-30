@@ -193,18 +193,14 @@ pub(in crate::ui) enum ComposerTarget {
     Detached(String),
 }
 
-pub(in crate::ui) struct AssistantPanelState {
+/// The assistant state of a window that outlives the pane: Codex, the
+/// conversations, and their drafts. Qrow owns it, because tabs, quit, and
+/// the workspace file use it too. The pane view keeps its own view state.
+pub(in crate::ui) struct AssistantState {
     pub open: bool,
     pub status: Status,
     pub service: Option<Service>,
     pub snapshot: Option<HarnessSnapshot>,
-    pub composer: Entity<TextareaState>,
-    pub _composer_subscription: Subscription,
-    pub thread_search: Entity<InputState>,
-    /// Lowercase conversation titles and connection names for the search.
-    /// The render clears it when the search is empty.
-    pub lowercase: RefCell<HashMap<String, String>>,
-    pub thread_list_override: Option<bool>,
     /// A closed conversation shown without opening a query tab.
     pub browsed_thread: Option<String>,
     pub transcripts: BTreeMap<String, Vec<TranscriptEntry>>,
@@ -223,7 +219,6 @@ pub(in crate::ui) struct AssistantPanelState {
     pub draft_modes: BTreeMap<Uuid, AssistantExecutionMode>,
     /// Tabs opened by New Conversation before their first message creates a thread.
     pub new_conversation_tabs: BTreeSet<Uuid>,
-    pub scroll: ScrollHandle,
     pub resizing: Option<(Point<Pixels>, Pixels)>,
     pub notice: Option<AssistantNotice>,
     pub sign_in: SignIn,
@@ -245,36 +240,13 @@ pub(in crate::ui) struct AssistantPanelState {
     pub idle_since: Instant,
 }
 
-impl AssistantPanelState {
-    pub fn new(window: &mut Window, cx: &mut Context<Qrow>) -> Self {
-        let composer = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder("Ask about your data or describe a query…")
-                .submit_on_enter(true)
-        });
-        let subscription = cx.subscribe_in(
-            &composer,
-            window,
-            |this, _, event: &InputEvent, window, cx| {
-                // The input redraws itself and so its ancestor views when
-                // its text changes.
-                if let InputEvent::PressEnter { shift: false, .. } = event {
-                    this.send_assistant(window, cx);
-                }
-            },
-        );
-        let thread_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search conversations…"));
+impl AssistantState {
+    pub fn new(cx: &App) -> Self {
         Self {
             open: false,
             status: Status::Idle,
             service: None,
             snapshot: None,
-            composer,
-            _composer_subscription: subscription,
-            thread_search,
-            lowercase: RefCell::default(),
-            thread_list_override: None,
             browsed_thread: None,
             transcripts: BTreeMap::new(),
             older_cursors: BTreeMap::new(),
@@ -286,7 +258,6 @@ impl AssistantPanelState {
             composer_target: None,
             draft_modes: BTreeMap::new(),
             new_conversation_tabs: BTreeSet::new(),
-            scroll: ScrollHandle::new(),
             resizing: None,
             notice: None,
             sign_in: SignIn::Idle,
@@ -332,6 +303,61 @@ impl AssistantPanelState {
     }
 }
 
+/// What the pane shows: the displayed conversation, or the first message of
+/// the active tab before Codex creates its conversation.
+pub(in crate::ui) struct Shown<'a> {
+    pub thread: Option<String>,
+    pub run: Option<&'a ThreadRun>,
+    pub first_message: Option<&'a FirstMessage>,
+    pub pending_approval: Option<&'a PendingQuery>,
+    /// Codex owes a reply from the send until the turn ends. A query that
+    /// waits for approval waits for you instead.
+    pub waiting_for_agent: bool,
+    pub entries: &'a [TranscriptEntry],
+}
+
+impl Shown<'_> {
+    /// The rows of the transcript list: the button for older messages, the
+    /// entries, and the line that shows while Codex works.
+    pub fn rows(&self, has_older: bool, active_tab: Option<Uuid>) -> TranscriptRows {
+        let entries = self
+            .entries
+            .iter()
+            .chain(self.first_message.map(|first| &first.entry))
+            .map(|entry| Row::Entry {
+                id: entry.id,
+                revision: entry.revision(),
+            });
+        TranscriptRows {
+            source: match (&self.thread, active_tab) {
+                (Some(thread), _) => Some(thread.clone()),
+                (None, Some(tab)) => Some(tab.to_string()),
+                (None, None) => None,
+            },
+            rows: has_older
+                .then_some(Row::Older)
+                .into_iter()
+                .chain(entries)
+                .chain(self.waiting_for_agent.then_some(Row::Working))
+                .collect(),
+        }
+    }
+
+    /// The entry `id` of the transcript or of the first message.
+    pub fn entry(&self, id: Uuid, index: usize) -> Option<&TranscriptEntry> {
+        let first = self.first_message.map(|first| &first.entry);
+        self.entries
+            .get(index)
+            .filter(|entry| entry.id == id)
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .chain(first)
+                    .find(|entry| entry.id == id)
+            })
+    }
+}
+
 impl Qrow {
     pub(in crate::ui) fn active_tab_id(&self) -> Option<Uuid> {
         self.tabs.get(self.active).map(|tab| tab.saved.id)
@@ -339,7 +365,7 @@ impl Qrow {
 
     /// The conversation shown in the pane, including a selected closed thread.
     pub(in crate::ui) fn displayed_thread(&self) -> Option<String> {
-        if let Some(thread) = self.assistant_panel.browsed_thread.as_ref()
+        if let Some(thread) = self.assistant_state.browsed_thread.as_ref()
             && self
                 .assistant
                 .conversation(thread)
@@ -352,6 +378,43 @@ impl Qrow {
             .map(|conversation| conversation.thread_id.clone())
     }
 
+    pub(in crate::ui) fn shown_conversation(&self) -> Shown<'_> {
+        let thread = self.displayed_thread();
+        let run = thread.as_deref().and_then(|thread| self.thread_run(thread));
+        let active_tab = self.active_tab_id();
+        let first_message = self.assistant_state.first_messages.iter().find(|first| {
+            self.assistant_state.browsed_thread.is_none() && Some(first.tab_id) == active_tab
+        });
+        let pending_approval = run
+            .and_then(|run| run.pending_query.as_ref())
+            .filter(|pending| !pending.approved);
+        let waiting_for_agent = first_message.is_some()
+            || (run.is_some_and(|run| run.pending_reply || run.active_turn.is_some())
+                && pending_approval.is_none());
+        let entries = thread
+            .as_deref()
+            .and_then(|thread| self.assistant_state.transcripts.get(thread))
+            .map_or(&[][..], Vec::as_slice);
+        Shown {
+            thread,
+            run,
+            first_message,
+            pending_approval,
+            waiting_for_agent,
+            entries,
+        }
+    }
+
+    /// The rows of the transcript that the pane shows.
+    pub(in crate::ui) fn assistant_rows(&self) -> TranscriptRows {
+        let shown = self.shown_conversation();
+        let has_older = shown
+            .thread
+            .as_ref()
+            .is_some_and(|thread| self.assistant_state.older_cursors.contains_key(thread));
+        shown.rows(has_older, self.active_tab_id())
+    }
+
     /// The index of a conversation's query tab.
     pub(in crate::ui) fn thread_tab_index(&self, thread_id: &str) -> Option<usize> {
         let tab = self.assistant.conversation(thread_id)?.tab_id?;
@@ -361,11 +424,11 @@ impl Qrow {
     }
 
     pub(in crate::ui) fn thread_run(&self, thread_id: &str) -> Option<&ThreadRun> {
-        self.assistant_panel.runs.get(thread_id)
+        self.assistant_state.runs.get(thread_id)
     }
 
     pub(in crate::ui) fn thread_run_mut(&mut self, thread_id: &str) -> &mut ThreadRun {
-        self.assistant_panel
+        self.assistant_state
             .runs
             .entry(thread_id.to_owned())
             .or_default()
@@ -380,7 +443,7 @@ impl Qrow {
     /// conversation.
     pub(in crate::ui) fn tab_assistant_status(&self, tab_id: Uuid) -> Option<ThreadStatus> {
         if self
-            .assistant_panel
+            .assistant_state
             .first_messages
             .iter()
             .any(|first| first.tab_id == tab_id)
@@ -401,9 +464,9 @@ impl Qrow {
 
     /// Whether a conversation has a turn that quitting would stop.
     pub(in crate::ui) fn assistant_working(&self) -> bool {
-        !self.assistant_panel.first_messages.is_empty()
+        !self.assistant_state.first_messages.is_empty()
             || self
-                .assistant_panel
+                .assistant_state
                 .runs
                 .values()
                 .any(|run| run.active_turn.is_some() || run.pending_reply)
@@ -413,7 +476,7 @@ impl Qrow {
     /// process cannot resume a conversation without a turn, and it does not
     /// know the requests, tool calls, and sign-in of the old process.
     pub(super) fn codex_has_work(&self) -> bool {
-        let panel = &self.assistant_panel;
+        let panel = &self.assistant_state;
         self.assistant_working()
             || panel
                 .runs
@@ -433,12 +496,12 @@ impl Qrow {
 
     /// The most urgent state of all conversations, for the assistant toggle.
     pub(in crate::ui) fn assistant_status(&self) -> ThreadStatus {
-        let first = if self.assistant_panel.first_messages.is_empty() {
+        let first = if self.assistant_state.first_messages.is_empty() {
             ThreadStatus::Idle
         } else {
             ThreadStatus::Working
         };
-        self.assistant_panel
+        self.assistant_state
             .runs
             .values()
             .map(ThreadStatus::of)
@@ -461,7 +524,7 @@ impl Qrow {
                 .map(|conversation| conversation.execution_mode)
                 .unwrap_or_default(),
             Some(ModeTarget::Tab(tab)) => self
-                .assistant_panel
+                .assistant_state
                 .draft_modes
                 .get(&tab)
                 .copied()
@@ -484,7 +547,7 @@ impl Qrow {
                 }
             }
             ModeTarget::Tab(tab) => {
-                self.assistant_panel.draft_modes.insert(*tab, mode);
+                self.assistant_state.draft_modes.insert(*tab, mode);
                 cx.notify();
             }
         }

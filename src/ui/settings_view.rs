@@ -481,16 +481,16 @@ impl Qrow {
         if !enabled {
             self.settings.assistant.enabled = false;
             set_menus(cx, false);
-            self.assistant_panel.open = false;
+            self.assistant_state.open = false;
             self.reset_assistant_runs(window, cx);
-            self.assistant_panel.runs.clear();
-            self.assistant_panel.snapshot = None;
-            self.assistant_panel.transcripts.clear();
-            self.assistant_panel.older_cursors.clear();
-            self.assistant_panel.loaded_cursors.clear();
-            self.assistant_panel.notice = None;
-            self.assistant_panel.status = super::assistant_view::Status::Idle;
-            self.assistant_panel.stop();
+            self.assistant_state.runs.clear();
+            self.assistant_state.snapshot = None;
+            self.assistant_state.transcripts.clear();
+            self.assistant_state.older_cursors.clear();
+            self.assistant_state.loaded_cursors.clear();
+            self.assistant_state.notice = None;
+            self.assistant_state.status = super::assistant_view::Status::Idle;
+            self.assistant_state.stop();
             self.changed(cx);
             return;
         }

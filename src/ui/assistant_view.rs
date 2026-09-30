@@ -74,10 +74,12 @@ use conversations::*;
 use pane::*;
 use session::*;
 use transcript::*;
+use transcript_view::*;
 
+pub(super) use pane::AssistantPane;
 pub use session::CODEX_IDLE_TIMEOUT;
 pub(super) use session::{
-    AppendedQuery, AssistantPanelState, ComposerTarget, PendingQuery, PendingQueryKind, Status,
+    AppendedQuery, AssistantState, ComposerTarget, PendingQuery, PendingQueryKind, Status,
     ThreadStatus,
 };
 pub(super) use transcript::{ToolActivity, ToolKind, ToolState, TranscriptEntry};

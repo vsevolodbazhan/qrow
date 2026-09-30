@@ -13,13 +13,13 @@ pub(super) const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameD
     label: "Conversation Name",
     tooltip: "Rename Conversation · ⌘Enter",
     form: |this| {
-        this.assistant_panel
+        this.assistant_state
             .rename_form
             .as_ref()
             .map(|form| (&form.title, form.error.clone()))
     },
     submit: Qrow::save_assistant_rename,
-    clear: |this| this.assistant_panel.rename_form = None,
+    clear: |this| this.assistant_state.rename_form = None,
 };
 
 pub(super) type MenuAction = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
@@ -44,7 +44,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let menu = self.conversation_menu(thread, cx);
+        let menu = self.conversation_menu(thread, &cx.weak_entity());
         self.open_context_menu(position, move |popup, _, _| menu.build(popup), window, cx);
     }
 }
@@ -75,11 +75,11 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_panel.browsed_thread = None;
+        self.assistant_state.browsed_thread = None;
         let target = self.active_tab_id().map(ComposerTarget::Tab);
         self.show_assistant_composer(target, window, cx);
         if let Some(thread) = self.displayed_thread() {
-            if self.assistant_panel.open {
+            if self.assistant_state.open {
                 self.thread_run_mut(&thread).unread = None;
             }
             self.load_assistant_thread(&thread, cx);
@@ -93,42 +93,41 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.assistant_panel.composer_target == target {
+        if self.assistant_state.composer_target == target {
             return;
         }
-        if let Some(previous) = self.assistant_panel.composer_target.take()
+        if let Some(previous) = self.assistant_state.composer_target.take()
             && match &previous {
                 ComposerTarget::Tab(tab) => self.tabs.iter().any(|item| item.saved.id == *tab),
                 ComposerTarget::Detached(thread) => self.assistant.conversation(thread).is_some(),
             }
         {
-            let text = self.assistant_panel.composer.read(cx).value().to_string();
+            let text = self.assistant_composer(cx).read(cx).value().to_string();
             if text.is_empty() {
-                self.assistant_panel.drafts.remove(&previous);
+                self.assistant_state.drafts.remove(&previous);
             } else {
-                self.assistant_panel.drafts.insert(previous, text);
+                self.assistant_state.drafts.insert(previous, text);
             }
         }
         let draft = target
             .as_ref()
-            .and_then(|target| self.assistant_panel.drafts.remove(target))
+            .and_then(|target| self.assistant_state.drafts.remove(target))
             .unwrap_or_default();
-        self.assistant_panel
-            .composer
+        self.assistant_composer(cx)
             .update(cx, |composer, cx| composer.set_value(draft, window, cx));
-        self.assistant_panel.composer_target = target;
-        self.scroll_assistant_to_bottom(window, cx);
+        self.assistant_state.composer_target = target;
+        self.scroll_assistant_to_bottom(cx);
     }
 
     /// Asks Codex to load a conversation that the current process has not
     /// loaded. Codex sends a waiting tool call again when a loaded
     /// conversation resumes, so Qrow resumes each conversation once.
     pub(super) fn load_assistant_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
-        if matches!(self.assistant_panel.status, Status::Ready)
-            && !self.assistant_panel.loaded_threads.contains(thread_id)
+        if matches!(self.assistant_state.status, Status::Ready)
+            && !self.assistant_state.loaded_threads.contains(thread_id)
             && self.assistant_command(AssistantCommand::Resume(thread_id.to_owned()), cx)
         {
-            self.assistant_panel
+            self.assistant_state
                 .loaded_threads
                 .insert(thread_id.to_owned());
         }
@@ -147,11 +146,11 @@ impl Qrow {
             self.thread_run_mut(&thread).unread = None;
         }
         self.assistant.detach_tab(tab_id, profile);
-        self.assistant_panel
+        self.assistant_state
             .drafts
             .remove(&ComposerTarget::Tab(tab_id));
-        self.assistant_panel.draft_modes.remove(&tab_id);
-        self.assistant_panel.new_conversation_tabs.remove(&tab_id);
+        self.assistant_state.draft_modes.remove(&tab_id);
+        self.assistant_state.new_conversation_tabs.remove(&tab_id);
     }
 
     /// Ends the live state of all conversations after Codex stops. A first
@@ -161,7 +160,7 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for run in self.assistant_panel.runs.values_mut() {
+        for run in self.assistant_state.runs.values_mut() {
             run.active_turn = None;
             run.pending_reply = false;
             run.target = None;
@@ -169,9 +168,9 @@ impl Qrow {
             run.loading_older = false;
             run.sent_messages.clear();
         }
-        self.assistant_panel.loaded_threads.clear();
-        self.assistant_panel.pending_titles.clear();
-        while let Some(first) = self.assistant_panel.first_messages.pop_front() {
+        self.assistant_state.loaded_threads.clear();
+        self.assistant_state.pending_titles.clear();
+        while let Some(first) = self.assistant_state.first_messages.pop_front() {
             self.restore_first_message(first, window, cx);
         }
     }
@@ -183,7 +182,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         self.restore_draft(ComposerTarget::Tab(first.tab_id), first.text, window, cx);
-        self.assistant_panel
+        self.assistant_state
             .draft_modes
             .insert(first.tab_id, first.mode);
     }
@@ -197,22 +196,21 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.assistant_panel.composer_target.as_ref() == Some(&target) {
-            let current = self.assistant_panel.composer.read(cx).value().to_string();
+        if self.assistant_state.composer_target.as_ref() == Some(&target) {
+            let current = self.assistant_composer(cx).read(cx).value().to_string();
             let text = if current.is_empty() {
                 text
             } else {
                 format!("{text}\n{current}")
             };
-            self.assistant_panel
-                .composer
+            self.assistant_composer(cx)
                 .update(cx, |composer, cx| composer.set_value(text, window, cx));
         } else {
-            let text = match self.assistant_panel.drafts.remove(&target) {
+            let text = match self.assistant_state.drafts.remove(&target) {
                 Some(draft) if !draft.is_empty() => format!("{text}\n{draft}"),
                 _ => text,
             };
-            self.assistant_panel.drafts.insert(target, text);
+            self.assistant_state.drafts.insert(target, text);
         }
     }
 
@@ -227,7 +225,7 @@ impl Qrow {
         let Some(text) = self.thread_run_mut(thread_id).sent_messages.pop_front() else {
             return;
         };
-        if let Some(entries) = self.assistant_panel.transcripts.get_mut(thread_id)
+        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id)
             && let Some(position) = entries
                 .iter()
                 .rposition(|entry| entry.speaker == Speaker::User && *entry.text() == text)
@@ -249,18 +247,18 @@ impl Qrow {
         let Some(thread_id) = self.displayed_thread() else {
             return;
         };
-        let Some(cursor) = self.assistant_panel.older_cursors.get(&thread_id).cloned() else {
+        let Some(cursor) = self.assistant_state.older_cursors.get(&thread_id).cloned() else {
             return;
         };
         if self
-            .assistant_panel
+            .assistant_state
             .loaded_cursors
             .entry(thread_id.clone())
             .or_default()
             .contains(&cursor)
         {
-            self.assistant_panel.older_cursors.remove(&thread_id);
-            self.assistant_panel.notice = Some(AssistantNotice::warning(
+            self.assistant_state.older_cursors.remove(&thread_id);
+            self.assistant_state.notice = Some(AssistantNotice::warning(
                 "Codex repeated a conversation page. Older messages cannot be loaded.",
             ));
             cx.notify();
@@ -278,7 +276,7 @@ impl Qrow {
             },
             cx,
         ) {
-            self.assistant_panel
+            self.assistant_state
                 .loaded_cursors
                 .entry(thread_id.clone())
                 .or_default()
@@ -299,7 +297,7 @@ impl Qrow {
             return;
         }
         let index = self.add_tab(self.active_profile(), window, cx);
-        self.assistant_panel
+        self.assistant_state
             .new_conversation_tabs
             .insert(self.tabs[index].saved.id);
         self.activate(index, window, cx);
@@ -335,7 +333,7 @@ impl Qrow {
             return;
         };
         self.activate(index, window, cx);
-        if self.assistant_panel.open {
+        if self.assistant_state.open {
             self.focus_assistant_composer(window, cx);
         } else {
             self.toggle_assistant(window, cx);
@@ -343,27 +341,29 @@ impl Qrow {
     }
 
     pub(super) fn focus_assistant_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.assistant_panel.open {
-            self.assistant_panel
-                .composer
+        if self.assistant_state.open {
+            self.assistant_composer(cx)
                 .update(cx, |composer, cx| composer.focus(window, cx));
         }
     }
-    pub(super) fn assistant_transcript_near_bottom(&self) -> bool {
-        let scroll = &self.assistant_panel.scroll;
-        scroll.offset().y + scroll.max_offset().y <= self.ui_px(32.)
+
+    /// The message field of the pane.
+    pub(in crate::ui) fn assistant_composer(&self, cx: &App) -> Entity<TextareaState> {
+        self.assistant_pane.read(cx).composer().clone()
     }
 
-    pub(super) fn scroll_assistant_to_bottom(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.assistant_panel.scroll.scroll_to_bottom();
-        cx.on_next_frame(window, |this, _, cx| {
-            this.assistant_panel.scroll.scroll_to_bottom();
-            cx.notify();
-        });
+    /// Shows the end of the transcript, which then follows new text.
+    pub(super) fn scroll_assistant_to_bottom(&self, cx: &mut App) {
+        self.assistant_pane
+            .update(cx, |pane, cx| pane.scroll_to_end(cx));
+    }
+
+    /// Gives the pane the rows of the shown transcript after a change that
+    /// Qrow does not render.
+    pub(super) fn sync_assistant_pane(&self, cx: &mut App) {
+        let rows = self.assistant_rows();
+        self.assistant_pane
+            .update(cx, |pane, cx| pane.sync_rows(rows, cx));
     }
 
     pub(super) fn begin_assistant_rename(
@@ -384,7 +384,7 @@ impl Qrow {
             return;
         };
         let title = conversation.title.clone();
-        self.assistant_panel.rename_form = Some(ConversationEditor {
+        self.assistant_state.rename_form = Some(ConversationEditor {
             thread_id: thread_id.to_owned(),
             title: cx.new(|cx| InputState::new(window, cx).default_value(title)),
             error: None,
@@ -394,7 +394,7 @@ impl Qrow {
     }
 
     pub(super) fn save_assistant_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(form) = self.assistant_panel.rename_form.as_mut() else {
+        let Some(form) = self.assistant_state.rename_form.as_mut() else {
             return;
         };
         let id = form.thread_id.clone();
@@ -413,18 +413,18 @@ impl Qrow {
             },
             cx,
         ) {
-            if let Some(form) = self.assistant_panel.rename_form.as_mut() {
+            if let Some(form) = self.assistant_state.rename_form.as_mut() {
                 form.error = Some("Codex is not connected. Reconnect and try again.".into());
             }
             cx.notify();
             return;
         }
         // Codex cancels a title that is still generating.
-        self.assistant_panel.regenerating_titles.remove(&id);
-        self.assistant_panel.pending_titles.remove(&id);
-        self.assistant_panel.title_history_reads.remove(&id);
-        self.assistant_panel.pending_rename = Some((id, title));
-        self.assistant_panel.rename_form = None;
+        self.assistant_state.regenerating_titles.remove(&id);
+        self.assistant_state.pending_titles.remove(&id);
+        self.assistant_state.title_history_reads.remove(&id);
+        self.assistant_state.pending_rename = Some((id, title));
+        self.assistant_state.rename_form = None;
         // Programmatic close_dialog does not invoke Dialog::on_close.
         window.close_dialog(cx);
         cx.notify();
@@ -433,14 +433,14 @@ impl Qrow {
     /// Asks Codex for a new title, also when the user set the current title.
     pub(super) fn regenerate_assistant_title(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         if !self
-            .assistant_panel
+            .assistant_state
             .regenerating_titles
             .insert(thread_id.to_owned())
         {
             return;
         }
         let has_messages = self
-            .assistant_panel
+            .assistant_state
             .transcripts
             .get(thread_id)
             .is_some_and(|entries| entries.iter().any(|entry| entry.speaker == Speaker::User));
@@ -448,14 +448,14 @@ impl Qrow {
             self.send_assistant_title_request(thread_id, cx)
         } else {
             // Qrow loads a conversation's messages when you open it.
-            self.assistant_panel
+            self.assistant_state
                 .title_history_reads
                 .insert(thread_id.to_owned());
             self.assistant_command(AssistantCommand::Read(thread_id.to_owned()), cx)
         };
         if !requested {
-            self.assistant_panel.regenerating_titles.remove(thread_id);
-            self.assistant_panel.title_history_reads.remove(thread_id);
+            self.assistant_state.regenerating_titles.remove(thread_id);
+            self.assistant_state.title_history_reads.remove(thread_id);
         }
         cx.notify();
     }
@@ -504,26 +504,26 @@ impl Qrow {
     pub(super) fn conversation_menu(
         &self,
         thread_id: &str,
-        cx: &mut Context<Self>,
+        handle: &WeakEntity<Qrow>,
     ) -> ConversationMenu {
         let busy = self.thread_status(thread_id).busy();
         let id = thread_id.to_owned();
         ConversationMenu {
             busy,
             can_regenerate: !busy
-                && !self.assistant_panel.unstarted_threads.contains(thread_id)
-                && !self.assistant_panel.regenerating_titles.contains(thread_id),
-            rename: Rc::new(cx.listener({
+                && !self.assistant_state.unstarted_threads.contains(thread_id)
+                && !self.assistant_state.regenerating_titles.contains(thread_id),
+            rename: Rc::new(on_qrow(handle, {
                 let id = id.clone();
                 move |this, _: &ClickEvent, window, cx| {
                     this.begin_assistant_rename(&id, window, cx);
                 }
             })),
-            regenerate: Rc::new(cx.listener({
+            regenerate: Rc::new(on_qrow(handle, {
                 let id = id.clone();
                 move |this, _: &ClickEvent, _, cx| this.regenerate_assistant_title(&id, cx)
             })),
-            delete: Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
+            delete: Rc::new(on_qrow(handle, move |this, _: &ClickEvent, window, cx| {
                 this.confirm_assistant_delete(id.clone(), window, cx);
             })),
         }
@@ -546,16 +546,16 @@ impl Qrow {
         if let Some(index) = self.thread_tab_index(id) {
             self.activate(index, window, cx);
         } else {
-            self.assistant_panel.browsed_thread = Some(id.to_owned());
+            self.assistant_state.browsed_thread = Some(id.to_owned());
             self.show_assistant_composer(Some(ComposerTarget::Detached(id.to_owned())), window, cx);
-            if self.assistant_panel.open {
+            if self.assistant_state.open {
                 self.thread_run_mut(id).unread = None;
             }
             self.load_assistant_thread(id, cx);
         }
-        self.assistant_panel.thread_list_override =
-            thread_list_after_selection(self.assistant_panel.thread_list_override);
-        self.scroll_assistant_to_bottom(window, cx);
+        self.assistant_pane
+            .update(cx, |pane, cx| pane.thread_selected(cx));
+        self.scroll_assistant_to_bottom(cx);
         self.focus_assistant_composer(window, cx);
         self.changed(cx);
     }
@@ -565,15 +565,15 @@ impl Qrow {
         if self.assistant.conversations.iter().any(|conversation| {
             conversation.thread_id == thread_id
                 && conversation.title_source == AssistantTitleSource::Temporary
-        }) && !self.assistant_panel.pending_titles.contains(thread_id)
+        }) && !self.assistant_state.pending_titles.contains(thread_id)
         {
             self.send_assistant_title_request(thread_id, cx);
         }
     }
 
     pub(in crate::ui) fn assistant_title_generating(&self, thread_id: &str) -> bool {
-        self.assistant_panel.pending_titles.contains(thread_id)
-            || self.assistant_panel.regenerating_titles.contains(thread_id)
+        self.assistant_state.pending_titles.contains(thread_id)
+            || self.assistant_state.regenerating_titles.contains(thread_id)
     }
 
     /// Sends the loaded messages of a conversation to Codex for a title.
@@ -585,7 +585,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> bool {
         let messages: Vec<_> = self
-            .assistant_panel
+            .assistant_state
             .transcripts
             .get(thread_id)
             .into_iter()
@@ -599,7 +599,7 @@ impl Qrow {
         if !messages.iter().any(|(role, _)| *role == "user") {
             return false;
         }
-        let model = self.assistant_panel.snapshot.as_ref().and_then(|snapshot| {
+        let model = self.assistant_state.snapshot.as_ref().and_then(|snapshot| {
             self.settings
                 .assistant
                 .model
@@ -626,7 +626,7 @@ impl Qrow {
             cx,
         );
         if requested {
-            self.assistant_panel
+            self.assistant_state
                 .pending_titles
                 .insert(thread_id.to_owned());
             cx.notify();

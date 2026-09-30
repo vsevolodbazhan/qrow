@@ -8,7 +8,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> bool {
         let events: Vec<_> = self
-            .assistant_panel
+            .assistant_state
             .service
             .as_ref()
             .map(|service| service.events.try_iter().collect())
@@ -17,14 +17,28 @@ impl Qrow {
         if changed {
             self.note_codex_activity(cx);
         }
+        let mut workspace_changed = false;
         for event in events {
+            // A streamed part changes only the transcript, unless it changes
+            // the state of its conversation. The pane renders it alone.
+            let streamed = match &event {
+                AssistantServiceEvent::Harness(AssistantEvent::MessageDelta {
+                    thread_id, ..
+                }) => Some((thread_id.clone(), self.thread_status(thread_id))),
+                _ => None,
+            };
             self.handle_assistant_event(event, window, cx);
+            workspace_changed |=
+                streamed.is_none_or(|(thread, status)| self.thread_status(&thread) != status);
         }
         self.tick_assistant_queries(cx);
         if changed {
+            self.sync_assistant_pane(cx);
+        }
+        if workspace_changed {
             cx.notify();
         }
-        changed
+        workspace_changed
     }
 
     pub(super) fn update_assistant_snapshot(
@@ -33,7 +47,7 @@ impl Qrow {
         initial: bool,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_panel.status = if matches!(
+        self.assistant_state.status = if matches!(
             snapshot.account().kind(),
             AccountKind::ChatGpt { .. } | AccountKind::ApiKey
         ) {
@@ -41,24 +55,24 @@ impl Qrow {
         } else {
             Status::SignInRequired
         };
-        if matches!(self.assistant_panel.status, Status::Ready) {
-            self.assistant_panel.sign_in = SignIn::Idle;
+        if matches!(self.assistant_state.status, Status::Ready) {
+            self.assistant_state.sign_in = SignIn::Idle;
         }
-        self.assistant_panel.snapshot = Some(snapshot);
+        self.assistant_state.snapshot = Some(snapshot);
         self.reconcile_assistant_settings(cx);
         if initial {
             // A new Codex process cannot resume conversations without a turn.
-            let unstarted = std::mem::take(&mut self.assistant_panel.unstarted_threads);
+            let unstarted = std::mem::take(&mut self.assistant_state.unstarted_threads);
             if !unstarted.is_empty() {
                 self.assistant.remove_unstarted(&unstarted);
-                self.assistant_panel
+                self.assistant_state
                     .transcripts
                     .retain(|thread, _| !unstarted.contains(thread));
                 self.changed(cx);
             }
         }
         if initial {
-            self.assistant_panel.loaded_threads.clear();
+            self.assistant_state.loaded_threads.clear();
         }
         if let Some(thread) = self.displayed_thread() {
             self.load_assistant_thread(&thread, cx);
@@ -80,12 +94,12 @@ impl Qrow {
             }
             AssistantServiceEvent::Created(conversation) => {
                 // Codex creates conversations in the order of the requests.
-                let Some(first) = self.assistant_panel.first_messages.pop_front() else {
+                let Some(first) = self.assistant_state.first_messages.pop_front() else {
                     return;
                 };
                 let id = conversation.id;
-                self.assistant_panel.loaded_threads.insert(id.clone());
-                self.assistant_panel.unstarted_threads.insert(id.clone());
+                self.assistant_state.loaded_threads.insert(id.clone());
+                self.assistant_state.unstarted_threads.insert(id.clone());
                 if !self.tabs.iter().any(|tab| tab.saved.id == first.tab_id)
                     || self.assistant.conversation_for_tab(first.tab_id).is_some()
                 {
@@ -96,7 +110,7 @@ impl Qrow {
                 entry.last_activity = unix_now_seconds();
                 entry.tab_id = Some(first.tab_id);
                 entry.title_follows_conversation = self
-                    .assistant_panel
+                    .assistant_state
                     .new_conversation_tabs
                     .remove(&first.tab_id);
                 self.assistant.conversations.push(entry);
@@ -104,7 +118,7 @@ impl Qrow {
                     self.restore_first_message(first, window, cx);
                 }
                 if self.displayed_thread().as_deref() == Some(id.as_str()) {
-                    self.scroll_assistant_to_bottom(window, cx);
+                    self.scroll_assistant_to_bottom(cx);
                 }
                 self.changed(cx);
             }
@@ -114,27 +128,27 @@ impl Qrow {
             AssistantServiceEvent::History(history) => {
                 let thread = history.conversation.id;
                 if let Some(cursor) = history.older_cursor {
-                    if !self.assistant_panel.loaded_cursors.contains_key(&thread) {
-                        self.assistant_panel
+                    if !self.assistant_state.loaded_cursors.contains_key(&thread) {
+                        self.assistant_state
                             .older_cursors
                             .insert(thread.clone(), cursor);
                     }
                 } else {
-                    self.assistant_panel.older_cursors.remove(&thread);
+                    self.assistant_state.older_cursors.remove(&thread);
                 }
                 let selected = self.displayed_thread().as_deref() == Some(thread.as_str());
                 let thread_id = thread.clone();
-                let entries = self.assistant_panel.transcripts.entry(thread).or_default();
+                let entries = self.assistant_state.transcripts.entry(thread).or_default();
                 let previous_count = entries.len();
                 merge_history(entries, history.turns);
                 if selected && entries.len() > previous_count {
-                    self.scroll_assistant_to_bottom(window, cx);
+                    self.scroll_assistant_to_bottom(cx);
                 }
-                if self.assistant_panel.title_history_reads.remove(&thread_id)
+                if self.assistant_state.title_history_reads.remove(&thread_id)
                     && !self.send_assistant_title_request(&thread_id, cx)
                 {
-                    self.assistant_panel.regenerating_titles.remove(&thread_id);
-                    self.assistant_panel.notice = Some(AssistantNotice::info(
+                    self.assistant_state.regenerating_titles.remove(&thread_id);
+                    self.assistant_state.notice = Some(AssistantNotice::info(
                         "This conversation has no messages for a title.",
                     ));
                 }
@@ -142,11 +156,11 @@ impl Qrow {
             AssistantServiceEvent::HistoryPage(page) => {
                 self.thread_run_mut(&page.thread_id).loading_older = false;
                 if let Some(cursor) = page.older_cursor {
-                    self.assistant_panel
+                    self.assistant_state
                         .older_cursors
                         .insert(page.thread_id.clone(), cursor);
                 } else {
-                    self.assistant_panel.older_cursors.remove(&page.thread_id);
+                    self.assistant_state.older_cursors.remove(&page.thread_id);
                 }
                 let older: Vec<_> = page
                     .turns
@@ -166,7 +180,7 @@ impl Qrow {
                         })
                     })
                     .collect();
-                self.assistant_panel
+                self.assistant_state
                     .transcripts
                     .entry(page.thread_id)
                     .or_default()
@@ -178,7 +192,7 @@ impl Qrow {
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
                 self.thread_run_mut(&thread_id).sent_messages.pop_front();
                 if let Some(entry) =
-                    self.assistant_panel
+                    self.assistant_state
                         .transcripts
                         .get_mut(&thread_id)
                         .and_then(|entries| {
@@ -195,7 +209,7 @@ impl Qrow {
                     target.turn_id = turn.id;
                 }
                 if self.displayed_thread().as_deref() == Some(thread_id.as_str()) {
-                    self.scroll_assistant_to_bottom(window, cx);
+                    self.scroll_assistant_to_bottom(cx);
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::MessageDelta {
@@ -208,7 +222,7 @@ impl Qrow {
                     self.thread_run_mut(&thread_id).pending_reply = false;
                 }
                 let entries = self
-                    .assistant_panel
+                    .assistant_state
                     .transcripts
                     .entry(thread_id)
                     .or_default();
@@ -226,12 +240,9 @@ impl Qrow {
                     ));
                     true
                 };
-                if selected && (new_message || self.assistant_transcript_near_bottom()) {
-                    if new_message {
-                        self.scroll_assistant_to_bottom(window, cx);
-                    } else {
-                        self.assistant_panel.scroll.scroll_to_bottom();
-                    }
+                // The transcript follows a growing reply while you stay at its end.
+                if selected && new_message {
+                    self.scroll_assistant_to_bottom(cx);
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TurnCompleted {
@@ -239,7 +250,7 @@ impl Qrow {
                 turn,
                 error,
             }) => {
-                let viewed = self.assistant_panel.open
+                let viewed = self.assistant_state.open
                     && self.displayed_thread().as_deref() == Some(thread_id.as_str());
                 let run = self.thread_run_mut(&thread_id);
                 run.pending_reply = false;
@@ -289,7 +300,7 @@ impl Qrow {
                     self.changed(cx);
                 }
                 if let Some(error) = error {
-                    self.assistant_panel
+                    self.assistant_state
                         .transcripts
                         .entry(thread_id)
                         .or_default()
@@ -297,8 +308,8 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
-                self.assistant_panel.pending_titles.remove(&thread_id);
-                let regenerated = self.assistant_panel.regenerating_titles.remove(&thread_id);
+                self.assistant_state.pending_titles.remove(&thread_id);
+                let regenerated = self.assistant_state.regenerating_titles.remove(&thread_id);
                 let mut tab_to_name = None;
                 if let Some(conversation) = self
                     .assistant
@@ -319,9 +330,9 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
-                self.assistant_panel.pending_titles.remove(&thread_id);
-                if self.assistant_panel.regenerating_titles.remove(&thread_id) {
-                    self.assistant_panel.notice = Some(AssistantNotice::warning(
+                self.assistant_state.pending_titles.remove(&thread_id);
+                if self.assistant_state.regenerating_titles.remove(&thread_id) {
+                    self.assistant_state.notice = Some(AssistantNotice::warning(
                         "Codex did not return a title. Try again.",
                     ));
                 }
@@ -332,7 +343,7 @@ impl Qrow {
             AssistantServiceEvent::Harness(AssistantEvent::Other { method, params }) => {
                 if method == "account/login/completed" {
                     let success = params.get("success").and_then(Value::as_bool) == Some(true);
-                    self.assistant_panel.sign_in.complete(
+                    self.assistant_state.sign_in.complete(
                         params.get("loginId").and_then(Value::as_str),
                         success,
                         params.get("error").and_then(Value::as_str),
@@ -345,9 +356,9 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::LoginStarted(login) => {
-                if self.assistant_panel.sign_in == SignIn::Starting {
+                if self.assistant_state.sign_in == SignIn::Starting {
                     cx.open_url(&login.url);
-                    self.assistant_panel.sign_in = SignIn::Waiting {
+                    self.assistant_state.sign_in = SignIn::Waiting {
                         login_id: login.login_id,
                         url: login.url,
                     };
@@ -357,7 +368,7 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Renamed(id) => {
-                if let Some((pending_id, title)) = self.assistant_panel.pending_rename.take()
+                if let Some((pending_id, title)) = self.assistant_state.pending_rename.take()
                     && pending_id == id
                     && let Some(conversation) = self
                         .assistant
@@ -378,37 +389,37 @@ impl Qrow {
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
-                if self.assistant_panel.browsed_thread.as_deref() == Some(id.as_str()) {
-                    self.assistant_panel.browsed_thread = None;
+                if self.assistant_state.browsed_thread.as_deref() == Some(id.as_str()) {
+                    self.assistant_state.browsed_thread = None;
                     self.show_assistant_composer(
                         self.active_tab_id().map(ComposerTarget::Tab),
                         window,
                         cx,
                     );
                 }
-                self.assistant_panel
+                self.assistant_state
                     .drafts
                     .remove(&ComposerTarget::Detached(id.clone()));
-                self.assistant_panel.runs.remove(&id);
-                self.assistant_panel.loaded_threads.remove(&id);
-                self.assistant_panel.older_cursors.remove(&id);
-                self.assistant_panel.loaded_cursors.remove(&id);
+                self.assistant_state.runs.remove(&id);
+                self.assistant_state.loaded_threads.remove(&id);
+                self.assistant_state.older_cursors.remove(&id);
+                self.assistant_state.loaded_cursors.remove(&id);
                 self.assistant
                     .conversations
                     .retain(|conversation| conversation.thread_id != id);
-                self.assistant_panel.transcripts.remove(&id);
-                self.assistant_panel.unstarted_threads.remove(&id);
-                self.assistant_panel.regenerating_titles.remove(&id);
-                self.assistant_panel.pending_titles.remove(&id);
-                self.assistant_panel.title_history_reads.remove(&id);
+                self.assistant_state.transcripts.remove(&id);
+                self.assistant_state.unstarted_threads.remove(&id);
+                self.assistant_state.regenerating_titles.remove(&id);
+                self.assistant_state.pending_titles.remove(&id);
+                self.assistant_state.title_history_reads.remove(&id);
                 // The tab stays open without a conversation.
                 self.changed(cx);
             }
             AssistantServiceEvent::Disconnected(error) => {
-                self.assistant_panel.sign_in = SignIn::Idle;
-                self.assistant_panel.status = Status::Disconnected(error);
-                self.assistant_panel.service = None;
-                self.assistant_panel.pending_titles.clear();
+                self.assistant_state.sign_in = SignIn::Idle;
+                self.assistant_state.status = Status::Disconnected(error);
+                self.assistant_state.service = None;
+                self.assistant_state.pending_titles.clear();
                 self.reset_assistant_runs(window, cx);
             }
             AssistantServiceEvent::Failed {
@@ -418,9 +429,9 @@ impl Qrow {
             } => {
                 if operation == Operation::GenerateTitle {
                     if let Some(thread) = id.as_ref() {
-                        self.assistant_panel.pending_titles.remove(thread);
-                        if self.assistant_panel.regenerating_titles.remove(thread) {
-                            self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                        self.assistant_state.pending_titles.remove(thread);
+                        if self.assistant_state.regenerating_titles.remove(thread) {
+                            self.assistant_state.notice = Some(AssistantNotice::error(format!(
                                 "Could not regenerate the title: {error}"
                             )));
                         }
@@ -430,10 +441,10 @@ impl Qrow {
                 }
                 if operation == Operation::Read
                     && let Some(thread) = id.as_ref()
-                    && self.assistant_panel.title_history_reads.remove(thread)
+                    && self.assistant_state.title_history_reads.remove(thread)
                 {
-                    self.assistant_panel.regenerating_titles.remove(thread);
-                    self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                    self.assistant_state.regenerating_titles.remove(thread);
+                    self.assistant_state.notice = Some(AssistantNotice::error(format!(
                         "Could not regenerate the title: {error}"
                     )));
                     // The conversation shows its own error when you open it.
@@ -442,7 +453,7 @@ impl Qrow {
                     }
                 }
                 if operation == Operation::Login {
-                    self.assistant_panel.sign_in = SignIn::Failed(error);
+                    self.assistant_state.sign_in = SignIn::Failed(error);
                     return;
                 }
                 if operation == Operation::CancelLogin {
@@ -450,13 +461,13 @@ impl Qrow {
                     return;
                 }
                 if operation == Operation::Rename {
-                    self.assistant_panel.pending_rename = None;
+                    self.assistant_state.pending_rename = None;
                 }
                 if operation == Operation::Create {
-                    if let Some(first) = self.assistant_panel.first_messages.pop_front() {
+                    if let Some(first) = self.assistant_state.first_messages.pop_front() {
                         self.restore_first_message(first, window, cx);
                     }
-                    self.assistant_panel.notice = Some(AssistantNotice::error(format!(
+                    self.assistant_state.notice = Some(AssistantNotice::error(format!(
                         "Could not start the conversation: {error}"
                     )));
                     return;
@@ -466,19 +477,19 @@ impl Qrow {
                 {
                     // Qrow does not try again in this Codex process, so a tab
                     // change does not add the error again.
-                    self.assistant_panel.loaded_threads.insert(thread.clone());
+                    self.assistant_state.loaded_threads.insert(thread.clone());
                 }
                 if operation == Operation::ReadOlder {
                     if let Some(thread) = id.as_ref() {
                         self.thread_run_mut(thread).loading_older = false;
                     }
                     if let Some(thread) = id.as_ref()
-                        && let Some(cursor) = self.assistant_panel.older_cursors.get(thread)
-                        && let Some(loaded) = self.assistant_panel.loaded_cursors.get_mut(thread)
+                        && let Some(cursor) = self.assistant_state.older_cursors.get(thread)
+                        && let Some(loaded) = self.assistant_state.loaded_cursors.get_mut(thread)
                     {
                         loaded.remove(cursor);
                         if loaded.is_empty() {
-                            self.assistant_panel.loaded_cursors.remove(thread);
+                            self.assistant_state.loaded_cursors.remove(thread);
                         }
                     }
                 }
@@ -503,8 +514,8 @@ impl Qrow {
                     }
                 }
                 if operation == Operation::Answer {
-                    self.assistant_panel.status = Status::Disconnected(error);
-                    self.assistant_panel.service = None;
+                    self.assistant_state.status = Status::Disconnected(error);
+                    self.assistant_state.service = None;
                     self.reset_assistant_runs(window, cx);
                     return;
                 }
@@ -521,7 +532,7 @@ impl Qrow {
                             | Operation::Rename
                     )
                 }) {
-                    self.assistant_panel
+                    self.assistant_state
                         .transcripts
                         .entry(thread)
                         .or_default()
@@ -529,7 +540,7 @@ impl Qrow {
                 } else {
                     // Codex still runs. The error does not belong to one
                     // conversation.
-                    self.assistant_panel.notice = Some(AssistantNotice::error(error));
+                    self.assistant_state.notice = Some(AssistantNotice::error(error));
                 }
             }
             _ => {}

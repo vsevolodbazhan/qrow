@@ -317,7 +317,7 @@ impl Qrow {
                     ToolState::Failed
                 },
             };
-            self.assistant_panel
+            self.assistant_state
                 .transcripts
                 .entry(call.thread_id.clone())
                 .or_default()
@@ -776,7 +776,7 @@ impl Qrow {
             pending.call.turn_id.clone(),
         )
         .with_detail(bound_text(&format!("{reason}\nQuery:\n{}", pending.sql)).0);
-        self.assistant_panel
+        self.assistant_state
             .transcripts
             .entry(pending.call.thread_id.clone())
             .or_default()
@@ -794,7 +794,7 @@ impl Qrow {
         let turn = pending.call.turn_id.clone();
         let tool = self.assistant_query_tool(pending, ToolState::Running("Preparing".into()));
         let detail = bound_text(&format!("Query:\n{}", pending.sql)).0;
-        let entries = self.assistant_panel.transcripts.entry(thread).or_default();
+        let entries = self.assistant_state.transcripts.entry(thread).or_default();
         let index = entries.len();
         entries.push(TranscriptEntry::tool(tool, turn).with_detail(detail));
         if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
@@ -807,7 +807,7 @@ impl Qrow {
     /// conversation, and answers the calls of queries that ended.
     pub(super) fn tick_assistant_queries(&mut self, cx: &mut Context<Self>) {
         let threads: Vec<_> = self
-            .assistant_panel
+            .assistant_state
             .runs
             .iter()
             .filter(|(_, run)| run.pending_query.is_some())
@@ -834,7 +834,7 @@ impl Qrow {
         };
         let state = ToolState::Running(running_step(&tab.status));
         if let Some(entry) = self
-            .assistant_panel
+            .assistant_state
             .transcripts
             .get_mut(thread_id)
             .and_then(|entries| entries.get_mut(index))
@@ -909,7 +909,7 @@ impl Qrow {
             .0,
         );
         let entries = self
-            .assistant_panel
+            .assistant_state
             .transcripts
             .entry(pending.call.thread_id.clone())
             .or_default();

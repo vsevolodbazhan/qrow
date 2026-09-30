@@ -127,7 +127,9 @@ pub(in crate::ui) struct TranscriptEntry {
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
-    pub expanded: bool,
+    expanded: bool,
+    /// Counts the changes that can change the height of the entry.
+    revision: u64,
 }
 
 impl TranscriptEntry {
@@ -141,6 +143,7 @@ impl TranscriptEntry {
             tool: None,
             detail: None,
             expanded: false,
+            revision: 0,
         };
         entry.set_text(text);
         entry
@@ -162,8 +165,23 @@ impl TranscriptEntry {
         &self.label
     }
 
+    pub fn expanded(&self) -> bool {
+        self.expanded
+    }
+
+    /// Opens or closes the detail of a tool card.
+    pub fn toggle_expanded(&mut self) {
+        self.expanded = !self.expanded;
+        self.revision += 1;
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
         self.text = text.into();
+        self.revision += 1;
         let speaker = if self.tool.is_some() {
             "Tool call"
         } else {
@@ -232,6 +250,78 @@ pub(super) fn merge_history(entries: &mut Vec<TranscriptEntry>, turns: Vec<Histo
     }
 }
 
+/// One row of the transcript list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui) enum Row {
+    /// The button that loads older messages.
+    Older,
+    Entry {
+        id: Uuid,
+        revision: u64,
+    },
+    /// The line that shows while Codex works on a reply.
+    Working,
+}
+
+impl Row {
+    /// Whether both rows show the same entry, maybe at another revision.
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Entry { id, .. }, Self::Entry { id: other, .. }) => id == other,
+            _ => self == other,
+        }
+    }
+}
+
+/// The rows of a transcript, and the conversation or tab that they show.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::ui) struct TranscriptRows {
+    pub source: Option<String>,
+    pub rows: Vec<Row>,
+}
+
+/// The change of a transcript list from one set of rows to the next.
+#[derive(Debug, Eq, PartialEq)]
+pub(in crate::ui) struct RowChange {
+    /// The old rows that new rows replace.
+    pub replaced: Range<usize>,
+    /// The number of new rows in place of `replaced`.
+    pub inserted: usize,
+    /// The new indexes of the rows whose content changed.
+    pub remeasure: Vec<usize>,
+}
+
+/// Compares the rows before and after a change of one transcript. The rows
+/// before and after the changed part keep their place, so that the list keeps
+/// its scroll position when older messages load or a reply grows.
+pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
+    let prefix = old
+        .iter()
+        .zip(new)
+        .take_while(|(old, new)| old.same(new))
+        .count();
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(old.len().min(new.len()) - prefix)
+        .take_while(|(old, new)| old.same(new))
+        .count();
+    let changed = |(old_index, new_index): (usize, usize)| {
+        (old[old_index] != new[new_index]).then_some(new_index)
+    };
+    let remeasure = (0..prefix)
+        .map(|index| (index, index))
+        .chain((0..suffix).map(|index| (old.len() - suffix + index, new.len() - suffix + index)))
+        .filter_map(changed)
+        .collect();
+    RowChange {
+        replaced: prefix..old.len() - suffix,
+        inserted: new.len() - prefix - suffix,
+        remeasure,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,7 +338,7 @@ mod tests {
             tool(ToolKind::RunQuery, ToolState::Running("Preparing".into())),
             "turn-1".into(),
         );
-        assert!(!entry.expanded);
+        assert!(!entry.expanded());
         assert_eq!(entry.text, "Run query · Preparing");
         entry.set_tool_state(ToolState::Done(Some("3 rows · 0.20 s".into())));
         assert_eq!(entry.text, "Run query · 3 rows · 0.20 s");
@@ -317,5 +407,67 @@ mod tests {
         );
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[1].text, "Follow-up");
+    }
+
+    fn entry(id: u128, revision: u64) -> Row {
+        Row::Entry {
+            id: Uuid::from_u128(id),
+            revision,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn transcript_rows_keep_their_place_when_rows_are_added_or_change() {
+        let change = |replaced, inserted, remeasure: &[usize]| RowChange {
+            replaced,
+            inserted,
+            remeasure: remeasure.to_vec(),
+        };
+        let rows = [Row::Older, entry(1, 0), entry(2, 0)];
+        assert_eq!(row_change(&rows, &rows), change(3..3, 0, &[]));
+        // A new reply and the working line after the last message.
+        let working = [
+            Row::Older,
+            entry(1, 0),
+            entry(2, 0),
+            entry(3, 0),
+            Row::Working,
+        ];
+        assert_eq!(row_change(&rows, &working), change(3..3, 2, &[]));
+        // Streamed text changes the reply before the working line.
+        let streamed = [
+            Row::Older,
+            entry(1, 0),
+            entry(2, 0),
+            entry(3, 4),
+            Row::Working,
+        ];
+        assert_eq!(row_change(&working, &streamed), change(5..5, 0, &[3]));
+        // Older messages go between the button and the first message.
+        let older = [
+            Row::Older,
+            entry(8, 0),
+            entry(9, 0),
+            entry(1, 0),
+            entry(2, 1),
+        ];
+        assert_eq!(row_change(&rows, &older), change(1..1, 2, &[4]));
+        // A finished query replaces its running tool card.
+        let replaced = [Row::Older, entry(1, 0), entry(7, 0)];
+        assert_eq!(row_change(&rows, &replaced), change(2..3, 1, &[]));
+        // The last page removes the button.
+        assert_eq!(row_change(&rows, &rows[1..]), change(0..1, 0, &[]));
+        assert_eq!(row_change(&[], &rows), change(0..0, 3, &[]));
+    }
+
+    #[::core::prelude::v1::test]
+    fn entries_count_the_changes_of_their_height() {
+        let mut entry = TranscriptEntry::new(Speaker::Assistant, "Part", None);
+        let first = entry.revision();
+        entry.push_text(" two");
+        assert!(entry.revision() > first);
+        let streamed = entry.revision();
+        entry.toggle_expanded();
+        assert!(entry.expanded() && entry.revision() > streamed);
     }
 }
