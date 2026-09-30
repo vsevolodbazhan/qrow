@@ -343,7 +343,7 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | Suite | Probes |
 | --- | --- |
 | `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. |
-| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, and an assistant reply of 800 streamed parts and a frame of the transcript after three such replies. It builds with the `perf` Cargo profile, which optimizes like the release build. |
+| `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, and a keystroke in the message field. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. It builds with the `perf` Cargo profile, which optimizes like the release build. |
 | `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The app idles for 12 seconds before the measurement, so the caret no longer blinks. The first launch after a build warms up, and the median of the next three counts. |
 
