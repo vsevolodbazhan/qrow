@@ -8,11 +8,14 @@ use qrow::{
 };
 use std::{
     process::Command,
-    sync::Arc,
+    sync::{Arc, mpsc::RecvTimeoutError},
     thread,
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
+
+#[path = "support/evidence.rs"]
+mod evidence;
 
 const TIMEOUT: Duration = Duration::from_secs(150);
 const REGISTER: &str = "CREATE TEMPORARY FUNCTION qrow_block AS 'io.qrow.fixture.Blocking'";
@@ -113,31 +116,64 @@ struct Page {
 fn scalar(page: &Page, expected: &str) {
     assert_eq!(page.rows, vec![vec![Some(expected.into())]]);
 }
-fn observe(action: &str, token: &str) -> Result<String> {
+/// Stops the engine, restarts Kyuubi, or waits for the servers.
+fn observe(action: &str) -> Result<()> {
     let output = Command::new("python3")
-        .args(["scripts/e2e/fixture.py", "observe", action, token])
+        .args(["scripts/e2e/fixture.py", "observe", action])
         .output()?;
     ensure!(
         output.status.success(),
         "Observer failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    Ok(String::from_utf8(output.stdout)?.trim().into())
+    Ok(())
+}
+fn count(token: &str, state: &str) -> Result<usize> {
+    Ok(evidence::count(token, state)?)
 }
 fn wait_evidence(token: &str, state: &str, deadline: Instant) -> Result<()> {
     loop {
-        if observe("count", &format!("{token}.{state}"))? == "1" {
-            ensure!(
-                Instant::now() <= deadline,
-                "Executor evidence arrived after deadline: {token}.{state}"
-            );
-            return Ok(());
+        match count(token, state)? {
+            0 => {}
+            1 => {
+                ensure!(
+                    Instant::now() <= deadline,
+                    "Executor evidence arrived after deadline: {token}.{state}"
+                );
+                return Ok(());
+            }
+            n => anyhow::bail!("Executor recorded {token}.{state} {n} times"),
         }
         ensure!(
             Instant::now() < deadline,
             "Executor did not record {token}.{state}"
         );
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+/// Fails when the worker sends an event, or the executor starts `token`
+/// again, before `until`.
+fn stays_quiet(client: &Client, token: Option<&str>, until: Instant) -> Result<()> {
+    loop {
+        if let Some(token) = token {
+            ensure!(
+                count(token, "started")? == 1,
+                "SQL was automatically replayed"
+            );
+        }
+        let now = Instant::now();
+        if now >= until {
+            return Ok(());
+        }
+        match client
+            .worker
+            .events
+            .recv_timeout((until - now).min(Duration::from_millis(100)))
+        {
+            Ok(_) => anyhow::bail!("Unexpected background activity after failure"),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => anyhow::bail!("The worker stopped"),
+        }
     }
 }
 fn blocking(token: &str) -> String {
@@ -323,7 +359,7 @@ fn cancellation_interrupts_executor_within_ten_seconds_and_preserves_other_tab()
     }
     let elapsed = started.elapsed();
     ensure!(elapsed <= Duration::from_secs(10));
-    assert_eq!(observe("count", &format!("{token}.completed"))?, "0");
+    assert_eq!(count(&token, "completed")?, 0);
     scalar(&second.query("SELECT 43")?, "43");
     scalar(&first.query("SELECT 44")?, "44");
     println!(
@@ -438,22 +474,16 @@ fn engine_and_transport_failure_never_replay_sql() -> Result<()> {
         let token = format!("failure-{}", uuid::Uuid::new_v4());
         client.run(&blocking(&token));
         wait_evidence(&token, "started", Instant::now() + TIMEOUT)?;
-        observe(action, "unused")?;
+        observe(action)?;
         ensure!(
             client.failure()?,
             "Dead transport/engine must discard session"
         );
-        thread::sleep(Duration::from_secs(3));
-        assert_eq!(
-            observe("count", &format!("{token}.started"))?,
-            "1",
-            "SQL was automatically replayed"
-        );
-        ensure!(
-            client.worker.events.try_recv().is_err(),
-            "Unexpected background activity after failure"
-        );
-        observe("ready", "unused")?;
+        // The worker must stay quiet for 3 seconds after the failure. The
+        // servers recover in that time.
+        let quiet = Instant::now() + Duration::from_secs(3);
+        observe("ready")?;
+        stays_quiet(&client, Some(&token), quiet)?;
         scalar(&client.query("SELECT 99")?, "99");
     }
     Ok(())
@@ -470,11 +500,9 @@ fn failed_heartbeat_disconnects_and_stops_background_queries() -> Result<()> {
         client.failure()?,
         "Failed heartbeat must discard its session"
     );
-    thread::sleep(Duration::from_secs(3));
-    ensure!(
-        client.worker.events.try_recv().is_err(),
-        "Heartbeat resumed without explicit execution"
-    );
+    // Three keep-alive intervals.
+    stays_quiet(&client, None, Instant::now() + Duration::from_secs(3))
+        .context("Heartbeat resumed without explicit execution")?;
     client.profile.lifecycle.keep_alive_seconds = 0;
     scalar(&client.query("SELECT 52")?, "52");
     Ok(())
@@ -530,6 +558,34 @@ fn shutdown_stops_active_server_work() -> Result<()> {
     client.worker.shutdown();
     wait_evidence(&token, "interrupted", deadline)?;
     wait_evidence(&token, "ended", deadline)?;
-    assert_eq!(observe("count", &format!("{token}.completed"))?, "0");
+    assert_eq!(count(&token, "completed")?, 0);
+    Ok(())
+}
+
+#[test]
+fn evidence_uses_executor_and_driver_markers() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let root = root.path();
+    assert_eq!(evidence::count_in(root, "query", "started")?, 0);
+    std::fs::write(root.join("query.interrupted"), "1\n")?;
+    std::fs::write(root.join("query.task"), "app-123-4")?;
+    std::fs::write(root.join("app-123-4.ended"), "1\n")?;
+    assert_eq!(evidence::count_in(root, "query", "interrupted")?, 1);
+    assert_eq!(evidence::count_in(root, "query", "ended")?, 1);
+    for (token, state) in [
+        ("../query", "started"),
+        ("query", "task"),
+        ("/query", "ended"),
+        ("valid", "started;id"),
+        ("x/../x", "started"),
+        ("", "started"),
+    ] {
+        ensure!(
+            evidence::count_in(root, token, state).is_err(),
+            "Accepted {token}.{state}"
+        );
+    }
+    std::fs::write(root.join("query.task"), "../outside")?;
+    ensure!(evidence::count_in(root, "query", "ended").is_err());
     Ok(())
 }

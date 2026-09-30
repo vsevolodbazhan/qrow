@@ -234,8 +234,9 @@ session, so tests that follow each other do not wait for an engine start.
 The Spark worker has room for one engine and two executor cores.
 
 The Docker runtime binds ports to loopback, and each run gets its own
-Compose project, network, and evidence volume. The [server
-sources](../tests/fixture/server/) pin base images by digest. The native
+Compose project and network. The servers write the execution evidence to a
+directory in the artifacts of the fixture, and tests read the files there.
+The [server sources](../tests/fixture/server/) pin base images by digest. The native
 runtime starts Java processes on temporary loopback ports and stops their
 process groups, with Spark engines and executors, at the end.
 

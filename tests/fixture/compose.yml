@@ -3,7 +3,8 @@ x-spark: &spark
   build: ./server
   init: true
   volumes:
-    - evidence:/evidence
+    # Tests read the executor evidence from this host directory.
+    - ${QROW_E2E_EVIDENCE:?Use ./qtest fixture up or ./qtest run}:/evidence
   environment:
     SPARK_NO_DAEMONIZE: '1'
   mem_limit: 3g
@@ -48,5 +49,3 @@ services:
         condition: service_started
       spark-worker:
         condition: service_started
-volumes:
-  evidence:
