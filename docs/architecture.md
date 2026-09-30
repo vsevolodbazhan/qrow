@@ -71,9 +71,11 @@ repaint loop.
 The assistant worker thread owns the Codex process. Window commands and Codex
 output arrive on one channel. The worker sleeps until a command or a Codex
 message arrives. It does not poll while the assistant is idle. The window thread
-does not wait for Codex. **Reconnect** and the **Enabled** setting stop Codex
-on a separate thread. That thread kills the Codex process group if Codex does
-not stop in 1.5 seconds. Quit waits up to 2 seconds for these threads.
+does not wait for Codex. **Reconnect**, the **Enabled** setting, and the
+[idle stop](assistant.md#pane-and-connection-state) stop Codex on a separate
+thread. That thread kills the Codex process group if Codex does not stop in
+1.5 seconds. Quit waits up to 2 seconds for these threads. The idle stop uses
+one window timer, and it does not poll.
 
 A window gets display refresh ticks only while GPUI requests frames. It stops
 its display link 1 second after the last frame request, so an idle window does

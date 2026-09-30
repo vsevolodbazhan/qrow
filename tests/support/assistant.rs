@@ -58,6 +58,26 @@ impl FakeCodex {
         self.state.join(name).exists()
     }
 
+    /// The process IDs of the servers that started, in order.
+    pub fn processes(&self) -> Vec<u32> {
+        std::fs::read_to_string(self.state.join("processes"))
+            .unwrap_or_default()
+            .lines()
+            .map(|pid| pid.parse().unwrap())
+            .collect()
+    }
+
+    /// Whether the process `pid` exists. A process that stopped and that
+    /// Qrow did not reap still exists.
+    pub fn running(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    }
+
     /// Settings that enable the assistant with this server.
     pub fn settings(&self) -> Settings {
         let mut settings = Settings::default();
@@ -279,6 +299,13 @@ impl TestApp {
 }
 
 impl TestApp {
+    /// Moves the test clock of Qrow's timers forward by `duration` and runs
+    /// the work that is due. Codex and its worker thread use wall time.
+    pub fn pass_time(&self, cx: &mut TestAppContext, duration: Duration) {
+        cx.executor().advance_clock(duration);
+        self.settle(cx);
+    }
+
     /// Waits until an element has a label that contains `text`.
     pub fn wait_label_containing(&self, cx: &mut TestAppContext, text: &str) {
         self.wait_until(cx, text, REPLY_TIMEOUT, |window, _| {

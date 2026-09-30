@@ -17,6 +17,9 @@ live_threads = set()
 title_threads = set()
 # The driver creates this file to start without an account.
 signed_out_path = os.path.join(state_dir, "signed-out")
+# The driver reads this file to find out when a server process stops.
+with open(os.path.join(state_dir, "processes"), "a") as processes:
+    processes.write(f"{os.getpid()}\n")
 
 
 def has_rollout(thread):
@@ -304,6 +307,13 @@ for line in sys.stdin:
         )
     elif method in {"thread/start", "thread/resume", "thread/read"}:
         if method == "thread/start":
+            if os.path.exists(os.path.join(state_dir, "hold-create")):
+                # Keep a new conversation waiting for the driver.
+                open(os.path.join(state_dir, "create-pending"), "w").close()
+                release = os.path.join(state_dir, "release-create")
+                deadline = time.monotonic() + 60
+                while not os.path.exists(release) and time.monotonic() < deadline:
+                    time.sleep(0.05)
             thread_id = f"synthetic-thread-{next_thread_number()}"
             live_threads.add(thread_id)
         elif not has_rollout(request["params"]["threadId"]):

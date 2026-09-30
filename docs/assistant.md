@@ -269,7 +269,24 @@ pane uses its minimum width. Press **⌘B** to hide the sidebar if you need more
 space.
 Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
-with the pane closed. Closing the pane does not stop Codex or a database query.
+with the pane closed. Closing the pane does not stop a database query.
+
+Codex continues to run after you close the pane. If the pane stays closed for
+10 minutes and Codex has no work, Qrow stops Codex to save memory and CPU
+time. Each Codex command or message starts the 10 minutes again. Qrow does not
+stop Codex while one of these items continues:
+
+- A turn, or a new conversation that Codex creates for its first message.
+- A query that waits for your approval, or a query that the assistant runs.
+- A title request, a history request, or a rename.
+- A sign-in.
+- A conversation without a turn. A new Codex process cannot open it.
+
+When you open the pane again, Qrow starts Codex. The pane shows the usual
+startup state, and the controls wait for Codex. The conversations and their
+messages stay in the pane. Qrow loads the history of each conversation again
+from Codex when you show it. Signed-in accounts stay signed in, because Codex
+keeps the account.
 
 Assistant notices use an alert in the pane. These notices report an unavailable
 saved option, a title error, or another exceptional condition. Routine status

@@ -12,6 +12,7 @@ mod settings_view;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
+pub use assistant_view::CODEX_IDLE_TIMEOUT;
 pub use environment::Environment;
 pub use workspace_view::WindowView;
 
