@@ -112,6 +112,17 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     open_rename(&app, cx);
     rename_to(&app, cx, "Listed title");
     app.wait_conversations(cx, &[(GENERATED, Codex), ("Listed title", User)]);
+    // The search ignores case. An empty search shows every conversation.
+    app.fill_labelled(cx, "Search Conversations", "LISTED");
+    app.wait_until(cx, "one matching row", REPLY_TIMEOUT, |window, _| {
+        labelled_starting(window, &row(GENERATED)).is_empty()
+            && labelled_starting(window, &row("Listed title")).len() == 1
+    });
+    app.fill_labelled(cx, "Search Conversations", "");
+    app.wait_until(cx, "every row", REPLY_TIMEOUT, |window, _| {
+        labelled_starting(window, &row(GENERATED)).len() == 1
+            && labelled_starting(window, &row("Listed title")).len() == 1
+    });
     app.context_menu_starting(cx, &row("Listed title"));
     app.choose(cx, "popup-menu", "Regenerate Title");
     app.wait_conversations(cx, &[(GENERATED, Codex), (GENERATED, Codex)]);
