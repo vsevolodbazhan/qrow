@@ -444,7 +444,10 @@ Some messages make the server wait for a marker file, which
 once. For example, it answers `initialize` only after `initialize-release`
 when the test creates `hold-initialize` before the launch. The
 [assistant support](../tests/support/assistant.rs) sends messages and reads
-the transcript, the editor, and the approval card.
+the transcript, the editor, and the approval card. `codex.processes()` lists
+the server processes, and `FakeCodex::running(pid)` shows if a process still
+exists. `app.pass_time(duration)` moves the test clock of Qrow's timers
+forward, for example for the idle stop of Codex. Codex itself uses wall time.
 
 Follow these rules:
 

@@ -704,6 +704,10 @@ pub(super) struct ConversationEditor {
 /// The time that quit waits for Codex to stop, including a forced stop.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Qrow stops Codex when the pane stays closed for this time without Codex
+/// work. The next open starts Codex again.
+pub const CODEX_IDLE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
 const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
     label: "Conversation Name",
@@ -814,6 +818,10 @@ pub(super) struct AssistantPanelState {
     pub title_history_reads: BTreeSet<String>,
     /// Conversations without a turn. Qrow does not save them.
     pub unstarted_threads: BTreeSet<String>,
+    /// Stops an idle Codex while the pane is closed.
+    idle_stop: Option<Task<()>>,
+    /// The last Codex command or event, or the time that the pane closed.
+    idle_since: Instant,
 }
 
 impl AssistantPanelState {
@@ -874,11 +882,14 @@ impl AssistantPanelState {
             pending_titles: BTreeSet::new(),
             title_history_reads: BTreeSet::new(),
             unstarted_threads: BTreeSet::new(),
+            idle_stop: None,
+            idle_since: cx.background_executor().now(),
         }
     }
 
     /// Stops Codex in the background. The window does not wait.
     pub fn stop(&mut self) {
+        self.idle_stop = None;
         if let Some(mut service) = self.service.take() {
             service.stop();
         }
@@ -1008,6 +1019,28 @@ impl Qrow {
                 .runs
                 .values()
                 .any(|run| run.active_turn.is_some() || run.pending_reply)
+    }
+
+    /// Whether Codex has work that a new Codex process would lose. A new
+    /// process cannot resume a conversation without a turn, and it does not
+    /// know the requests, tool calls, and sign-in of the old process.
+    fn codex_has_work(&self) -> bool {
+        let panel = &self.assistant_panel;
+        self.assistant_working()
+            || panel
+                .runs
+                .values()
+                .any(|run| run.pending_query.is_some() || run.loading_older)
+            || !panel.pending_titles.is_empty()
+            || !panel.regenerating_titles.is_empty()
+            || !panel.title_history_reads.is_empty()
+            || panel.pending_rename.is_some()
+            || matches!(panel.sign_in, SignIn::Starting | SignIn::Waiting { .. })
+            || self
+                .assistant
+                .conversations
+                .iter()
+                .any(|conversation| panel.unstarted_threads.contains(&conversation.thread_id))
     }
 
     /// The most urgent state of all conversations, for the assistant toggle.
@@ -1643,14 +1676,65 @@ impl Qrow {
             if let Some(thread) = self.displayed_thread() {
                 self.thread_run_mut(&thread).unread = None;
             }
+            self.assistant_panel.idle_stop = None;
             self.start_assistant(cx);
             self.assistant_panel
                 .composer
                 .update(cx, |composer, cx| composer.focus(window, cx));
-        } else if let Some(focus) = self.assistant_panel.previous_focus.take() {
-            focus.focus(window, cx);
+        } else {
+            if let Some(focus) = self.assistant_panel.previous_focus.take() {
+                focus.focus(window, cx);
+            }
+            if self.assistant_panel.service.is_some() {
+                self.note_codex_activity(cx);
+                self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT, window, cx);
+            }
         }
         cx.notify();
+    }
+
+    /// Starts the idle period again after a Codex command or event.
+    fn note_codex_activity(&mut self, cx: &App) {
+        self.assistant_panel.idle_since = cx.background_executor().now();
+    }
+
+    fn schedule_idle_codex_stop(
+        &mut self,
+        delay: Duration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.assistant_panel.idle_stop = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = this.update_in(cx, |this, window, cx| this.stop_idle_codex(window, cx));
+        }));
+    }
+
+    /// Stops Codex after `CODEX_IDLE_TIMEOUT` with the pane closed and without
+    /// Codex activity. Work that a new process would lose delays the stop.
+    fn stop_idle_codex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = &self.assistant_panel;
+        if panel.open || panel.service.is_none() {
+            self.assistant_panel.idle_stop = None;
+            return;
+        }
+        let idle = cx
+            .background_executor()
+            .now()
+            .saturating_duration_since(panel.idle_since);
+        if idle < CODEX_IDLE_TIMEOUT {
+            self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT - idle, window, cx);
+        } else if self.codex_has_work() {
+            // The end of the work is Codex activity, which starts the idle
+            // period again.
+            self.schedule_idle_codex_stop(CODEX_IDLE_TIMEOUT, window, cx);
+        } else {
+            self.assistant_panel.stop();
+            self.reset_assistant_runs(window, cx);
+            // The next open starts Codex like the first open, without an error.
+            self.assistant_panel.status = Status::Idle;
+            cx.notify();
+        }
     }
 
     fn start_assistant(&mut self, cx: &mut Context<Self>) {
@@ -1860,7 +1944,10 @@ impl Qrow {
             .as_ref()
             .map(|service| service.send(command));
         match result {
-            Some(Ok(())) => true,
+            Some(Ok(())) => {
+                self.note_codex_activity(cx);
+                true
+            }
             Some(Err(error)) => {
                 self.assistant_panel.status = Status::Disconnected(error.into());
                 cx.notify();
@@ -2219,6 +2306,9 @@ impl Qrow {
             .map(|service| service.events.try_iter().collect())
             .unwrap_or_default();
         let changed = !events.is_empty();
+        if changed {
+            self.note_codex_activity(cx);
+        }
         for event in events {
             self.handle_assistant_event(event, window, cx);
         }
