@@ -905,7 +905,24 @@ impl Qrow {
             cx.write_to_clipboard(ClipboardItem::new_string(error));
         }
     }
+    /// Applies what the workers, the assistant, the workspace saver, and a
+    /// connection form save sent since the last tick. Returns whether a timed
+    /// step still waits: an autosave, a quit, or a connection form save.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut changed = self.drain_workers(cx);
+        changed |= self.tick_assistant(window, cx);
+        changed |= self.autosave(cx);
+        changed |= self.finish_profile_save(window, cx);
+        changed |= self.finish_quit(window, cx);
+        if changed {
+            cx.notify();
+        }
+        self.dirty.is_some()
+            || self.pending_quit.is_some()
+            || self.form.as_ref().is_some_and(|f| f.saving.is_some())
+    }
+    /// Applies the activity and the events that the tab workers sent.
+    fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let activities: Vec<_> = tab
@@ -928,133 +945,142 @@ impl Qrow {
                 .unwrap_or_default();
             changed |= !events.is_empty();
             for event in events {
-                if tab.started.is_some() {
-                    tab.table.update(cx, |table, cx| {
-                        if table.delegate_mut().query_event(&event, tab.cancelling) {
-                            cx.notify();
-                        }
-                    });
-                }
-                match event {
-                    Event::Connecting => {
-                        tab.connected = false;
-                        tab.busy = true;
-                        tab.status = "Connecting…".into();
-                    }
-                    Event::Connected => tab.connected = true,
-                    Event::Running => {
-                        tab.busy = true;
-                        tab.status = "Executing…".into();
-                    }
-                    Event::KeepAliveStarted => {
-                        tab.busy = true;
-                        tab.status = "Sending keep-alive…".into();
-                    }
-                    Event::KeepAliveFinished => {
-                        tab.busy = false;
-                        tab.cancelling = false;
-                        tab.status = if self
-                            .profiles
-                            .iter()
-                            .find(|profile| Some(profile.id) == tab.worker_profile)
-                            .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
-                        {
-                            "Connected · Keep-alive enabled"
-                        } else {
-                            "Connected"
-                        }
-                        .into();
-                    }
-                    Event::Columns(columns) => {
-                        tab.table.update(cx, |t, cx| {
-                            t.delegate_mut().schema(columns);
-                            t.refresh(cx);
-                        });
-                        tab.status = "Fetching preview…".into();
-                    }
-                    Event::Rows(rows) => {
-                        tab.table.update(cx, |t, cx| {
-                            t.delegate_mut().rows.extend(rows);
-                            cx.notify();
-                        });
-                        if let Some(page) = tab.pending_page.take() {
-                            results::select_page(&tab.table, page, cx);
-                        }
-                    }
-                    Event::Ready { more, limited } => {
-                        let was_cancelling = tab.cancelling;
-                        tab.more = more;
-                        tab.pending_page = None;
-                        tab.busy = false;
-                        tab.cancelling = false;
-                        tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                        tab.status = if limited {
-                            "Preview · Limit reached"
-                        } else if more {
-                            "Preview · More rows available"
-                        } else {
-                            "Complete"
-                        }
-                        .into();
-                        if !was_cancelling {
-                            tab.panel.success();
-                        }
-                    }
-                    Event::Cancelled => {
-                        tab.busy = false;
-                        tab.cancelling = false;
-                        tab.more = false;
-                        tab.pending_page = None;
-                        tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                        tab.status = "Cancelled · Partial preview retained".into();
-                    }
-                    Event::Error {
-                        message: _,
-                        disconnected,
-                    } => {
-                        tab.busy = false;
-                        tab.cancelling = false;
-                        tab.more = false;
-                        tab.pending_page = None;
-                        if disconnected {
-                            tab.connected = false;
-                        }
-                        tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                        tab.status = if disconnected {
-                            "Error · Connection lost"
-                        } else {
-                            "Error · Query failed"
-                        }
-                        .into();
-                        Self::record_failure(tab, index == self.active);
-                    }
-                    Event::CancelError(message) => {
-                        Self::record_local_activity(
-                            tab,
-                            Severity::Error,
-                            ActivityKind::Error,
-                            message,
-                        );
-                        Self::record_failure(tab, index == self.active);
-                        tab.cancelling = false;
-                    }
-                    Event::Disconnected | Event::IdleDisconnected => {
-                        tab.connected = false;
-                        tab.more = false;
-                        tab.pending_page = None;
-                        tab.busy = false;
-                        tab.cancelling = false;
-                        tab.status = if matches!(event, Event::IdleDisconnected) {
-                            "Disconnected · Idle timeout"
-                        } else {
-                            "Disconnected"
-                        }
-                        .into();
-                    }
-                }
+                Self::apply_worker_event(tab, event, index == self.active, &self.profiles, cx);
             }
         }
-        changed |= self.tick_assistant(window, cx);
+        changed
+    }
+    /// Applies one worker event to its tab. `active` is true for the shown tab.
+    fn apply_worker_event(
+        tab: &mut Tab,
+        event: Event,
+        active: bool,
+        profiles: &[Profile],
+        cx: &mut Context<Self>,
+    ) {
+        if tab.started.is_some() {
+            tab.table.update(cx, |table, cx| {
+                if table.delegate_mut().query_event(&event, tab.cancelling) {
+                    cx.notify();
+                }
+            });
+        }
+        match event {
+            Event::Connecting => {
+                tab.connected = false;
+                tab.busy = true;
+                tab.status = "Connecting…".into();
+            }
+            Event::Connected => tab.connected = true,
+            Event::Running => {
+                tab.busy = true;
+                tab.status = "Executing…".into();
+            }
+            Event::KeepAliveStarted => {
+                tab.busy = true;
+                tab.status = "Sending keep-alive…".into();
+            }
+            Event::KeepAliveFinished => {
+                tab.busy = false;
+                tab.cancelling = false;
+                tab.status = if profiles
+                    .iter()
+                    .find(|profile| Some(profile.id) == tab.worker_profile)
+                    .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
+                {
+                    "Connected · Keep-alive enabled"
+                } else {
+                    "Connected"
+                }
+                .into();
+            }
+            Event::Columns(columns) => {
+                tab.table.update(cx, |t, cx| {
+                    t.delegate_mut().schema(columns);
+                    t.refresh(cx);
+                });
+                tab.status = "Fetching preview…".into();
+            }
+            Event::Rows(rows) => {
+                tab.table.update(cx, |t, cx| {
+                    t.delegate_mut().rows.extend(rows);
+                    cx.notify();
+                });
+                if let Some(page) = tab.pending_page.take() {
+                    results::select_page(&tab.table, page, cx);
+                }
+            }
+            Event::Ready { more, limited } => {
+                let was_cancelling = tab.cancelling;
+                tab.more = more;
+                tab.pending_page = None;
+                tab.busy = false;
+                tab.cancelling = false;
+                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                tab.status = if limited {
+                    "Preview · Limit reached"
+                } else if more {
+                    "Preview · More rows available"
+                } else {
+                    "Complete"
+                }
+                .into();
+                if !was_cancelling {
+                    tab.panel.success();
+                }
+            }
+            Event::Cancelled => {
+                tab.busy = false;
+                tab.cancelling = false;
+                tab.more = false;
+                tab.pending_page = None;
+                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                tab.status = "Cancelled · Partial preview retained".into();
+            }
+            Event::Error {
+                message: _,
+                disconnected,
+            } => {
+                tab.busy = false;
+                tab.cancelling = false;
+                tab.more = false;
+                tab.pending_page = None;
+                if disconnected {
+                    tab.connected = false;
+                }
+                tab.elapsed = tab.started.take().map(|t| t.elapsed());
+                tab.status = if disconnected {
+                    "Error · Connection lost"
+                } else {
+                    "Error · Query failed"
+                }
+                .into();
+                Self::record_failure(tab, active);
+            }
+            Event::CancelError(message) => {
+                Self::record_local_activity(tab, Severity::Error, ActivityKind::Error, message);
+                Self::record_failure(tab, active);
+                tab.cancelling = false;
+            }
+            Event::Disconnected | Event::IdleDisconnected => {
+                tab.connected = false;
+                tab.more = false;
+                tab.pending_page = None;
+                tab.busy = false;
+                tab.cancelling = false;
+                tab.status = if matches!(event, Event::IdleDisconnected) {
+                    "Disconnected · Idle timeout"
+                } else {
+                    "Disconnected"
+                }
+                .into();
+            }
+        }
+    }
+    /// Saves the workspace 400 ms after the last change, and shows the errors
+    /// of earlier saves.
+    fn autosave(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut changed = false;
         if self
             .dirty
             .is_some_and(|t| t.elapsed() >= Duration::from_millis(400))
@@ -1074,91 +1100,99 @@ impl Qrow {
                 changed = true;
             }
         }
+        changed
+    }
+    /// Applies the result of a connection form save.
+    fn finish_profile_save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let result = self
             .form
             .as_ref()
             .and_then(|f| f.saving.as_ref())
             .and_then(|r| r.try_recv().ok());
-        if let Some(result) = result {
-            match result {
-                Ok(saved) => {
-                    let ProfileSave {
-                        profile,
-                        password_changed,
-                    } = saved;
-                    let id = profile.id;
-                    let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
-                    let had_profiles = !self.profiles.is_empty();
-                    let previous = self.profiles.iter().find(|p| p.id == id).cloned();
-                    let action = profile_save_action(previous.as_ref(), &profile, password_changed);
-                    if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == id) {
-                        *existing = profile.clone();
+        let Some(result) = result else {
+            return false;
+        };
+        match result {
+            Ok(saved) => {
+                let ProfileSave {
+                    profile,
+                    password_changed,
+                } = saved;
+                let id = profile.id;
+                let is_new = self.form.as_ref().is_some_and(|form| form.is_new);
+                let had_profiles = !self.profiles.is_empty();
+                let previous = self.profiles.iter().find(|p| p.id == id).cloned();
+                let action = profile_save_action(previous.as_ref(), &profile, password_changed);
+                if let Some(existing) = self.profiles.iter_mut().find(|p| p.id == id) {
+                    *existing = profile.clone();
+                } else {
+                    self.profiles.push(profile.clone());
+                }
+                if is_new {
+                    if had_profiles {
+                        let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
+                        self.tabs.push(tab);
+                        self.activate(self.tabs.len() - 1, window, cx);
                     } else {
-                        self.profiles.push(profile.clone());
+                        for tab in &mut self.tabs {
+                            tab.saved.profile = Some(id);
+                        }
+                        if let Some(index) = self
+                            .tabs
+                            .iter()
+                            .position(|tab| tab.saved.profile == Some(id))
+                        {
+                            self.activate(index, window, cx);
+                        }
                     }
-                    if is_new {
-                        if had_profiles {
-                            let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
-                            self.tabs.push(tab);
-                            self.activate(self.tabs.len() - 1, window, cx);
-                        } else {
-                            for tab in &mut self.tabs {
-                                tab.saved.profile = Some(id);
+                }
+                if action == ProfileSaveAction::Reconnect {
+                    for tab in &mut self.tabs {
+                        if tab.worker_profile != Some(id) {
+                            continue;
+                        }
+                        if let Some(worker) = tab.worker.take() {
+                            worker.shutdown();
+                        }
+                        tab.worker_profile = None;
+                        tab.connected = false;
+                        tab.busy = false;
+                        tab.cancelling = false;
+                        tab.more = false;
+                        tab.pending_page = None;
+                        tab.status = "Not connected".into();
+                    }
+                } else if action == ProfileSaveAction::Update {
+                    for tab in &mut self.tabs {
+                        if tab.worker_profile == Some(id) {
+                            if let Some(worker) = &tab.worker {
+                                let _ = worker.update_profile(profile.clone());
                             }
-                            if let Some(index) = self
-                                .tabs
-                                .iter()
-                                .position(|tab| tab.saved.profile == Some(id))
+                            if profile.lifecycle.keep_alive_seconds == 0
+                                && tab.status == "Connected · Keep-alive enabled"
                             {
-                                self.activate(index, window, cx);
+                                tab.status = "Connected".into();
                             }
                         }
                     }
-                    if action == ProfileSaveAction::Reconnect {
-                        for tab in &mut self.tabs {
-                            if tab.worker_profile != Some(id) {
-                                continue;
-                            }
-                            if let Some(worker) = tab.worker.take() {
-                                worker.shutdown();
-                            }
-                            tab.worker_profile = None;
-                            tab.connected = false;
-                            tab.busy = false;
-                            tab.cancelling = false;
-                            tab.more = false;
-                            tab.pending_page = None;
-                            tab.status = "Not connected".into();
-                        }
-                    } else if action == ProfileSaveAction::Update {
-                        for tab in &mut self.tabs {
-                            if tab.worker_profile == Some(id) {
-                                if let Some(worker) = &tab.worker {
-                                    let _ = worker.update_profile(profile.clone());
-                                }
-                                if profile.lifecycle.keep_alive_seconds == 0
-                                    && tab.status == "Connected · Keep-alive enabled"
-                                {
-                                    tab.status = "Connected".into();
-                                }
-                            }
-                        }
-                    }
-                    if !is_new && self.tabs[self.active].saved.profile.is_none() {
-                        self.tabs[self.active].saved.profile = Some(id);
-                    }
-                    self.form = None;
-                    window.close_dialog(cx);
-                    self.dirty = Some(Instant::now());
                 }
-                Err(error) => {
-                    let form = self.form.as_mut().unwrap();
-                    form.error = Some(error);
-                    form.saving = None;
+                if !is_new && self.tabs[self.active].saved.profile.is_none() {
+                    self.tabs[self.active].saved.profile = Some(id);
                 }
+                self.form = None;
+                window.close_dialog(cx);
+                self.dirty = Some(Instant::now());
             }
-            changed = true;
+            Err(error) => {
+                let form = self.form.as_mut().unwrap();
+                form.error = Some(error);
+                form.saving = None;
+            }
         }
+        true
+    }
+    /// Quits after the final save, or reports a failed save.
+    fn finish_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let quit_result =
             self.pending_quit
                 .as_ref()
@@ -1169,27 +1203,22 @@ impl Qrow {
                         "Workspace saver stopped before confirming the save".into(),
                     )),
                 });
-        if let Some(result) = quit_result {
-            let (saved, _) = self.pending_quit.take().unwrap();
-            match result {
-                Ok(())
-                    if saved == self.snapshot(cx)
-                        && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
-                {
-                    self.quit_confirmed = true;
-                    cx.quit();
-                }
-                Ok(()) => self.request_quit(window, cx),
-                Err(error) => self.quit_failed(error, window, cx),
+        let Some(result) = quit_result else {
+            return false;
+        };
+        let (saved, _) = self.pending_quit.take().unwrap();
+        match result {
+            Ok(())
+                if saved == self.snapshot(cx)
+                    && !self.form.as_ref().is_some_and(|f| f.saving.is_some()) =>
+            {
+                self.quit_confirmed = true;
+                cx.quit();
             }
-            changed = true;
+            Ok(()) => self.request_quit(window, cx),
+            Err(error) => self.quit_failed(error, window, cx),
         }
-        if changed {
-            cx.notify();
-        }
-        self.dirty.is_some()
-            || self.pending_quit.is_some()
-            || self.form.as_ref().is_some_and(|f| f.saving.is_some())
+        true
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
