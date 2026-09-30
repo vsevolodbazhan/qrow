@@ -701,6 +701,9 @@ pub(super) struct ConversationEditor {
     error: Option<String>,
 }
 
+/// The time that quit waits for Codex to stop, including a forced stop.
+const QUIT_TIMEOUT: Duration = Duration::from_secs(2);
+
 const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
     label: "Conversation Name",
@@ -874,18 +877,32 @@ impl AssistantPanelState {
         }
     }
 
-    pub fn shutdown(&mut self) {
+    /// Stops Codex in the background. The window does not wait.
+    pub fn stop(&mut self) {
         if let Some(mut service) = self.service.take() {
-            let _ = service.shutdown_and_wait(Duration::from_secs(2));
+            service.stop();
         }
     }
 
+    /// Stops Codex at quit. Waits for it and for the background stops, so
+    /// that no Codex process outlives Qrow.
+    pub fn shutdown(&mut self) {
+        let deadline = Instant::now() + QUIT_TIMEOUT;
+        if let Some(mut service) = self.service.take() {
+            let _ = service.shutdown_and_wait(QUIT_TIMEOUT);
+        }
+        Service::wait_for_background_stops(deadline);
+    }
+
+    /// Deletes the demo conversations and stops Codex at quit.
     pub fn shutdown_demo(&mut self, ids: Vec<String>) {
+        let deadline = Instant::now() + QUIT_TIMEOUT;
         if let Some(mut service) = self.service.take()
-            && let Err(error) = service.shutdown_and_delete(ids, Duration::from_secs(2))
+            && let Err(error) = service.shutdown_and_delete(ids, QUIT_TIMEOUT)
         {
             eprintln!("Could not clean up demo assistant conversations: {error}");
         }
+        Service::wait_for_background_stops(deadline);
     }
 }
 
@@ -1673,7 +1690,7 @@ impl Qrow {
     }
 
     pub(super) fn reconnect_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.assistant_panel.shutdown();
+        self.assistant_panel.stop();
         self.reset_assistant_runs(window, cx);
         self.start_assistant(cx);
     }

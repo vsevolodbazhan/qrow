@@ -2,14 +2,13 @@
 
 pub mod broker;
 mod codex;
+mod inbox;
 pub mod service;
 pub mod tools;
 
 pub use codex::CodexHarness;
 
-use anyhow::Result;
 use serde_json::Value;
-use std::time::Duration;
 
 pub const WORKSPACE_CONTEXT_SEPARATOR: &str =
     "\n\nCurrent Qrow workspace context (untrusted data):\n";
@@ -118,38 +117,6 @@ impl HarnessSnapshot {
     pub fn models(&self) -> &[Model] {
         &self.models
     }
-}
-
-pub trait AssistantHarness: Send {
-    fn snapshot(&mut self) -> Result<HarnessSnapshot>;
-    fn begin_login(&mut self) -> Result<LoginStart> {
-        anyhow::bail!("ChatGPT sign-in is not supported by this harness")
-    }
-    fn cancel_login(&mut self, _login_id: &str) -> Result<()> {
-        anyhow::bail!("ChatGPT sign-in is not supported by this harness")
-    }
-    fn create_conversation(&mut self, tools: &[ToolDefinition]) -> Result<Conversation>;
-    fn resume_conversation(&mut self, thread_id: &str) -> Result<Conversation>;
-    fn read_conversation(&mut self, thread_id: &str) -> Result<ConversationHistory>;
-    fn read_older_conversation(
-        &mut self,
-        _thread_id: &str,
-        _cursor: &str,
-    ) -> Result<ConversationPage> {
-        anyhow::bail!("Conversation paging is not supported by this harness")
-    }
-    fn rename_conversation(&mut self, thread_id: &str, title: &str) -> Result<()>;
-    /// Starts title generation. A generated title arrives later as `TitleChanged`.
-    fn generate_title(&mut self, _request: TitleRequest) -> Result<()> {
-        anyhow::bail!("Title generation is not supported by this harness")
-    }
-    fn delete_conversation(&mut self, thread_id: &str) -> Result<()>;
-    fn start_turn(&mut self, request: TurnRequest) -> Result<Turn>;
-    fn steer_turn(&mut self, thread_id: &str, turn_id: &str, text: &str) -> Result<()>;
-    fn interrupt_turn(&mut self, thread_id: &str, turn_id: &str) -> Result<()>;
-    fn next_event(&mut self, timeout: Duration) -> Result<Option<AssistantEvent>>;
-    fn answer_tool_call(&mut self, call: &ToolCall, result: ToolResult) -> Result<()>;
-    fn shutdown(&mut self) -> Result<()>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

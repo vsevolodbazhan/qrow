@@ -490,7 +490,7 @@ impl Qrow {
             self.assistant_panel.loaded_cursors.clear();
             self.assistant_panel.notice = None;
             self.assistant_panel.status = super::assistant_view::Status::Idle;
-            self.assistant_panel.shutdown();
+            self.assistant_panel.stop();
             self.changed(cx);
             return;
         }

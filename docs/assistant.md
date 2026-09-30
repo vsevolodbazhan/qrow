@@ -276,13 +276,16 @@ saved option, a title error, or another exceptional condition. Routine status
 does not add text above the message field.
 
 If you quit Qrow while Codex is working, Qrow uses the [workspace close
-confirmation](workspace.md#quit-and-save) before it stops the turn.
+confirmation](workspace.md#quit-and-save) before it stops the turn. At quit,
+Qrow waits up to 2 seconds for Codex to stop. If Codex does not stop in 1.5
+seconds, Qrow stops Codex and its child processes.
 
 If Codex disconnects, Qrow keeps your unsent draft for the current app session.
 A first message that did not start its conversation goes back to the message
 field of its tab.
 **Reconnect** replaces **Send** and **Cancel** below the message field. Its
-tooltip shows the error. Select **Reconnect** to try again.
+tooltip shows the error. Select **Reconnect** to try again. Qrow stops the
+old Codex process in the background, so the window does not wait for it.
 Qrow does not send the draft for you. A database query that already started can
 finish while Codex is disconnected.
 
