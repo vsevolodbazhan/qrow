@@ -484,15 +484,18 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
   reads Logs through **Copy All Logs**.
 - `blocking(token, milliseconds)` makes a query that holds an executor
-  task. The fixture records the task, and `evidence(token, "started")` or
-  `app.wait_evidence(...)` reads that record. Register the function first
-  with `REGISTER_BLOCKING`.
+  task. The fixture records the task in a file on the host, and
+  `evidence(token, "started")` or `app.wait_evidence(...)` reads that file.
+  Register the function first with `REGISTER_BLOCKING`.
 - `app.scroll_to(id)` scrolls a form to a field below its fold.
 - Tests run at the same time and share the Spark engine of `qrow`. Do not
   change shared state, like global tables. The fixture has two executor
   cores, so put a test that holds executors in the `blocking` module, where
   tests run one at a time. A test that stops or restarts a server belongs in
   the `backend` suite.
+- Check the result that a user can see. The `backend` suite checks the
+  contract with the servers, for example that Spark stops a cancelled task
+  in 10 seconds. Do not check it again in an E2E test.
 
 Add a test from the template with `./qtest new e2e SUITE NAME`. Run one test
 with `./qtest run e2e/query_rows`.
