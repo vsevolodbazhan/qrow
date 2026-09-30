@@ -20,12 +20,13 @@ case "$QROW_BUILD_PROFILE" in
     *) echo "Use release or debug for QROW_BUILD_PROFILE." >&2; exit 1 ;;
 esac
 QROW_DIST_DIR="${QROW_DIST_DIR:-dist}"
+qrow_target_dir="${CARGO_TARGET_DIR:-target}"
 QROW_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 mkdir -p "$QROW_BUNDLE/Contents/MacOS" "$QROW_BUNDLE/Contents/Resources"
 QROW_ICON_SOURCE="assets/app-icons/macos/qrow.png"
 uv run --locked python scripts/package/icon.py "$QROW_ICON_SOURCE" "$QROW_BUNDLE/Contents/Resources/Qrow.icns"
 # Replace the executable atomically, including when an older build is still running.
-cp "target/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
+cp "$qrow_target_dir/$QROW_BUILD_PROFILE/qrow" "$QROW_BUNDLE/Contents/MacOS/qrow.new"
 mv -f "$QROW_BUNDLE/Contents/MacOS/qrow.new" "$QROW_BUNDLE/Contents/MacOS/qrow"
 cp NOTICE "$QROW_BUNDLE/Contents/Resources/NOTICE"
 cp LICENSE "$QROW_BUNDLE/Contents/Resources/LICENSE"

@@ -16,7 +16,10 @@ import xml.etree.ElementTree as ElementTree
 import catalog
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/core"))
 sys.path.insert(0, str(ROOT / "scripts/e2e"))
+import environment  # noqa: E402
+from environment import target_dir  # noqa: E402
 import fixture  # noqa: E402
 
 # Exit codes are part of the CLI contract; docs/testing.md lists them.
@@ -24,10 +27,6 @@ EXIT_PASSED = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_MISSING = 3
-
-
-def target_dir():
-    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 
 
 def runs_dir():
@@ -62,9 +61,10 @@ def check_requirement(name, options):
     if name == "xcode":
         return None if shutil.which("xcode-select") and _succeeds(["xcode-select", "-p"]) else fixes[name]
     if name == "docker":
-        if not shutil.which("docker"):
+        status = environment.docker_status()
+        if status == "missing":
             return fixes["docker"]
-        return None if _succeeds(["docker", "info"]) else fixes["docker-running"]
+        return None if status == "running" else fixes["docker-running"]
     if name in catalog.TOOLS:
         tool = catalog.TOOLS[name]
         version = _tool_version(tool)
@@ -83,14 +83,10 @@ def check_requirement(name, options):
             return check_requirement("docker", options)
         if fixture.reusable(runtime) is not None:
             return None
-        java_home = os.environ.get("JAVA_HOME")
-        java = java_home and all((Path(java_home) / "bin" / tool).is_file() for tool in ("java", "javac", "jar"))
-        if runtime == "native":
-            return None if java else fixes["java"]
-        # auto: Docker when its daemon answers, else local Java processes.
-        if check_requirement("docker", options) is None or java:
+        # `auto` chooses Docker only when its daemon answers.
+        if environment.choose_runtime(runtime) == "docker":
             return None
-        return fixes["java"]
+        return None if environment.jdk_problem() is None else fixes["java"]
     raise ValueError(f"Unknown requirement: {name}")
 
 

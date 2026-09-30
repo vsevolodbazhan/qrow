@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import signal
 import socket
 import subprocess
@@ -21,6 +20,9 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/core"))
+from environment import choose_runtime, target_dir  # noqa: E402
+
 COMPOSE = ROOT / "tests/fixture/compose.yml"
 SERVER = ROOT / "tests/fixture/server"
 # The synthetic LDAP user of tests/fixture/server/users.ldif. Tests connect
@@ -35,10 +37,6 @@ EVIDENCE = re.compile(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)")
 
 def announce(message):
     print(f"[fixture] {message}", file=sys.stderr, flush=True)
-
-
-def target_dir():
-    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 
 
 def default_state():
@@ -58,11 +56,6 @@ def free_ports(count):
     finally:
         for listener in listeners:
             listener.close()
-
-
-def docker_available():
-    return shutil.which("docker") is not None and subprocess.run(
-        ["docker", "info"], capture_output=True, timeout=20).returncode == 0
 
 
 def wait_ready(fixture):
@@ -377,12 +370,6 @@ class NativeFixture:
 
 
 RUNTIMES = {"docker": DockerFixture, "native": NativeFixture}
-
-
-def choose_runtime(runtime):
-    if runtime != "auto":
-        return runtime
-    return "docker" if docker_available() else "native"
 
 
 def start(runtime, artifacts):

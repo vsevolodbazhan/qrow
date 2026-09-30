@@ -18,7 +18,9 @@ import sys
 import tempfile
 import time
 
-ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
+from environment import target_dir  # noqa: E402
+
 READY = "Qrow GPUI initialized"
 # The caret blinks for 10 seconds after the editor gets focus, and each blink
 # repaints the window.
@@ -71,7 +73,7 @@ def measure(executable):
 
 
 def main():
-    executable = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "release/qrow"
+    executable = target_dir() / "release/qrow"
     measure(executable)
     runs = [measure(executable) for _ in range(LAUNCHES)]
     over = []

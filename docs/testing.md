@@ -127,7 +127,10 @@ To list the tests of a suite, run `./qtest list ui --tests`.
 
 Each run writes its artifacts to `target/qtest/runs/<run>/`.
 `target/qtest/runs/latest` points to the most recent run. `./qtest artifacts`
-prints its directory.
+prints its directory. When you set `CARGO_TARGET_DIR`, qtest and the scripts
+use that directory in place of `target` for all paths on this page. Hook
+snapshots set it, as
+[Hooks and continuous integration](#hooks-and-continuous-integration) tells.
 
 | Path | Content |
 | --- | --- |

@@ -50,7 +50,7 @@ class NativeFixtureTests(unittest.TestCase):
                 process.returncode = 0
                 return process
 
-            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
                 self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
             command = popen.call_args.args[0]
             self.assertEqual(command[command.index("--continue-at") + 1], "-")
@@ -78,7 +78,7 @@ class NativeFixtureTests(unittest.TestCase):
                     process.returncode = 0
                 return process
 
-            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", side_effect=start) as popen, patch.object(native_fixture, "announce"):
                 self.assertEqual(native_fixture.distribution(item), cache / "fixture.jar")
             mirror, origin = (call.args[0] for call in popen.call_args_list)
             self.assertEqual(mirror[-1], item["urls"][0])
@@ -95,7 +95,7 @@ class NativeFixtureTests(unittest.TestCase):
             process = MagicMock()
             process.poll.return_value = 0
             process.returncode = 22
-            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "Popen", return_value=process) as popen, patch.object(native_fixture, "announce"):
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "Popen", return_value=process) as popen, patch.object(native_fixture, "announce"):
                 with self.assertRaises(native_fixture.subprocess.CalledProcessError):
                     native_fixture.distribution(item)
             self.assertEqual(popen.call_count, 2)
@@ -117,7 +117,7 @@ class NativeFixtureTests(unittest.TestCase):
             archive.write_bytes(b"verified fixture")
             item = {"urls": ["https://example.invalid/fixture.jar"], "directory": "fixture.jar",
                     "sha512": hashlib.sha512(archive.read_bytes()).hexdigest()}
-            with patch.object(native_fixture, "ROOT", root), patch.object(native_fixture.subprocess, "run") as download:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(root / "target")}), patch.object(native_fixture.subprocess, "run") as download:
                 self.assertEqual(native_fixture.distribution(item), archive)
                 archive.write_bytes(b"corrupted fixture")
                 with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
