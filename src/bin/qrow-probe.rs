@@ -1,13 +1,10 @@
 //! Read-only connectivity check using a profile already saved by the application.
 use anyhow::{Context, Result};
 use qrow::{
-    connector::{Connector, QueryState, hive::HiveConnector},
+    connector::{Completion, Connector, hive::HiveConnector, wait_for_completion},
     storage::{self, Credentials, Keychain},
 };
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 fn main() -> Result<()> {
     let name = std::env::args()
@@ -27,17 +24,12 @@ fn main() -> Result<()> {
     let mut session = HiveConnector.connect(profile, Keychain.password(profile.id)?)?;
     let result = (|| -> Result<()> {
         let cancel = session.execute("SELECT 1 AS qrow_connection_test")?;
-        let started = Instant::now();
-        loop {
-            match session.poll()? {
-                QueryState::Finished { has_results: true } => break,
-                QueryState::Running if started.elapsed() < Duration::from_secs(60) => {
-                    thread::sleep(Duration::from_millis(100))
-                }
-                state => {
-                    let _ = cancel.cancel();
-                    anyhow::bail!("Connectivity check did not complete: {state:?}");
-                }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        match wait_for_completion(session.as_mut(), Some(deadline)) {
+            Ok(Completion::Finished { has_results: true }) => {}
+            state => {
+                let _ = cancel.cancel();
+                anyhow::bail!("Connectivity check did not complete: {state:?}");
             }
         }
         let columns = session.columns()?;
