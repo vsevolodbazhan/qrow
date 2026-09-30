@@ -166,3 +166,16 @@ fn a_long_tab_sends_a_bounded_part_and_the_assistant_reads_the_rest(cx: &mut Tes
     app.send(cx, "Read the tab SQL in pages");
     app.wait_reply(cx, "Read 56000 of 56000 bytes in 2 pages.");
 }
+
+#[gpui_kit::test]
+fn the_logs_tool_reads_only_the_latest_execution(cx: &mut TestAppContext) {
+    let (app, _codex) = launch(cx, "SELECT 1; SELECT 2", |_| {});
+    // Rejected SQL makes a Logs group without an execution.
+    app.click(cx, "run");
+    app.type_sql(cx, "SELECT 'logged-query'");
+    app.click(cx, "run");
+
+    app.open_assistant(cx);
+    app.send(cx, "Read the latest execution logs");
+    app.wait_reply(cx, "Logs: query True, rejected SQL False");
+}

@@ -1,6 +1,12 @@
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashSet,
+    time::{Duration, SystemTime},
+};
 
 pub const MAX_EXECUTION_GROUPS: usize = 100;
+/// Groups without an execution, such as keep-alive queries, disconnects, and rejected SQL, have
+/// their own cap, so they cannot remove query history.
+pub const MAX_NON_EXECUTION_GROUPS: usize = 50;
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -27,26 +33,6 @@ pub enum ActivityKind {
     Error,
     Disconnected,
     HistoryTrimmed,
-}
-
-impl ActivityKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Connected => "Connected",
-            Self::Submitted => "Submitted",
-            Self::ExecutionStarted => "Execution started",
-            Self::ExecutionCompleted => "Execution complete",
-            Self::FetchStarted => "Fetch started",
-            Self::FetchCompleted => "Fetch complete",
-            Self::KeepAliveStarted => "Keep-alive started",
-            Self::KeepAliveCompleted => "Keep-alive complete",
-            Self::CancelRequested => "Cancellation requested",
-            Self::Cancelled => "Cancelled",
-            Self::Error => "Error",
-            Self::Disconnected => "Disconnected",
-            Self::HistoryTrimmed => "History trimmed",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,11 +87,6 @@ impl ActivityEvent {
         self.sql = Some(sql.into());
         self
     }
-
-    pub fn with_duration(mut self, duration: Duration) -> Self {
-        self.duration = Some(duration);
-        self
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -151,49 +132,37 @@ impl ActivityEntry {
     }
 }
 
+/// Metadata of one execution, or of one event without an execution. The entries stay in
+/// [`ActivityLog::entries`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActivityGroup {
     pub id: u64,
     pub execution_id: Option<ExecutionId>,
-    pub connection: Option<String>,
-    pub sql: Option<String>,
-    pub entries: Vec<ActivityEntry>,
     text_bytes: usize,
 }
 
 impl ActivityGroup {
-    fn new(id: u64, entry: ActivityEntry) -> Self {
-        let text_bytes = entry.text_bytes();
-        Self {
-            id,
-            execution_id: entry.execution_id,
-            connection: entry.connection.clone(),
-            sql: entry.sql.clone(),
-            entries: vec![entry],
-            text_bytes,
-        }
-    }
-
-    fn add(&mut self, entry: ActivityEntry) {
-        self.connection = entry.connection.clone().or_else(|| self.connection.clone());
-        self.sql = entry.sql.clone().or_else(|| self.sql.clone());
-        self.text_bytes += entry.text_bytes();
-        self.entries.push(entry);
-    }
-
     pub fn text_bytes(&self) -> usize {
         self.text_bytes
     }
 }
 
+/// The group ID of the retention line. It belongs to no group.
+const NO_GROUP: u64 = u64::MAX;
+
 #[derive(Clone, Debug, Default)]
 pub struct ActivityLog {
+    /// Groups in creation order.
     groups: Vec<ActivityGroup>,
-    ordered_entries: Vec<ActivityEntry>,
+    /// Entries in record order, after the retention line if there is one.
+    entries: Vec<ActivityEntry>,
+    execution_groups: usize,
+    /// Index of the latest error in `entries`.
+    latest_error: Option<usize>,
     next_group_id: u64,
     next_entry_id: u64,
     text_bytes: usize,
-    retention_entry_id: Option<u64>,
+    trimmed: bool,
 }
 
 impl ActivityLog {
@@ -201,57 +170,63 @@ impl ActivityLog {
         let mut entry: ActivityEntry = event.into();
         entry.entry_id = self.next_entry_id;
         self.next_entry_id += 1;
-        let group = entry.execution_id.and_then(|execution_id| {
+        let existing = entry.execution_id.and_then(|execution_id| {
             self.groups
                 .iter()
-                .position(|group| group.execution_id == Some(execution_id))
+                .rposition(|group| group.execution_id == Some(execution_id))
         });
-        if let Some(index) = group {
-            entry.group_id = self.groups[index].id;
-            self.ordered_entries.push(entry.clone());
-            let mut group = self.groups.remove(index);
-            self.text_bytes += entry.text_bytes();
-            group.add(entry);
-            self.groups.push(group);
-        } else {
+        let index = existing.unwrap_or_else(|| {
             let id = self.next_group_id;
             self.next_group_id += 1;
-            self.text_bytes += entry.text_bytes();
-            entry.group_id = id;
-            self.ordered_entries.push(entry.clone());
-            self.groups.push(ActivityGroup::new(id, entry));
+            self.execution_groups += usize::from(entry.execution_id.is_some());
+            self.groups.push(ActivityGroup {
+                id,
+                execution_id: entry.execution_id,
+                text_bytes: 0,
+            });
+            self.groups.len() - 1
+        });
+        let group = &mut self.groups[index];
+        let text_bytes = entry.text_bytes();
+        group.text_bytes += text_bytes;
+        self.text_bytes += text_bytes;
+        entry.group_id = group.id;
+        if entry.severity == Severity::Error {
+            self.latest_error = Some(self.entries.len());
         }
+        self.entries.push(entry);
         self.retain();
-    }
-
-    pub fn record_connection(
-        &mut self,
-        kind: ActivityKind,
-        text: impl Into<String>,
-        connection: Option<String>,
-    ) {
-        let mut event = ActivityEvent::new(None, Severity::Info, kind, text);
-        event.connection = connection;
-        self.record(event);
     }
 
     pub fn clear(&mut self) {
         self.groups.clear();
-        self.ordered_entries.clear();
+        self.entries.clear();
+        self.execution_groups = 0;
+        self.latest_error = None;
         self.text_bytes = 0;
-        self.retention_entry_id = None;
+        self.trimmed = false;
     }
 
     pub fn groups(&self) -> &[ActivityGroup] {
         &self.groups
     }
 
-    pub fn entries(&self) -> impl Iterator<Item = &ActivityEntry> {
-        self.ordered_entries.iter()
+    pub fn entries(&self) -> std::slice::Iter<'_, ActivityEntry> {
+        self.entries.iter()
+    }
+
+    pub fn group_entries(&self, group_id: u64) -> impl Iterator<Item = &ActivityEntry> {
+        self.entries
+            .iter()
+            .filter(move |entry| entry.group_id == group_id)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
+        self.entries.is_empty()
+    }
+
+    pub fn has_error(&self) -> bool {
+        self.latest_error.is_some()
     }
 
     pub fn text_bytes(&self) -> usize {
@@ -259,9 +234,7 @@ impl ActivityLog {
     }
 
     pub fn latest_error(&self) -> Option<&ActivityEntry> {
-        self.entries()
-            .filter(|entry| entry.severity == Severity::Error)
-            .last()
+        self.latest_error.map(|index| &self.entries[index])
     }
 
     pub fn copy_all(&self) -> String {
@@ -275,18 +248,21 @@ impl ActivityLog {
         self.latest_error().map(|entry| entry.text.clone())
     }
 
+    fn over_limit(&self, groups: usize) -> bool {
+        self.execution_groups > MAX_EXECUTION_GROUPS
+            || groups - self.execution_groups > MAX_NON_EXECUTION_GROUPS
+            || self.text_bytes > MAX_TEXT_BYTES
+    }
+
     fn retain(&mut self) {
-        let latest_execution = self
+        if !self.over_limit(self.groups.len()) {
+            return;
+        }
+        let latest_execution_group = self
             .groups
             .iter()
-            .filter_map(|group| group.execution_id)
-            .max_by_key(|id| id.0);
-        let latest_execution_group = latest_execution
-            .and_then(|execution_id| {
-                self.groups
-                    .iter()
-                    .find(|group| group.execution_id == Some(execution_id))
-            })
+            .filter(|group| group.execution_id.is_some())
+            .max_by_key(|group| group.execution_id.map(|id| id.0))
             .map(|group| group.id);
         let latest_error_group = self.latest_error().map(|entry| entry.group_id);
         let protected_groups = [
@@ -298,41 +274,53 @@ impl ActivityLog {
                 None
             },
         ];
-        let mut removed = false;
-        while (self.groups.len() > MAX_EXECUTION_GROUPS || self.text_bytes > MAX_TEXT_BYTES)
-            && self.groups.len() > 1
-        {
-            let Some(index) = self
-                .groups
-                .iter()
-                .position(|group| !protected_groups.contains(&Some(group.id)))
-            else {
+        let mut removed = HashSet::new();
+        let mut groups = self.groups.len();
+        for group in &self.groups {
+            if groups <= 1 || !self.over_limit(groups) {
                 break;
-            };
-            let removed_group = self.groups.remove(index);
-            self.text_bytes = self.text_bytes.saturating_sub(removed_group.text_bytes());
-            removed = true;
-        }
-        if removed {
-            self.ordered_entries.retain(|entry| {
-                Some(entry.id()) == self.retention_entry_id
-                    || self.groups.iter().any(|group| group.id == entry.group_id)
-            });
-            if self.retention_entry_id.is_none() {
-                let mut entry: ActivityEntry = ActivityEvent::new(
-                    None,
-                    Severity::Info,
-                    ActivityKind::HistoryTrimmed,
-                    "Older activity was removed",
-                )
-                .into();
-                entry.entry_id = self.next_entry_id;
-                self.next_entry_id += 1;
-                self.text_bytes += entry.text_bytes();
-                self.retention_entry_id = Some(entry.id());
-                self.ordered_entries.insert(0, entry);
             }
+            // Only the text budget removes groups of a kind that is within its own cap.
+            let over_cap = if group.execution_id.is_some() {
+                self.execution_groups > MAX_EXECUTION_GROUPS
+            } else {
+                groups - self.execution_groups > MAX_NON_EXECUTION_GROUPS
+            };
+            if !(over_cap || self.text_bytes > MAX_TEXT_BYTES)
+                || protected_groups.contains(&Some(group.id))
+            {
+                continue;
+            }
+            removed.insert(group.id);
+            groups -= 1;
+            self.execution_groups -= usize::from(group.execution_id.is_some());
+            self.text_bytes = self.text_bytes.saturating_sub(group.text_bytes);
         }
+        if removed.is_empty() {
+            return;
+        }
+        self.groups.retain(|group| !removed.contains(&group.id));
+        self.entries
+            .retain(|entry| !removed.contains(&entry.group_id));
+        if !self.trimmed {
+            self.trimmed = true;
+            let mut entry: ActivityEntry = ActivityEvent::new(
+                None,
+                Severity::Info,
+                ActivityKind::HistoryTrimmed,
+                "Older activity was removed",
+            )
+            .into();
+            entry.entry_id = self.next_entry_id;
+            entry.group_id = NO_GROUP;
+            self.next_entry_id += 1;
+            self.text_bytes += entry.text_bytes();
+            self.entries.insert(0, entry);
+        }
+        self.latest_error = self
+            .entries
+            .iter()
+            .rposition(|entry| entry.severity == Severity::Error);
     }
 }
 
@@ -404,8 +392,9 @@ mod tests {
         log.record(event(Some(1), ActivityKind::ExecutionCompleted, "complete"));
 
         assert_eq!(log.groups().len(), 2);
-        assert_eq!(log.groups()[0].entries.len(), 1);
-        assert_eq!(log.groups()[1].entries.len(), 2);
+        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(1)));
+        assert_eq!(log.group_entries(log.groups()[0].id).count(), 2);
+        assert_eq!(log.group_entries(log.groups()[1].id).count(), 1);
         assert_eq!(
             log.entries()
                 .map(|entry| entry.text.as_str())
@@ -456,16 +445,109 @@ mod tests {
         );
 
         let mut connection_log = ActivityLog::default();
-        for _ in 0..=MAX_EXECUTION_GROUPS {
-            connection_log.record(event(None, ActivityKind::Connected, "connected"));
+        for _ in 0..=MAX_NON_EXECUTION_GROUPS {
+            connection_log.record(event(None, ActivityKind::Disconnected, "disconnected"));
         }
-        assert_eq!(connection_log.groups().len(), MAX_EXECUTION_GROUPS);
+        assert_eq!(connection_log.groups().len(), MAX_NON_EXECUTION_GROUPS);
         assert!(
             connection_log
                 .groups()
                 .iter()
                 .all(|group| group.execution_id.is_none())
         );
+        assert_eq!(connection_log.entries().len(), MAX_NON_EXECUTION_GROUPS + 1);
+    }
+
+    #[test]
+    fn keep_alive_cycles_do_not_remove_query_history() {
+        let mut log = ActivityLog::default();
+        for id in 0..MAX_EXECUTION_GROUPS as u64 {
+            log.record(event(Some(id), ActivityKind::Submitted, "select 1"));
+            log.record(event(
+                Some(id),
+                ActivityKind::ExecutionCompleted,
+                "complete",
+            ));
+        }
+        for _ in 0..1_000 {
+            log.record(event(None, ActivityKind::KeepAliveStarted, "keep-alive"));
+            log.record(event(None, ActivityKind::KeepAliveCompleted, "complete"));
+        }
+
+        let executions: Vec<_> = log
+            .groups()
+            .iter()
+            .filter_map(|group| group.execution_id)
+            .collect();
+        assert_eq!(
+            executions,
+            (0..MAX_EXECUTION_GROUPS as u64)
+                .map(ExecutionId)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            log.groups().len(),
+            MAX_EXECUTION_GROUPS + MAX_NON_EXECUTION_GROUPS
+        );
+        let entries: Vec<_> = log.entries().collect();
+        assert_eq!(
+            entries.len(),
+            1 + 2 * MAX_EXECUTION_GROUPS + MAX_NON_EXECUTION_GROUPS
+        );
+        assert_eq!(entries[0].kind, ActivityKind::HistoryTrimmed);
+        assert_eq!(entries[1].execution_id, Some(ExecutionId(0)));
+        assert_eq!(
+            entries.last().unwrap().kind,
+            ActivityKind::KeepAliveCompleted
+        );
+        assert!(
+            entries
+                .windows(2)
+                .skip(1)
+                .all(|pair| pair[0].id() < pair[1].id())
+        );
+    }
+
+    #[test]
+    fn the_latest_error_is_cached_across_trimming_and_clear() {
+        let mut log = ActivityLog::default();
+        assert!(!log.has_error());
+        log.record(event(Some(0), ActivityKind::Error, "old error"));
+        log.record(event(Some(1), ActivityKind::Error, "latest error"));
+        for id in 2..=MAX_EXECUTION_GROUPS as u64 + 5 {
+            log.record(event(Some(id), ActivityKind::Submitted, "start"));
+        }
+        assert!(log.has_error());
+        assert_eq!(log.copy_error().as_deref(), Some("latest error"));
+        assert!(
+            log.groups()
+                .iter()
+                .all(|group| group.execution_id != Some(ExecutionId(0)))
+        );
+
+        log.clear();
+        assert!(!log.has_error());
+        assert!(log.is_empty());
+        assert_eq!(log.copy_error(), None);
+    }
+
+    #[test]
+    fn group_entries_exclude_the_retention_line() {
+        let mut log = ActivityLog::default();
+        let text = "x".repeat(MAX_TEXT_BYTES / 2 + 1);
+        log.record(event(Some(0), ActivityKind::Submitted, &text));
+        log.record(event(None, ActivityKind::Disconnected, &text));
+        log.record(event(Some(0), ActivityKind::ExecutionCompleted, "complete"));
+        assert_eq!(log.groups().len(), 1);
+        let group = &log.groups()[0];
+        assert_eq!((group.id, group.execution_id), (0, Some(ExecutionId(0))));
+        assert_eq!(
+            log.group_entries(group.id)
+                .map(|entry| entry.kind)
+                .collect::<Vec<_>>(),
+            [ActivityKind::Submitted, ActivityKind::ExecutionCompleted]
+        );
+        assert_eq!(log.entries().len(), 3);
     }
 
     #[test]
