@@ -5,13 +5,14 @@ Both runtimes give the same interface: start, wait for an authenticated SQL
 response, warm the engine of the synthetic user, and stop. A fixture writes
 its state to a JSON file, so another process can use it and stop it.
 
-Usage: fixture.py up [--runtime auto|docker|native] | down | status | observe ACTION TOKEN
+Usage: fixture.py up [--runtime auto|docker|native] | down | status | observe ACTION
 """
 import argparse
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -32,7 +33,6 @@ TEST_USER = "qrow"
 TEST_PASSWORD = "qrow-test-password"
 READY_SECONDS = 180
 PROJECT = re.compile(r"qrow-e2e-[a-z0-9-]+")
-EVIDENCE = re.compile(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)")
 
 
 def announce(message):
@@ -82,10 +82,9 @@ def wait_ready(fixture):
         time.sleep(2)
 
 
-def evidence_file(token):
-    if not EVIDENCE.fullmatch(token):
-        raise ValueError("Invalid evidence filename")
-    return token
+def evidence_dir(artifacts):
+    """The executor evidence of `tests/fixture/server/Blocking.java`. Tests read it from the host."""
+    return Path(artifacts) / "executor-evidence"
 
 
 def reference(runtime):
@@ -107,6 +106,10 @@ class DockerFixture:
         (bind_port,) = free_ports(1)
         fixture = cls(project, bind_port, 0, artifacts)
         announce(f"Starting Docker fixture {project}.")
+        evidence = evidence_dir(artifacts)
+        evidence.mkdir(parents=True, exist_ok=True)
+        # The servers can run as another user than the host user.
+        evidence.chmod(0o777)
         try:
             fixture.compose("up", "-d", "--build", timeout=900)
             published = fixture.compose("port", "kyuubi", "10009", capture=True).stdout.strip()
@@ -119,7 +122,8 @@ class DockerFixture:
         return fixture
 
     def compose(self, *args, timeout=180, check=True, capture=False):
-        env = dict(os.environ, QROW_E2E_PROJECT=self.project, QROW_E2E_BIND_PORT=str(self.bind_port))
+        env = dict(os.environ, QROW_E2E_PROJECT=self.project, QROW_E2E_BIND_PORT=str(self.bind_port),
+                   QROW_E2E_EVIDENCE=str(evidence_dir(self.artifacts).resolve()))
         return subprocess.run(["docker", "compose", "-f", str(COMPOSE), "-p", self.project, *args],
                               cwd=ROOT, env=env, check=check, timeout=timeout, text=True,
                               capture_output=capture)
@@ -138,20 +142,6 @@ class DockerFixture:
         except (OSError, subprocess.TimeoutExpired):
             return False
 
-    def evidence_count(self, token):
-        token = evidence_file(token)
-        if token.endswith(".ended"):
-            task = self.compose("exec", "-T", "spark-worker", "cat",
-                                "/evidence/" + token.removesuffix(".ended") + ".task",
-                                capture=True, timeout=5).stdout.strip()
-            if not re.fullmatch(r"app-[a-zA-Z0-9_-]+", task):
-                raise ValueError("Invalid Spark task reference")
-            token = task + ".ended"
-        result = self.compose("exec", "-T", "spark-worker", "sh", "-c",
-                              'if [ -f "$1" ]; then wc -l < "$1"; else echo 0; fi',
-                              "sh", "/evidence/" + token, capture=True, timeout=5)
-        return int(result.stdout.strip())
-
     def kill_engine(self):
         self.compose("exec", "-T", "kyuubi", "pkill", "-9", "-f",
                      "[o]rg.apache.kyuubi.engine.spark.SparkSQLEngine", timeout=5)
@@ -168,11 +158,12 @@ class DockerFixture:
         for service, source, destination in [
             ("kyuubi", "/opt/kyuubi/logs", "kyuubi-logs"),
             ("kyuubi", "/opt/kyuubi/work", "engine-work"),
-            ("spark-worker", "/evidence", "executor-evidence"),
             ("spark-worker", "/opt/spark/work", "spark-executor-logs"),
         ]:
             self.compose("cp", f"{service}:{source}", str(artifacts / destination), check=False, timeout=30,
                          capture=True)
+        if artifacts.resolve() != self.artifacts.resolve() and evidence_dir(self.artifacts).exists():
+            shutil.copytree(evidence_dir(self.artifacts), evidence_dir(artifacts), dirs_exist_ok=True)
         (artifacts / "reference.json").write_text(json.dumps(reference(self.runtime), indent=2) + "\n")
 
     def stop(self):
@@ -182,7 +173,8 @@ class DockerFixture:
             raise RuntimeError(f"Could not remove {self.project}: {result.stderr[-2000:]}")
 
     def env(self):
-        return {"QROW_E2E_PROJECT": self.project, "QROW_E2E_PORT": str(self.port)}
+        return {"QROW_E2E_PROJECT": self.project, "QROW_E2E_PORT": str(self.port),
+                "QROW_E2E_NATIVE_EVIDENCE": str(evidence_dir(self.artifacts).resolve())}
 
     def state(self):
         return {"runtime": self.runtime, "project": self.project, "bind_port": self.bind_port,
@@ -212,7 +204,7 @@ class NativeFixture:
         java_home = servers.preflight()
         paths = servers.downloads()
         project = "qrow-e2e-" + uuid.uuid4().hex[:12]
-        evidence = artifacts / "executor-evidence"
+        evidence = evidence_dir(artifacts)
         evidence.mkdir(exist_ok=True)
         classes = artifacts / "classes"
         classes.mkdir(exist_ok=True)
@@ -312,17 +304,6 @@ class NativeFixture:
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             return False
 
-    def evidence_count(self, token):
-        root = self.artifacts / "executor-evidence"
-        token = evidence_file(token)
-        if token.endswith(".ended"):
-            task = (root / (token.removesuffix(".ended") + ".task")).read_text().strip()
-            if not re.fullmatch(r"app-[a-zA-Z0-9_-]+", task):
-                raise ValueError("Invalid Spark task reference")
-            token = task + ".ended"
-        path = root / token
-        return len(path.read_text().splitlines()) if path.exists() else 0
-
     def kill_engine(self):
         raise RuntimeError("Stopping an engine needs the Docker runtime; it cannot be scoped to local processes.")
 
@@ -356,7 +337,7 @@ class NativeFixture:
 
     def env(self):
         return {"QROW_E2E_PROJECT": self.project, "QROW_E2E_PORT": str(self.port),
-                "QROW_E2E_NATIVE_EVIDENCE": str(self.artifacts / "executor-evidence")}
+                "QROW_E2E_NATIVE_EVIDENCE": str(evidence_dir(self.artifacts))}
 
     def state(self):
         return {"runtime": self.runtime, "project": self.project, "port": self.port,
@@ -399,12 +380,10 @@ def reusable(runtime):
     return fixture
 
 
-def observe(action, token):
+def observe(action):
     fixture = load()
     if fixture is None:
         raise RuntimeError(f"No fixture state at {state_path()}. Run tests through ./qtest.")
-    if action == "count":
-        return str(fixture.evidence_count(token))
     if action == "kill-engine":
         fixture.kill_engine()
     elif action == "restart-server":
@@ -413,7 +392,6 @@ def observe(action, token):
         wait_ready(fixture)
     else:
         raise ValueError("Unknown observer action")
-    return ""
 
 
 def main(argv=None):
@@ -424,11 +402,10 @@ def main(argv=None):
     commands.add_parser("down")
     commands.add_parser("status")
     watch = commands.add_parser("observe")
-    watch.add_argument("action")
-    watch.add_argument("token", nargs="?", default="unused")
+    watch.add_argument("action", choices=["kill-engine", "restart-server", "ready"])
     args = parser.parse_args(argv)
     if args.command == "observe":
-        print(observe(args.action, args.token))
+        observe(args.action)
         return 0
     path = default_state()
     if args.command == "up":

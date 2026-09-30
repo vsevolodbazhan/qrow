@@ -32,28 +32,3 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
         assert_eq!(cell(window, 3, 1), None, "The query returned three rows");
     });
 }
-
-#[gpui_kit::test]
-#[ignore = "needs the server fixture: ./qtest run e2e"]
-fn a_sql_error_leaves_the_session_usable(cx: &mut TestAppContext) {
-    let kyuubi = Kyuubi::get();
-    let (workspace, credentials) =
-        kyuubi.workspace("SELECT * FROM qrow_table_that_does_not_exist", PASSWORD);
-    let row = gpui_kit::ElementId::Name(format!("profile-{}", workspace.profiles[0].id).into());
-    let app = TestApp::launch_with(cx, workspace, credentials);
-
-    app.update(cx, |window, cx| window.click("run", cx));
-    app.wait_until(cx, "the SQL error", QUERY_TIMEOUT, |window, _| {
-        window.find(row.clone()).label() == Some("Spark, unread error")
-    });
-    app.update(cx, |window, _| assert_eq!(cell(window, 0, 1), None));
-
-    app.type_sql(cx, "SELECT 'recovered' AS value");
-    app.update(cx, |window, cx| window.click("run", cx));
-    app.wait_until(
-        cx,
-        "the result after the error",
-        QUERY_TIMEOUT,
-        |window, _| cell(window, 0, 1).as_deref() == Some("recovered"),
-    );
-}

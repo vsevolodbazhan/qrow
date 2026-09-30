@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 pub mod assistant;
+pub mod evidence;
 pub mod fixture;
 pub mod perf;
 use anyhow::Result;

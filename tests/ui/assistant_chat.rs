@@ -33,7 +33,11 @@ fn has(window: &gpui_kit::Window, id: &str) -> bool {
 
 #[gpui_kit::test]
 fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
-    let (app, _codex) = launch(cx, Workspace::default());
+    let (directory, codex) = FakeCodex::new();
+    // The synthetic server does not answer `initialize` before the release.
+    codex.mark("hold-initialize");
+    let workspace = codex.workspace(Workspace::default());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
     app.dispatch(cx, ToggleAssistant);
     app.update(cx, |window, cx| {
         window.render_frame(cx);
@@ -56,6 +60,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
         }
         assert!(!labels(window).iter().any(|l| l.contains("Starting Codex")));
     });
+    codex.mark("initialize-release");
     app.open_assistant(cx);
     for id in [
         "assistant-new",
@@ -83,9 +88,9 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
-    let (app, _codex) = launch(cx, Workspace::default());
+    let (app, codex) = launch(cx, Workspace::default());
     app.open_assistant(cx);
-    // The synthetic server holds this turn for 8 seconds.
+    // The synthetic server holds this turn until the release.
     app.send(cx, "Return to the latest message while hidden");
     app.wait_for(cx, "assistant-working");
     // Quit asks before it stops a working assistant.
@@ -102,6 +107,7 @@ fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
             Some("Toggle Assistant, working")
         );
     });
+    codex.mark("latest-release");
     app.wait_until(cx, "the reply-ready toggle", REPLY_TIMEOUT, |window, _| {
         label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
     });
@@ -212,7 +218,7 @@ fn scroll_transcript(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
 
 #[gpui_kit::test]
 fn the_transcript_jumps_to_the_latest_message(cx: &mut TestAppContext) {
-    let (app, _codex) = launch(cx, Workspace::default());
+    let (app, codex) = launch(cx, Workspace::default());
     app.open_assistant(cx);
     app.send(cx, "Show many lines");
     app.wait_reply(cx, "Line 40");
@@ -228,6 +234,7 @@ fn the_transcript_jumps_to_the_latest_message(cx: &mut TestAppContext) {
     app.wait_for(cx, "assistant-jump-latest");
     app.send(cx, "Return to the latest message");
     app.wait_for(cx, "assistant-working");
+    codex.mark("latest-release");
     app.wait_idle(cx);
     // Only this reply has this text in the conversation.
     app.wait_reply(cx, "I can help with this query");

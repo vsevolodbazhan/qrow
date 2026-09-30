@@ -234,8 +234,9 @@ session, so tests that follow each other do not wait for an engine start.
 The Spark worker has room for one engine and two executor cores.
 
 The Docker runtime binds ports to loopback, and each run gets its own
-Compose project, network, and evidence volume. The [server
-sources](../tests/fixture/server/) pin base images by digest. The native
+Compose project and network. The servers write the execution evidence to a
+directory in the artifacts of the fixture, and tests read the files there.
+The [server sources](../tests/fixture/server/) pin base images by digest. The native
 runtime starts Java processes on temporary loopback ports and stops their
 process groups, with Spark engines and executors, at the end.
 
@@ -435,7 +436,9 @@ Assistant tests use the synthetic Codex server in
 `FakeCodex::new()` gives a workspace directory and a Codex executable for
 it. `codex.workspace(...)` turns on the assistant with this executable.
 Some messages make the server wait for a marker file, which
-`codex.mark(name)` creates. The
+`codex.mark(name)` creates. Without the marker files, the server answers at
+once. For example, it answers `initialize` only after `initialize-release`
+when the test creates `hold-initialize` before the launch. The
 [assistant support](../tests/support/assistant.rs) sends messages and reads
 the transcript, the editor, and the approval card.
 
@@ -481,15 +484,18 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
   reads Logs through **Copy All Logs**.
 - `blocking(token, milliseconds)` makes a query that holds an executor
-  task. The fixture records the task, and `evidence(token, "started")` or
-  `app.wait_evidence(...)` reads that record. Register the function first
-  with `REGISTER_BLOCKING`.
+  task. The fixture records the task in a file on the host, and
+  `evidence(token, "started")` or `app.wait_evidence(...)` reads that file.
+  Register the function first with `REGISTER_BLOCKING`.
 - `app.scroll_to(id)` scrolls a form to a field below its fold.
 - Tests run at the same time and share the Spark engine of `qrow`. Do not
   change shared state, like global tables. The fixture has two executor
   cores, so put a test that holds executors in the `blocking` module, where
   tests run one at a time. A test that stops or restarts a server belongs in
   the `backend` suite.
+- Check the result that a user can see. The `backend` suite checks the
+  contract with the servers, for example that Spark stops a cancelled task
+  in 10 seconds. Do not check it again in an E2E test.
 
 Add a test from the template with `./qtest new e2e SUITE NAME`. Run one test
 with `./qtest run e2e/query_rows`.
@@ -591,8 +597,6 @@ events, required checks, and releases.
 - GPUI's leak detector fails a UI test that ends with a leaked entity. GPUI
   Kit's `context_menu` keeps each dismissed menu alive, so Qrow opens its
   context menus itself.
-- An assistant test waits about 5 seconds while the synthetic Codex server
-  starts.
 - The servers have room for one Spark engine. Tests connect only as `qrow`.
 - `--repeat` runs complete suites again. It does not run one test in a loop.
 - The UI probes run on GPUI's test platform, which lays out and paints

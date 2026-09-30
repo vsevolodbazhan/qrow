@@ -29,23 +29,16 @@ class FakeServers:
 
 
 class FixtureTests(unittest.TestCase):
-    def test_native_evidence_uses_executor_and_driver_markers(self):
+    def test_both_runtimes_share_the_evidence_directory_with_tests(self):
         with tempfile.TemporaryDirectory() as directory:
+            evidence = str((Path(directory) / "executor-evidence").resolve())
+            docker = fixture.DockerFixture("qrow-e2e-unit", 1, 2, directory)
+            self.assertEqual(docker.env()["QROW_E2E_NATIVE_EVIDENCE"], evidence)
+            with patch.object(fixture.subprocess, "run") as run:
+                docker.compose("ps")
+            self.assertEqual(run.call_args.kwargs["env"]["QROW_E2E_EVIDENCE"], evidence)
             native = fixture.NativeFixture("qrow-e2e-unit", 1, directory, [], [], {})
-            root = Path(directory) / "executor-evidence"
-            root.mkdir()
-            self.assertEqual(native.evidence_count("query.started"), 0)
-            (root / "query.interrupted").write_text("1\n")
-            (root / "query.task").write_text("app-123-4")
-            (root / "app-123-4.ended").write_text("1\n")
-            self.assertEqual(native.evidence_count("query.interrupted"), 1)
-            self.assertEqual(native.evidence_count("query.ended"), 1)
-            for token in ["../query.started", "query.task", "/query.ended"]:
-                with self.assertRaises(ValueError):
-                    native.evidence_count(token)
-            (root / "query.task").write_text("../outside")
-            with self.assertRaises(ValueError):
-                native.evidence_count("query.ended")
+            self.assertEqual(native.env()["QROW_E2E_NATIVE_EVIDENCE"], str(Path(directory) / "executor-evidence"))
 
     def test_docker_fixture_rejects_an_unscoped_project_before_invoking_docker(self):
         for name in ["", "production", "qrow-e2e-", "qrow-e2e-a;ls", "../qrow-e2e-x"]:
@@ -62,14 +55,6 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(args[:7], ["docker", "compose", "-f", str(fixture.COMPOSE), "-p", "qrow-e2e-unit", "exec"])
         self.assertIn("kyuubi", args)
         self.assertEqual(run.call_args.kwargs["env"]["QROW_E2E_PROJECT"], "qrow-e2e-unit")
-
-    def test_evidence_paths_cannot_escape_the_volume(self):
-        docker = fixture.DockerFixture("qrow-e2e-unit", 1, 1, "/tmp")
-        with patch.object(docker, "compose") as compose:
-            for token in ["../../passwd", "valid.started;id", "valid.unknown", "x/../x.started"]:
-                with self.assertRaises(ValueError):
-                    docker.evidence_count(token)
-            compose.assert_not_called()
 
     def test_local_processes_cannot_stop_engines(self):
         native = fixture.NativeFixture("qrow-e2e-unit", 1, "/tmp", [], [], {})
@@ -95,8 +80,10 @@ class FixtureTests(unittest.TestCase):
             path = Path(directory) / "fixture.json"
             fixture.save(fixture.DockerFixture("qrow-e2e-unit", 2, 3, directory), path)
             loaded = fixture.load(path)
+            evidence = str((Path(directory) / "executor-evidence").resolve())
         self.assertEqual((loaded.project, loaded.bind_port, loaded.port), ("qrow-e2e-unit", 2, 3))
-        self.assertEqual(loaded.env(), {"QROW_E2E_PROJECT": "qrow-e2e-unit", "QROW_E2E_PORT": "3"})
+        self.assertEqual(loaded.env(), {"QROW_E2E_PROJECT": "qrow-e2e-unit", "QROW_E2E_PORT": "3",
+                                        "QROW_E2E_NATIVE_EVIDENCE": evidence})
 
 class DriverTests(unittest.TestCase):
     def test_native_e2e_package_mode_validates_bundle(self):

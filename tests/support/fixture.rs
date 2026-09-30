@@ -97,24 +97,8 @@ impl Kyuubi {
 /// How often the executor recorded `token.state`: started, interrupted,
 /// completed, or ended. The fixture keeps the evidence outside Qrow.
 pub fn evidence(token: &str, state: &str) -> usize {
-    let output = std::process::Command::new("python3")
-        .args([
-            "scripts/e2e/fixture.py",
-            "observe",
-            "count",
-            &format!("{token}.{state}"),
-        ])
-        .output()
-        .expect("Could not run the fixture observer");
-    assert!(
-        output.status.success(),
-        "Observer failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .unwrap()
+    super::evidence::count(token, state)
+        .unwrap_or_else(|error| panic!("Could not read the evidence {token}.{state}: {error}"))
 }
 
 /// A query that blocks one executor task for `milliseconds` and records
