@@ -506,14 +506,14 @@ impl Runner {
                 .session
                 .as_mut()
                 .context("Session is disconnected")?
-                .fetch((PREVIEW_ROWS - fetched).min(250))?;
+                .fetch(PREVIEW_ROWS - fetched)?;
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
                 return Ok(());
             }
             let count = batch.rows.len();
             anyhow::ensure!(
-                count <= (PREVIEW_ROWS - fetched).min(250),
+                count <= PREVIEW_ROWS - fetched,
                 "Connector returned more rows than requested"
             );
             let bytes: usize = batch

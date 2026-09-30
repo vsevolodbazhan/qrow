@@ -7,7 +7,7 @@ use qrow::{
 };
 use std::{
     sync::{
-        Arc, Barrier,
+        Arc, Barrier, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -22,6 +22,9 @@ struct Fixture {
     fail_fetch: Option<usize>,
     total_rows: usize,
     value_bytes: usize,
+    /// The most rows that one fetch returns, like a server limit. 0 has no limit.
+    max_batch: usize,
+    requested: Arc<Mutex<Vec<usize>>>,
     closes: Arc<AtomicUsize>,
 }
 struct FakeSession {
@@ -31,6 +34,8 @@ struct FakeSession {
     preview_offset: Option<usize>,
     total_rows: usize,
     value_bytes: usize,
+    max_batch: usize,
+    requested: Arc<Mutex<Vec<usize>>>,
     offset: usize,
     slow: bool,
     cancelled: Arc<AtomicBool>,
@@ -57,6 +62,8 @@ impl Connector for Fixture {
                 self.total_rows
             },
             value_bytes: self.value_bytes,
+            max_batch: self.max_batch,
+            requested: self.requested.clone(),
             offset: 0,
             slow: false,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -98,6 +105,12 @@ impl Session for FakeSession {
         }])
     }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        self.requested.lock().unwrap().push(count);
+        let count = if self.max_batch == 0 {
+            count
+        } else {
+            count.min(self.max_batch)
+        };
         let fetch = self.fetches.fetch_add(1, Ordering::SeqCst);
         anyhow::ensure!(self.fail_fetch != Some(fetch), "Fetch transport failed");
         if fetch == 1
@@ -363,7 +376,7 @@ fn repeated_previews_stop_at_the_row_cap() {
         match next(&worker) {
             Event::Rows(rows) => {
                 total += rows.len();
-                assert!(rows.len() <= 250);
+                assert!(rows.len() <= PREVIEW_ROWS);
                 assert!(total <= MAX_RESULT_ROWS);
             }
             Event::Ready {
@@ -626,7 +639,7 @@ fn pages_fetch_only_on_demand_and_confirm_exhaustion_with_an_empty_fetch() {
                 _ => {}
             }
         }
-        assert_eq!(fixture.fetches.load(Ordering::SeqCst), (page + 1) * 4);
+        assert_eq!(fixture.fetches.load(Ordering::SeqCst), page + 1);
         assert!(
             worker
                 .events
@@ -636,7 +649,8 @@ fn pages_fetch_only_on_demand_and_confirm_exhaustion_with_an_empty_fetch() {
         worker.more();
     }
     assert_eq!(ready(&worker), (0, false));
-    assert_eq!(fixture.fetches.load(Ordering::SeqCst), 9);
+    // Each page is one request for all its rows.
+    assert_eq!(*fixture.requested.lock().unwrap(), [1000, 1000, 1000]);
     assert_eq!(values, (0..2000).map(|n| n.to_string()).collect::<Vec<_>>());
 }
 
@@ -645,6 +659,7 @@ fn rows_stream_before_the_page_finishes_and_cancel_discards_a_late_fetch() {
     let barrier = Arc::new(Barrier::new(2));
     let fixture = Arc::new(Fixture {
         second_fetch: Some(barrier.clone()),
+        max_batch: 250,
         ..Default::default()
     });
     let worker = worker(fixture.clone());
@@ -664,6 +679,8 @@ fn rows_stream_before_the_page_finishes_and_cancel_discards_a_late_fetch() {
     barrier.wait();
     assert!(matches!(next(&worker), Event::Cancelled));
     assert_eq!(fixture.fetches.load(Ordering::SeqCst), 2);
+    // A short batch leaves the rest of the page for the next request.
+    assert_eq!(*fixture.requested.lock().unwrap(), [1000, 750]);
 }
 
 #[test]
@@ -671,6 +688,7 @@ fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
     let fixture = Arc::new(Fixture {
         total_rows: 2500,
         fail_fetch: Some(5),
+        max_batch: 250,
         ..Default::default()
     });
     let worker = worker(fixture.clone());
