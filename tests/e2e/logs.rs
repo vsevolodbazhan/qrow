@@ -11,8 +11,8 @@ fn logs_record_when_older_activity_is_removed(cx: &mut TestAppContext) {
     app.click(cx, "output-clear");
     app.click(cx, "results-panel-tab");
 
-    // Logs keep 100 activity groups. A rejected statement makes a group
-    // without a server request, so only the first and last queries reach Spark.
+    // Rejected SQL makes a group without an execution and without a server
+    // request. Logs keep 50 such groups, and they do not remove query history.
     app.run_complete(cx, "SELECT 'retention-oldest' AS value");
     app.wait_cell(cx, 0, 1, "retention-oldest");
     app.type_sql(cx, "SELECT 'retention-rejected'; SELECT 2");
@@ -28,10 +28,13 @@ fn logs_record_when_older_activity_is_removed(cx: &mut TestAppContext) {
         "Logs start with {:?}",
         &logs[..logs.len().min(120)]
     );
-    assert!(logs.contains("retention-latest"));
-    assert!(logs.contains("Run one statement at a time"));
     assert!(
-        !logs.contains("retention-oldest"),
-        "Logs kept the oldest query after the limit"
+        logs.contains("retention-oldest"),
+        "Rejected SQL removed the oldest query"
+    );
+    assert!(logs.contains("retention-latest"));
+    assert_eq!(
+        logs.matches("Run one statement at a time").count(),
+        qrow::activity::MAX_NON_EXECUTION_GROUPS
     );
 }

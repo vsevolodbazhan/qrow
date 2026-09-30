@@ -57,15 +57,12 @@ impl Qrow {
 
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
-        let all_text = tab.output.copy_all();
-        let error_text = tab.output.copy_error();
-        let entries: Vec<_> = tab.output.entries().collect();
-        let content = if entries.is_empty() {
+        let content = if tab.output.is_empty() {
             panel_empty_state("No activity yet", cx).into_any_element()
         } else {
             v_flex()
                 .w_full()
-                .children(entries.into_iter().enumerate().map(|(index, entry)| {
+                .children(tab.output.entries().enumerate().map(|(index, entry)| {
                     let (first_line, remaining_lines) = entry
                         .text
                         .split_once('\n')
@@ -117,7 +114,7 @@ impl Qrow {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("{} entries", tab.output.entries().count())),
+                            .child(format!("{} entries", tab.output.entries().len())),
                     )
                     .child(div().flex_1())
                     .child(
@@ -125,7 +122,7 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label("Copy All")
-                            .disabled(all_text.is_empty())
+                            .disabled(tab.output.is_empty())
                             .accessibility_label("Copy All Logs")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
                     )
@@ -134,7 +131,7 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label("Copy Error")
-                            .disabled(error_text.is_none())
+                            .disabled(!tab.output.has_error())
                             .accessibility_label("Copy Latest Error")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
                     )

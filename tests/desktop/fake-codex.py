@@ -635,6 +635,23 @@ for line in sys.stdin:
                 call_tool(thread_id, turn_id, "read_tab_sql", {"version": 1, "tab_id": tab["id"], "offset": offset}, received)
 
             read_sql(0)
+        elif message.startswith("Read the latest execution logs"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+
+            def received(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                text = result["text"]
+                finish_turn(
+                    thread_id,
+                    turn_id,
+                    f"Logs: query {'logged-query' in text}, rejected SQL {'one statement' in text}",
+                )
+
+            call_tool(thread_id, turn_id, "read_query_logs", {
+                "version": 1, "tab_id": context["selected_tab"]["id"], "scope": "latest_execution",
+            }, received)
         elif message.startswith("Run 170 rows and read results"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]

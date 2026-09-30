@@ -1118,9 +1118,8 @@ impl Qrow {
                 .rev()
                 .find(|group| group.execution_id.is_some())
                 .map(|group| {
-                    group
-                        .entries
-                        .iter()
+                    tab.output
+                        .group_entries(group.id)
                         .map(|entry| entry.text.as_str())
                         .collect::<Vec<_>>()
                         .join("\n")

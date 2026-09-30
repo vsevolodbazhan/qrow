@@ -53,9 +53,17 @@ after completion. Background queries update their own panel without changing
 the active query tab. A failed background query shows an unread error indicator
 on its tab.
 
-Qrow limits history to 100 activity groups and 8 MiB per query tab. Qrow
-removes complete old groups when a limit is reached. The latest execution and
-its complete error are kept. A single latest execution can exceed 8 MiB. Qrow
+Qrow puts Logs entries into history groups. One group holds all entries of
+one query execution. An entry without an execution has its own group. Examples
+are a keep-alive query, its outcome, a disconnect, and rejected SQL. Each
+keep-alive query uses two groups: one for the query and one for its outcome.
+
+Qrow limits the history of each query tab to 100 execution groups, 50 other
+groups, and 8 MiB of text. When one type of group is more than its limit, Qrow
+removes the oldest complete groups of that type. Thus keep-alive queries do not
+remove query history. When the text is more than 8 MiB, Qrow removes the oldest
+complete groups of any type. Qrow keeps the latest execution and the group
+of the latest error. A single latest execution can be more than 8 MiB. Qrow
 adds an `Older activity was removed` line at the start of Logs history when it
 removes old groups. The line marks the boundary before the retained entries.
 It has no timestamp because it does not describe a timed activity. The line
