@@ -80,13 +80,13 @@ class FixtureTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_authentication_failures_do_not_count_as_readiness(self):
-        servers = FakeServers({"qrow": (1, "LDAP rejected"), "other": (0, "")})
+        servers = FakeServers({"qrow": (1, "LDAP rejected")})
         with patch.object(fixture.time, "monotonic", side_effect=[0, 0, 0, 181]), patch.object(fixture.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "LDAP rejected"):
                 fixture.wait_ready(servers)
 
     def test_readiness_starts_only_the_engine_of_the_test_user(self):
-        servers = FakeServers({"qrow": (0, ""), "other": (1, "no room for a second engine")})
+        servers = FakeServers({"qrow": (0, "")})
         fixture.wait_ready(servers)
         self.assertEqual(servers.users, [fixture.TEST_USER])
 

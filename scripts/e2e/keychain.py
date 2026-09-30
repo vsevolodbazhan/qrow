@@ -8,14 +8,15 @@ import shutil
 import subprocess
 import uuid
 
-FIXTURE_PROFILE_NAMES = {"Qrow E2E", "Qrow E2E copy", "Qrow E2E live"}
+# The desktop driver adds one connection with this name.
+FIXTURE_PROFILE_NAME = "Qrow E2E"
 
 
 def fixture_profile_ids(profiles):
     identifiers = []
     for profile in profiles:
         if (
-            profile["name"] not in FIXTURE_PROFILE_NAMES
+            profile["name"] != FIXTURE_PROFILE_NAME
             or profile["username"] != "qrow"
             or profile["host"] != "127.0.0.1"
         ):

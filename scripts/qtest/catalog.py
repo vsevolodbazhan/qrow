@@ -279,7 +279,6 @@ def suites_for_hook(hook, paths):
 class CiJob:
     """One job of the checks workflow. `./qtest ci NAME` runs its suites."""
     name: str
-    summary: str
     runner: str
     suites: tuple[str, ...]
     # Suites that run and report their measurements, but do not fail the job.
@@ -296,21 +295,16 @@ E2E_PATHS = r"^(tests/fixture/|scripts/e2e/)"
 CI_JOBS = {
     job.name: job
     for job in [
-        CiJob("static", "Formatting, lint, API docs, dependency policy, and scripts.", LINUX,
-              ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
-        CiJob("core", "Core unit tests with line coverage.", LINUX, ("coverage",), paths=RUST_PATHS),
-        CiJob("ui", "Lint of the application, unit tests, and the headless window.", MACOS_RUNNER,
-              ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
-        CiJob("package", "The release package, its size, and the launch and idle probes of the app.",
-              MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
+        CiJob("static", LINUX, ("scripts", "policy", "deps", "fmt", "clippy", "rustdoc")),
+        CiJob("core", LINUX, ("coverage",), paths=RUST_PATHS),
+        CiJob("ui", MACOS_RUNNER, ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+        CiJob("package", MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
-        CiJob("backend", "Connector and worker against the servers in Docker.", LINUX, ("backend",),
-              needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}", runtime="docker"),
-        CiJob("e2e", "The window and the package against local Java servers, and the query probes.",
-              MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
+        CiJob("backend", LINUX, ("backend",), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
+              runtime="docker"),
+        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
-        CiJob("perf", "The SQL benchmark budgets, and the frame and editor probes.", MACOS_RUNNER,
-              ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
+        CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.

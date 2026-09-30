@@ -220,7 +220,7 @@ Docker runtime. Its tests run one at a time. Do not point a suite at an
 existing deployment. The suites must control disposable servers.
 
 The servers are Kyuubi 1.12.0, Spark 3.5.3 in standalone mode, LDAP with
-synthetic users, and ZooKeeper. Let Docker use approximately 8 GB of memory
+the synthetic user `qrow`, and ZooKeeper. Let Docker use approximately 8 GB of memory
 for them. They also run on an M1 Mac with 8 GB of memory. The first image download and build are much larger than Qrow. Java
 belongs only to the servers. Qrow itself does not use a JVM.
 
