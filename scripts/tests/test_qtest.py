@@ -227,6 +227,25 @@ class RunTests(unittest.TestCase):
             cli.main(["ci", "e2e"])
         self.assertTrue(run.call_args.kwargs["require_all"])
 
+    def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
+        report = runner.junit_report()
+        report.parent.mkdir(parents=True)
+        report.write_text(JUNIT)
+        step = catalog.Step(("sh", "-c", "exit 1"), nextest_filter="all()")
+        summary = self.run_suites(catalog.Suite("stale", "Fake stale.", (), (step,)))
+        self.assertEqual(summary["suites"][0]["status"], "failed")
+        self.assertNotIn("failures", summary["suites"][0])
+        self.assertFalse(report.exists())
+
+    def test_a_nextest_step_reports_the_failures_of_its_report(self):
+        report = runner.junit_report()
+        fresh = Path(os.environ["CARGO_TARGET_DIR"]) / "fresh.xml"
+        fresh.write_text(JUNIT)
+        step = catalog.Step(("sh", "-c", f'mkdir -p "{report.parent}" && cp "{fresh}" "{report}"; exit 1'),
+                            nextest_filter="all()")
+        summary = self.run_suites(catalog.Suite("fresh", "Fake fresh.", (), (step,)))
+        self.assertEqual(summary["suites"][0]["failures"][0]["test"], "qrow::ui::queries::fails")
+
     def test_step_environment_names_the_target_directory(self):
         step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
         summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))

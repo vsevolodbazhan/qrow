@@ -209,9 +209,17 @@ def render_command(step, options, test_filter, extra):
         expression = step.nextest_filter
         if test_filter:
             expression = f"({expression}) and test({test_filter})"
-        profile = "ci" if os.environ.get("CI") else "default"
-        command += ["--profile", profile, "-E", expression, *extra]
+        command += ["--profile", nextest_profile(), "-E", expression, *extra]
     return command
+
+
+def nextest_profile():
+    return "ci" if os.environ.get("CI") else "default"
+
+
+def junit_report():
+    """The JUnit report that nextest writes, as .config/nextest.toml sets."""
+    return target_dir() / "nextest" / nextest_profile() / "junit.xml"
 
 
 def execute(command, env, timeout, log, output):
@@ -300,6 +308,9 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
             continue
         command = render_command(step, options, item.test_filter, extra)
         step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
+        if step.nextest_filter is not None:
+            # A step that fails before nextest writes a report must not report old failures.
+            junit_report().unlink(missing_ok=True)
         code = execute(command, dict(os.environ, **env, **step_env), step.timeout, log, output)
         if code == 0:
             continue
@@ -309,8 +320,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if iteration:
             result.reason += f" Iteration {iteration[0]} of {iteration[1]}."
         if step.nextest_filter is not None:
-            profile = "ci" if os.environ.get("CI") else "default"
-            junit = target_dir() / "nextest" / profile / "junit.xml"
+            junit = junit_report()
             if junit.exists():
                 saved = run_dir / "junit" / f"{suite.name}.xml"
                 saved.parent.mkdir(parents=True, exist_ok=True)
