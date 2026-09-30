@@ -45,7 +45,7 @@ fn competing_process_cannot_load_for_writing_and_crash_releases_lock() {
         .unwrap();
     let mut child = TestProcess(
         Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "workspace_lock_child", "--nocapture"])
+            .args(["--exact", "storage::workspace_lock_child", "--nocapture"])
             .env("QROW_TEST_LOCK_PATH", &path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
