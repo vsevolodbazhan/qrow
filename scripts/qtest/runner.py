@@ -1,4 +1,5 @@
 """Run suites: check requirements, execute steps, collect logs and failures."""
+import dataclasses
 from dataclasses import dataclass, field
 import datetime
 import json
@@ -51,7 +52,7 @@ def _tool_version(tool):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
-def check_requirement(name, options, thorough=False):
+def check_requirement(name, options):
     """Return None when the requirement holds, else a fix for the user."""
     fixes = catalog.REQUIREMENTS
     if name in ("cargo", "uv", "shellcheck", "actionlint"):
@@ -69,9 +70,8 @@ def check_requirement(name, options, thorough=False):
         version = _tool_version(tool)
         return None if version and version.startswith(tool.version_prefix) else fixes[name]
     if name == "desktop":
-        # The E2E orchestrator checks automation access itself before it starts servers.
-        if not thorough:
-            return None
+        # `driver.sh --preflight` checks the permissions. The other modes of the
+        # driver do not, so check them here, before the package build and the servers.
         return None if _succeeds(["sh", "scripts/e2e/driver.sh", "--preflight"], timeout=600) else fixes[name]
     if name == "fixture-runtime":
         runtime = options.get("runtime", "auto")
@@ -444,11 +444,20 @@ def run(selected, options, extra, output, fail_fast=False, report_only=()):
             if item.suite.fixture and blocked[index] is None and not prepared:
                 # Build everything that the fixture suites need before servers use memory.
                 prepared = True
+                # Suites can share a step, like the build of one test binary. It runs once.
+                done = {}
                 for other in served:
                     suite = selected[other].suite
-                    failure = run_steps(selected[other], suite.prepare, options, extra,
-                                        {"QROW_E2E_ARTIFACTS": str(run_dir / suite.name)},
-                                        run_dir, output, time.monotonic())
+                    failure = None
+                    for step in suite.prepare:
+                        if step not in done:
+                            done[step] = run_steps(selected[other], (step,), options, extra,
+                                                   {"QROW_E2E_ARTIFACTS": str(run_dir / suite.name)},
+                                                   run_dir, output, time.monotonic())
+                        failure = done[step]
+                        if failure:
+                            failure = dataclasses.replace(failure, name=suite.name)
+                            break
                     if failure:
                         failure.reason = "Preparation failed. " + failure.reason
                         blocked[other] = failure
