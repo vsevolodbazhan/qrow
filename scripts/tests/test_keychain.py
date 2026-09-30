@@ -20,16 +20,18 @@ class KeychainTests(unittest.TestCase):
         }
 
     def test_accepts_native_fixture_profiles(self):
-        profiles = [self.profile(name) for name in ("Qrow E2E", "Qrow E2E copy", "Qrow E2E live")]
+        profiles = [self.profile("Qrow E2E")]
         self.assertEqual(
             keychain.fixture_profile_ids(profiles),
             [profile["id"] for profile in profiles],
         )
 
     def test_rejects_non_fixture_profiles_before_cleanup(self):
-        profiles = [self.profile("Qrow E2E"), self.profile("User profile")]
-        with self.assertRaises(ValueError):
-            keychain.fixture_profile_ids(profiles)
+        for name in ("User profile", "Qrow E2E copy"):
+            with self.subTest(name=name):
+                profiles = [self.profile("Qrow E2E"), self.profile(name)]
+                with self.assertRaises(ValueError):
+                    keychain.fixture_profile_ids(profiles)
 
     def test_cleans_only_the_desktop_directory_of_a_qtest_run(self):
         target = Path("/repo/target")

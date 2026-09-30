@@ -16,7 +16,10 @@ import xml.etree.ElementTree as ElementTree
 import catalog
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/core"))
 sys.path.insert(0, str(ROOT / "scripts/e2e"))
+import environment  # noqa: E402
+from environment import target_dir  # noqa: E402
 import fixture  # noqa: E402
 
 # Exit codes are part of the CLI contract; docs/testing.md lists them.
@@ -24,10 +27,6 @@ EXIT_PASSED = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_MISSING = 3
-
-
-def target_dir():
-    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 
 
 def runs_dir():
@@ -62,9 +61,10 @@ def check_requirement(name, options):
     if name == "xcode":
         return None if shutil.which("xcode-select") and _succeeds(["xcode-select", "-p"]) else fixes[name]
     if name == "docker":
-        if not shutil.which("docker"):
+        status = environment.docker_status()
+        if status == "missing":
             return fixes["docker"]
-        return None if _succeeds(["docker", "info"]) else fixes["docker-running"]
+        return None if status == "running" else fixes["docker-running"]
     if name in catalog.TOOLS:
         tool = catalog.TOOLS[name]
         version = _tool_version(tool)
@@ -83,14 +83,10 @@ def check_requirement(name, options):
             return check_requirement("docker", options)
         if fixture.reusable(runtime) is not None:
             return None
-        java_home = os.environ.get("JAVA_HOME")
-        java = java_home and all((Path(java_home) / "bin" / tool).is_file() for tool in ("java", "javac", "jar"))
-        if runtime == "native":
-            return None if java else fixes["java"]
-        # auto: Docker when its daemon answers, else local Java processes.
-        if check_requirement("docker", options) is None or java:
+        # `auto` chooses Docker only when its daemon answers.
+        if environment.choose_runtime(runtime) == "docker":
             return None
-        return fixes["java"]
+        return None if environment.jdk_problem() is None else fixes["java"]
     raise ValueError(f"Unknown requirement: {name}")
 
 
@@ -209,9 +205,17 @@ def render_command(step, options, test_filter, extra):
         expression = step.nextest_filter
         if test_filter:
             expression = f"({expression}) and test({test_filter})"
-        profile = "ci" if os.environ.get("CI") else "default"
-        command += ["--profile", profile, "-E", expression, *extra]
+        command += ["--profile", nextest_profile(), "-E", expression, *extra]
     return command
+
+
+def nextest_profile():
+    return "ci" if os.environ.get("CI") else "default"
+
+
+def junit_report():
+    """The JUnit report that nextest writes, as .config/nextest.toml sets."""
+    return target_dir() / "nextest" / nextest_profile() / "junit.xml"
 
 
 def execute(command, env, timeout, log, output):
@@ -300,6 +304,9 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
             continue
         command = render_command(step, options, item.test_filter, extra)
         step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
+        if step.nextest_filter is not None:
+            # A step that fails before nextest writes a report must not report old failures.
+            junit_report().unlink(missing_ok=True)
         code = execute(command, dict(os.environ, **env, **step_env), step.timeout, log, output)
         if code == 0:
             continue
@@ -309,8 +316,7 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if iteration:
             result.reason += f" Iteration {iteration[0]} of {iteration[1]}."
         if step.nextest_filter is not None:
-            profile = "ci" if os.environ.get("CI") else "default"
-            junit = target_dir() / "nextest" / profile / "junit.xml"
+            junit = junit_report()
             if junit.exists():
                 saved = run_dir / "junit" / f"{suite.name}.xml"
                 saved.parent.mkdir(parents=True, exist_ok=True)

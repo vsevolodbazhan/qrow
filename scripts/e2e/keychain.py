@@ -6,16 +6,21 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import uuid
 
-FIXTURE_PROFILE_NAMES = {"Qrow E2E", "Qrow E2E copy", "Qrow E2E live"}
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "core"))
+from environment import target_dir  # noqa: E402
+
+# The desktop driver adds one connection with this name.
+FIXTURE_PROFILE_NAME = "Qrow E2E"
 
 
 def fixture_profile_ids(profiles):
     identifiers = []
     for profile in profiles:
         if (
-            profile["name"] not in FIXTURE_PROFILE_NAMES
+            profile["name"] != FIXTURE_PROFILE_NAME
             or profile["username"] != "qrow"
             or profile["host"] != "127.0.0.1"
         ):
@@ -35,7 +40,7 @@ def main():
     if shutil.which("security") is None:
         raise RuntimeError("Missing required command: security")
     artifacts = Path(os.environ["QROW_E2E_ARTIFACTS"]).resolve()
-    target = Path(os.environ.get("CARGO_TARGET_DIR", Path(__file__).resolve().parents[2] / "target")).resolve()
+    target = target_dir().resolve()
     if not isolated_run(artifacts, target):
         raise ValueError("Refusing to clean credentials outside an isolated E2E run")
     workspace = artifacts / "workspace/workspace.json"

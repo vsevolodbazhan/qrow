@@ -80,13 +80,13 @@ class FixtureTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_authentication_failures_do_not_count_as_readiness(self):
-        servers = FakeServers({"qrow": (1, "LDAP rejected"), "other": (0, "")})
+        servers = FakeServers({"qrow": (1, "LDAP rejected")})
         with patch.object(fixture.time, "monotonic", side_effect=[0, 0, 0, 181]), patch.object(fixture.time, "sleep"):
             with self.assertRaisesRegex(RuntimeError, "LDAP rejected"):
                 fixture.wait_ready(servers)
 
     def test_readiness_starts_only_the_engine_of_the_test_user(self):
-        servers = FakeServers({"qrow": (0, ""), "other": (1, "no room for a second engine")})
+        servers = FakeServers({"qrow": (0, "")})
         fixture.wait_ready(servers)
         self.assertEqual(servers.users, [fixture.TEST_USER])
 
@@ -105,12 +105,21 @@ class DriverTests(unittest.TestCase):
         self.assertIn("ditto -x -k", driver)
         self.assertIn("QROW_E2E_BUNDLE/Contents/MacOS/qrow", driver)
 
+    def test_shell_scripts_build_in_the_cargo_target_directory(self):
+        # Hook snapshots set CARGO_TARGET_DIR, so a fixed target/ path reads another build.
+        for script in ("scripts/e2e/driver.sh", "scripts/package/macos.sh"):
+            with self.subTest(script=script):
+                text = (ROOT / script).read_text()
+                self.assertEqual(text.count('qrow_target_dir="${CARGO_TARGET_DIR:-target}"'), 1)
+                paths = [line for line in text.splitlines() if "target/" in line]
+                self.assertEqual(paths, [])
+
     def test_only_preflight_mode_checks_permissions_and_only_the_driver_run_cleans_up(self):
         driver = (ROOT / "scripts/e2e/driver.sh").read_text()
         preflight = driver.index('if [ "${1:-}" = --preflight ]; then')
-        self.assertEqual(driver.count("native-driver --preflight"), 1)
-        self.assertLess(preflight, driver.index("native-driver --preflight"))
-        self.assertLess(driver.index("native-driver --preflight"), driver.index("    exit 0\nfi\n", preflight))
+        self.assertEqual(driver.count('"$qrow_driver" --preflight'), 1)
+        self.assertLess(preflight, driver.index('"$qrow_driver" --preflight'))
+        self.assertLess(driver.index('"$qrow_driver" --preflight'), driver.index("    exit 0\nfi\n", preflight))
         prepare_exit = driver.index('test "${1:-}" != --prepare || exit 0')
         self.assertLess(prepare_exit, driver.index("trap cleanup 0"))
         self.assertEqual(driver.count("trap cleanup 0"), 1)

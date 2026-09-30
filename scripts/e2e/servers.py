@@ -14,6 +14,9 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/core"))
+from environment import jdk_problem, target_dir  # noqa: E402
+
 FIXTURE = ROOT / "tests/fixture/server"
 DOWNLOAD_REPORT_INTERVAL = 15
 DOWNLOAD_TIMEOUT_SECONDS = 120 * 60
@@ -71,14 +74,10 @@ def preflight():
     missing = [command for command in ("curl",) if shutil.which(command) is None]
     if missing:
         raise RuntimeError("Missing required command: " + ", ".join(missing))
-    java_home = os.environ.get("JAVA_HOME")
-    if not java_home:
-        raise RuntimeError("JAVA_HOME must point to a JDK for native E2E tests")
-    required_tools = ("java", "javac", "jar")
-    missing = [tool for tool in required_tools if not (Path(java_home) / "bin" / tool).is_file()]
-    if missing:
-        raise RuntimeError("JAVA_HOME is missing required JDK tools: " + ", ".join(missing))
-    return Path(java_home)
+    problem = jdk_problem()
+    if problem:
+        raise RuntimeError(problem)
+    return Path(os.environ["JAVA_HOME"])
 
 
 def transfer(label, url, partial, total, more_sources):
@@ -119,10 +118,14 @@ def transfer(label, url, partial, total, more_sources):
     announce(f"{label}: download complete: {human_size(partial.stat().st_size)} in {elapsed_seconds(started)}.")
 
 
+def download_cache():
+    return target_dir() / "e2e-downloads"
+
+
 def distribution(item, label=None):
     label = label or item["directory"]
     total = item.get("bytes")
-    cache = ROOT / "target/e2e-downloads"
+    cache = download_cache()
     cache.mkdir(parents=True, exist_ok=True)
     urls = item["urls"]
     archive = cache / urls[0].rsplit("/", 1)[1]
@@ -167,7 +170,7 @@ def distribution(item, label=None):
 
 def downloads():
     manifest = json.loads((ROOT / "tests/fixture/native-downloads.json").read_text())
-    cache = ROOT / "target/e2e-downloads"
+    cache = download_cache()
     announce(f"Checking {len(manifest)} native fixture dependencies in {cache}.")
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         paths = list(executor.map(distribution, manifest.values(), manifest.keys()))

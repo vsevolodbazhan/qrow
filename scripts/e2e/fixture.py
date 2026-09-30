@@ -2,7 +2,7 @@
 """Disposable LDAP, ZooKeeper, Spark, and Kyuubi servers for end-to-end tests.
 
 Both runtimes give the same interface: start, wait for an authenticated SQL
-response, warm the engine of each synthetic user, and stop. A fixture writes
+response, warm the engine of the synthetic user, and stop. A fixture writes
 its state to a JSON file, so another process can use it and stop it.
 
 Usage: fixture.py up [--runtime auto|docker|native] | down | status | observe ACTION TOKEN
@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import signal
 import socket
 import subprocess
@@ -21,14 +20,16 @@ import time
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "scripts/core"))
+from environment import choose_runtime, target_dir  # noqa: E402
+
 COMPOSE = ROOT / "tests/fixture/compose.yml"
 SERVER = ROOT / "tests/fixture/server"
-# Synthetic LDAP users of tests/fixture/server/users.ldif.
-USERS = {"qrow": "qrow-test-password", "other": "other-test-password"}
-# Tests connect as this user. Readiness starts its Spark engine, so the first
-# test does not wait for an engine start. The Spark worker has room for one
-# engine, so readiness does not start an engine for another user.
+# The synthetic LDAP user of tests/fixture/server/users.ldif. Tests connect
+# as this user. Readiness starts its Spark engine, so the first test does not
+# wait for an engine start. The Spark worker has room for one engine.
 TEST_USER = "qrow"
+TEST_PASSWORD = "qrow-test-password"
 READY_SECONDS = 180
 PROJECT = re.compile(r"qrow-e2e-[a-z0-9-]+")
 EVIDENCE = re.compile(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)")
@@ -36,10 +37,6 @@ EVIDENCE = re.compile(r"[a-zA-Z0-9_-]+\.(started|interrupted|completed|ended)")
 
 def announce(message):
     print(f"[fixture] {message}", file=sys.stderr, flush=True)
-
-
-def target_dir():
-    return Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
 
 
 def default_state():
@@ -61,33 +58,28 @@ def free_ports(count):
             listener.close()
 
 
-def docker_available():
-    return shutil.which("docker") is not None and subprocess.run(
-        ["docker", "info"], capture_output=True, timeout=20).returncode == 0
-
-
 def wait_ready(fixture):
     """An authenticated SQL round trip as the test user; an open port is not enough."""
     started = time.monotonic()
-    for user, password in [(TEST_USER, USERS[TEST_USER])]:
-        announce(f"Waiting for authenticated SQL as {user} (timeout: {READY_SECONDS}s).")
-        attempt = 0
-        last_report = time.monotonic()
-        while True:
-            attempt += 1
-            fixture.check_alive()
-            result = fixture.beeline(user, password)
-            if result.returncode == 0:
-                announce(f"{user} is ready after {time.monotonic() - started:.0f}s (attempt {attempt}).")
-                break
-            now = time.monotonic()
-            if now - started >= READY_SECONDS:
-                raise RuntimeError(f"Kyuubi never became ready for {user}: {result.stderr[-4000:]}")
-            if now - last_report >= 15:
-                announce(f"Still waiting for {user} after {now - started:.0f}s "
-                         f"(attempt {attempt}, exit code {result.returncode}).")
-                last_report = now
-            time.sleep(2)
+    user = TEST_USER
+    announce(f"Waiting for authenticated SQL as {user} (timeout: {READY_SECONDS}s).")
+    attempt = 0
+    last_report = time.monotonic()
+    while True:
+        attempt += 1
+        fixture.check_alive()
+        result = fixture.beeline(user, TEST_PASSWORD)
+        if result.returncode == 0:
+            announce(f"{user} is ready after {time.monotonic() - started:.0f}s (attempt {attempt}).")
+            return
+        now = time.monotonic()
+        if now - started >= READY_SECONDS:
+            raise RuntimeError(f"Kyuubi never became ready for {user}: {result.stderr[-4000:]}")
+        if now - last_report >= 15:
+            announce(f"Still waiting for {user} after {now - started:.0f}s "
+                     f"(attempt {attempt}, exit code {result.returncode}).")
+            last_report = now
+        time.sleep(2)
 
 
 def evidence_file(token):
@@ -142,7 +134,7 @@ class DockerFixture:
 
     def healthy(self):
         try:
-            return self.beeline("qrow", USERS["qrow"]).returncode == 0
+            return self.beeline(TEST_USER, TEST_PASSWORD).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             return False
 
@@ -316,7 +308,7 @@ class NativeFixture:
     def healthy(self):
         try:
             self.check_alive()
-            return self.beeline("qrow", USERS["qrow"]).returncode == 0
+            return self.beeline(TEST_USER, TEST_PASSWORD).returncode == 0
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             return False
 
@@ -378,12 +370,6 @@ class NativeFixture:
 
 
 RUNTIMES = {"docker": DockerFixture, "native": NativeFixture}
-
-
-def choose_runtime(runtime):
-    if runtime != "auto":
-        return runtime
-    return "docker" if docker_available() else "native"
 
 
 def start(runtime, artifacts):

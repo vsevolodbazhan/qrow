@@ -119,7 +119,9 @@ to Rust sources, tests, Cargo files, `vendor/`, themes, and embedded icons
 select `fmt`, `clippy`, `rustdoc`, `unit`, and `ui`. Changes to Cargo files or
 dependency policy files also select `deps`. Changes to Cargo files, dependency
 policy files, or workflows select `policy`. Changes to scripts, hooks,
-workflows, `qtest`, the Python dependencies, or this page select `scripts`.
+workflows, `qtest`, the Python dependencies, this page, or the Python and
+shell files in `tests/desktop/` select `scripts`. The `scripts` suite also
+lints these files.
 
 To list the tests of a suite, run `./qtest list ui --tests`.
 
@@ -127,7 +129,10 @@ To list the tests of a suite, run `./qtest list ui --tests`.
 
 Each run writes its artifacts to `target/qtest/runs/<run>/`.
 `target/qtest/runs/latest` points to the most recent run. `./qtest artifacts`
-prints its directory.
+prints its directory. When you set `CARGO_TARGET_DIR`, qtest and the scripts
+use that directory in place of `target` for all paths on this page. Hook
+snapshots set it, as
+[Hooks and continuous integration](#hooks-and-continuous-integration) tells.
 
 | Path | Content |
 | --- | --- |
@@ -220,7 +225,7 @@ Docker runtime. Its tests run one at a time. Do not point a suite at an
 existing deployment. The suites must control disposable servers.
 
 The servers are Kyuubi 1.12.0, Spark 3.5.3 in standalone mode, LDAP with
-synthetic users, and ZooKeeper. Let Docker use approximately 8 GB of memory
+the synthetic user `qrow`, and ZooKeeper. Let Docker use approximately 8 GB of memory
 for them. They also run on an M1 Mac with 8 GB of memory. The first image download and build are much larger than Qrow. Java
 belongs only to the servers. Qrow itself does not use a JVM.
 
