@@ -345,11 +345,8 @@ impl Session for HiveSession {
             MAX_RESULT_BYTES,
         )?;
         // Older Hive-compatible servers report hasMoreRows=false even when more rows exist.
-        // An empty fetch is the portable end-of-results signal used by PyHive.
-        Ok(Batch {
-            more: !rows.is_empty(),
-            rows,
-        })
+        // The worker uses an empty fetch as the end-of-results signal, like PyHive.
+        Ok(Batch { rows })
     }
 
     fn close_operation(&mut self) -> Result<()> {

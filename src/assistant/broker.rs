@@ -523,14 +523,6 @@ pub struct BoundedRows {
     pub truncated: bool,
 }
 
-pub fn bound_rows(
-    rows: &[Vec<Option<String>>],
-    offset: usize,
-    requested: usize,
-) -> Result<BoundedRows, ToolError> {
-    bound_rows_after(rows, offset, requested, 0)
-}
-
 /// Rows from `offset` when the result metadata already uses `used_bytes`.
 pub fn bound_rows_after(
     rows: &[Vec<Option<String>>],
@@ -1253,7 +1245,7 @@ mod tests {
     #[test]
     fn row_and_text_outputs_respect_byte_limits() {
         let rows = vec![vec![Some("x".repeat(MAX_TOOL_OUTPUT_BYTES))], vec![None]];
-        let bounded = bound_rows(&rows, 0, 2).unwrap();
+        let bounded = bound_rows_after(&rows, 0, 2, 0).unwrap();
         assert_eq!(bounded.rows, [vec![None]]);
         assert!(bounded.truncated);
         assert_eq!(bounded.omitted_row_offsets, [0]);
@@ -1390,11 +1382,13 @@ mod tests {
             ToolErrorCode::LimitReached
         );
         assert_eq!(
-            bound_rows(&[], 0, 0).unwrap_err().code,
+            bound_rows_after(&[], 0, 0, 0).unwrap_err().code,
             ToolErrorCode::InvalidArguments
         );
         assert_eq!(
-            bound_rows(&[], 0, MAX_TOOL_ROWS + 1).unwrap_err().code,
+            bound_rows_after(&[], 0, MAX_TOOL_ROWS + 1, 0)
+                .unwrap_err()
+                .code,
             ToolErrorCode::InvalidArguments
         );
     }
@@ -1436,13 +1430,13 @@ mod tests {
     fn ordinary_row_pages_advance_by_the_requested_window() {
         let rows = vec![vec![Some("a".into())], vec![None], vec![Some("c".into())]];
 
-        let first = bound_rows(&rows, 0, 2).unwrap();
+        let first = bound_rows_after(&rows, 0, 2, 0).unwrap();
         assert_eq!(first.rows, rows[..2]);
         assert_eq!(first.next_offset, 2);
         assert!(!first.truncated);
         assert!(first.omitted_row_offsets.is_empty());
 
-        let second = bound_rows(&rows, first.next_offset, 1).unwrap();
+        let second = bound_rows_after(&rows, first.next_offset, 1, 0).unwrap();
         assert_eq!(second.rows, rows[2..]);
         assert_eq!(second.next_offset, 3);
         assert!(!second.truncated);

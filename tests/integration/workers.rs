@@ -117,10 +117,7 @@ impl Session for FakeSession {
             })
             .collect();
         self.offset = end;
-        Ok(Batch {
-            more: !rows.is_empty(),
-            rows,
-        })
+        Ok(Batch { rows })
     }
     fn close_operation(&mut self) -> Result<()> {
         Ok(())

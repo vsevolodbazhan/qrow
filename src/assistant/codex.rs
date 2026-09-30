@@ -469,10 +469,7 @@ impl CodexHarness {
                 other => AccountKind::Other(other.to_owned()),
             },
         };
-        Ok(AccountStatus {
-            kind,
-            requires_openai_auth: response.requires_openai_auth,
-        })
+        Ok(AccountStatus { kind })
     }
 
     fn models(&mut self) -> Result<Vec<Model>> {
@@ -1402,7 +1399,6 @@ struct DynamicToolCall {
 #[serde(rename_all = "camelCase")]
 struct AccountResponse {
     account: Option<Value>,
-    requires_openai_auth: bool,
 }
 
 #[derive(Deserialize)]
@@ -1417,12 +1413,9 @@ struct ModelListResponse {
 struct CodexModel {
     id: String,
     display_name: String,
-    description: String,
     is_default: bool,
     default_reasoning_effort: String,
     supported_reasoning_efforts: Vec<CodexReasoningEffort>,
-    #[serde(default)]
-    default_service_tier: Option<String>,
     #[serde(default)]
     service_tiers: Vec<CodexServiceTier>,
 }
@@ -1431,14 +1424,12 @@ struct CodexModel {
 #[serde(rename_all = "camelCase")]
 struct CodexReasoningEffort {
     reasoning_effort: String,
-    description: String,
 }
 
 #[derive(Deserialize)]
 struct CodexServiceTier {
     id: String,
     name: String,
-    description: String,
 }
 
 impl From<CodexModel> for Model {
@@ -1446,7 +1437,6 @@ impl From<CodexModel> for Model {
         Self {
             id: model.id,
             display_name: model.display_name,
-            description: model.description,
             is_default: model.is_default,
             default_reasoning_effort: model.default_reasoning_effort,
             reasoning_efforts: model
@@ -1454,17 +1444,14 @@ impl From<CodexModel> for Model {
                 .into_iter()
                 .map(|effort| ReasoningEffort {
                     id: effort.reasoning_effort,
-                    description: effort.description,
                 })
                 .collect(),
-            default_service_tier: model.default_service_tier,
             service_tiers: model
                 .service_tiers
                 .into_iter()
                 .map(|tier| ServiceTier {
                     id: tier.id,
                     name: tier.name,
-                    description: tier.description,
                 })
                 .collect(),
         }
@@ -1516,17 +1503,13 @@ while IFS= read -r line; do
                 plan: Some("plus".into())
             }
         );
-        assert!(snapshot.account().requires_openai_auth());
         assert_eq!(snapshot.models().len(), 2);
         assert_eq!(snapshot.models()[0].id(), "model-1");
         assert!(snapshot.models()[0].is_default());
         assert_eq!(snapshot.models()[0].default_reasoning_effort(), "medium");
         assert_eq!(snapshot.models()[0].reasoning_efforts()[0].id(), "medium");
         assert_eq!(snapshot.models()[0].service_tiers()[1].id(), "fast");
-        assert_eq!(
-            snapshot.models()[0].default_service_tier(),
-            Some("standard")
-        );
+        assert_eq!(snapshot.models()[0].service_tiers()[1].name(), "Fast");
         assert_eq!(snapshot.models()[1].id(), "model-2");
 
         harness.shutdown().unwrap();

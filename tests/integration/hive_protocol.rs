@@ -239,12 +239,11 @@ fn ldap_session_parameters_async_query_exact_values_and_fetch_exhaustion() {
     );
     assert_eq!(session.columns().unwrap()[0].data_type, "DECIMAL");
     let batch = session.fetch(250).unwrap();
-    assert!(batch.more);
     assert_eq!(
         batch.rows,
         vec![vec![Some("999999999999.123456789".into())], vec![None]]
     );
-    assert!(!session.fetch(250).unwrap().more);
+    assert!(session.fetch(250).unwrap().rows.is_empty());
     session.close().unwrap();
     server.join().unwrap();
 }
@@ -432,7 +431,7 @@ fn heartbeat_closes_its_own_operation_and_preserves_the_preview_cursor() {
         QueryState::Finished { has_results: false }
     );
     session.close_keep_alive().unwrap();
-    assert!(!session.fetch(250).unwrap().more);
+    assert!(session.fetch(250).unwrap().rows.is_empty());
     session.close().unwrap();
     server.join().unwrap();
 }

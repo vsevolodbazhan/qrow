@@ -699,7 +699,6 @@ pub type Row = Vec<Option<String>>;
 #[derive(Default, Debug)]
 pub struct Batch {
     pub rows: Vec<Row>,
-    pub more: bool,
 }
 
 #[cfg(test)]
