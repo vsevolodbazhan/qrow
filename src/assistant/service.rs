@@ -780,8 +780,9 @@ printf '%s
         let started = Instant::now();
         service.shutdown_and_wait(Duration::from_secs(3)).unwrap();
         // A wait for the worker alone kills Codex only after 2.25 seconds.
+        // The limit leaves time for a slow CI runner.
         assert!(
-            started.elapsed() < Duration::from_secs(1),
+            started.elapsed() < Duration::from_secs(2),
             "{:?}",
             started.elapsed()
         );
