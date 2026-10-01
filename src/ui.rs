@@ -228,12 +228,24 @@ struct ProfileEditor {
     _schema_refresh_subscription: Subscription,
     /// Whether schema refreshes write their requests to Logs.
     refresh_logs: connection_form::ChoiceSelect,
+    /// The catalog that the connection uses. A change loads the settings of
+    /// the chosen catalog into the Schemas fields.
+    catalog_select: connection_form::ChoiceSelect,
+    catalog_choices: Vec<(connection_form::CatalogChoice, String)>,
+    _catalog_subscription: Subscription,
+    /// The ID that a new shared catalog gets.
+    new_catalog: Uuid,
+    shared_name: Entity<InputState>,
+    preferred_select: connection_form::ChoiceSelect,
+    preferred_choices: Vec<(Option<Uuid>, String)>,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
     profile: Profile,
+    /// The shared catalog that the connection uses, with its edited settings.
+    shared: Option<SharedCatalog>,
     password_changed: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1167,6 +1179,7 @@ impl Qrow {
             Ok(saved) => {
                 let ProfileSave {
                     profile,
+                    shared,
                     password_changed,
                 } = saved;
                 let id = profile.id;
@@ -1179,6 +1192,17 @@ impl Qrow {
                 } else {
                     self.profiles.push(profile.clone());
                 }
+                if let Some(shared) = shared {
+                    match self
+                        .shared_catalogs
+                        .iter_mut()
+                        .find(|catalog| catalog.id == shared.id)
+                    {
+                        Some(existing) => *existing = shared,
+                        None => self.shared_catalogs.push(shared),
+                    }
+                }
+                crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
                 if is_new {
                     if had_profiles {
                         let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
@@ -2125,6 +2149,26 @@ impl Qrow {
             cx.notify();
             return;
         }
+        let shared = profile.shared_catalog.and_then(|id| {
+            self.shared_catalogs
+                .iter()
+                .find(|catalog| catalog.id == id)
+                .cloned()
+        });
+        // A member shows the settings of its shared catalog, also while it
+        // does not browse schemas.
+        let settings = match &shared {
+            Some(shared) => CatalogSettings {
+                refresh: if profile.catalog.browses() {
+                    shared.settings.refresh
+                } else {
+                    CatalogRefresh::Disabled
+                },
+                log_refreshes: profile.catalog.log_refreshes,
+                ..shared.settings.clone()
+            },
+            None => profile.catalog.clone(),
+        };
         let values = [
             profile.name.clone(),
             profile.host.clone(),
@@ -2140,10 +2184,10 @@ impl Qrow {
                 profile.lifecycle.keep_alive_seconds.to_string()
             },
             profile.lifecycle.keep_alive_sql.clone(),
-            profile.catalog.include.join(", "),
-            profile.catalog.exclude.join(", "),
-            profile.catalog.refresh_minutes.to_string(),
-            profile.catalog.timeout_minutes.to_string(),
+            settings.include.join(", "),
+            settings.exclude.join(", "),
+            settings.refresh_minutes.to_string(),
+            settings.timeout_minutes.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2172,10 +2216,35 @@ impl Qrow {
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
         let schema_refresh = connection_form::schema_refresh_select(
-            connection_form::RefreshMode::of(profile.catalog.refresh),
+            connection_form::RefreshMode::of(settings.refresh),
             window,
             cx,
         );
+        let catalog_choices = connection_form::catalog_choices(&self.shared_catalogs);
+        let catalog = match &shared {
+            Some(shared) => connection_form::CatalogChoice::Shared(shared.id),
+            None => connection_form::CatalogChoice::Private,
+        };
+        let catalog_select = connection_form::choice_select(&catalog_choices, &catalog, window, cx);
+        let catalog_subscription =
+            cx.subscribe_in(&catalog_select, window, |this, _, event, window, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    this.catalog_choice_changed(window, cx);
+                }
+            });
+        let shared_name = cx.new(|cx| {
+            InputState::new(window, cx).default_value(
+                shared
+                    .as_ref()
+                    .map(|shared| shared.name.clone())
+                    .unwrap_or_default(),
+            )
+        });
+        let preferred_choices =
+            connection_form::preferred_choices(&profile, catalog, &self.profiles);
+        let preferred = shared.as_ref().and_then(|shared| shared.preferred);
+        let preferred_select =
+            connection_form::choice_select(&preferred_choices, &preferred, window, cx);
         // The choice decides which Schemas fields show.
         let schema_refresh_subscription =
             cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
@@ -2196,6 +2265,13 @@ impl Qrow {
             schema_refresh,
             _schema_refresh_subscription: schema_refresh_subscription,
             refresh_logs,
+            catalog_select,
+            catalog_choices,
+            _catalog_subscription: catalog_subscription,
+            new_catalog: Uuid::new_v4(),
+            shared_name,
+            preferred_select,
+            preferred_choices,
             profile,
             fields,
             is_new,
@@ -2203,6 +2279,57 @@ impl Qrow {
             saving: None,
         });
         self.open_profile_dialog(window, cx);
+        cx.notify();
+    }
+    /// Load the settings of the chosen catalog into the Schemas fields. A new
+    /// shared catalog starts with the settings in the fields.
+    fn catalog_choice_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        let choice = connection_form::chosen(&form.catalog_select, &form.catalog_choices, cx);
+        let shared = match choice {
+            connection_form::CatalogChoice::Shared(id) => {
+                self.shared_catalogs.iter().find(|catalog| catalog.id == id)
+            }
+            connection_form::CatalogChoice::Private | connection_form::CatalogChoice::New => None,
+        };
+        let settings = match (choice, shared) {
+            (connection_form::CatalogChoice::Private, _) => Some(&form.profile.catalog),
+            (_, Some(shared)) => Some(&shared.settings),
+            _ => None,
+        };
+        if let Some(settings) = settings {
+            let values = [
+                (10, settings.include.join(", ")),
+                (11, settings.exclude.join(", ")),
+                (12, settings.refresh_minutes.to_string()),
+                (13, settings.timeout_minutes.to_string()),
+            ];
+            for (index, value) in values {
+                form.fields[index].update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+            // A private catalog that is off still shows schemas once chosen.
+            let mode = match connection_form::RefreshMode::of(settings.refresh) {
+                connection_form::RefreshMode::Disabled => connection_form::RefreshMode::Manual,
+                mode => mode,
+            };
+            form.schema_refresh = connection_form::schema_refresh_select(mode, window, cx);
+            form._schema_refresh_subscription =
+                cx.subscribe_in(&form.schema_refresh, window, |_this, _, event, _, cx| {
+                    if matches!(event, SelectEvent::Confirm(Some(_))) {
+                        cx.notify();
+                    }
+                });
+        }
+        let name = shared.map(|shared| shared.name.clone()).unwrap_or_default();
+        form.shared_name
+            .update(cx, |input, cx| input.set_value(name, window, cx));
+        form.preferred_choices =
+            connection_form::preferred_choices(&form.profile, choice, &self.profiles);
+        let preferred = shared.and_then(|shared| shared.preferred);
+        form.preferred_select =
+            connection_form::choice_select(&form.preferred_choices, &preferred, window, cx);
         cx.notify();
     }
     fn save_profile(&mut self, cx: &mut Context<Self>) {
@@ -2226,6 +2353,7 @@ impl Qrow {
             .collect();
         values[6] = form.parameters.read(cx).value().to_string();
         let mut profile = form.profile.clone();
+        let mut shared = None;
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
@@ -2242,18 +2370,66 @@ impl Qrow {
                     )
                 })?;
             let mode = connection_form::refresh_mode(&form.schema_refresh, cx);
-            // Disabled hides the other Schemas fields and keeps their values.
-            if mode != connection_form::RefreshMode::Disabled {
-                profile.catalog.include = connection_form::parse_patterns(&values[10]);
-                profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
+            // Disabled hides the other Schemas fields and keeps their values,
+            // also the shared catalog of the connection.
+            if mode == connection_form::RefreshMode::Disabled {
+                profile.catalog.refresh = CatalogRefresh::Disabled;
+                shared = profile.shared_catalog.and_then(|id| {
+                    self.shared_catalogs
+                        .iter()
+                        .find(|catalog| catalog.id == id)
+                        .cloned()
+                });
+            } else {
+                let choice =
+                    connection_form::chosen(&form.catalog_select, &form.catalog_choices, cx);
+                let preferred =
+                    connection_form::chosen(&form.preferred_select, &form.preferred_choices, cx);
                 profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+                // A member keeps its own settings for a later private catalog.
+                let mut settings = match choice {
+                    connection_form::CatalogChoice::Private => profile.catalog.clone(),
+                    _ => CatalogSettings {
+                        log_refreshes: false,
+                        ..profile.catalog.clone()
+                    },
+                };
+                settings.include = connection_form::parse_patterns(&values[10]);
+                settings.exclude = connection_form::parse_patterns(&values[11]);
+                connection_form::parse_refresh_policy(
+                    &values[12],
+                    &values[13],
+                    mode,
+                    &mut settings,
+                )?;
+                let id = match choice {
+                    connection_form::CatalogChoice::Private => None,
+                    connection_form::CatalogChoice::Shared(id) => Some(id),
+                    connection_form::CatalogChoice::New => Some(form.new_catalog),
+                };
+                match id {
+                    None => {
+                        profile.catalog = settings;
+                        profile.shared_catalog = None;
+                    }
+                    Some(id) => {
+                        profile.catalog.refresh = settings.refresh;
+                        profile.shared_catalog = Some(id);
+                        let catalog = SharedCatalog {
+                            id,
+                            name: form.shared_name.read(cx).value().trim().to_owned(),
+                            settings,
+                            preferred,
+                        };
+                        catalog.validate()?;
+                        anyhow::ensure!(
+                            !connection_form::shared_name_is_taken(&self.shared_catalogs, &catalog),
+                            "A shared catalog or a catalog choice with this name already exists."
+                        );
+                        shared = Some(catalog);
+                    }
+                }
             }
-            connection_form::parse_refresh_policy(
-                &values[12],
-                &values[13],
-                mode,
-                &mut profile.catalog,
-            )?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
@@ -2294,6 +2470,7 @@ impl Qrow {
             };
             let _ = send.send(result.map(|()| ProfileSave {
                 profile,
+                shared,
                 password_changed,
             }));
         });

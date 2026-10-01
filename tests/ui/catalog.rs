@@ -690,7 +690,9 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh period must be between 5 and 10080 minutes.");
     app.fill(cx, "connection-refresh-period", "15");
-    app.scroll_to(cx, "connection-refresh-timeout");
+    // The error above the footer covers the bottom of the form, so show
+    // the field below the timeout too.
+    app.scroll_to(cx, "connection-refresh-logs");
     app.fill(cx, "connection-refresh-timeout", "0");
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh timeout must be between 1 and 1440 minutes.");
@@ -878,5 +880,122 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
             label(window, connection_row(profile.id)).as_deref(),
             Some("Closing, schema refresh error")
         );
+    });
+}
+
+#[gpui_kit::test]
+fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContext) {
+    let first = offline_profile("Small");
+    let second = offline_profile("Large");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &first);
+    let workspace_file = directory.path().join("workspace.json");
+    let private = storage::catalog_path(&workspace_file, first.id);
+    let credentials = MemoryCredentials::default();
+    for profile in [&first, &second] {
+        credentials
+            .set_password(profile.id, "synthetic-password")
+            .unwrap();
+    }
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![first.clone(), second.clone()]),
+        credentials,
+    );
+    let edit = |cx: &mut TestAppContext, profile: &Profile| {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.scroll_to(cx, "connection-schema-catalog");
+    };
+
+    // The first connection makes a shared catalog, which takes its cache.
+    edit(cx, &first);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-catalog").as_deref(),
+            Some("This connection")
+        );
+        assert!(window.try_find("connection-shared-catalog-name").is_none());
+    });
+    app.select(cx, "connection-schema-catalog", "New shared catalog");
+    app.wait_for(cx, "connection-shared-catalog-name");
+    app.click(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "the name error",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, "connection-form-error-accessibility").as_deref()
+                == Some("Give the shared catalog a name.")
+        },
+    );
+    app.scroll_to(cx, "connection-shared-catalog-name");
+    app.fill(cx, "connection-shared-catalog-name", "Lake");
+    app.scroll_to(cx, "connection-hide-schemas");
+    app.fill(cx, "connection-hide-schemas", "scratch");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the shared catalog", Duration::from_secs(10), |_, _| {
+        let saved = app.saved();
+        saved.shared_catalogs.len() == 1
+            && saved.profiles[0].shared_catalog == Some(saved.shared_catalogs[0].id)
+    });
+    let lake = app.saved().shared_catalogs[0].clone();
+    assert_eq!(lake.name, "Lake");
+    assert_eq!(lake.settings.exclude, ["scratch"]);
+    let shared = storage::catalog_path(&workspace_file, lake.id);
+    app.wait_until(cx, "the moved cache", Duration::from_secs(10), |_, _| {
+        shared.exists() && !private.exists()
+    });
+
+    // The second connection joins it and shows the same schemas.
+    edit(cx, &second);
+    app.select(cx, "connection-schema-catalog", "Lake");
+    app.wait_for(cx, "connection-shared-catalog-name");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-shared-catalog-name").as_deref(),
+            Some("Lake")
+        );
+    });
+    app.scroll_to(cx, "connection-hide-schemas");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-hide-schemas").as_deref(),
+            Some("scratch")
+        );
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the second member", Duration::from_secs(10), |_, _| {
+        app.saved().profiles[1].shared_catalog == Some(lake.id)
+    });
+    expand_connection(&app, cx, &second);
+    wait_shows(&app, cx, "avia");
+    assert_eq!(app.credentials.reads(), 0, "The tree must not connect");
+
+    // The catalog stays while one connection uses it.
+    edit(cx, &first);
+    app.select(cx, "connection-schema-catalog", "This connection");
+    app.wait_gone(cx, "connection-shared-catalog-name");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the first to leave", Duration::from_secs(10), |_, _| {
+        let saved = app.saved();
+        saved.profiles[0].shared_catalog.is_none() && saved.shared_catalogs.len() == 1
+    });
+    assert!(shared.exists());
+
+    // The last connection that leaves deletes the catalog and its cache.
+    edit(cx, &second);
+    app.select(cx, "connection-schema-catalog", "This connection");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "no shared catalog", Duration::from_secs(10), |_, _| {
+        app.saved().shared_catalogs.is_empty()
+    });
+    app.wait_until(cx, "the deleted cache", Duration::from_secs(10), |_, _| {
+        !shared.exists()
     });
 }
