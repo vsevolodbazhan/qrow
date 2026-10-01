@@ -75,7 +75,7 @@ trap 'exit 143' TERM
 rm -rf "$QROW_DATA_DIR"
 mkdir -p "$QROW_DATA_DIR"
 "$qrow_driver"
-for scenario in window-close-only assistant-layout-only assistant-selection-only editor-highlight-only results-text-only; do
+for scenario in window-close-only assistant-layout-only assistant-selection-only assistant-delete-menu-only editor-highlight-only results-text-only; do
     scenario_dir="$QROW_E2E_ARTIFACTS/$scenario"
     rm -rf "$scenario_dir/workspace"
     mkdir -p "$scenario_dir/workspace"
