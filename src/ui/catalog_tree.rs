@@ -801,7 +801,9 @@ impl Qrow {
         }
     }
 
-    /// Whether Collapse All has rows to collapse below the connection or schema.
+    /// Whether Collapse All has rows to collapse below the connection or
+    /// schema. The built tree knows which rows are open, also the rows that
+    /// a search opens.
     pub(super) fn has_expanded_descendants(
         &self,
         profile: Uuid,
@@ -809,19 +811,13 @@ impl Qrow {
         cx: &App,
     ) -> bool {
         let prefixes = Self::descendant_prefixes(profile, schema);
-        let searching = !self.catalog.search.read(cx).value().trim().is_empty();
-        self.catalog.expanded.iter().any(|id| {
-            prefixes
-                .iter()
-                .any(|prefix| id.starts_with(prefix.as_str()))
-        }) || (searching
-            && schema.is_none()
-            && self.catalog.catalog(profile).is_some_and(|catalog| {
-                catalog
-                    .schemas
-                    .keys()
-                    .any(|name| !self.catalog.collapsed.contains(&schema_id(profile, name)))
-            }))
+        let state = self.catalog.state.read(cx);
+        (0..).map_while(|ix| state.entry(ix)).any(|entry| {
+            entry.is_expanded()
+                && prefixes
+                    .iter()
+                    .any(|prefix| entry.item().id.starts_with(prefix.as_str()))
+        })
     }
 
     /// Collapses every row below the connection, or below one of its schemas.
