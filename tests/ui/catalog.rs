@@ -499,10 +499,39 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
 }
 
 #[gpui_kit::test]
-fn each_row_shows_its_full_name_on_hover(cx: &mut TestAppContext) {
+fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
     let profile = offline_profile("Warehouse");
     let directory = tempfile::tempdir().unwrap();
-    avia(&directory, &profile);
+    let long = format!("asb_exp_{}_app_android_v1", "compactorderdetails".repeat(4));
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(vec!["avia".into()], &CatalogSettings::default(), 1);
+    catalog.apply_relations(
+        "avia",
+        None,
+        vec![
+            table(&long, RelationKind::Table),
+            table("daily", RelationKind::View),
+        ],
+        1,
+    );
+    catalog.apply_columns(
+        "avia",
+        Some("daily"),
+        BTreeMap::from([(
+            "daily".into(),
+            vec![
+                CatalogColumn {
+                    name: "day".into(),
+                    data_type: "DATE".into(),
+                    comment: Some("Booking day".into()),
+                },
+                column("gate", "STRING"),
+            ],
+        )]),
+        1,
+    );
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    storage::save_catalog(&path, &catalog).unwrap();
     let app = TestApp::launch_in(
         cx,
         directory,
@@ -511,23 +540,32 @@ fn each_row_shows_its_full_name_on_hover(cx: &mut TestAppContext) {
     );
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
-    app.click_labelled(cx, "bookings");
+    app.click_labelled(cx, "daily");
     wait_shows(&app, cx, "gate STRING");
-    for (row, tooltip) in [
-        ("avia", "avia"),
-        ("daily", "daily"),
-        ("gate STRING", "gate STRING"),
-    ] {
+
+    let hover = |app: &TestApp, cx: &mut TestAppContext, row: &str| -> Option<String> {
+        app.hover_labelled(cx, row);
+        // The first frame lays out the label. The next one knows its width.
         app.hover_labelled(cx, row);
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.wait_until(
-            cx,
-            &format!("the tooltip of {row}"),
-            Duration::from_secs(5),
-            |window, _| label(window, "catalog-tooltip").as_deref() == Some(tooltip),
-        );
-    }
+        app.update(cx, |window, _| label(window, "catalog-tooltip"))
+    };
+    assert_eq!(hover(&app, cx, &long), Some(long.clone()));
+    assert_eq!(hover(&app, cx, "daily"), None);
+    assert_eq!(hover(&app, cx, "gate STRING"), None);
+    assert_eq!(
+        hover(&app, cx, "day DATE").as_deref(),
+        Some("day DATE\nBooking day")
+    );
+
+    // An open menu hides the tooltip of the row that it belongs to.
+    app.context_menu_labelled(cx, "day DATE");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(label(window, "catalog-tooltip"), None);
+    });
 }
 
 #[gpui_kit::test]

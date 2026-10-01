@@ -12,12 +12,15 @@ use crate::catalog::{
     quote_identifier,
 };
 use gpui_kit::assets::IconName as AssetIconName;
-use gpui_kit::base::{Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState};
+use gpui_kit::base::{
+    ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
+};
 use gpui_kit::component::{
     Icon, button::ButtonCustomVariant, h_flex, scroll::ScrollableElement as _, spinner::Spinner,
     tooltip::Tooltip, v_flex,
 };
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     rc::Rc,
@@ -28,7 +31,9 @@ pub(super) const MAX_SEARCH_MATCHES: usize = 500;
 /// Separates the names in a node ID. Names cannot contain it in practice.
 const SEPARATOR: char = '\u{1f}';
 /// The height of every tree row. The virtual list needs one height for all rows.
-const ROW_HEIGHT: f32 = 28.;
+const ROW_HEIGHT: f32 = 30.;
+/// The most label widths that the tree keeps between frames.
+const MAX_LABEL_WIDTHS: usize = 4096;
 
 /// What a tree row shows. The tree item ID is the key of its node.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +110,9 @@ pub(super) struct CatalogTree {
     collapsed: HashSet<SharedString>,
     connections: HashMap<Uuid, CatalogConnection>,
     nodes: Rc<HashMap<SharedString, Node>>,
+    /// The laid-out width of each label in the last frame, to know which
+    /// names the rows truncate.
+    widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
     /// The workspace file. Caches are next to it. `None` keeps them in memory.
     workspace: Option<PathBuf>,
 }
@@ -118,6 +126,7 @@ impl CatalogTree {
             collapsed: HashSet::new(),
             connections: HashMap::new(),
             nodes: Rc::new(HashMap::new()),
+            widths: Rc::new(RefCell::new(HashMap::new())),
             workspace,
         }
     }
@@ -407,7 +416,7 @@ impl Builder<'_> {
                         Some(scope),
                     ));
                 } else if relations.is_empty() {
-                    children.push(self.notice(id, profile, "No tables", Tone::Muted, None));
+                    children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
                     if filtered && !self.matches(name) {
@@ -990,10 +999,17 @@ impl Qrow {
                 })
                 .collect(),
         );
-        let nodes = self.catalog.nodes.clone();
+        let context = Rc::new(RowContext {
+            nodes: self.catalog.nodes.clone(),
+            rows,
+            weak: cx.weak_entity(),
+            tree: self.catalog.state.clone(),
+            scale: self.settings.ui_scale,
+            widths: self.catalog.widths.clone(),
+            // A tooltip would cover the open menu.
+            menu_open: self.menu.is_some(),
+        });
         let tree = self.catalog.state.clone();
-        let weak = cx.weak_entity();
-        let scale = self.settings.ui_scale;
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
@@ -1057,9 +1073,7 @@ impl Qrow {
                     .child(
                         Tree::new(&tree)
                             .item(move |_, entry, state, window, cx| {
-                                render_entry(
-                                    entry, state, &nodes, &rows, &weak, &tree, scale, window, cx,
-                                )
+                                render_entry(entry, state, &context, window, cx)
                             })
                             .list_style(StyleRefinement::default().size_full())
                             .size_full(),
@@ -1069,19 +1083,84 @@ impl Qrow {
     }
 }
 
-/// The tree row of `entry`.
-#[allow(clippy::too_many_arguments)]
+/// What the rows of one frame share.
+struct RowContext {
+    nodes: Rc<HashMap<SharedString, Node>>,
+    rows: Rc<HashMap<Uuid, ConnectionRow>>,
+    weak: WeakEntity<Qrow>,
+    tree: Entity<TreeState>,
+    scale: f32,
+    widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
+    menu_open: bool,
+}
+
+impl RowContext {
+    /// Whether the label `key` cut `text` in the last frame. A label that
+    /// has no width yet counts as not cut.
+    fn is_truncated(
+        &self,
+        key: &SharedString,
+        text: &str,
+        size: Pixels,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        let Some(width) = self.widths.borrow().get(key).copied() else {
+            return false;
+        };
+        let run = TextRun {
+            len: text.len(),
+            font: font(cx.theme().font_family.clone()),
+            color: cx.theme().foreground,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let shaped = window.text_system().shape_line(
+            SharedString::from(text.to_owned()),
+            size,
+            &[run],
+            None,
+        );
+        // Half a pixel absorbs rounding of the laid-out width.
+        shaped.width > width + px(0.5)
+    }
+
+    /// Records the laid-out width of the label `key` during prepaint.
+    fn record_width(
+        &self,
+        key: SharedString,
+    ) -> impl FnOnce(Bounds<Pixels>, &mut Window, &mut App) + use<> {
+        let widths = self.widths.clone();
+        move |bounds, _, _| {
+            let mut widths = widths.borrow_mut();
+            if widths.len() >= MAX_LABEL_WIDTHS && !widths.contains_key(&key) {
+                widths.clear();
+            }
+            widths.insert(key, bounds.size.width);
+        }
+    }
+}
+
+/// The tree row of `entry`. The highlight is inset in the row, so the
+/// highlights of adjacent rows keep a gap.
 fn render_entry(
     entry: &TreeEntry,
     state: TreeEntryState,
-    nodes: &HashMap<SharedString, Node>,
-    rows: &HashMap<Uuid, ConnectionRow>,
-    weak: &WeakEntity<Qrow>,
-    tree: &Entity<TreeState>,
-    scale: f32,
-    _: &mut Window,
+    context: &RowContext,
+    window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
+    let RowContext {
+        nodes,
+        rows,
+        weak,
+        tree,
+        scale,
+        menu_open,
+        ..
+    } = context;
+    let scale = *scale;
     let ui_px = |value: f32| px(scale * value);
     let id = entry.item().id.clone();
     let disclosure = div()
@@ -1116,10 +1195,16 @@ fn render_entry(
         let Some(row) = rows.get(profile) else {
             return div().into_any_element();
         };
-        return connection_row(*profile, row, state, disclosure, weak, cx)
-            .pl(ui_px(4.))
+        return div()
+            .w_full()
             .h(ui_px(ROW_HEIGHT))
-            .on_mouse_down(MouseButton::Left, focus)
+            .py_0p5()
+            .child(
+                connection_row(*profile, row, state, disclosure, *menu_open, weak, cx)
+                    .pl(ui_px(4.))
+                    .h_full()
+                    .on_mouse_down(MouseButton::Left, focus),
+            )
             .into_any_element();
     }
     let (icon, label, detail, loading, error, tooltip): (
@@ -1190,11 +1275,26 @@ fn render_entry(
         }
         Node::Connection(_) => unreachable!(),
     };
+    // Show the tooltip only when it adds text: a name that the row cuts, a
+    // comment, or an error.
+    let label_key = child_id(&id, "label");
+    let detail_key = child_id(&id, "detail");
+    let rem = window.rem_size();
+    let has_comment = match node {
+        Node::Relation { comment, .. } | Node::Column { comment, .. } => comment.is_some(),
+        _ => false,
+    };
+    let shows_tooltip = !*menu_open
+        && (has_comment
+            || error.is_some()
+            || context.is_truncated(&label_key, &label, rem * 0.875, window, cx)
+            || detail.as_deref().is_some_and(|detail| {
+                context.is_truncated(&detail_key, detail, rem * 0.75, window, cx)
+            }));
     let menu_id = id.clone();
-    h_flex()
+    let row = h_flex()
         .id(id.clone())
-        .w_full()
-        .h(ui_px(ROW_HEIGHT))
+        .size_full()
         .pl(indent)
         .pr_2()
         .gap_1()
@@ -1223,16 +1323,26 @@ fn render_entry(
                     )
                 }),
         )
-        .child(div().flex_1().min_w_0().truncate().child(label))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(label)
+                .on_prepaint(context.record_width(label_key)),
+        )
         .when_some(detail, |el, detail| {
             el.child(
                 div()
+                    .relative()
                     .flex_shrink_0()
                     .max_w(ui_px(120.))
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(detail),
+                    .child(detail)
+                    .on_prepaint(context.record_width(detail_key)),
             )
         })
         .when(loading, |el| {
@@ -1245,7 +1355,7 @@ fn render_entry(
                     .text_color(cx.theme().danger),
             )
         })
-        .when_some(tooltip, |el, tooltip| {
+        .when_some(tooltip.filter(|_| shows_tooltip), |el, tooltip| {
             el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
         .on_mouse_down(MouseButton::Left, focus)
@@ -1259,7 +1369,12 @@ fn render_entry(
                     })
                 });
             }
-        })
+        });
+    div()
+        .w_full()
+        .h(ui_px(ROW_HEIGHT))
+        .py_0p5()
+        .child(row)
         .into_any_element()
 }
 
@@ -1294,6 +1409,7 @@ fn connection_row(
     row: &ConnectionRow,
     state: TreeEntryState,
     disclosure: Div,
+    menu_open: bool,
     weak: &WeakEntity<Qrow>,
     cx: &App,
 ) -> Stateful<Div> {
@@ -1365,7 +1481,9 @@ fn connection_row(
                     )
                 }),
         )
-        .tooltip(format!("{}\n{}", row.name, row.tooltip))
+        .when(!menu_open, |button| {
+            button.tooltip(format!("{}\n{}", row.name, row.tooltip))
+        })
         .on_click({
             let weak = weak.clone();
             move |_, window, cx| {

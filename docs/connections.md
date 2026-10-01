@@ -69,9 +69,10 @@ name and its type. A schema row shows the number of its tables and views.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
   connection puts the cursor in the SQL editor.
-- Point to a row to see its full name, which a narrow sidebar can cut. The
-  tooltip also shows the comment of a table, a view, or a column, and the
-  error of a failed refresh.
+- Point to a row to see its full name when the sidebar cuts it. A tooltip
+  also shows the comment of a table, a view, or a column, and the error of a
+  failed refresh. A row whose name fits and that has no comment or error
+  shows no tooltip. The tree shows no tooltips while a context menu is open.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
 shows this copy, also when the connection has no session. Qrow reads the copy
