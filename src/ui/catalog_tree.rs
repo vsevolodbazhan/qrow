@@ -67,6 +67,21 @@ pub(super) enum Node {
     },
 }
 
+impl Node {
+    /// The name that Copy gives and the name for SQL, for a node with a name.
+    fn names(&self) -> Option<(String, String)> {
+        match self {
+            Node::Schema { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Relation { schema, name, .. } => {
+                let qualified = qualified_name(schema, name);
+                Some((qualified.clone(), qualified))
+            }
+            Node::Column { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Connection(_) | Node::Notice { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Tone {
     Muted,
@@ -315,7 +330,9 @@ impl Builder<'_> {
         }
         let searching = !self.search.is_empty();
         for (name, schema) in &catalog.schemas {
-            if self.matches >= MAX_SEARCH_MATCHES {
+            // The match limit applies only to a search. Without a search,
+            // every name matches the empty text.
+            if searching && self.matches >= MAX_SEARCH_MATCHES {
                 break;
             }
             let schema_matches = self.matches(name);
@@ -327,7 +344,7 @@ impl Builder<'_> {
             if searching && !schema_matches && !relation_matches {
                 continue;
             }
-            if schema_matches {
+            if searching && schema_matches {
                 self.matches += 1;
             }
             let item_id = schema_id(profile, name);
@@ -395,10 +412,10 @@ impl Builder<'_> {
                     if filtered && !self.matches(name) {
                         continue;
                     }
-                    if self.matches >= MAX_SEARCH_MATCHES {
-                        break;
-                    }
                     if filtered {
+                        if self.matches >= MAX_SEARCH_MATCHES {
+                            break;
+                        }
                         self.matches += 1;
                     }
                     let item_id = relation_id(profile, schema, name);
@@ -756,6 +773,26 @@ impl Qrow {
         });
     }
 
+    /// The names of the row that the tree selects.
+    fn selected_catalog_names(&self, cx: &App) -> Option<(String, String)> {
+        let state = self.catalog.state.read(cx);
+        self.catalog.node(&state.selected_item()?.id)?.names()
+    }
+
+    /// Copies the name of the selected row, like Copy Name in its menu.
+    pub(super) fn copy_catalog_name(&mut self, cx: &mut Context<Self>) {
+        if let Some((name, _)) = self.selected_catalog_names(cx) {
+            cx.write_to_clipboard(ClipboardItem::new_string(name));
+        }
+    }
+
+    /// Inserts the name of the selected row, like Insert into Editor in its menu.
+    pub(super) fn insert_catalog_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((_, insert)) = self.selected_catalog_names(cx) {
+            self.insert_into_editor(insert, window, cx);
+        }
+    }
+
     pub(super) fn open_catalog_menu(
         &mut self,
         id: SharedString,
@@ -766,13 +803,11 @@ impl Qrow {
         let Some(node) = self.catalog.node(&id).cloned() else {
             return;
         };
-        let (profile, scope, name, insert) = match &node {
-            Node::Schema { profile, name, .. } => (
-                *profile,
-                Some(Scope::Schema(name.clone())),
-                name.clone(),
-                quote_identifier(name),
-            ),
+        let Some((name, insert)) = node.names() else {
+            return;
+        };
+        let (profile, scope) = match &node {
+            Node::Schema { profile, name, .. } => (*profile, Some(Scope::Schema(name.clone()))),
             Node::Relation {
                 profile,
                 schema,
@@ -781,12 +816,8 @@ impl Qrow {
             } => (
                 *profile,
                 Some(Scope::Relation(schema.clone(), name.clone())),
-                qualified_name(schema, name),
-                qualified_name(schema, name),
             ),
-            Node::Column { profile, name, .. } => {
-                (*profile, None, name.clone(), quote_identifier(name))
-            }
+            Node::Column { profile, .. } => (*profile, None),
             Node::Connection(_) | Node::Notice { .. } => return,
         };
         let refreshing = scope.as_ref().is_some_and(|scope| {
@@ -930,6 +961,12 @@ impl Qrow {
                 div()
                     .id("connections-list")
                     .test_support()
+                    .on_action(
+                        cx.listener(|this, _: &CopyCatalogName, _, cx| this.copy_catalog_name(cx)),
+                    )
+                    .on_action(cx.listener(|this, _: &InsertCatalogName, window, cx| {
+                        this.insert_catalog_name(window, cx)
+                    }))
                     .flex_1()
                     .min_h_0()
                     .pt_1()
@@ -1069,9 +1106,9 @@ fn render_entry(
         }
         Node::Connection(_) => unreachable!(),
     };
+    // A double-click on a schema only expands and collapses it.
     let insertion = match node {
-        Node::Relation { schema, name, .. } => Some(qualified_name(schema, name)),
-        Node::Column { name, .. } => Some(quote_identifier(name)),
+        Node::Relation { .. } | Node::Column { .. } => node.names().map(|(_, insert)| insert),
         _ => None,
     };
     let menu_id = id.clone();

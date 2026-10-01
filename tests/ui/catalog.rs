@@ -358,3 +358,70 @@ fn hidden_schemas_leave_the_tree_when_the_connection_is_saved(cx: &mut TestAppCo
     });
     assert_eq!(app.credentials.reads(), 0);
 }
+
+#[gpui_kit::test]
+fn the_search_limit_does_not_apply_without_a_search(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    let names: Vec<String> = (0..600).map(|n| format!("schema_{n:03}")).collect();
+    let relations = [table("orders", RelationKind::Table)];
+    let schemas: Vec<(&str, Option<&[RelationEntry]>)> = names
+        .iter()
+        .map(|name| (name.as_str(), Some(&relations[..])))
+        .collect();
+    cache(&directory, &profile, &schemas);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    wait_shows(&app, cx, "schema_000");
+    app.update(cx, |window, _| {
+        assert!(!shows(window, "Refine your search"));
+    });
+    // The 600th schema is in the tree: a search for its table finds it.
+    app.fill_labelled(cx, "Search Tables", "schema_599");
+    wait_shows(&app, cx, "schema_599");
+    app.fill_labelled(cx, "Search Tables", "");
+    app.wait_until(cx, "the full tree", Duration::from_secs(10), |window, _| {
+        labelled(window, "schema_000").is_some() && !shows(window, "Refine your search")
+    });
+}
+
+#[gpui_kit::test]
+fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+
+    // A click selects the row and focuses the tree. Down moves to the next row.
+    app.click_labelled(cx, "booking_id BIGINT");
+    app.press(cx, "down");
+    app.press(cx, "cmd-c");
+    app.settle(cx);
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("gate")
+    );
+    app.press(cx, "shift-enter");
+    app.wait_until(
+        cx,
+        "the inserted column",
+        Duration::from_secs(10),
+        |_, _| app.saved().tabs[0].sql == "gate",
+    );
+}

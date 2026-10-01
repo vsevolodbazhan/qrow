@@ -67,6 +67,8 @@ actions!(
         DecreaseUiScale,
         SaveConnection,
         SubmitRename,
+        CopyCatalogName,
+        InsertCatalogName,
         Quit
     ]
 );
@@ -105,6 +107,16 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
+        KeyBinding::new(
+            "cmd-c",
+            CopyCatalogName,
+            Some(gpui_kit::base::tree_key_context()),
+        ),
+        KeyBinding::new(
+            "shift-enter",
+            InsertCatalogName,
+            Some(gpui_kit::base::tree_key_context()),
+        ),
     ]);
     set_menus(cx, false);
 }

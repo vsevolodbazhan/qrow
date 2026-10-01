@@ -126,8 +126,13 @@ Right-click a schema, a table, a view, or a column, then select:
 - **Insert into Editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
-Double-click a table, a view, or a column to insert its name. Qrow adds
-backticks to a name that is not a plain identifier.
+Double-click a table, a view, or a column to insert its name. You can also
+use the keyboard. Select a row in the tree, then:
+
+- Press **⌘C** to copy its name.
+- Press **Shift-Enter** to insert its name into the SQL editor.
+
+Qrow adds backticks to a name that is not a plain identifier.
 
 ### Show or hide schemas
 
