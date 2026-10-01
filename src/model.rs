@@ -320,8 +320,40 @@ pub const MAX_SCHEMA_PATTERNS: usize = 100;
 /// The maximum length of one schema pattern, in characters.
 pub const MAX_SCHEMA_PATTERN: usize = 256;
 
-/// Which schemas the schema tree and the assistant show for a connection.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+/// The valid automatic refresh periods, in minutes (5 minutes to 7 days).
+pub const CATALOG_REFRESH_MINUTES: std::ops::RangeInclusive<u32> = 5..=10_080;
+/// The valid refresh timeouts, in minutes (1 minute to 1 day).
+pub const CATALOG_TIMEOUT_MINUTES: std::ops::RangeInclusive<u32> = 1..=1_440;
+
+/// When Qrow reads the catalog of a connection without a request.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CatalogRefresh {
+    /// Only an explicit Refresh reads the catalog.
+    Manual,
+    /// Read the connection again after `minutes`, but only while a tab of
+    /// the connection has a live session.
+    WhileConnected { minutes: u32 },
+}
+
+impl CatalogRefresh {
+    /// The refresh period that a new connection uses.
+    pub const fn default_minutes() -> u32 {
+        60
+    }
+}
+
+impl Default for CatalogRefresh {
+    fn default() -> Self {
+        Self::WhileConnected {
+            minutes: Self::default_minutes(),
+        }
+    }
+}
+
+/// Which schemas the schema tree and the assistant show for a connection,
+/// and when Qrow reads them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct CatalogSettings {
     /// Glob patterns of the schemas to show. Empty shows all schemas.
@@ -330,10 +362,39 @@ pub struct CatalogSettings {
     pub exclude: Vec<String>,
     /// Record the requests of each schema refresh in Logs.
     pub log_refreshes: bool,
+    pub refresh: CatalogRefresh,
+    /// The longest time of one refresh, manual or automatic.
+    pub timeout_minutes: u32,
+}
+
+impl Default for CatalogSettings {
+    fn default() -> Self {
+        Self {
+            include: Vec::new(),
+            exclude: Vec::new(),
+            log_refreshes: false,
+            refresh: CatalogRefresh::default(),
+            timeout_minutes: 30,
+        }
+    }
 }
 
 impl CatalogSettings {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if let CatalogRefresh::WhileConnected { minutes } = self.refresh {
+            anyhow::ensure!(
+                CATALOG_REFRESH_MINUTES.contains(&minutes),
+                "Refresh period must be between {} and {} minutes.",
+                CATALOG_REFRESH_MINUTES.start(),
+                CATALOG_REFRESH_MINUTES.end()
+            );
+        }
+        anyhow::ensure!(
+            CATALOG_TIMEOUT_MINUTES.contains(&self.timeout_minutes),
+            "Refresh timeout must be between {} and {} minutes.",
+            CATALOG_TIMEOUT_MINUTES.start(),
+            CATALOG_TIMEOUT_MINUTES.end()
+        );
         for patterns in [&self.include, &self.exclude] {
             anyhow::ensure!(
                 patterns.len() <= MAX_SCHEMA_PATTERNS,
@@ -821,6 +882,46 @@ mod tests {
             serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000001","name":"a","host":"h","port":1,"username":"u","database":"d","parameters":{}}"#)
                 .unwrap();
         assert_eq!(restored.catalog, CatalogSettings::default());
+    }
+
+    #[test]
+    fn schema_refresh_policy_defaults_and_bounds() {
+        let defaults = CatalogSettings::default();
+        assert_eq!(
+            defaults.refresh,
+            CatalogRefresh::WhileConnected { minutes: 60 }
+        );
+        assert_eq!(defaults.timeout_minutes, 30);
+        // Phase 1 settings have no policy fields and get the defaults.
+        let restored: CatalogSettings =
+            serde_json::from_str(r#"{"include":["a"],"exclude":[],"log_refreshes":true}"#).unwrap();
+        assert_eq!(restored.refresh, defaults.refresh);
+        assert_eq!(restored.timeout_minutes, 30);
+        let manual = CatalogSettings {
+            refresh: CatalogRefresh::Manual,
+            ..defaults.clone()
+        };
+        let text = serde_json::to_string(&manual).unwrap();
+        assert!(text.contains(r#""refresh":{"mode":"manual"}"#), "{text}");
+        assert_eq!(
+            serde_json::from_str::<CatalogSettings>(&text).unwrap(),
+            manual
+        );
+
+        for (minutes, valid) in [(4, false), (5, true), (10_080, true), (10_081, false)] {
+            let settings = CatalogSettings {
+                refresh: CatalogRefresh::WhileConnected { minutes },
+                ..defaults.clone()
+            };
+            assert_eq!(settings.validate().is_ok(), valid, "{minutes}");
+        }
+        for (minutes, valid) in [(0, false), (1, true), (1_440, true), (1_441, false)] {
+            let settings = CatalogSettings {
+                timeout_minutes: minutes,
+                ..defaults.clone()
+            };
+            assert_eq!(settings.validate().is_ok(), valid, "{minutes}");
+        }
     }
 
     #[test]

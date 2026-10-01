@@ -2,11 +2,12 @@
 //! connections that no test reaches.
 use crate::support::{
     MemoryCredentials, TestApp, connection_row, label, labelled, offline_profile, press_at, shows,
+    value,
 };
 use gpui_kit::TestAppContext;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
-    model::{CatalogSettings, Profile, SavedTab, Workspace},
+    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, Workspace},
     storage::{self, Credentials},
 };
 use std::{collections::BTreeMap, net::TcpListener, time::Duration};
@@ -628,4 +629,67 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     app.choose(cx, "popup-menu", "Collapse All");
     gone(&app, cx, "bookings");
     wait_shows(&app, cx, "avia");
+}
+
+#[gpui_kit::test]
+fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let wait_error = |cx: &mut TestAppContext, expected: &str| {
+        app.wait_until(cx, expected, Duration::from_secs(10), |window, _| {
+            label(window, "connection-form-error-accessibility").as_deref() == Some(expected)
+        });
+    };
+    let edit = |cx: &mut TestAppContext| {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit Connection…");
+        app.scroll_to(cx, "connection-refresh-timeout");
+    };
+
+    // The defaults: refresh every 60 minutes while connected, stop after 30.
+    edit(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-refresh").as_deref(),
+            Some("While connected")
+        );
+        assert_eq!(
+            value(window, "connection-refresh-period").as_deref(),
+            Some("60")
+        );
+        assert_eq!(
+            value(window, "connection-refresh-timeout").as_deref(),
+            Some("30")
+        );
+    });
+    app.fill(cx, "connection-refresh-period", "4");
+    app.click(cx, "save-profile");
+    wait_error(cx, "Refresh period must be between 5 and 10080 minutes.");
+    app.fill(cx, "connection-refresh-period", "15");
+    app.fill(cx, "connection-refresh-timeout", "0");
+    app.click(cx, "save-profile");
+    wait_error(cx, "Refresh timeout must be between 1 and 1440 minutes.");
+    app.fill(cx, "connection-refresh-timeout", "45");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the saved policy", Duration::from_secs(10), |_, _| {
+        let saved = &app.saved().profiles[0].catalog;
+        saved.refresh == CatalogRefresh::WhileConnected { minutes: 15 }
+            && saved.timeout_minutes == 45
+    });
+
+    // Manual hides the period and keeps the timeout.
+    edit(cx);
+    app.select(cx, "connection-schema-refresh", "Manual");
+    app.wait_gone(cx, "connection-refresh-period");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the manual policy", Duration::from_secs(10), |_, _| {
+        let saved = &app.saved().profiles[0].catalog;
+        saved.refresh == CatalogRefresh::Manual && saved.timeout_minutes == 45
+    });
 }

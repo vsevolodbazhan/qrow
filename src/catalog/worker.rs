@@ -2,7 +2,8 @@
 //!
 //! The worker opens its own session for the queued refreshes and closes it
 //! when the queue is empty, so it never changes the idle timer or the result
-//! cursor of a query tab.
+//! cursor of a query tab. While a tab of the connection has a live session,
+//! the worker also refreshes the connection when its refresh period passes.
 
 use super::{Catalog, MetadataRows, Scope, now, parse_columns, parse_relations, parse_schemas};
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
         hive::HiveConnector,
     },
-    model::{MAX_RESULT_BYTES, Profile, Row},
+    model::{CatalogRefresh, MAX_RESULT_BYTES, Profile, Row},
     storage::{self, Credentials},
     worker::PasswordProvider,
 };
@@ -22,10 +23,10 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc,
+        mpsc::{self, RecvTimeoutError},
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 /// The rows that one fetch of a catalog request asks for.
@@ -36,6 +37,29 @@ const MAX_METADATA_ROWS: usize = 200_000;
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
 /// Identifies the Logs entries of one refresh across all workers.
 static NEXT_BATCH: AtomicU64 = AtomicU64::new(1);
+/// The length of one minute of the refresh period and timeout.
+pub const MINUTE: Duration = Duration::from_secs(60);
+/// The longest wait before the worker checks the clock for an automatic
+/// refresh again. A wait does not count the time that the computer sleeps.
+const CLOCK_CHECK: Duration = Duration::from_secs(60);
+
+/// When the next automatic refresh is due, or `None` if no refresh is due.
+/// `last` is the start of the last connection refresh. A catalog that Qrow
+/// never read is due at once.
+pub fn refresh_due(
+    refresh: CatalogRefresh,
+    warm: bool,
+    last: Option<SystemTime>,
+    minute: Duration,
+) -> Option<SystemTime> {
+    let CatalogRefresh::WhileConnected { minutes } = refresh else {
+        return None;
+    };
+    if !warm {
+        return None;
+    }
+    Some(last.map_or(UNIX_EPOCH, |last| last + minute * minutes))
+}
 
 /// The refreshes that a worker performs.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -71,6 +95,8 @@ enum Command {
     RefreshIfUnloaded,
     Cancel,
     UpdateProfile(Box<Profile>),
+    /// Whether a tab of the connection has a live session.
+    SetWarm(bool),
     Delete,
     Shutdown,
 }
@@ -103,15 +129,19 @@ impl CatalogWorker {
             wake,
             Arc::new(HiveConnector),
             Arc::new(move |profile| credentials.password(profile.id)),
+            MINUTE,
         )
     }
 
+    /// `minute` is the length of one minute of the refresh period and
+    /// timeout. Tests make it shorter.
     pub fn with_connector(
         profile: Profile,
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
         passwords: PasswordProvider,
+        minute: Duration,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
@@ -141,6 +171,11 @@ impl CatalogWorker {
             batch: 0,
             failures: 0,
             wake,
+            warm: false,
+            minute,
+            last_refresh: None,
+            deadline: None,
+            automatic: false,
         };
         thread::spawn(move || {
             runner.run();
@@ -166,6 +201,12 @@ impl CatalogWorker {
     /// decides after it loads the cache, so a cached catalog is not read again.
     pub fn refresh_if_unloaded(&self) {
         let _ = self.tx.send(Command::RefreshIfUnloaded);
+    }
+
+    /// Tell the worker whether a tab of the connection has a live session.
+    /// Only then does it refresh the connection by itself.
+    pub fn set_warm(&self, warm: bool) {
+        let _ = self.tx.send(Command::SetWarm(warm));
     }
 
     /// Stop the refresh in progress and remove the waiting refreshes.
@@ -224,6 +265,11 @@ enum Interrupt {
     Stopped,
     /// The connection failed. The message goes to the refreshed node.
     Unavailable(String),
+    /// The refresh took longer than the timeout. The catalog keeps its data.
+    TimedOut,
+    /// No tab of the connection has a live session any more, so an
+    /// automatic refresh stops. The catalog keeps its data.
+    Cold,
 }
 
 struct Runner {
@@ -253,6 +299,15 @@ struct Runner {
     /// The nodes that the refresh in progress could not read.
     failures: usize,
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// Whether a tab of the connection has a live session.
+    warm: bool,
+    minute: Duration,
+    /// When the last connection refresh started.
+    last_refresh: Option<SystemTime>,
+    /// When the refresh in progress times out.
+    deadline: Option<Instant>,
+    /// The refresh in progress started by itself, not at a request.
+    automatic: bool,
 }
 
 fn describe_scope(scope: &Scope) -> String {
@@ -316,6 +371,18 @@ fn format_duration(duration: Duration) -> String {
     format!("{:.2} s", duration.as_secs_f64())
 }
 
+fn past(deadline: Option<Instant>) -> bool {
+    deadline.is_some_and(|deadline| Instant::now() >= deadline)
+}
+
+fn format_minutes(minutes: u32) -> String {
+    if minutes == 1 {
+        "1 minute".into()
+    } else {
+        format!("{minutes} minutes")
+    }
+}
+
 impl Runner {
     fn run(mut self) {
         if let Some(cached) = self
@@ -326,11 +393,13 @@ impl Runner {
         {
             self.catalog = Arc::new(cached);
             Arc::make_mut(&mut self.catalog).retain(&self.profile.catalog);
+            self.last_refresh = self
+                .catalog
+                .fetched_at
+                .map(|at| UNIX_EPOCH + Duration::from_secs(at));
         }
         self.publish(true);
-        'commands: while let Some(command) =
-            self.deferred.pop_front().or_else(|| self.rx.recv().ok())
-        {
+        'commands: while let Some(command) = self.next_command() {
             if !self.handle(command) {
                 break;
             }
@@ -346,12 +415,20 @@ impl Runner {
                 self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
                 self.failures = 0;
                 let started = Instant::now();
+                let timeout = self.profile.catalog.timeout_minutes;
+                self.deadline = Some(started + self.minute * timeout);
                 self.log(
                     Severity::Info,
-                    format!("Started a schema refresh of {}", describe_scope(&scope)),
+                    format!(
+                        "Started {} schema refresh of {}",
+                        if self.automatic { "an automatic" } else { "a" },
+                        describe_scope(&scope)
+                    ),
                     None,
                 );
                 let result = self.refresh(&scope);
+                self.deadline = None;
+                self.automatic = false;
                 let duration = started.elapsed();
                 let outcome = match &result {
                     Ok(()) if self.failures == 1 => {
@@ -366,13 +443,21 @@ impl Runner {
                     Err(Interrupt::Unavailable(message)) => {
                         format!("Schema refresh failed: {message}")
                     }
+                    Err(Interrupt::TimedOut) => {
+                        format!("Schema refresh stopped after {}", format_minutes(timeout))
+                    }
+                    Err(Interrupt::Cold) => {
+                        "Schema refresh stopped because no tab of the connection is connected"
+                            .to_owned()
+                    }
                 };
-                let severity =
-                    if self.failures > 0 || matches!(result, Err(Interrupt::Unavailable(_))) {
-                        Severity::Error
-                    } else {
-                        Severity::Info
-                    };
+                let severity = if self.failures > 0
+                    || matches!(result, Err(Interrupt::Unavailable(_) | Interrupt::TimedOut))
+                {
+                    Severity::Error
+                } else {
+                    Severity::Info
+                };
                 self.log(
                     severity,
                     format!(
@@ -396,6 +481,13 @@ impl Runner {
                             self.update(|catalog| catalog.set_error(&scope, message.clone()));
                         }
                     }
+                    Err(Interrupt::TimedOut) => {
+                        let message = format!("Refresh stopped after {}", format_minutes(timeout));
+                        self.update(|catalog| catalog.set_error(&scope, message));
+                        // The cancelled request can still hold the session.
+                        self.close_session();
+                    }
+                    Err(Interrupt::Cold) => {}
                 }
                 self.save();
             }
@@ -404,6 +496,39 @@ impl Runner {
             self.publish(true);
         }
         self.close_session();
+    }
+
+    /// Wait for the next command. While an automatic refresh is pending,
+    /// wake at its time and return a connection refresh.
+    fn next_command(&mut self) -> Option<Command> {
+        if let Some(command) = self.deferred.pop_front() {
+            return Some(command);
+        }
+        loop {
+            let Some(due) = refresh_due(
+                self.profile.catalog.refresh,
+                self.warm,
+                self.last_refresh,
+                self.minute,
+            ) else {
+                return self.rx.recv().ok();
+            };
+            // A due time in the past is an error, which means no wait.
+            let wait = due.duration_since(SystemTime::now()).unwrap_or_default();
+            if wait.is_zero() {
+                // A waiting command can change the policy or the live session.
+                if let Ok(command) = self.rx.try_recv() {
+                    return Some(command);
+                }
+                self.automatic = true;
+                return Some(Command::Refresh(Scope::Connection));
+            }
+            match self.rx.recv_timeout(wait.min(CLOCK_CHECK)) {
+                Ok(command) => return Some(command),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return None,
+            }
+        }
     }
 
     /// Apply one command. Returns `false` when the worker must stop.
@@ -438,6 +563,7 @@ impl Runner {
                 if !self.catalog.describes(&profile) {
                     self.close_session();
                     self.catalog = Arc::new(Catalog::new(&profile));
+                    self.last_refresh = None;
                     self.dirty = false;
                     if let Some(path) = &self.cache {
                         storage::delete_catalog(path);
@@ -454,6 +580,7 @@ impl Runner {
                 self.profile = *profile;
                 self.publish(true);
             }
+            Command::SetWarm(warm) => self.warm = warm,
             Command::Delete => {
                 if let Some(path) = &self.cache {
                     storage::delete_catalog(path);
@@ -481,7 +608,24 @@ impl Runner {
         if self.interrupted || self.cancelled.load(Ordering::SeqCst) {
             return Err(Interrupt::Cancelled);
         }
+        if self.expired() {
+            return Err(Interrupt::TimedOut);
+        }
+        if self.automatic && !self.warm {
+            return Err(Interrupt::Cold);
+        }
         Ok(())
+    }
+
+    /// Whether the refresh in progress took longer than its timeout.
+    fn expired(&self) -> bool {
+        past(self.deadline)
+    }
+
+    /// Whether the refresh in progress must stop: it timed out, or it is
+    /// automatic and the connection has no live session.
+    fn must_stop(&self) -> bool {
+        self.expired() || (self.automatic && !self.warm)
     }
 
     fn refresh(&mut self, scope: &Scope) -> Result<(), Interrupt> {
@@ -493,6 +637,7 @@ impl Runner {
     }
 
     fn refresh_connection(&mut self) -> Result<(), Interrupt> {
+        self.last_refresh = Some(SystemTime::now());
         let names = match self.read_parsed(&MetadataRequest::Schemas, parse_schemas)? {
             Ok(names) => names,
             Err(message) => {
@@ -502,7 +647,16 @@ impl Runner {
         };
         let settings = self.profile.catalog.clone();
         self.update(|catalog| catalog.apply_schemas(names, &settings, now()));
-        let schemas: Vec<String> = self.catalog.schemas.keys().cloned().collect();
+        // The schemas that Qrow read longest ago go first. A refresh that the
+        // timeout stops then does not leave the same schemas old each time.
+        let mut schemas: Vec<(Option<u64>, String)> = self
+            .catalog
+            .schemas
+            .iter()
+            .map(|(name, schema)| (schema.fetched_at, name.clone()))
+            .collect();
+        schemas.sort();
+        let schemas: Vec<String> = schemas.into_iter().map(|(_, name)| name).collect();
         self.status.total = schemas.len();
         self.publish(true);
         // Each schema is one step: its relations, then their columns. No
@@ -714,6 +868,10 @@ impl Runner {
                 "The catalog request was cancelled"
             );
             self.accept_refreshes();
+            if self.must_stop() {
+                Self::cancel_request(&cancellation);
+                anyhow::bail!("The catalog request was stopped");
+            }
             thread::sleep(POLL_INTERVAL);
         };
         let session = self.session.as_mut().unwrap();
@@ -750,17 +908,30 @@ impl Runner {
             if self.cancelled.load(Ordering::SeqCst) {
                 anyhow::bail!("The catalog request was cancelled");
             }
+            if past(self.deadline) || (self.automatic && !self.warm) {
+                Self::cancel_request(&cancellation);
+                anyhow::bail!("The catalog request was stopped");
+            }
         }
         session.close_operation()?;
         Ok(MetadataRows { columns, rows })
     }
 
+    /// Cancel a request through the separate cancel transport, off this thread.
+    fn cancel_request(cancellation: &Arc<dyn Cancellation>) {
+        let cancellation = cancellation.clone();
+        thread::spawn(move || {
+            let _ = cancellation.cancel();
+        });
+    }
+
     /// Queue the refreshes that arrived while a request runs, so the UI shows
-    /// them as waiting. Keep the other commands for the next checkpoint.
+    /// them as waiting, and apply the live-session state. Keep the other
+    /// commands for the next checkpoint.
     fn accept_refreshes(&mut self) {
         while let Ok(command) = self.rx.try_recv() {
             match command {
-                Command::Refresh(_) | Command::RefreshIfUnloaded => {
+                Command::Refresh(_) | Command::RefreshIfUnloaded | Command::SetWarm(_) => {
                     self.handle(command);
                 }
                 command => self.deferred.push_back(command),

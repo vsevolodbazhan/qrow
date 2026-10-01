@@ -16,7 +16,8 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 5. Enter the initial database.
 6. Enter session parameters as a JSON object with string values.
 7. Optional: Enter [schema patterns](#show-or-hide-schemas) in **Show schemas**
-   and **Hide schemas**.
+   and **Hide schemas**, and set the
+   [automatic schema refresh](#refresh-schemas-automatically).
 8. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
@@ -38,7 +39,7 @@ has a new profile identifier, a unique name based on the source name, and
 requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name, the Connection Lifecycle fields, or the schema patterns. The worker applies the new lifecycle
+name, the Connection Lifecycle fields, or the Schemas fields. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -77,8 +78,8 @@ name and its type. A schema row shows the number of its tables and views.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
 shows this copy, also when the connection has no session. Qrow reads the copy
-when you first expand the connection or search the tree. Qrow does not read
-the copy or open a session at startup.
+when you first expand the connection, search the tree, or connect a tab of
+the connection. Qrow does not read the copy or open a session at startup.
 
 ### Refresh schemas
 
@@ -96,13 +97,20 @@ not change the idle timer, the keep-alive, or the results of a tab.
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
 A connection refresh reads one schema at a time: first its tables, then their
-columns. The progress row shows the number of schemas that are done. A
-connection with many schemas or tables can need many minutes. To make it
-faster, hide the schemas that you do not use.
+columns. It starts with the schemas that Qrow read longest ago. The progress
+row shows the number of schemas that are done. A connection with many schemas
+or tables can need many minutes. To make it faster, hide the schemas that you
+do not use.
 
-Qrow does not start a session to read schemas by itself. When a tab of the
-connection has a live session, Qrow reads the missing data when you expand a
-row:
+Each refresh stops when it takes longer than **Refresh timeout** in the
+connection settings. The default is 30 minutes. The tree keeps what the
+refresh read before it stopped, and the refreshed row shows **Refresh stopped
+after 30 minutes**. The next connection refresh starts with the schemas that
+it did not read.
+
+Qrow does not start a session to read schemas when no tab of the connection
+has a live session. When a tab of the connection has a live session, Qrow
+reads the missing data when you expand a row:
 
 - A connection that Qrow never read.
 - A schema without its list of tables.
@@ -116,6 +124,33 @@ row to read the first line of the error. The Logs of each tab of the
 connection show the full error. The tree keeps the data that it had before the
 refresh. If Qrow cannot connect, it stops the refreshes that wait for that
 connection.
+
+### Refresh schemas automatically
+
+By default, Qrow refreshes the schemas of a connection each 60 minutes, but
+only while a tab of the connection has a live session. The refresh then uses
+the engine that the tab already started. Qrow never opens a session for an
+automatic refresh on a connection without one.
+
+- When a tab of a connection gets a live session and the last connection
+  refresh is older than the period, Qrow refreshes the connection at once. A
+  connection that Qrow never read is always older than the period. Thus, the
+  first query of a connection fills its tree.
+- While a tab of the connection stays connected, Qrow refreshes the connection
+  each time the period passes. The period starts at the start of the last
+  connection refresh, also a manual refresh, or a refresh that failed or
+  stopped.
+- When no tab of the connection has a live session any more, Qrow stops an
+  automatic refresh in progress. The tree keeps what the refresh read.
+
+To change the policy, open the connection settings:
+
+- **Schema refresh**: **While connected** refreshes automatically. **Manual**
+  refreshes only when you select **Refresh**.
+- **Refresh period**: the minutes between automatic refreshes, from 5 to
+  10,080 (7 days). This field shows only for **While connected**.
+- **Refresh timeout**: the longest time of one refresh, manual or automatic,
+  from 1 to 1,440 minutes (1 day).
 
 ### Search the tree
 
@@ -151,14 +186,15 @@ To see the requests of each refresh, open the connection settings and set
 **Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
 records each refresh in the Logs of each tab of the connection:
 
-- The start of the refresh.
+- The start of the refresh. An automatic refresh starts with **Started an
+  automatic schema refresh**.
 - The session that the refresh opens.
 - Each request, with its duration and the number of schemas, relations, or
   columns that it returned. For example, `List columns of all relations in
   sales: 769 columns` is one request for the columns of all tables and views
   in the schema `sales`.
-- The result of the refresh: completed, cancelled, or failed. If some schemas
-  or tables could not be read, the result tells how many.
+- The result of the refresh: completed, cancelled, stopped, or failed. If some
+  schemas or tables could not be read, the result tells how many.
 
 When the option is **Disabled**, Logs show only the errors of a refresh: each
 failed request and the result of a failed refresh, with the full error.
@@ -190,8 +226,8 @@ use.
 ### Schema limitations
 
 - With the Kyuubi share level `CONNECTION`, each refresh session starts its own
-  Spark engine. The default share level, `USER`, uses the engine of your
-  other sessions.
+  Spark engine, also for an automatic refresh. The default share level,
+  `USER`, uses the engine of your other sessions.
 - The tree does not show temporary views, because they belong to the session
   of a tab.
 - The tree does not show which columns are partition columns. HiveServer2 does

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 mod worker;
 
-pub use worker::{CatalogWorker, Event, Status};
+pub use worker::{CatalogWorker, Event, MINUTE, Status, refresh_due};
 
 /// The cache format. Qrow discards a cache with another version.
 pub const CATALOG_VERSION: u32 = 1;

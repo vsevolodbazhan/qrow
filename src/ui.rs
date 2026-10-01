@@ -23,10 +23,10 @@ use crate::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
-        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
-        SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION,
-        Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
+        AssistantWorkspace, CatalogRefresh, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE,
+        MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT,
+        MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP,
+        WORKSPACE_VERSION, Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -39,6 +39,7 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
+    select::SelectEvent,
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -221,6 +222,9 @@ struct ProfileEditor {
     parameters: Entity<TextareaState>,
     idle_behavior: connection_form::ChoiceSelect,
     _idle_behavior_subscription: Subscription,
+    /// Manual or automatic schema refresh.
+    schema_refresh: connection_form::ChoiceSelect,
+    _schema_refresh_subscription: Subscription,
     /// Whether schema refreshes write their requests to Logs.
     refresh_logs: connection_form::ChoiceSelect,
     is_new: bool,
@@ -954,6 +958,7 @@ impl Qrow {
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
         changed |= self.finish_quit(window, cx);
+        self.sync_catalog_warmth();
         if changed {
             cx.notify();
         }
@@ -1366,6 +1371,7 @@ impl Qrow {
         let profile = self.tabs[index].saved.profile;
         let tab_id = self.tabs[index].saved.id;
         self.tabs.remove(index);
+        self.sync_catalog_warmth();
         self.assistant_tab_removed(tab_id, profile);
         if let Some(profile) = profile
             && !self
@@ -2126,6 +2132,11 @@ impl Qrow {
             profile.lifecycle.keep_alive_sql.clone(),
             profile.catalog.include.join(", "),
             profile.catalog.exclude.join(", "),
+            match profile.catalog.refresh {
+                CatalogRefresh::WhileConnected { minutes } => minutes.to_string(),
+                CatalogRefresh::Manual => CatalogRefresh::default_minutes().to_string(),
+            },
+            profile.catalog.timeout_minutes.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2153,6 +2164,18 @@ impl Qrow {
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
+        let schema_refresh = connection_form::schema_refresh_select(
+            profile.catalog.refresh != CatalogRefresh::Manual,
+            window,
+            cx,
+        );
+        // The refresh period shows only for an automatic refresh.
+        let schema_refresh_subscription =
+            cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    cx.notify();
+                }
+            });
         let idle_behavior_subscription =
             cx.subscribe_in(&idle_behavior, window, |_this, _, event, _, cx| {
                 if connection_form::keep_connected_from_event(event).is_some() {
@@ -2163,6 +2186,8 @@ impl Qrow {
             parameters,
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
+            schema_refresh,
+            _schema_refresh_subscription: schema_refresh_subscription,
             refresh_logs,
             profile,
             fields,
@@ -2212,6 +2237,12 @@ impl Qrow {
             profile.catalog.include = connection_form::parse_patterns(&values[10]);
             profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
             profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+            connection_form::parse_refresh_policy(
+                &values[12],
+                &values[13],
+                connection_form::refreshes_automatically(&form.schema_refresh, cx),
+                &mut profile.catalog,
+            )?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),

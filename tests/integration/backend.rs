@@ -618,6 +618,7 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
         Arc::new(|| {}),
         Arc::new(HiveConnector),
         Arc::new(|_| Ok(Zeroizing::new("qrow-test-password".into()))),
+        catalog::MINUTE,
     );
     let mut latest: Option<Arc<catalog::Catalog>> = None;
     let mut refresh = |scope: Scope| -> Result<Arc<catalog::Catalog>> {

@@ -100,6 +100,8 @@ struct CatalogConnection {
     worker: Option<CatalogWorker>,
     catalog: Option<Arc<Catalog>>,
     status: Status,
+    /// The live-session state that the worker last received.
+    warm: bool,
 }
 
 pub(super) struct CatalogTree {
@@ -580,12 +582,14 @@ impl Qrow {
                     worker: None,
                     catalog: Some(Arc::new(demo_catalog(profile))),
                     status: Status::default(),
+                    warm: false,
                 });
             return;
         }
         let Some(saved) = self.profiles.iter().find(|p| p.id == profile).cloned() else {
             return;
         };
+        let warm = self.catalog_warm(profile);
         let connection = self.catalog.connections.entry(profile).or_default();
         if connection.worker.is_some() {
             return;
@@ -597,14 +601,45 @@ impl Qrow {
             .as_deref()
             .filter(|_| self.saver.is_some())
             .map(|workspace| storage::catalog_path(workspace, profile));
-        connection.worker = Some(CatalogWorker::new(
+        let worker = CatalogWorker::new(
             saved,
             cache,
             Arc::new(move || {
                 let _ = wake.try_send(());
             }),
             self.credentials.clone(),
-        ));
+        );
+        worker.set_warm(warm);
+        connection.warm = warm;
+        connection.worker = Some(worker);
+    }
+
+    /// Tell each catalog worker whether a tab of its connection has a live
+    /// session. A connection with automatic refresh gets its worker when it
+    /// first has one, so the worker can refresh a stale catalog.
+    pub(super) fn sync_catalog_warmth(&mut self) {
+        for index in 0..self.profiles.len() {
+            let profile = &self.profiles[index];
+            let id = profile.id;
+            let automatic = profile.catalog.refresh != CatalogRefresh::Manual;
+            let warm = self.catalog_warm(id);
+            let connection = self.catalog.connections.get_mut(&id);
+            match connection.and_then(|connection| {
+                connection
+                    .worker
+                    .as_ref()
+                    .map(|worker| (worker, &mut connection.warm))
+            }) {
+                Some((worker, sent)) => {
+                    if *sent != warm {
+                        worker.set_warm(warm);
+                        *sent = warm;
+                    }
+                }
+                None if warm && automatic => self.ensure_catalog(id),
+                None => {}
+            }
+        }
     }
 
     /// The demo shows the tree of its first connection open to one table.
