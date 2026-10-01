@@ -460,7 +460,7 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement
             el.child(field(
                 "Schema catalog",
                 Some(if shared {
-                    "Connections that read the same metastore share one catalog. Its refresh and schema settings apply to each of them."
+                    "Its refresh and schema settings apply to each connection that uses it. These connections must read the same metastore with the same permissions. Qrow cannot check this."
                 } else {
                     "Only this connection uses the catalog. Connections that read the same metastore can share one."
                 }),

@@ -167,7 +167,7 @@ settings saved with the schema tree but without a choice use Manual.
     catalog keeps the schemas read before the limit). UI test for the form
     fields and their validation. Docs in `connections.md`.
 
-## Phase 2b: shared catalogs
+## Phase 2b: shared catalogs (implemented on feat/shared-catalogs)
 
 Connections that read the same metastore through different users or compute
 clusters (for example analytics-s and analytics-m) can share one catalog.
