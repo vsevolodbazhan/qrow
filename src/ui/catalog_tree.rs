@@ -167,6 +167,15 @@ impl CatalogTree {
             .map(|connection| &connection.status)
     }
 
+    /// The error of the last connection refresh, while no connection
+    /// refresh runs. A collapsed connection shows it too.
+    fn connection_error(&self, profile: Uuid) -> Option<&str> {
+        let running = self
+            .status(profile)
+            .is_some_and(|status| status.active == Some(Scope::Connection));
+        self.catalog(profile)?.error.as_deref().filter(|_| !running)
+    }
+
     /// Whether a refresh of the connection is in progress or waits.
     pub(super) fn is_refreshing(&self, profile: Uuid) -> bool {
         self.status(profile).is_some_and(|status| !status.is_idle())
@@ -526,6 +535,8 @@ struct ConnectionRow {
     busy: bool,
     refreshing: bool,
     unread_error: bool,
+    /// The error of the last connection refresh.
+    refresh_error: bool,
     active: bool,
 }
 
@@ -1028,11 +1039,13 @@ impl Qrow {
                 .iter()
                 .map(|profile| {
                     let id = profile.id;
+                    let refresh_error = self.catalog.connection_error(id);
                     (
                         id,
                         ConnectionRow {
                             name: profile.name.clone(),
-                            tooltip: workspace_view::connection_tooltip(profile),
+                            tooltip: workspace_view::connection_tooltip(profile, refresh_error),
+                            refresh_error: refresh_error.is_some(),
                             busy: self.profile_busy(id),
                             refreshing: self.catalog.is_refreshing(id),
                             unread_error: self
@@ -1583,7 +1596,7 @@ fn connection_row(
     let slot_width = px(context.scale * 28.);
     let has_status = row.busy || row.refreshing || row.unread_error;
     let accessibility_label = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
         row.name,
         if row.busy { ", running" } else { "" },
         if row.refreshing {
@@ -1593,6 +1606,11 @@ fn connection_row(
         },
         if row.unread_error {
             ", unread error"
+        } else {
+            ""
+        },
+        if row.refresh_error {
+            ", schema refresh error"
         } else {
             ""
         }
@@ -1644,7 +1662,9 @@ fn connection_row(
                             .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
                     )
                 })
-                .when(row.unread_error, |el| {
+                // One warning icon covers an unread query error and a
+                // schema refresh error. The tooltip and the label tell which.
+                .when(row.unread_error || row.refresh_error, |el| {
                     el.child(
                         status_slot(format!("connection-error-{id}"), slot_width).child(
                             Icon::new(AssetIconName::TriangleAlert)

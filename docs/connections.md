@@ -104,9 +104,9 @@ do not use.
 
 Each refresh stops when it takes longer than **Refresh timeout** in the
 connection settings. The default is 30 minutes. The tree keeps what the
-refresh read before it stopped, and the refreshed row shows **Refresh stopped
-after 30 minutes**. The next connection refresh starts with the schemas that
-it did not read.
+refresh read before it stopped. The error **Refresh stopped after 30
+minutes** shows like other [refresh errors](#refresh-errors). The next
+connection refresh starts with the schemas that it did not read.
 
 Qrow does not start a session to read schemas when no tab of the connection
 has a live session. When a tab of the connection has a live session, Qrow
@@ -119,11 +119,24 @@ reads the missing data when you expand a row:
 When the connection has no live session, an unread row shows **Not loaded**.
 Click **Refresh** in that row to read it. This opens a session.
 
-If a refresh fails, the row of the failed part shows the error. Point to the
-row to read the first line of the error. The Logs of each tab of the
-connection show the full error. The tree keeps the data that it had before the
-refresh. If Qrow cannot connect, it stops the refreshes that wait for that
-connection.
+#### Refresh errors
+
+If a refresh fails or stops at its timeout, the tree keeps the data that it
+had before the refresh. The error shows on the row of the refreshed part:
+
+- A connection: the connection row shows a warning icon, also when the
+  connection is collapsed. Point to the row to read the first line of the
+  error below the host and the user. The first row under the expanded
+  connection shows the error with **Refresh**. The icon goes away when the
+  next connection refresh starts.
+- A schema, a table, or a view: the row shows a warning icon. Point to the row
+  to read the first line of the error. The first row under the expanded row
+  shows the error with **Refresh**.
+
+The Logs of each tab of the connection show the full error. The connection
+row uses the same warning icon for an unread query error. Only a refresh error
+adds text to the tooltip of the row. If Qrow cannot connect, it stops the
+refreshes that wait for that connection.
 
 ### Refresh schemas automatically
 

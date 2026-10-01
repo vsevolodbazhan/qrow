@@ -506,13 +506,17 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
         "{logs}"
     );
     assert!(logs.contains("Schema refresh failed"), "{logs}");
-    // A refresh error does not mark the connection as having an unread error.
-    app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, connection_row(profile.id)).as_deref(),
-            Some("Unreachable")
-        );
-    });
+    // A refresh error does not mark the connection as having an unread
+    // error. The collapsed connection row shows the refresh error.
+    app.wait_until(
+        cx,
+        "the refresh error",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, connection_row(profile.id)).as_deref()
+                == Some("Unreachable, schema refresh error")
+        },
+    );
 }
 
 #[gpui_kit::test]
