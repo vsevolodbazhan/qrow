@@ -267,7 +267,7 @@ final class Driver {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
     }
-    func press(_ label: String) throws {
+    func press(_ label: String, pointer: Bool = false) throws {
         let deadline = clock.now.advanced(by: .seconds(150))
         repeat {
             let control = find(label, role: kAXButtonRole) ?? find(label, role: kAXCheckBoxRole)
@@ -275,7 +275,7 @@ final class Driver {
                 // Prefer the control's native accessibility action. GPUI Kit
                 // alert buttons can be present in the accessibility tree
                 // before their hit-test surface is ready for a pointer click.
-                if AXUIElementPerformAction(control, kAXPressAction as CFString) != .success {
+                if pointer || AXUIElementPerformAction(control, kAXPressAction as CFString) != .success {
                     try click(control)
                 }
                 return
@@ -654,22 +654,40 @@ final class Driver {
         let commit = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "()"))
         return commit.count == 12 && commit.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
-    /// Select an item of the application menu, which accessibility exposes
-    /// after the Apple menu.
-    func selectApplicationMenuItem(_ label: String) throws {
+    /// Opens the application menu, which follows the Apple menu.
+    func openApplicationMenu() throws -> AXUIElement {
         guard let bar = attribute(app, kAXMenuBarAttribute) else { throw Failure("Qrow has no menu bar") }
         let menus = (attribute(unsafeBitCast(bar, to: AXUIElement.self), kAXChildrenAttribute) as? [AXUIElement]) ?? []
         try require(menus.count > 1, "Qrow has no application menu")
         try require(AXUIElementPerformAction(menus[1], kAXPressAction as CFString) == .success, "Cannot open the application menu")
+        return menus[1]
+    }
+    func applicationMenuItem(_ label: String, in menu: AXUIElement) throws -> AXUIElement {
         let deadline = clock.now.advanced(by: .seconds(10))
         var item: AXUIElement?
         repeat {
-            item = descendants(menus[1]).first { strings($0).contains(label) }
+            item = descendants(menu).first { strings($0).contains(label) }
             if item != nil { break }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         } while clock.now < deadline
         guard let item else { throw Failure("The application menu has no item: \(label)") }
+        return item
+    }
+    func selectApplicationMenuItem(_ label: String) throws {
+        let menu = try openApplicationMenu()
+        let item = try applicationMenuItem(label, in: menu)
+        try require(attribute(item, kAXEnabledAttribute) as? Bool == true, "The application menu item is disabled: \(label)")
         try require(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success, "Cannot select \(label)")
+    }
+    func checkApplicationMenuCommands(after close: String) throws {
+        let menu = try openApplicationMenu()
+        for label in ["About Qrow", "Settings…", "Quit Qrow"] {
+            let item = try applicationMenuItem(label, in: menu)
+            try require(attribute(item, kAXEnabledAttribute) as? Bool == true,
+                        "\(label) is disabled after \(close) of the conversation delete dialog")
+        }
+        try snapshot("assistant-delete-menu-\(close)")
+        key(53)
     }
     func testAbout() throws {
         try selectApplicationMenuItem("About Qrow")
@@ -957,6 +975,34 @@ final class Driver {
         try waitGone("UI Scale")
         print("PASS: The application menu opens and closes Settings")
     }
+    func testAssistantDeleteMenu() throws {
+        key(38, flags: .maskCommand)
+        _ = try wait("Model: Synthetic Model", timeout: 20)
+        if find("Search Conversations") != nil {
+            try press("Toggle Conversation List")
+            try waitGone("Search Conversations", timeout: 5)
+        }
+        try fill("Assistant Message", "Explain SELECT 1")
+        try press("Send")
+        _ = try wait("I can help with this query", timeout: 20)
+        for close in ["cancel", "escape", "delete"] {
+            // The dropdown opens on pointer input around the button.
+            try press("Conversation Actions", pointer: true)
+            try click(try wait("Delete…"))
+            _ = try waitExact("Delete", timeout: 10, role: kAXButtonRole)
+            switch close {
+            case "cancel": try press("Cancel", pointer: true)
+            case "escape": key(53)
+            default: try press("Delete", pointer: true)
+            }
+            try waitGone("Cancel", role: kAXButtonRole)
+            // No click in the workspace may repair focus before this check.
+            try checkApplicationMenuCommands(after: close)
+        }
+        try testAbout()
+        try testSettingsMenu()
+        print("PASS: About Qrow, Settings, and Quit Qrow stay enabled after Delete, Cancel, and Escape")
+    }
     /// Pixel checks of assistant messages at the scale and width at which the
     /// transcript cut them off. The headless UI tests check their geometry.
     func testAssistantLayout() throws {
@@ -1011,6 +1057,10 @@ do {
                 try driver.seedAssistantLayoutWorkspace(theme: "One Dark")
                 try driver.start()
                 try driver.testAssistantSelection()
+            } else if CommandLine.arguments.contains("--assistant-delete-menu-only") {
+                try driver.seedAssistantLayoutWorkspace(uiScale: 1)
+                try driver.start()
+                try driver.testAssistantDeleteMenu()
             } else if CommandLine.arguments.contains("--editor-highlight-only") {
                 try driver.start()
                 try driver.testEditorHighlight()

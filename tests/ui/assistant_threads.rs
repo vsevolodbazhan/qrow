@@ -9,7 +9,7 @@ use qrow::model::{
     AssistantTitleSource::{Codex, User},
     Workspace,
 };
-use qrow::ui::{ToggleAssistant, ToggleSidebar};
+use qrow::ui::{OpenAbout, OpenSettings, Quit, ToggleAssistant, ToggleSidebar};
 use std::time::Duration;
 
 fn launch(
@@ -137,6 +137,64 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     app.choose(cx, "popup-menu", "Delete…");
     app.click(cx, "confirm-delete-assistant-conversation");
     app.wait_conversations(cx, &[(GENERATED, Codex)]);
+}
+
+fn delete_dialog_keeps_application_commands(cx: &mut TestAppContext, from_list: bool) {
+    let (app, _codex) = launch(cx, |_, _| {});
+    app.open_assistant(cx);
+    app.send(cx, "Explain SELECT 1");
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_idle(cx);
+    if from_list {
+        app.show_threads(cx);
+    }
+    for close in ["cancel", "escape", "delete"] {
+        if from_list {
+            app.context_menu_starting(cx, &row("Title: Explain SELECT 1"));
+        } else {
+            app.click(cx, "assistant-conversation-menu");
+        }
+        app.choose(cx, "popup-menu", "Delete…");
+        app.wait_for(cx, "confirm-delete-assistant-conversation");
+        match close {
+            "cancel" => app.click(cx, "cancel-delete-assistant-conversation"),
+            "escape" => app.press(cx, "escape"),
+            _ => app.click(cx, "confirm-delete-assistant-conversation"),
+        }
+        app.wait_gone(cx, "confirm-delete-assistant-conversation");
+        // Check the same focus path that macOS uses to enable menu commands.
+        app.update(cx, |window, cx| {
+            assert!(
+                window.is_action_available(&OpenAbout, cx),
+                "About after {close}"
+            );
+            assert!(
+                window.is_action_available(&OpenSettings, cx),
+                "Settings after {close}"
+            );
+            assert!(window.is_action_available(&Quit, cx), "Quit after {close}");
+        });
+        app.dispatch(cx, OpenAbout);
+        app.wait_for(cx, "about-copyright");
+        app.press(cx, "escape");
+        app.wait_gone(cx, "about-copyright");
+        if close != "delete" {
+            assert_eq!(app.conversations().len(), 1);
+        }
+    }
+    app.wait_until(cx, "no conversations", REPLY_TIMEOUT, |_, _| {
+        app.conversations().is_empty()
+    });
+}
+
+#[gpui_kit::test]
+fn header_delete_dialog_keeps_application_commands(cx: &mut TestAppContext) {
+    delete_dialog_keeps_application_commands(cx, false);
+}
+
+#[gpui_kit::test]
+fn thread_list_delete_dialog_keeps_application_commands(cx: &mut TestAppContext) {
+    delete_dialog_keeps_application_commands(cx, true);
 }
 
 #[gpui_kit::test]

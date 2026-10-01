@@ -466,6 +466,9 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Save a retained focus target before the popup menu is dismissed.
+        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
+        restore.focus(window, cx);
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
