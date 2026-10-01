@@ -1562,9 +1562,7 @@ fn connection_row(
                     )
                 }),
         )
-        .when(!menu_open, |button| {
-            button.tooltip(format!("{}\n{}", row.name, row.tooltip))
-        })
+        .when(!menu_open, |button| button.tooltip(row.tooltip.clone()))
         .on_click({
             let weak = weak.clone();
             move |_, window, cx| {
