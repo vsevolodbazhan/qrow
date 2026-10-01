@@ -14,8 +14,8 @@ use crate::catalog::{
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::{Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState};
 use gpui_kit::component::{
-    Icon, Selectable, h_flex, scroll::ScrollableElement as _, spinner::Spinner, tooltip::Tooltip,
-    v_flex,
+    Icon, button::ButtonCustomVariant, h_flex, scroll::ScrollableElement as _, spinner::Spinner,
+    tooltip::Tooltip, v_flex,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -637,16 +637,27 @@ impl Qrow {
     /// Applies what the catalog workers sent since the last tick.
     pub(super) fn drain_catalogs(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        for connection in self.catalog.connections.values_mut() {
+        let mut activities = Vec::new();
+        for (profile, connection) in &mut self.catalog.connections {
             let Some(worker) = &connection.worker else {
                 continue;
             };
+            activities.extend(worker.activities.try_iter().map(|event| (*profile, event)));
             for event in worker.events.try_iter() {
                 changed = true;
                 match event {
                     CatalogEvent::Catalog(catalog) => connection.catalog = Some(catalog),
                     CatalogEvent::Status(status) => connection.status = status,
                 }
+            }
+        }
+        // A refresh belongs to a connection. Its Logs entries go to the tab
+        // that the connection shows. They do not mark an unread error,
+        // because the tree shows refresh errors.
+        for (profile, event) in activities {
+            if let Some(index) = self.active_tab_for_profile(profile) {
+                Self::record_activity(&mut self.tabs[index], event);
+                changed = true;
             }
         }
         if changed {
@@ -892,7 +903,6 @@ impl Qrow {
         let tree = self.catalog.state.clone();
         let weak = cx.weak_entity();
         let scale = self.settings.ui_scale;
-        let refreshing = active.is_some_and(|id| self.catalog.is_refreshing(id));
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
@@ -914,25 +924,6 @@ impl Qrow {
                             .child("Connections"),
                     )
                     .child(
-                        Button::new("refresh-schemas")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(Icon::new(AssetIconName::RefreshCw))
-                            .accessibility_label("Refresh Schemas")
-                            .tooltip("Refresh Schemas")
-                            .disabled(active.is_none() || refreshing)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                if let Some(profile) = this.active_profile() {
-                                    this.catalog.expanded.insert(connection_id(profile));
-                                    this.refresh_catalog(profile, Scope::Connection, cx);
-                                    this.rebuild_catalog_tree(cx);
-                                }
-                            })),
-                    )
-                    .child(
                         Button::new("add-connection")
                             .ghost()
                             .small()
@@ -949,7 +940,7 @@ impl Qrow {
             )
             .when(!self.profiles.is_empty(), |el| {
                 el.child(
-                    div().px_2().pt_2().flex_shrink_0().child(
+                    div().p_2().flex_shrink_0().child(
                         Input::new(&self.catalog.search)
                             .small()
                             .w_full()
@@ -969,8 +960,9 @@ impl Qrow {
                     }))
                     .flex_1()
                     .min_h_0()
-                    .pt_1()
-                    .vertical_scrollbar(&self.catalog.state.read(cx).scroll_handle().clone())
+                    // Rows keep a margin from the sidebar edges. The scrollbar
+                    // stays at the edge, above the rows.
+                    .px_2()
                     .child(
                         Tree::new(&tree)
                             .item(move |_, entry, state, window, cx| {
@@ -980,7 +972,8 @@ impl Qrow {
                             })
                             .list_style(StyleRefinement::default().size_full())
                             .size_full(),
-                    ),
+                    )
+                    .vertical_scrollbar(&self.catalog.state.read(cx).scroll_handle().clone()),
             )
     }
 }
@@ -1032,7 +1025,7 @@ fn render_entry(
         let Some(row) = rows.get(profile) else {
             return div().into_any_element();
         };
-        return connection_row(*profile, row, disclosure, weak, cx)
+        return connection_row(*profile, row, state, disclosure, weak, cx)
             .pl(ui_px(4.))
             .h(ui_px(ROW_HEIGHT))
             .on_mouse_down(MouseButton::Left, focus)
@@ -1058,7 +1051,7 @@ fn render_entry(
             relations.map(|count| count.to_string()),
             *loading,
             error.clone(),
-            error.clone(),
+            row_tooltip(name, None, error.as_deref()),
         ),
         Node::Relation {
             name,
@@ -1076,7 +1069,7 @@ fn render_entry(
             None,
             *loading,
             error.clone(),
-            error.clone().or_else(|| comment.clone()),
+            row_tooltip(name, comment.as_deref(), error.as_deref()),
         ),
         Node::Column {
             name,
@@ -1089,7 +1082,7 @@ fn render_entry(
             Some(data_type.clone()),
             false,
             None,
-            comment.clone(),
+            row_tooltip(&format!("{name} {data_type}"), comment.as_deref(), None),
         ),
         Node::Notice {
             profile,
@@ -1105,11 +1098,6 @@ fn render_entry(
                 .into_any_element();
         }
         Node::Connection(_) => unreachable!(),
-    };
-    // A double-click on a schema only expands and collapses it.
-    let insertion = match node {
-        Node::Relation { .. } | Node::Column { .. } => node.names().map(|(_, insert)| insert),
-        _ => None,
     };
     let menu_id = id.clone();
     h_flex()
@@ -1181,24 +1169,25 @@ fn render_entry(
                 });
             }
         })
-        .when_some(insertion, |el, insertion| {
-            let weak = weak.clone();
-            el.on_click(move |event, window, cx| {
-                if event.click_count() == 2 {
-                    let insertion = insertion.clone();
-                    let _ = weak.update(cx, |this, cx| {
-                        this.insert_into_editor(insertion, window, cx)
-                    });
-                }
-            })
-        })
         .into_any_element()
+}
+
+/// The tooltip of a tree row: its full name, which the row can truncate,
+/// then its comment or its error.
+fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<String> {
+    let mut text = name.to_owned();
+    for line in [comment, error].into_iter().flatten() {
+        text.push('\n');
+        text.push_str(line);
+    }
+    Some(text)
 }
 
 /// The row of a connection: the disclosure and the connection button.
 fn connection_row(
     id: Uuid,
     row: &ConnectionRow,
+    state: TreeEntryState,
     disclosure: Div,
     weak: &WeakEntity<Qrow>,
     cx: &App,
@@ -1218,8 +1207,22 @@ fn connection_row(
             ""
         }
     );
+    let foreground = if row.active {
+        cx.theme().sidebar_accent_foreground
+    } else {
+        cx.theme().sidebar_foreground
+    };
+    // The row draws the hover and the selection, so they also cover the
+    // disclosure. The button itself paints no background.
     let button = Button::new(SharedString::from(format!("profile-{id}")))
-        .ghost()
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(transparent_black())
+                .hover(transparent_black())
+                .active(transparent_black())
+                .foreground(foreground)
+                .shadow(false),
+        )
         .small()
         .h_full()
         .flex_1()
@@ -1257,14 +1260,7 @@ fn connection_row(
                     )
                 }),
         )
-        .selected(row.active)
-        .text_color(cx.theme().sidebar_foreground)
-        .when(row.active, |button| {
-            button
-                .bg(cx.theme().sidebar_accent)
-                .text_color(cx.theme().sidebar_accent_foreground)
-        })
-        .tooltip(row.tooltip.clone())
+        .tooltip(format!("{}\n{}", row.name, row.tooltip))
         .on_click({
             let weak = weak.clone();
             move |_, window, cx| {
@@ -1274,8 +1270,19 @@ fn connection_row(
     h_flex()
         .id(SharedString::from(format!("connection-{id}")))
         .w_full()
-        .pr_2()
+        .pr_1()
         .gap_0p5()
+        .rounded(cx.theme().radius)
+        .text_color(foreground)
+        .map(|el| {
+            if row.active {
+                el.bg(cx.theme().sidebar_accent)
+            } else if state.is_selected() {
+                el.bg(cx.theme().list_active)
+            } else {
+                el.hover(|el| el.bg(cx.theme().tokens.list_hover))
+            }
+        })
         .child(disclosure)
         .child(
             h_flex()

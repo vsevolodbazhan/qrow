@@ -705,6 +705,7 @@ mod tests {
         let settings = CatalogSettings {
             include: vec!["sales*".into(), "OPS".into()],
             exclude: vec!["*_tmp".into()],
+            ..CatalogSettings::default()
         };
         let mut catalog = Catalog::new(&Profile::default());
         catalog.apply_schemas(
@@ -721,6 +722,7 @@ mod tests {
         catalog.retain(&CatalogSettings {
             include: vec![],
             exclude: vec!["o?s".into()],
+            ..CatalogSettings::default()
         });
         assert_eq!(catalog.schemas.keys().collect::<Vec<_>>(), ["sales"]);
     }

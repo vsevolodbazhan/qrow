@@ -6,6 +6,7 @@
 
 use super::{Catalog, MetadataRows, Scope, now, parse_columns, parse_relations, parse_schemas};
 use crate::{
+    activity::{ActivityEvent, ActivityKind, Severity},
     connector::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
         hive::HiveConnector,
@@ -20,7 +21,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
     thread,
@@ -33,6 +34,8 @@ const METADATA_BATCH: usize = 1_000;
 const MAX_METADATA_ROWS: usize = 200_000;
 /// The shortest time between two snapshots during a long refresh.
 const SNAPSHOT_INTERVAL: Duration = Duration::from_millis(250);
+/// Identifies the Logs entries of one refresh across all workers.
+static NEXT_BATCH: AtomicU64 = AtomicU64::new(1);
 
 /// The refreshes that a worker performs.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -77,6 +80,8 @@ type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
 pub struct CatalogWorker {
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
+    /// Logs entries, only when the profile enables them.
+    pub activities: mpsc::Receiver<ActivityEvent>,
     cancelled: Arc<AtomicBool>,
     stopped: Arc<AtomicBool>,
     target: Target,
@@ -110,6 +115,7 @@ impl CatalogWorker {
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
+        let (activity_tx, activities) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let stopped = Arc::new(AtomicBool::new(false));
@@ -131,6 +137,8 @@ impl CatalogWorker {
             target: target.clone(),
             rx,
             tx: events_tx,
+            activity: activity_tx,
+            batch: 0,
             wake,
         };
         thread::spawn(move || {
@@ -140,6 +148,7 @@ impl CatalogWorker {
         Self {
             tx,
             events,
+            activities,
             cancelled,
             stopped,
             target,
@@ -237,7 +246,44 @@ struct Runner {
     target: Target,
     rx: mpsc::Receiver<Command>,
     tx: mpsc::Sender<Event>,
+    activity: mpsc::Sender<ActivityEvent>,
+    /// The Logs batch of the refresh in progress.
+    batch: u64,
     wake: Arc<dyn Fn() + Send + Sync>,
+}
+
+fn describe_scope(scope: &Scope) -> String {
+    match scope {
+        Scope::Connection => "the connection".into(),
+        Scope::Schema(schema) => format!("schema {schema}"),
+        Scope::Relation(schema, relation) => format!("table {schema}.{relation}"),
+    }
+}
+
+fn describe_request(request: &MetadataRequest) -> String {
+    match request {
+        MetadataRequest::Schemas => "List schemas".into(),
+        MetadataRequest::Relations {
+            schema,
+            relation: None,
+        } => format!("List tables in {schema}"),
+        MetadataRequest::Relations {
+            schema,
+            relation: Some(relation),
+        } => format!("Find table {schema}.{relation}"),
+        MetadataRequest::Columns {
+            schema,
+            relation: None,
+        } => format!("List columns in {schema}"),
+        MetadataRequest::Columns {
+            schema,
+            relation: Some(relation),
+        } => format!("List columns of {schema}.{relation}"),
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    format!("{:.2} s", duration.as_secs_f64())
 }
 
 impl Runner {
@@ -267,7 +313,37 @@ impl Runner {
                 };
                 self.interrupted = false;
                 self.publish(true);
-                match self.refresh(&scope) {
+                self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
+                let started = Instant::now();
+                self.log(
+                    Severity::Info,
+                    format!("Started a schema refresh of {}", describe_scope(&scope)),
+                    None,
+                );
+                let result = self.refresh(&scope);
+                let duration = started.elapsed();
+                let outcome = match &result {
+                    Ok(()) => "Schema refresh completed".to_owned(),
+                    Err(Interrupt::Cancelled) => "Schema refresh cancelled".to_owned(),
+                    Err(Interrupt::Stopped) => "Schema refresh stopped".to_owned(),
+                    Err(Interrupt::Unavailable(message)) => {
+                        format!("Schema refresh failed: {message}")
+                    }
+                };
+                let severity = if matches!(result, Err(Interrupt::Unavailable(_))) {
+                    Severity::Error
+                } else {
+                    Severity::Info
+                };
+                self.log(
+                    severity,
+                    format!(
+                        "{outcome} (client measurement: {})",
+                        format_duration(duration)
+                    ),
+                    Some(duration),
+                );
+                match result {
                     Ok(()) => {}
                     // The `Cancel` command can arrive after the flag stops the
                     // request. It also clears the queue, so do it here.
@@ -495,13 +571,32 @@ impl Runner {
         &mut self,
         request: &MetadataRequest,
     ) -> Result<Result<MetadataRows, String>, Interrupt> {
+        let started = Instant::now();
         let result = self.read_rows(request);
+        let duration = started.elapsed();
         *self.target.lock().unwrap() = None;
         self.checkpoint()?;
+        let label = describe_request(request);
         match result {
-            Ok(rows) => Ok(Ok(rows)),
+            Ok(rows) => {
+                self.log(
+                    Severity::Info,
+                    format!(
+                        "{label}: {} rows (client measurement: {})",
+                        rows.rows.len(),
+                        format_duration(duration)
+                    ),
+                    Some(duration),
+                );
+                Ok(Ok(rows))
+            }
             Err(error) => {
                 let message = crate::connector::error_message(&error);
+                self.log(
+                    Severity::Error,
+                    format!("{label} failed: {message}"),
+                    Some(duration),
+                );
                 let healthy = error.downcast_ref::<QueryError>().is_some()
                     && self
                         .session
@@ -519,8 +614,18 @@ impl Runner {
 
     fn read_rows(&mut self, request: &MetadataRequest) -> Result<MetadataRows> {
         if self.session.is_none() {
+            let started = Instant::now();
             let password = (self.passwords)(&self.profile)?;
             self.session = Some(self.connector.connect(&self.profile, password)?);
+            let duration = started.elapsed();
+            self.log(
+                Severity::Info,
+                format!(
+                    "Opened a session for the schema refresh (client measurement: {})",
+                    format_duration(duration)
+                ),
+                Some(duration),
+            );
         }
         let session = self.session.as_mut().unwrap();
         let cancellation = session.execute_metadata(request)?;
@@ -593,6 +698,19 @@ impl Runner {
                 command => self.deferred.push_back(command),
             }
         }
+    }
+
+    /// Send a Logs entry of the refresh in progress, if the profile enables it.
+    fn log(&self, severity: Severity, text: String, duration: Option<Duration>) {
+        if !self.profile.catalog.log_refreshes {
+            return;
+        }
+        let mut event = ActivityEvent::new(None, severity, ActivityKind::SchemaRefresh, text)
+            .with_connection(self.profile.name.clone())
+            .with_batch(self.batch);
+        event.duration = duration;
+        let _ = self.activity.send(event);
+        (self.wake)();
     }
 
     fn update(&mut self, change: impl FnOnce(&mut Catalog)) {

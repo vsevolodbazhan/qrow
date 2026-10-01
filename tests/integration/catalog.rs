@@ -318,6 +318,7 @@ fn connection_refresh_reads_filtered_schemas_and_relations_without_columns() {
     profile.catalog = CatalogSettings {
         include: vec![],
         exclude: vec!["*_tmp".into()],
+        ..CatalogSettings::default()
     };
     let mut h = Harness::new(warehouse(), profile, None);
     h.refresh(Scope::Connection);
@@ -539,4 +540,60 @@ fn the_cache_restores_without_a_session_and_profile_changes_update_it() {
     h.worker.delete();
     h.worker.wait_for_shutdown(Duration::from_secs(5));
     assert!(!path.exists());
+}
+
+#[test]
+fn logs_entries_share_one_batch_and_follow_the_profile_option() {
+    let server = warehouse();
+    let mut h = Harness::new(server, profile(), None);
+    h.refresh(Scope::Schema("sales".into()));
+    assert_eq!(h.worker.activities.try_iter().count(), 0);
+
+    let mut logged = profile();
+    logged.id = h.catalog().profile;
+    logged.catalog.log_refreshes = true;
+    h.worker.update_profile(logged);
+    h.refresh(Scope::Connection);
+    let entries: Vec<_> = h.worker.activities.try_iter().collect();
+    let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
+    assert!(
+        texts[0].starts_with("Started a schema refresh of the connection"),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("Opened a session"))
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("List schemas: 4 rows"))
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|text| text.starts_with("List tables in sales: 2 rows"))
+    );
+    assert!(
+        texts
+            .last()
+            .unwrap()
+            .starts_with("Schema refresh completed")
+    );
+    let batch = entries[0].batch;
+    assert!(batch.is_some());
+    assert!(entries.iter().all(|entry| entry.batch == batch));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.connection.as_deref() == Some("Catalog"))
+    );
+
+    h.refresh(Scope::Relation("sales".into(), "orders".into()));
+    let next: Vec<_> = h.worker.activities.try_iter().collect();
+    assert!(
+        next.iter()
+            .all(|entry| entry.batch.is_some() && entry.batch != batch)
+    );
 }

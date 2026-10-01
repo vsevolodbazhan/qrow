@@ -65,8 +65,9 @@ name and its type. A schema row shows the number of its tables and views.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
   connection puts the cursor in the SQL editor.
-- Point to a table or a view to see its comment. Point to a column to see its
-  comment.
+- Point to a row to see its full name, which a narrow sidebar can cut. The
+  tooltip also shows the comment of a table, a view, or a column, and the
+  error of a failed refresh.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
 shows this copy, also when the connection has no session. Qrow reads the copy
@@ -80,8 +81,7 @@ session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
 - To refresh the schema list and the tables of each schema, right-click the
-  connection and select **Refresh Schemas**. You can also select the connection
-  and click the refresh button beside **+**.
+  connection and select **Refresh Schemas**.
 - To refresh one schema and the columns of all its tables, right-click the
   schema and select **Refresh**.
 - To refresh one table or view and its columns, right-click it and select
@@ -126,13 +126,30 @@ Right-click a schema, a table, a view, or a column, then select:
 - **Insert into Editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
-Double-click a table, a view, or a column to insert its name. You can also
-use the keyboard. Select a row in the tree, then:
+A double-click does not insert a name.
+
+To use the keyboard, select a row in the tree, then:
 
 - Press **⌘C** to copy its name.
 - Press **Shift-Enter** to insert its name into the SQL editor.
 
 Qrow adds backticks to a name that is not a plain identifier.
+
+### Show refreshes in Logs
+
+To see the requests of each refresh, open the connection settings and select
+**Show schema refreshes**. The option applies to the connection. Qrow then
+records each refresh in the Logs of the tab that the connection shows:
+
+- The start of the refresh.
+- The session that the refresh opens.
+- Each request, with its number of rows and its duration.
+- The result of the refresh: completed, cancelled, or failed.
+
+The entries of one refresh share one place in the Logs history. A large
+refresh does not remove the history of queries. A refresh error does not mark
+the connection with an unread error, because the tree shows the error. The
+option is off by default.
 
 ### Show or hide schemas
 

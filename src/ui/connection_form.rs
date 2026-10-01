@@ -43,7 +43,8 @@ pub(super) fn parse_lifecycle(
 
 use super::{ProfileEditor, Qrow};
 use gpui_kit::component::{
-    IndexPath,
+    Disableable, IndexPath,
+    checkbox::Checkbox,
     form::{Field, Form},
     input::Input,
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -164,7 +165,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
+pub(super) fn render_schemas(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
     let saving = form.saving.is_some();
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
@@ -185,6 +186,21 @@ pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
             "Hide schemas",
             Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
             input(11, "Hide schemas"),
+        ))
+        .child(field(
+            "Logs",
+            Some("Records each request of a schema refresh in the Logs of the tab that the connection shows."),
+            Checkbox::new("connection-log-refreshes")
+                .label("Show schema refreshes")
+                .checked(form.log_refreshes)
+                .disabled(saving)
+                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                    if let Some(form) = &mut this.form {
+                        form.log_refreshes = *checked;
+                        cx.notify();
+                    }
+                }))
+                .into_any_element(),
         ))
 }
 

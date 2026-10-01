@@ -328,6 +328,8 @@ pub struct CatalogSettings {
     pub include: Vec<String>,
     /// Glob patterns of the schemas to hide, also when an include matches.
     pub exclude: Vec<String>,
+    /// Record the requests of each schema refresh in Logs.
+    pub log_refreshes: bool,
 }
 
 impl CatalogSettings {
@@ -787,6 +789,7 @@ mod tests {
         let settings = CatalogSettings {
             include: vec!["sales_*".into(), "o?s".into()],
             exclude: vec!["*_tmp".into()],
+            ..CatalogSettings::default()
         };
         assert!(settings.shows("Sales_EU"));
         assert!(settings.shows("ops"));
@@ -805,6 +808,7 @@ mod tests {
         let mut settings = CatalogSettings {
             include: vec![" ".into()],
             exclude: vec![],
+            ..CatalogSettings::default()
         };
         assert!(settings.validate().is_err());
         settings.include = vec!["x".repeat(MAX_SCHEMA_PATTERN + 1)];

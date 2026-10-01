@@ -1,7 +1,7 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, labelled, offline_profile, press_at, shows,
+    MemoryCredentials, TestApp, connection_row, label, labelled, offline_profile, press_at, shows,
 };
 use gpui_kit::TestAppContext;
 use qrow::{
@@ -254,13 +254,14 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     let gate = app.update(cx, |window, _| {
         labelled(window, "gate STRING").unwrap().bounds()
     });
+    // Only Insert into Editor inserts. A double-click does not change SQL.
     app.update(cx, |window, cx| press_at(window, gate.center(), 2, cx));
-    app.wait_until(
-        cx,
-        "the double-clicked column",
-        Duration::from_secs(10),
-        |_, _| app.saved().tabs[0].sql == "avia.dailygate",
-    );
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "gate STRING").is_some());
+    });
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(app.saved().tabs[0].sql, "avia.daily");
 }
 
 #[gpui_kit::test]
@@ -293,8 +294,9 @@ fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
         |window, _| shows(window, "refused"),
     );
     assert_eq!(app.credentials.reads(), 1);
-    // The header button tries the active connection again.
-    app.click(cx, "refresh-schemas");
+    // The connection menu tries again.
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh Schemas");
     app.wait_until(cx, "a second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -424,4 +426,74 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| app.saved().tabs[0].sql == "gate",
     );
+}
+
+#[gpui_kit::test]
+fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut TestAppContext) {
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port,
+        ..offline_profile("Unreachable")
+    };
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+
+    // Off by default: a refresh adds nothing to Logs.
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.wait_until(cx, "the first attempt", Duration::from_secs(20), |_, _| {
+        app.credentials.reads() == 1
+    });
+    app.settle(cx);
+    assert!(!app.logs(cx).contains("schema refresh"));
+
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.scroll_to(cx, "connection-log-refreshes");
+    app.click(cx, "connection-log-refreshes");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the saved option", Duration::from_secs(10), |_, _| {
+        app.saved().profiles[0].catalog.log_refreshes
+    });
+
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.wait_until(cx, "the second attempt", Duration::from_secs(20), |_, _| {
+        app.credentials.reads() == 2
+    });
+    let mut logs = String::new();
+    app.wait_until(
+        cx,
+        "the refresh in Logs",
+        Duration::from_secs(10),
+        |_, _| true,
+    );
+    for _ in 0..100 {
+        logs = app.logs(cx);
+        if logs.contains("Schema refresh failed") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        logs.contains("Started a schema refresh of the connection"),
+        "{logs}"
+    );
+    assert!(logs.contains("Schema refresh failed"), "{logs}");
+    // A refresh error does not mark the connection as having an unread error.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, connection_row(profile.id)).as_deref(),
+            Some("Unreachable")
+        );
+    });
 }

@@ -221,6 +221,8 @@ struct ProfileEditor {
     parameters: Entity<TextareaState>,
     idle_behavior: connection_form::IdleBehaviorSelect,
     _idle_behavior_subscription: Subscription,
+    /// Show the requests of schema refreshes in Logs.
+    log_refreshes: bool,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -2151,6 +2153,7 @@ impl Qrow {
             parameters,
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
+            log_refreshes: profile.catalog.log_refreshes,
             profile,
             fields,
             is_new,
@@ -2198,6 +2201,7 @@ impl Qrow {
                 })?;
             profile.catalog.include = connection_form::parse_patterns(&values[10]);
             profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
+            profile.catalog.log_refreshes = form.log_refreshes;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
