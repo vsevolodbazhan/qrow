@@ -80,8 +80,8 @@ A refresh reads the schemas from the server again. Qrow opens a separate
 session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
-- To refresh the schema list and the tables of each schema, right-click the
-  connection and select **Refresh Schemas**.
+- To refresh all schemas, with the tables and the columns of each schema,
+  right-click the connection and select **Refresh Schemas**.
 - To refresh one schema and the columns of all its tables, right-click the
   schema and select **Refresh**.
 - To refresh one table or view and its columns, right-click it and select
@@ -89,9 +89,10 @@ not change the idle timer, the keep-alive, or the results of a tab.
 - To stop a connection refresh, right-click the connection and select **Stop
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
-A connection refresh does not read columns, because a server with many tables
-can need much time to send them. Qrow reads the columns of a schema or a table
-when you refresh it.
+A connection refresh reads one schema at a time: first its tables, then their
+columns. The progress row shows the number of schemas that are done. A
+connection with many schemas or tables can need many minutes. To make it
+faster, hide the schemas that you do not use.
 
 Qrow does not start a session to read schemas by itself. When a tab of the
 connection has a live session, Qrow reads the missing data when you expand a

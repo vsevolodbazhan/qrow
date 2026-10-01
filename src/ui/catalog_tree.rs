@@ -386,8 +386,9 @@ impl Builder<'_> {
         let status = self.tree.status(profile).cloned().unwrap_or_default();
         let scope = Scope::Schema(schema.into());
         let mut children = vec![];
+        let loading = status.includes(&scope) || status.includes(&Scope::Connection);
         match (&node.relations, &node.error) {
-            (None, _) if status.includes(&scope) => {
+            (None, _) if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
             }
             (None, Some(error)) => {
@@ -454,7 +455,9 @@ impl Builder<'_> {
         let node = catalog.relation(schema, relation).unwrap();
         let status = self.tree.status(profile).cloned().unwrap_or_default();
         let scope = Scope::Relation(schema.into(), relation.into());
-        let loading = status.includes(&scope) || status.includes(&Scope::Schema(schema.into()));
+        let loading = status.includes(&scope)
+            || status.includes(&Scope::Schema(schema.into()))
+            || status.includes(&Scope::Connection);
         let mut children = vec![];
         if let Some(error) = &node.error {
             children.push(self.notice(
@@ -1155,7 +1158,7 @@ fn render_entry(
             )
         })
         .when_some(tooltip, |el, tooltip| {
-            el.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
@@ -1170,6 +1173,20 @@ fn render_entry(
             }
         })
         .into_any_element()
+}
+
+/// The tooltip view of a tree row. Its text is an observed element, so tests
+/// can find the tooltip that a hover opens.
+fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
+    let text = SharedString::from(text.to_owned());
+    Tooltip::element(move |_, _| {
+        div()
+            .id("catalog-tooltip")
+            .test_support()
+            .aria_label(text.clone())
+            .child(text.clone())
+    })
+    .build(window, cx)
 }
 
 /// The tooltip of a tree row: its full name, which the row can truncate,
@@ -1358,7 +1375,7 @@ fn notice_row(
             )
         })
         .when_some(tooltip, |el, tooltip| {
-            el.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
 }
 

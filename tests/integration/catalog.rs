@@ -313,7 +313,7 @@ fn warehouse() -> Arc<Server> {
 }
 
 #[test]
-fn connection_refresh_reads_filtered_schemas_and_relations_without_columns() {
+fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     let mut profile = profile();
     profile.catalog = CatalogSettings {
         include: vec![],
@@ -350,7 +350,8 @@ fn connection_refresh_reads_filtered_schemas_and_relations_without_columns() {
             .as_deref(),
         Some("About orders")
     );
-    assert_eq!(h.columns("sales", "orders"), None);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
     assert!(
         catalog
             .schema("empty")
@@ -360,11 +361,23 @@ fn connection_refresh_reads_filtered_schemas_and_relations_without_columns() {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        !h.server
-            .requests()
-            .iter()
-            .any(|r| matches!(r, MetadataRequest::Columns { .. }))
+    // Columns are read one schema at a time, never for the whole connection.
+    let columns: Vec<_> = h
+        .server
+        .requests()
+        .into_iter()
+        .filter_map(|r| match r {
+            MetadataRequest::Columns { schema, relation } => Some((schema, relation)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        columns,
+        [
+            ("empty".to_owned(), None),
+            ("sales".to_owned(), None),
+            ("salesx".to_owned(), None)
+        ]
     );
     // One session for the whole pass, closed when the queue is empty.
     assert_eq!(h.server.connects.load(Ordering::SeqCst), 1);
@@ -403,9 +416,17 @@ fn relation_refresh_updates_one_relation_or_removes_a_dropped_one() {
     let server = warehouse();
     let mut h = Harness::new(server.clone(), profile(), None);
     h.refresh(Scope::Connection);
+    // A relation refresh reads only its relation.
+    server.set(&[
+        ("sales", "orders", "TABLE", &["id", "total", "currency"]),
+        ("sales", "daily", "VIEW", &["day", "count"]),
+    ]);
     h.refresh(Scope::Relation("sales".into(), "orders".into()));
-    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
-    assert_eq!(h.columns("sales", "daily"), None);
+    assert_eq!(
+        h.columns("sales", "orders").unwrap(),
+        ["id", "total", "currency"]
+    );
+    assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
 
     server.set(&[("sales", "daily", "VIEW", &["day"])]);
     h.refresh(Scope::Relation("sales".into(), "orders".into()));

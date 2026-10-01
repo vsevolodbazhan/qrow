@@ -478,9 +478,11 @@ impl Runner {
         let schemas: Vec<String> = self.catalog.schemas.keys().cloned().collect();
         self.status.total = schemas.len();
         self.publish(true);
+        // Each schema is one step: its relations, then their columns. No
+        // request reads the columns of the whole connection at once.
         for schema in schemas {
             self.checkpoint()?;
-            self.read_relations(&schema, None)?;
+            self.refresh_schema(&schema)?;
             self.status.done += 1;
             self.publish(false);
         }

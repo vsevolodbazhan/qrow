@@ -43,7 +43,7 @@ impl CatalogIdentity {
 /// The part of the catalog that a refresh reads again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Scope {
-    /// The schema list and the relations of each schema, without columns.
+    /// The schema list, then the relations and columns of each schema.
     Connection,
     /// The relations of one schema and their columns.
     Schema(String),
@@ -55,6 +55,7 @@ impl Scope {
     /// Return whether a refresh of `self` also reads everything that `other` reads.
     pub fn covers(&self, other: &Scope) -> bool {
         match (self, other) {
+            (Scope::Connection, _) => true,
             (Scope::Schema(schema), Scope::Relation(parent, _)) => schema == parent,
             _ => self == other,
         }
@@ -740,9 +741,9 @@ mod tests {
         let schema = Scope::Schema("a".into());
         assert!(schema.covers(&Scope::Relation("a".into(), "t".into())));
         assert!(!schema.covers(&Scope::Relation("b".into(), "t".into())));
-        // A connection refresh does not read columns.
-        assert!(!Scope::Connection.covers(&schema));
-        assert!(Scope::Connection.covers(&Scope::Connection));
+        assert!(Scope::Connection.covers(&schema));
+        assert!(Scope::Connection.covers(&Scope::Relation("b".into(), "t".into())));
+        assert!(!schema.covers(&Scope::Connection));
     }
 
     #[test]

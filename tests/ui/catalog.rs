@@ -497,3 +497,35 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
         );
     });
 }
+
+#[gpui_kit::test]
+fn each_row_shows_its_full_name_on_hover(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+    for (row, tooltip) in [
+        ("avia", "avia"),
+        ("daily", "daily"),
+        ("gate STRING", "gate STRING"),
+    ] {
+        app.hover_labelled(cx, row);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.wait_until(
+            cx,
+            &format!("the tooltip of {row}"),
+            Duration::from_secs(5),
+            |window, _| label(window, "catalog-tooltip").as_deref() == Some(tooltip),
+        );
+    }
+}
