@@ -111,9 +111,9 @@ use gpui_kit::component::{
     IndexPath,
     form::{Field, Form},
     input::Input,
-    select::{SearchableVec, Select, SelectEvent, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
-use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*};
+use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, SharedString, Window, prelude::*};
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
@@ -180,7 +180,7 @@ pub(super) fn shared_name_is_taken(shared: &[SharedCatalog], candidate: &SharedC
 }
 
 /// The choices of the Preferred connection dropdown: any member, or one of
-/// the connections that browse the catalog. `profile` is the edited one.
+/// the members. `profile` is the edited one.
 pub(super) fn preferred_choices(
     profile: &Profile,
     catalog: CatalogChoice,
@@ -192,11 +192,10 @@ pub(super) fn preferred_choices(
     };
     let mut members: Vec<(Option<Uuid>, String)> = profiles
         .iter()
+        // A member with browsing off keeps its place, so a save of another
+        // member does not clear the preference.
         .filter(|member| {
-            member.id != profile.id
-                && shared.is_some()
-                && member.shared_catalog == shared
-                && member.catalog.browses()
+            member.id != profile.id && shared.is_some() && member.shared_catalog == shared
         })
         .map(|member| (Some(member.id), member.name.clone()))
         .collect();
@@ -221,21 +220,51 @@ pub(super) fn preferred_choices(
         .collect()
 }
 
+/// A dropdown row that knows its position, so two rows with the same
+/// label stay apart.
+#[derive(Clone)]
+pub(super) struct Row {
+    label: SharedString,
+    index: usize,
+}
+
+impl SelectItem for Row {
+    type Value = usize;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &usize {
+        &self.index
+    }
+}
+
+/// A dropdown of choices whose labels can repeat.
+pub(super) type RowSelect = Entity<SelectState<SearchableVec<Row>>>;
+
 /// A dropdown of `choices` with `selected` chosen, or the first choice.
 pub(super) fn choice_select<T: PartialEq>(
     choices: &[(T, String)],
     selected: &T,
     window: &mut Window,
     cx: &mut Context<Qrow>,
-) -> ChoiceSelect {
+) -> RowSelect {
     let row = choices
         .iter()
         .position(|(choice, _)| choice == selected)
         .unwrap_or_default();
-    let labels: Vec<String> = choices.iter().map(|(_, label)| label.clone()).collect();
+    let rows: Vec<Row> = choices
+        .iter()
+        .enumerate()
+        .map(|(index, (_, label))| Row {
+            label: label.clone().into(),
+            index,
+        })
+        .collect();
     cx.new(|cx| {
         SelectState::new(
-            SearchableVec::new(labels),
+            SearchableVec::new(rows),
             Some(IndexPath::default().row(row)),
             window,
             cx,
@@ -244,14 +273,13 @@ pub(super) fn choice_select<T: PartialEq>(
 }
 
 /// The choice that `select` shows, or the first choice.
-pub(super) fn chosen<T: Clone>(select: &ChoiceSelect, choices: &[(T, String)], cx: &App) -> T {
-    let selected = select.read(cx).selected_value().cloned();
-    choices
-        .iter()
-        .find(|(_, label)| selected.as_deref() == Some(label.as_str()))
-        .unwrap_or(&choices[0])
-        .0
-        .clone()
+pub(super) fn chosen<T: Clone>(select: &RowSelect, choices: &[(T, String)], cx: &App) -> T {
+    let row = select
+        .read(cx)
+        .selected_value()
+        .copied()
+        .unwrap_or_default();
+    choices.get(row).unwrap_or(&choices[0]).0.clone()
 }
 
 pub(super) fn idle_behavior_select(
@@ -629,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn preferred_choices_list_browsing_members_in_sidebar_order() {
+    fn preferred_choices_list_the_members_in_sidebar_order() {
         let catalog = Uuid::new_v4();
         let member = |name: &str, refresh: CatalogRefresh| Profile {
             name: name.into(),
@@ -648,9 +676,10 @@ mod tests {
 
         let choices = preferred_choices(&edited, CatalogChoice::Shared(catalog), &profiles);
         let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
-        assert_eq!(labels, [ANY_MEMBER, "first", "edited", "last"]);
+        // A member with browsing off stays, so its preference stays.
+        assert_eq!(labels, [ANY_MEMBER, "first", "edited", "off", "last"]);
         assert_eq!(choices[0].0, None);
-        assert_eq!(choices[3].0, Some(last.id));
+        assert_eq!(choices[4].0, Some(last.id));
 
         // A new catalog has only the edited connection, with a name.
         let unnamed = Profile {

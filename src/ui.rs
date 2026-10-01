@@ -230,13 +230,13 @@ struct ProfileEditor {
     refresh_logs: connection_form::ChoiceSelect,
     /// The catalog that the connection uses. A change loads the settings of
     /// the chosen catalog into the Schemas fields.
-    catalog_select: connection_form::ChoiceSelect,
+    catalog_select: connection_form::RowSelect,
     catalog_choices: Vec<(connection_form::CatalogChoice, String)>,
     _catalog_subscription: Subscription,
     /// The ID that a new shared catalog gets.
     new_catalog: Uuid,
     shared_name: Entity<InputState>,
-    preferred_select: connection_form::ChoiceSelect,
+    preferred_select: connection_form::RowSelect,
     preferred_choices: Vec<(Option<Uuid>, String)>,
     is_new: bool,
     error: Option<String>,
@@ -2387,13 +2387,23 @@ impl Qrow {
                     connection_form::chosen(&form.preferred_select, &form.preferred_choices, cx);
                 profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
                 // A member keeps its own settings for a later private catalog.
+                // A shared catalog keeps the values of the fields that the
+                // mode hides, like the period of a manual refresh.
                 let mut settings = match choice {
                     connection_form::CatalogChoice::Private => profile.catalog.clone(),
-                    _ => CatalogSettings {
-                        log_refreshes: false,
-                        ..profile.catalog.clone()
-                    },
+                    connection_form::CatalogChoice::Shared(id) => self
+                        .shared_catalogs
+                        .iter()
+                        .find(|catalog| catalog.id == id)
+                        .map_or_else(
+                            || profile.catalog.clone(),
+                            |catalog| catalog.settings.clone(),
+                        ),
+                    connection_form::CatalogChoice::New => profile.catalog.clone(),
                 };
+                if choice != connection_form::CatalogChoice::Private {
+                    settings.log_refreshes = false;
+                }
                 settings.include = connection_form::parse_patterns(&values[10]);
                 settings.exclude = connection_form::parse_patterns(&values[11]);
                 connection_form::parse_refresh_policy(

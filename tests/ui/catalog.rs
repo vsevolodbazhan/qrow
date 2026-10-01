@@ -8,7 +8,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
-    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, Workspace},
+    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, SharedCatalog, Workspace},
     storage::{self, Credentials},
 };
 use std::{collections::BTreeMap, net::TcpListener, time::Duration};
@@ -998,4 +998,97 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     app.wait_until(cx, "the deleted cache", Duration::from_secs(10), |_, _| {
         !shared.exists()
     });
+}
+
+#[gpui_kit::test]
+fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAppContext) {
+    let lake = SharedCatalog {
+        id: uuid::Uuid::new_v4(),
+        name: "Lake".into(),
+        settings: CatalogSettings {
+            refresh: CatalogRefresh::Manual,
+            refresh_minutes: 15,
+            ..CatalogSettings::default()
+        },
+        preferred: None,
+    };
+    let member = |name: &str| Profile {
+        shared_catalog: Some(lake.id),
+        ..offline_profile(name)
+    };
+    let edited = member("Edited");
+    // A name like the first choice must not stand for it.
+    let named_like_any = member("Any connected connection");
+    let mut off = member("Off");
+    off.catalog.refresh = CatalogRefresh::Disabled;
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(edited.id, "synthetic-password")
+        .unwrap();
+    let mut saved = workspace(vec![named_like_any.clone(), off.clone(), edited.clone()]);
+    saved.shared_catalogs = vec![SharedCatalog {
+        preferred: Some(off.id),
+        ..lake.clone()
+    }];
+    let app = TestApp::launch_with(cx, saved, credentials);
+    let edit = |cx: &mut TestAppContext| {
+        app.context_menu(cx, connection_row(edited.id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.scroll_to(cx, "connection-preferred-catalog-connection");
+    };
+    let preferred = |app: &TestApp| app.saved().shared_catalogs[0].preferred;
+
+    // A preferred member with browsing off stays preferred, and the hidden
+    // period of a manual refresh stays with the shared catalog.
+    edit(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-preferred-catalog-connection").as_deref(),
+            Some("Off")
+        );
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.settle(cx);
+    let catalog = app.saved().shared_catalogs[0].clone();
+    assert_eq!(catalog.preferred, Some(off.id));
+    assert_eq!(catalog.settings.refresh_minutes, 15);
+
+    // The member whose name is the label of the first choice is chosen by
+    // its row.
+    edit(cx);
+    app.select(
+        cx,
+        "connection-preferred-catalog-connection",
+        "Any connected connection",
+    );
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "no preference", Duration::from_secs(10), |_, _| {
+        preferred(&app).is_none()
+    });
+    let rows = |cx: &mut TestAppContext| {
+        edit(cx);
+        app.update(cx, |window, cx| {
+            window
+                .within("connection-preferred-catalog-connection".to_owned())
+                .click("input", cx)
+        });
+        app.settle(cx);
+    };
+    rows(cx);
+    // The second row has the same label as the first.
+    app.press(cx, "down");
+    app.press(cx, "enter");
+    app.settle(cx);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the member", Duration::from_secs(10), |_, _| {
+        preferred(&app) == Some(named_like_any.id)
+    });
+    edit(cx);
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.settle(cx);
+    assert_eq!(preferred(&app), Some(named_like_any.id));
 }
