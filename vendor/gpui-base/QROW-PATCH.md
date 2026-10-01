@@ -26,6 +26,12 @@ Qrow changes these files:
 - `src/text/inline.rs`: Markdown text paints its selection under the glyphs,
   as the input does. Before, the selection was painted over the glyphs and
   dimmed the selected text. `src/text/text_view.rs` adds the regression test.
+- `src/input/editor/indent.rs` and `src/input/base/element.rs`: the editor
+  paints its indent guides as 1-pixel quads. Before, the guides were one
+  stroked path. Each frame with a path makes GPUI draw through an
+  intermediate texture of the window size, and the texture then stays in GPU
+  memory: approximately 16 MB for a 1280 by 821 point window on a Retina
+  display. `src/input/editor/indent.rs` has the unit test.
 - `src/input/base/blink_cursor.rs`: the caret stops blinking and stays visible
   10 seconds after the last input, focus, or window activation. Before, the
   caret of a focused input blinked until the input lost focus, and each blink

@@ -52,11 +52,9 @@ name = "perf"
 required-features = ["ui"]
 
 [patch.crates-io]
-# GPUI Base 0.6.6 with three Qrow fixes: the active-line paint covers the
-# editor's right padding, inline code lines keep one line when they fit, and
-# lines with bold or italic text wrap at the column width. See
-# vendor/gpui-base/QROW-PATCH.md. Remove this patch when a GPUI Kit release
-# includes all fixes.
+# GPUI Base 0.6.6 with Qrow fixes to the editor and Markdown text.
+# vendor/gpui-base/QROW-PATCH.md lists them. Remove this patch when a GPUI Kit
+# release includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
 # GPUI's macOS platform 0.3.6 with one Qrow fix: a window stops its display

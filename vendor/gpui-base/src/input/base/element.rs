@@ -1673,7 +1673,7 @@ pub(super) struct PrepaintState {
     search_match_paths: Vec<(Path<Pixels>, bool)>,
     document_color_paths: Vec<(Path<Pixels>, Hsla)>,
     hover_definition_hitbox: Option<Hitbox>,
-    indent_guides_path: Option<Path<Pixels>>,
+    indent_guides: Vec<Bounds<Pixels>>,
     /// The whole input, for deciding whether a long press started in it.
     hitbox: Hitbox,
     bounds: Bounds<Pixels>,
@@ -2161,7 +2161,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
         };
 
         let hover_definition_hitbox = M::hover_definition_hitbox(state, window, cx);
-        let indent_guides_path =
+        let indent_guides =
             self.layout_indent_guides(state, &bounds, &last_layout, &text_style, window);
         state
             .editor_scrollbar_snapshot
@@ -2190,7 +2190,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             hover_highlight_path,
             hover_definition_hitbox,
             document_color_paths,
-            indent_guides_path,
+            indent_guides,
             fold_icon_layout,
             ghost_first_line,
             ghost_lines,
@@ -2318,8 +2318,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
         }
 
         // Paint indent guides
-        if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, editor_style.border.opacity(0.85));
+        let indent_guide_color = editor_style.border.opacity(0.85);
+        for guide in prepaint.indent_guides.drain(..) {
+            window.paint_quad(fill(guide, indent_guide_color));
         }
 
         // Paint selections
