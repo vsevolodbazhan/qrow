@@ -32,6 +32,11 @@ struct Server {
     block: AtomicBool,
     /// Requests for this schema stay running until they are cancelled.
     block_schema: Mutex<Option<String>>,
+    /// A status call for this schema does not return until the request is
+    /// cancelled, like a call that waits for a slow server.
+    hang_schema: Mutex<Option<String>>,
+    /// Requests for this schema return rows without an end.
+    endless_schema: Mutex<Option<String>>,
     /// How many requests the worker cancelled.
     cancels: AtomicUsize,
     refuse: AtomicBool,
@@ -223,6 +228,11 @@ impl Session for FakeSession {
         )))
     }
     fn poll(&mut self) -> Result<QueryState> {
+        if self.schema.is_some() && *self.server.hang_schema.lock().unwrap() == self.schema {
+            while !self.cancelled.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let blocked =
             self.schema.is_some() && *self.server.block_schema.lock().unwrap() == self.schema;
         Ok(if self.cancelled.load(Ordering::SeqCst) {
@@ -244,6 +254,12 @@ impl Session for FakeSession {
         Ok(self.columns.clone())
     }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        if self.schema.is_some() && *self.server.endless_schema.lock().unwrap() == self.schema {
+            std::thread::sleep(Duration::from_millis(10));
+            return Ok(Batch {
+                rows: vec![vec![None; self.columns.len()]],
+            });
+        }
         // Small batches check that the worker reads until an empty batch.
         let take = count.min(2).min(self.rows.len());
         Ok(Batch {
@@ -967,4 +983,38 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
             .starts_with("Schema refresh stopped because no tab of the connection is connected"),
         "{texts:?}"
     );
+}
+
+#[test]
+fn a_timeout_cancels_a_call_that_blocks() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 150 ms, so the timeout is 300 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(150));
+    h.refresh(Scope::Connection);
+    *server.hang_schema.lock().unwrap() = Some("sales".into());
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        h.catalog().schema("sales").unwrap().error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
+    );
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+}
+
+#[test]
+fn an_automatic_refresh_stops_between_fetches_when_the_connection_becomes_cold() {
+    let server = warehouse();
+    *server.endless_schema.lock().unwrap() = Some("sales".into());
+    let mut h = Harness::new(server.clone(), profile(), None);
+    h.worker.set_warm(true);
+    h.wait(|h| h.status.active == Some(Scope::Connection));
+    std::thread::sleep(Duration::from_millis(200));
+    h.worker.set_warm(false);
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    assert_eq!(h.catalog().error, None);
 }

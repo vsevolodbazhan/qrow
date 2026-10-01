@@ -371,6 +371,21 @@ fn format_duration(duration: Duration) -> String {
     format!("{:.2} s", duration.as_secs_f64())
 }
 
+/// Cancel the request in progress at `deadline`, also while the worker waits
+/// for a call that blocks. Dropping the sender stops the watchdog.
+fn watchdog(deadline: Instant, target: Target) -> mpsc::Sender<()> {
+    let (stop, stopped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let wait = deadline.saturating_duration_since(Instant::now());
+        if stopped.recv_timeout(wait) == Err(RecvTimeoutError::Timeout)
+            && let Some(cancellation) = target.lock().unwrap().clone()
+        {
+            let _ = cancellation.cancel();
+        }
+    });
+    stop
+}
+
 fn past(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
@@ -416,7 +431,9 @@ impl Runner {
                 self.failures = 0;
                 let started = Instant::now();
                 let timeout = self.profile.catalog.timeout_minutes;
-                self.deadline = Some(started + self.minute * timeout);
+                let deadline = started + self.minute * timeout;
+                self.deadline = Some(deadline);
+                let watchdog = watchdog(deadline, self.target.clone());
                 self.log(
                     Severity::Info,
                     format!(
@@ -427,6 +444,7 @@ impl Runner {
                     None,
                 );
                 let result = self.refresh(&scope);
+                drop(watchdog);
                 self.deadline = None;
                 self.automatic = false;
                 let duration = started.elapsed();
@@ -874,19 +892,18 @@ impl Runner {
             }
             thread::sleep(POLL_INTERVAL);
         };
-        let session = self.session.as_mut().unwrap();
         if !has_results {
-            session.close_operation()?;
+            self.session.as_mut().unwrap().close_operation()?;
             return Ok(MetadataRows {
                 columns: vec![],
                 rows: vec![],
             });
         }
-        let columns = session.columns()?;
+        let columns = self.session.as_mut().unwrap().columns()?;
         let mut rows: Vec<Row> = Vec::new();
         let mut bytes = 0usize;
         loop {
-            let batch = session.fetch(METADATA_BATCH)?;
+            let batch = self.session.as_mut().unwrap().fetch(METADATA_BATCH)?;
             if batch.rows.is_empty() {
                 break;
             }
@@ -908,12 +925,13 @@ impl Runner {
             if self.cancelled.load(Ordering::SeqCst) {
                 anyhow::bail!("The catalog request was cancelled");
             }
-            if past(self.deadline) || (self.automatic && !self.warm) {
+            self.accept_refreshes();
+            if self.must_stop() {
                 Self::cancel_request(&cancellation);
                 anyhow::bail!("The catalog request was stopped");
             }
         }
-        session.close_operation()?;
+        self.session.as_mut().unwrap().close_operation()?;
         Ok(MetadataRows { columns, rows })
     }
 
