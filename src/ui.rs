@@ -1922,34 +1922,32 @@ impl Qrow {
         self.open_context_menu(
             position,
             move |menu, _, _| {
-                menu.when(browses, |menu| {
-                    menu.item(
-                        PopupMenuItem::new(if refreshing {
-                            "Stop Refresh"
-                        } else {
-                            "Refresh Schemas"
-                        })
-                        .on_click(refresh),
-                    )
+                // Labeled sections: what the row is, then what it contains.
+                menu.label("Connection")
+                    .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
+                    .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(
-                        PopupMenuItem::new("Collapse All")
-                            .on_click(collapse)
-                            .disabled(!has_expanded),
+                        PopupMenuItem::new("Delete")
+                            .on_click(delete)
+                            .disabled(in_use),
                     )
-                    .separator()
-                })
-                .item(
-                    PopupMenuItem::new("Edit Connection…")
-                        .on_click(edit)
-                        .disabled(busy),
-                )
-                .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
-                .separator()
-                .item(
-                    PopupMenuItem::new("Delete")
-                        .on_click(delete)
-                        .disabled(in_use),
-                )
+                    .when(browses, |menu| {
+                        menu.separator()
+                            .label("Schemas")
+                            .item(
+                                PopupMenuItem::new(if refreshing {
+                                    "Stop Refresh"
+                                } else {
+                                    "Refresh"
+                                })
+                                .on_click(refresh),
+                            )
+                            .item(
+                                PopupMenuItem::new("Collapse")
+                                    .on_click(collapse)
+                                    .disabled(!has_expanded),
+                            )
+                    })
             },
             window,
             cx,

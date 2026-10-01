@@ -298,7 +298,7 @@ fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 1);
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "a second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -346,7 +346,7 @@ fn hidden_schemas_leave_the_tree_when_the_connection_is_saved(cx: &mut TestAppCo
     wait_shows(&app, cx, "finance");
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.scroll_to(cx, "connection-hide-schemas");
     app.fill(cx, "connection-hide-schemas", "fin*, scratch");
     app.click(cx, "save-profile");
@@ -452,7 +452,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
 
     // Off by default: only the errors of a refresh go to Logs, in full.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the first attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
@@ -475,7 +475,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
     app.settle(cx);
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.scroll_to(cx, "connection-refresh-logs");
     app.select(cx, "connection-refresh-logs", "Enabled");
     app.click(cx, "save-profile");
@@ -485,7 +485,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
     });
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -615,7 +615,7 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
 
     // A schema keeps its relations open, but their columns close.
     app.context_menu_labelled(cx, "avia");
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "gate STRING");
     wait_shows(&app, cx, "bookings");
 
@@ -623,15 +623,15 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     app.click_labelled(cx, "bookings");
     wait_shows(&app, cx, "gate STRING");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "bookings");
     wait_shows(&app, cx, "avia");
 
-    // A search expands the schemas with matches. Collapse All closes them too.
+    // A search expands the schemas with matches. Collapse closes them too.
     app.fill_labelled(cx, "Search Tables", "book");
     wait_shows(&app, cx, "bookings");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "bookings");
     wait_shows(&app, cx, "avia");
 }
@@ -676,7 +676,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     };
     let edit = |cx: &mut TestAppContext| {
         app.context_menu(cx, connection_row(profile.id));
-        app.choose(cx, "popup-menu", "Edit Connection…");
+        app.choose(cx, "popup-menu", "Edit");
         app.scroll_to(cx, "connection-schema-refresh");
     };
     let saved = |app: &TestApp| app.saved().profiles[0].catalog.clone();
@@ -787,7 +787,7 @@ fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppCont
     let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
     let set_mode = |cx: &mut TestAppContext, mode: &str| {
         app.context_menu(cx, connection_row(profile.id));
-        app.choose(cx, "popup-menu", "Edit Connection…");
+        app.choose(cx, "popup-menu", "Edit");
         app.scroll_to(cx, "connection-schema-refresh");
         choose_schema_refresh(&app, cx, mode);
         app.click(cx, "save-profile");
@@ -840,9 +840,11 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
     app.update(cx, |window, _| assert!(labelled(window, "avia").is_none()));
     app.context_menu(cx, connection_row(profile.id));
     app.update(cx, |window, _| {
-        assert!(menu_item(window, "popup-menu", "Edit Connection…").is_some());
-        assert!(menu_item(window, "popup-menu", "Refresh Schemas").is_none());
-        assert!(menu_item(window, "popup-menu", "Collapse All").is_none());
+        assert!(menu_item(window, "popup-menu", "Edit").is_some());
+        // Without schema browsing, the menu has no Schemas section.
+        for item in ["Schemas", "Refresh", "Collapse"] {
+            assert!(menu_item(window, "popup-menu", item).is_none(), "{item}");
+        }
     });
 }
 
@@ -873,7 +875,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
     };
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);

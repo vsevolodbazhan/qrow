@@ -906,7 +906,7 @@ impl Qrow {
         }
     }
 
-    /// Whether Collapse All has rows to collapse below the connection or
+    /// Whether Collapse has rows to collapse below the connection or
     /// schema. The built tree knows which rows are open, also the rows that
     /// a search opens.
     pub(super) fn has_expanded_descendants(
@@ -1054,7 +1054,7 @@ impl Qrow {
                 };
                 let menu = match collapse {
                     Some((collapse, has_expanded)) => menu.item(
-                        PopupMenuItem::new("Collapse All")
+                        PopupMenuItem::new("Collapse")
                             .on_click(collapse)
                             .disabled(!has_expanded),
                     ),

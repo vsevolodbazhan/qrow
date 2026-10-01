@@ -33,7 +33,8 @@ macOS can request Keychain access when you save the password.
 
 ## Edit, duplicate, or delete a profile
 
-Right-click a profile to use **Edit Connection…**, **Duplicate**, or **Delete**.
+Right-click a profile and use the **Connection** section of the menu: **Edit**,
+**Duplicate**, or **Delete**.
 An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier, a unique name based on the source name, and
 requires a password.
@@ -66,7 +67,7 @@ connection settings. In **Schema refresh**, the first field of the Schemas
 section, select **Manual** or **While connected**. The choices are:
 
 - **Disabled**: Qrow does not read or show the schemas of the connection. The
-  connection row has no arrow, and its menu has no **Refresh Schemas**. The
+  connection row has no arrow, and its menu has no **Schemas** section. The
   other Schemas fields do not show, and they keep their values. Qrow keeps
   the copy of the schemas on your computer, so the tree shows it again when
   you turn browsing on.
@@ -81,8 +82,8 @@ To use the tree:
 - Click the arrow before a connection to expand or collapse it.
 - Click a schema, a table, or a view to expand or collapse it.
 - To collapse all rows below a connection or a schema, right-click it and
-  select **Collapse All**. The connection or the schema stays expanded. During
-  a search, **Collapse All** on a connection also collapses the schemas that
+  select **Collapse**. The connection or the schema stays expanded. During
+  a search, **Collapse** on a connection also collapses the schemas that
   the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
@@ -105,7 +106,8 @@ session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
 - To refresh all schemas, with the tables and the columns of each schema,
-  right-click the connection and select **Refresh Schemas**.
+  right-click the connection and select **Refresh** in the **Schemas**
+  section.
 - To refresh one schema and the columns of all its tables, right-click the
   schema and select **Refresh**.
 - To refresh one table or view and its columns, right-click it and select

@@ -131,7 +131,7 @@ fn connection_names_stay_unique_on_create_and_rename(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.count(), 2);
 
     app.context_menu(cx, connection_row(other));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
     app.fill(cx, "connection-name", "Qrow E2E");
     app.click(cx, "save-profile");
@@ -148,19 +148,28 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
 
     app.context_menu(cx, connection_row(original));
     app.update(cx, |window, _| {
-        for item in ["Edit Connection…", "Duplicate", "Delete"] {
-            assert!(
-                menu_item(window, "popup-menu", item).is_some(),
-                "The menu has no {item}"
-            );
-        }
+        // The connection section, then the schemas section, in this order.
+        let order = [
+            "Connection",
+            "Edit",
+            "Duplicate",
+            "Delete",
+            "Schemas",
+            "Refresh",
+            "Collapse",
+        ]
+        .map(|item| {
+            menu_item(window, "popup-menu", item)
+                .unwrap_or_else(|| panic!("The menu has no {item}"))
+        });
+        assert!(order.is_sorted_by(|a, b| a < b), "{order:?}");
     });
     // A dismissed menu is released; the leak detector fails the test otherwise.
     app.press(cx, "escape");
     app.wait_gone(cx, "popup-menu");
 
     app.context_menu(cx, connection_row(original));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-password");
     cancel_form(&app, cx);
 
