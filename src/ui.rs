@@ -40,6 +40,7 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
+    select::SelectEvent,
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -222,8 +223,9 @@ struct ProfileEditor {
     parameters: Entity<TextareaState>,
     idle_behavior: connection_form::ChoiceSelect,
     _idle_behavior_subscription: Subscription,
-    /// Whether and when Qrow reads the schemas of the connection.
-    schema_refresh: connection_form::RefreshMode,
+    /// Manual or automatic schema refresh.
+    schema_refresh: connection_form::ChoiceSelect,
+    _schema_refresh_subscription: Subscription,
     /// Whether schema refreshes write their requests to Logs.
     refresh_logs: connection_form::ChoiceSelect,
     is_new: bool,
@@ -2164,7 +2166,18 @@ impl Qrow {
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
-        let schema_refresh = connection_form::RefreshMode::of(profile.catalog.refresh);
+        let schema_refresh = connection_form::schema_refresh_select(
+            connection_form::RefreshMode::of(profile.catalog.refresh),
+            window,
+            cx,
+        );
+        // The choice decides which Schemas fields show.
+        let schema_refresh_subscription =
+            cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    cx.notify();
+                }
+            });
         let idle_behavior_subscription =
             cx.subscribe_in(&idle_behavior, window, |_this, _, event, _, cx| {
                 if connection_form::keep_connected_from_event(event).is_some() {
@@ -2176,6 +2189,7 @@ impl Qrow {
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
             schema_refresh,
+            _schema_refresh_subscription: schema_refresh_subscription,
             refresh_logs,
             profile,
             fields,
@@ -2222,7 +2236,7 @@ impl Qrow {
                         "Session parameters must be a JSON object with string values: {e}"
                     )
                 })?;
-            let mode = form.schema_refresh;
+            let mode = connection_form::refresh_mode(&form.schema_refresh, cx);
             // Disabled hides the other Schemas fields and keeps their values.
             if mode != connection_form::RefreshMode::Disabled {
                 profile.catalog.include = connection_form::parse_patterns(&values[10]);

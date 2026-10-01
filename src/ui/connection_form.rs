@@ -32,7 +32,7 @@ const REFRESH_MODES: [(RefreshMode, &str); 3] = [
 ];
 
 impl RefreshMode {
-    /// What the mode does, in one line below the choices.
+    /// What the mode does, in one line below the dropdown.
     fn help(self) -> &'static str {
         match self {
             Self::Disabled => "Qrow does not read or show schemas.",
@@ -110,12 +110,9 @@ use gpui_kit::component::{
     IndexPath,
     form::{Field, Form},
     input::Input,
-    radio::RadioGroup,
     select::{SearchableVec, Select, SelectEvent, SelectState},
 };
-use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, TestSupportExt as _, Window, div, prelude::*,
-};
+use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*};
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
@@ -156,6 +153,39 @@ pub(super) fn idle_behavior_select(
             cx,
         )
     })
+}
+
+/// The Schema refresh dropdown, with `mode` selected.
+pub(super) fn schema_refresh_select(
+    mode: RefreshMode,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> ChoiceSelect {
+    let row = REFRESH_MODES
+        .iter()
+        .position(|(choice, _)| *choice == mode)
+        .unwrap_or_default();
+    cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(
+                REFRESH_MODES
+                    .iter()
+                    .map(|(_, label)| (*label).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+            Some(IndexPath::default().row(row)),
+            window,
+            cx,
+        )
+    })
+}
+
+pub(super) fn refresh_mode(select: &ChoiceSelect, cx: &App) -> RefreshMode {
+    let selected = select.read(cx).selected_value().cloned();
+    REFRESH_MODES
+        .iter()
+        .find(|(_, label)| selected.as_deref() == Some(*label))
+        .map_or(RefreshMode::Disabled, |(mode, _)| *mode)
 }
 
 /// A choice between Disabled and Enabled.
@@ -259,9 +289,9 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
+pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement {
     let saving = form.saving.is_some();
-    let mode = form.schema_refresh;
+    let mode = refresh_mode(&form.schema_refresh, cx);
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
             .id(FIELD_IDS[index])
@@ -275,24 +305,11 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &mut Context<Qrow>) -> im
         .child(field(
             "Schema refresh",
             Some(mode.help()),
-            // Three choices stay visible, so the current one reads at a glance.
-            div()
+            Select::new(&form.schema_refresh)
                 .id("connection-schema-refresh")
-                .test_support()
-                .child(
-                    RadioGroup::horizontal("connection-schema-refresh-choices")
-                        .children(REFRESH_MODES.iter().map(|(_, label)| *label))
-                        .selected_index(
-                            REFRESH_MODES.iter().position(|(choice, _)| *choice == mode),
-                        )
-                        .disabled(saving)
-                        .on_click(cx.listener(|this, index: &usize, _, cx| {
-                            if let Some(form) = &mut this.form {
-                                form.schema_refresh = REFRESH_MODES[*index].0;
-                                cx.notify();
-                            }
-                        })),
-                )
+                .w_full()
+                .disabled(saving)
+                .accessibility_label("Schema refresh")
                 .into_any_element(),
         ))
         .when(mode == RefreshMode::WhileConnected, |el| {
