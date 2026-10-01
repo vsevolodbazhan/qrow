@@ -544,8 +544,7 @@ fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
     wait_shows(&app, cx, "gate STRING");
 
     let hover = |app: &TestApp, cx: &mut TestAppContext, row: &str| -> Option<String> {
-        app.hover_labelled(cx, row);
-        // The first frame lays out the label. The next one knows its width.
+        // One hover, then rest: the row decides when its tooltip opens.
         app.hover_labelled(cx, row);
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);

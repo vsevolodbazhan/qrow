@@ -1095,37 +1095,6 @@ struct RowContext {
 }
 
 impl RowContext {
-    /// Whether the label `key` cut `text` in the last frame. A label that
-    /// has no width yet counts as not cut.
-    fn is_truncated(
-        &self,
-        key: &SharedString,
-        text: &str,
-        size: Pixels,
-        window: &Window,
-        cx: &App,
-    ) -> bool {
-        let Some(width) = self.widths.borrow().get(key).copied() else {
-            return false;
-        };
-        let run = TextRun {
-            len: text.len(),
-            font: font(cx.theme().font_family.clone()),
-            color: cx.theme().foreground,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let shaped = window.text_system().shape_line(
-            SharedString::from(text.to_owned()),
-            size,
-            &[run],
-            None,
-        );
-        // Half a pixel absorbs rounding of the laid-out width.
-        shaped.width > width + px(0.5)
-    }
-
     /// Records the laid-out width of the label `key` during prepaint.
     fn record_width(
         &self,
@@ -1142,13 +1111,58 @@ impl RowContext {
     }
 }
 
+/// Whether a row cuts its name or its type. Rows ask when GPUI builds their
+/// tooltip, after the pointer rests. By then the row has its laid-out width.
+struct Truncation {
+    widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
+    /// Each label: its width key, its text, and its font size in rems.
+    labels: Vec<(SharedString, String, f32)>,
+}
+
+impl Truncation {
+    fn is_truncated(&self, window: &Window, cx: &App) -> bool {
+        let widths = self.widths.borrow();
+        self.labels.iter().any(|(key, text, rems)| {
+            let Some(width) = widths.get(key).copied() else {
+                return false;
+            };
+            let run = TextRun {
+                len: text.len(),
+                font: font(cx.theme().font_family.clone()),
+                color: cx.theme().foreground,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let size = window.rem_size() * *rems;
+            let shaped = window.text_system().shape_line(
+                SharedString::from(text.clone()),
+                size,
+                &[run],
+                None,
+            );
+            // Half a pixel absorbs rounding of the laid-out width.
+            shaped.width > width + px(0.5)
+        })
+    }
+}
+
+/// The tooltip of a row whose name fits and that has nothing else to show.
+struct NoTooltip;
+
+impl Render for NoTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
 /// The tree row of `entry`. The highlight is inset in the row, so the
 /// highlights of adjacent rows keep a gap.
 fn render_entry(
     entry: &TreeEntry,
     state: TreeEntryState,
     context: &RowContext,
-    window: &mut Window,
+    _: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
     let RowContext {
@@ -1279,18 +1293,21 @@ fn render_entry(
     // comment, or an error.
     let label_key = child_id(&id, "label");
     let detail_key = child_id(&id, "detail");
-    let rem = window.rem_size();
     let has_comment = match node {
         Node::Relation { comment, .. } | Node::Column { comment, .. } => comment.is_some(),
         _ => false,
     };
-    let shows_tooltip = !*menu_open
-        && (has_comment
-            || error.is_some()
-            || context.is_truncated(&label_key, &label, rem * 0.875, window, cx)
-            || detail.as_deref().is_some_and(|detail| {
-                context.is_truncated(&detail_key, detail, rem * 0.75, window, cx)
-            }));
+    let truncation = (!has_comment && error.is_none()).then(|| Truncation {
+        widths: context.widths.clone(),
+        labels: [(label_key.clone(), label.to_string(), 0.875)]
+            .into_iter()
+            .chain(
+                detail
+                    .clone()
+                    .map(|detail| (detail_key.clone(), detail, 0.75)),
+            )
+            .collect(),
+    });
     let menu_id = id.clone();
     let row = h_flex()
         .id(id.clone())
@@ -1355,8 +1372,17 @@ fn render_entry(
                     .text_color(cx.theme().danger),
             )
         })
-        .when_some(tooltip.filter(|_| shows_tooltip), |el, tooltip| {
-            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
+        .when_some(tooltip.filter(|_| !*menu_open), |el, tooltip| {
+            el.tooltip(move |window, cx| {
+                if truncation
+                    .as_ref()
+                    .is_none_or(|truncation| truncation.is_truncated(window, cx))
+                {
+                    row_tooltip_view(&tooltip, window, cx)
+                } else {
+                    cx.new(|_| NoTooltip).into()
+                }
+            })
         })
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
