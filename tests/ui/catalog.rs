@@ -457,8 +457,8 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
 
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit Connection…");
-    app.scroll_to(cx, "connection-log-refreshes");
-    app.click(cx, "connection-log-refreshes");
+    app.scroll_to(cx, "connection-refresh-logs");
+    app.select(cx, "connection-refresh-logs", "Enabled");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
     app.wait_until(cx, "the saved option", Duration::from_secs(10), |_, _| {

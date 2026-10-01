@@ -219,10 +219,10 @@ struct ProfileEditor {
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
-    idle_behavior: connection_form::IdleBehaviorSelect,
+    idle_behavior: connection_form::ChoiceSelect,
     _idle_behavior_subscription: Subscription,
-    /// Show the requests of schema refreshes in Logs.
-    log_refreshes: bool,
+    /// Whether schema refreshes write their requests to Logs.
+    refresh_logs: connection_form::ChoiceSelect,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -2151,6 +2151,8 @@ impl Qrow {
         });
         let keep_connected = profile.lifecycle.keep_alive_seconds > 0;
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
+        let refresh_logs =
+            connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
         let idle_behavior_subscription =
             cx.subscribe_in(&idle_behavior, window, |_this, _, event, _, cx| {
                 if connection_form::keep_connected_from_event(event).is_some() {
@@ -2161,7 +2163,7 @@ impl Qrow {
             parameters,
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
-            log_refreshes: profile.catalog.log_refreshes,
+            refresh_logs,
             profile,
             fields,
             is_new,
@@ -2209,7 +2211,7 @@ impl Qrow {
                 })?;
             profile.catalog.include = connection_form::parse_patterns(&values[10]);
             profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
-            profile.catalog.log_refreshes = form.log_refreshes;
+            profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),

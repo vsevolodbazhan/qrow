@@ -43,8 +43,7 @@ pub(super) fn parse_lifecycle(
 
 use super::{ProfileEditor, Qrow};
 use gpui_kit::component::{
-    Disableable, IndexPath,
-    checkbox::Checkbox,
+    IndexPath,
     form::{Field, Form},
     input::Input,
     select::{SearchableVec, Select, SelectEvent, SelectState},
@@ -69,14 +68,17 @@ pub(super) const FIELD_IDS: [&str; 12] = [
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
+const DISABLED: &str = "Disabled";
+const ENABLED: &str = "Enabled";
 
-pub(super) type IdleBehaviorSelect = Entity<SelectState<SearchableVec<String>>>;
+/// A dropdown of a few fixed choices.
+pub(super) type ChoiceSelect = Entity<SelectState<SearchableVec<String>>>;
 
 pub(super) fn idle_behavior_select(
     keep_connected: bool,
     window: &mut Window,
     cx: &mut Context<Qrow>,
-) -> IdleBehaviorSelect {
+) -> ChoiceSelect {
     cx.new(|cx| {
         SelectState::new(
             SearchableVec::new(vec![DISCONNECT_AFTER.into(), KEEP_CONNECTED.into()]),
@@ -85,6 +87,29 @@ pub(super) fn idle_behavior_select(
             cx,
         )
     })
+}
+
+/// A choice between Disabled and Enabled.
+pub(super) fn enabled_select(
+    enabled: bool,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> ChoiceSelect {
+    cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(vec![DISABLED.into(), ENABLED.into()]),
+            Some(IndexPath::default().row(usize::from(enabled))),
+            window,
+            cx,
+        )
+    })
+}
+
+pub(super) fn is_enabled(select: &ChoiceSelect, cx: &App) -> bool {
+    select
+        .read(cx)
+        .selected_value()
+        .is_some_and(|choice| choice == ENABLED)
 }
 
 pub(super) fn keep_connected_from_event(
@@ -100,7 +125,7 @@ pub(super) fn keep_connected_from_event(
     }
 }
 
-pub(super) fn keeps_connected(select: &IdleBehaviorSelect, cx: &App) -> bool {
+pub(super) fn keeps_connected(select: &ChoiceSelect, cx: &App) -> bool {
     select
         .read(cx)
         .selected_value()
@@ -165,7 +190,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
+pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
     let saving = form.saving.is_some();
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
@@ -188,18 +213,13 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &mut Context<Qrow>) -> im
             input(11, "Hide schemas"),
         ))
         .child(field(
-            "Logs",
+            "Schema refresh logs",
             Some("Records each request of a schema refresh in the Logs of the tab that the connection shows."),
-            Checkbox::new("connection-log-refreshes")
-                .label("Show schema refreshes")
-                .checked(form.log_refreshes)
+            Select::new(&form.refresh_logs)
+                .id("connection-refresh-logs")
+                .w_full()
                 .disabled(saving)
-                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                    if let Some(form) = &mut this.form {
-                        form.log_refreshes = *checked;
-                        cx.notify();
-                    }
-                }))
+                .accessibility_label("Schema refresh logs")
                 .into_any_element(),
         ))
 }

@@ -143,8 +143,8 @@ Qrow adds backticks to a name that is not a plain identifier.
 
 ### Show refreshes in Logs
 
-To see the requests of each refresh, open the connection settings and select
-**Show schema refreshes**. The option applies to the connection. Qrow then
+To see the requests of each refresh, open the connection settings and set
+**Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
 records each refresh in the Logs of the tab that the connection shows:
 
 - The start of the refresh.
@@ -156,7 +156,7 @@ records each refresh in the Logs of the tab that the connection shows:
 The entries of one refresh share one place in the Logs history. A large
 refresh does not remove the history of queries. A refresh error does not mark
 the connection with an unread error, because the tree shows the error. The
-option is off by default.
+default is **Disabled**.
 
 ### Show or hide schemas
 
