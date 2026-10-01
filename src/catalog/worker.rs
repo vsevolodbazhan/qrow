@@ -1,12 +1,15 @@
-//! A thread that reads the catalog of one connection.
+//! A thread that reads the catalog of one connection, or of the connections
+//! that share one catalog.
 //!
 //! The worker opens its own session for the queued refreshes and closes it
 //! when the queue is empty, so it never changes the idle timer or the result
-//! cursor of a query tab. While a tab of the connection has a live session,
-//! the worker also refreshes the connection when its refresh period passes.
+//! cursor of a query tab. It runs one refresh at a time, with the profile of
+//! the member that asked for it. While a tab of a member has a live session,
+//! the worker also refreshes the catalog when its refresh period passes.
 
 use super::{
-    Catalog, MetadataRows, Scope, Unfinished, now, parse_columns, parse_relations, parse_schemas,
+    Catalog, CatalogConfig, CatalogIdentity, MetadataRows, Scope, Unfinished, now, parse_columns,
+    parse_relations, parse_schemas,
 };
 use crate::{
     activity::{ActivityEvent, ActivityKind, Severity},
@@ -30,6 +33,7 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use uuid::Uuid;
 
 /// The rows that one fetch of a catalog request asks for.
 const METADATA_BATCH: usize = 1_000;
@@ -44,6 +48,9 @@ pub const MINUTE: Duration = Duration::from_secs(60);
 /// The longest wait before the worker checks the clock for an automatic
 /// refresh again. A wait does not count the time that the computer sleeps.
 const CLOCK_CHECK: Duration = Duration::from_secs(60);
+/// The cancel flag value that stops every refresh. Other values stop only
+/// the refresh with that Logs batch, and zero stops nothing.
+const CANCEL_ALL: u64 = u64::MAX;
 
 /// When the next automatic refresh is due, or `None` if no refresh is due.
 /// `last` is the start of the last connection refresh. A catalog that Qrow
@@ -60,13 +67,22 @@ pub fn refresh_due(
     Some(last.map_or(UNIX_EPOCH, |last| last + minute * settings.refresh_minutes))
 }
 
+/// A refresh, and the member whose profile runs it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub member: Uuid,
+    pub scope: Scope,
+}
+
 /// The refreshes that a worker performs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Status {
     /// The refresh in progress.
     pub active: Option<Scope>,
+    /// The member that runs the refresh in progress.
+    pub runner: Option<Uuid>,
     /// The refreshes that wait for the active one.
-    pub queued: Vec<Scope>,
+    pub queued: Vec<Request>,
     /// For a connection refresh, the schemas that are done and all schemas.
     pub done: usize,
     pub total: usize,
@@ -75,11 +91,31 @@ pub struct Status {
 impl Status {
     /// Return whether `scope` is in progress or waits.
     pub fn includes(&self, scope: &Scope) -> bool {
-        self.active.as_ref() == Some(scope) || self.queued.contains(scope)
+        self.active.as_ref() == Some(scope)
+            || self.queued.iter().any(|request| request.scope == *scope)
     }
 
     pub fn is_idle(&self) -> bool {
         self.active.is_none() && self.queued.is_empty()
+    }
+
+    /// The refreshes of `member` only. A member of a shared catalog shows
+    /// the state of its own refreshes; the data of the others arrives in
+    /// the catalog.
+    pub fn of_member(&self, member: Uuid) -> Status {
+        let runs = self.runner == Some(member);
+        Status {
+            active: self.active.clone().filter(|_| runs),
+            runner: self.runner.filter(|_| runs),
+            queued: self
+                .queued
+                .iter()
+                .filter(|request| request.member == member)
+                .cloned()
+                .collect(),
+            done: if runs { self.done } else { 0 },
+            total: if runs { self.total } else { 0 },
+        }
     }
 }
 
@@ -88,42 +124,63 @@ pub enum Event {
     Status(Status),
 }
 
+/// A catalog that a new shared catalog starts with: the private catalog of
+/// the connection that made it.
+pub enum Seed {
+    /// The catalog that the private worker had loaded.
+    Catalog(Arc<Catalog>),
+    /// The cache file of a private catalog that no worker loaded. The worker
+    /// deletes the file.
+    File {
+        path: PathBuf,
+        owner: Uuid,
+        identity: CatalogIdentity,
+    },
+}
+
 enum Command {
-    Refresh(Scope),
+    Refresh(Request),
     /// A connection refresh when the catalog has never been read.
-    RefreshIfUnloaded,
-    Cancel,
-    UpdateProfile(Box<Profile>),
-    /// Whether a tab of the connection has a live session.
-    SetWarm(bool),
+    RefreshIfUnloaded(Uuid),
+    /// Stop the refreshes of one member, or all refreshes.
+    Cancel(Option<Uuid>),
+    Configure(Box<CatalogConfig>),
+    /// Whether a tab of the member has a live session.
+    SetLive(Uuid, bool),
+    Seed(Seed),
     Delete,
     Shutdown,
 }
 
-type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
+/// The request in progress, with the Logs batch of its refresh.
+type Target = Arc<Mutex<Option<(u64, Arc<dyn Cancellation>)>>>;
+/// The Logs batch and the member of the refresh in progress.
+type Running = Arc<Mutex<Option<(u64, Uuid)>>>;
 
 pub struct CatalogWorker {
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
-    /// Logs entries, only when the profile enables them.
-    pub activities: mpsc::Receiver<ActivityEvent>,
-    cancelled: Arc<AtomicBool>,
+    /// Logs entries, with the member that ran the refresh. Only for members
+    /// that enable them.
+    pub activities: mpsc::Receiver<(Uuid, ActivityEvent)>,
+    cancelled: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
     target: Target,
-    profile: Mutex<Profile>,
+    running: Running,
+    config: Mutex<CatalogConfig>,
     done: mpsc::Receiver<()>,
 }
 
 impl CatalogWorker {
     /// `cache` is the cache file, or `None` to keep the catalog only in memory.
     pub fn new(
-        profile: Profile,
+        config: CatalogConfig,
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
         credentials: Arc<dyn Credentials>,
     ) -> Self {
         Self::with_connector(
-            profile,
+            config,
             cache,
             wake,
             Arc::new(HiveConnector),
@@ -135,7 +192,7 @@ impl CatalogWorker {
     /// `minute` is the length of one minute of the refresh period and
     /// timeout. Tests make it shorter.
     pub fn with_connector(
-        profile: Profile,
+        config: CatalogConfig,
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
@@ -146,12 +203,13 @@ impl CatalogWorker {
         let (events_tx, events) = mpsc::channel();
         let (activity_tx, activities) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
-        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
         let target: Target = Arc::new(Mutex::new(None));
+        let running: Running = Arc::new(Mutex::new(None));
         let runner = Runner {
-            catalog: Arc::new(Catalog::new(&profile)),
-            profile: profile.clone(),
+            catalog: Arc::new(Catalog::empty(config.id, config.identity())),
+            config: config.clone(),
             cache,
             queue: VecDeque::new(),
             deferred: VecDeque::new(),
@@ -164,13 +222,15 @@ impl CatalogWorker {
             passwords,
             cancelled: cancelled.clone(),
             target: target.clone(),
+            running: running.clone(),
             rx,
             tx: events_tx,
             activity: activity_tx,
             batch: 0,
+            profile: config.members.first().cloned().unwrap_or_default(),
             failures: 0,
             wake,
-            warm: false,
+            live: BTreeSet::new(),
             minute,
             last_refresh: None,
             deadline: None,
@@ -187,50 +247,90 @@ impl CatalogWorker {
             cancelled,
             stopped,
             target,
-            profile: Mutex::new(profile),
+            running,
+            config: Mutex::new(config),
             done,
         }
     }
 
-    pub fn refresh(&self, scope: Scope) {
-        let _ = self.tx.send(Command::Refresh(scope));
+    /// Read `scope` again with the profile of `member`.
+    pub fn refresh(&self, member: Uuid, scope: Scope) {
+        let _ = self.tx.send(Command::Refresh(Request { member, scope }));
     }
 
-    /// Refresh the connection if Qrow has never read its catalog. The worker
-    /// decides after it loads the cache, so a cached catalog is not read again.
-    pub fn refresh_if_unloaded(&self) {
-        let _ = self.tx.send(Command::RefreshIfUnloaded);
+    /// Refresh the catalog with `member` if Qrow has never read it. The
+    /// worker decides after it loads the cache, so a cached catalog is not
+    /// read again.
+    pub fn refresh_if_unloaded(&self, member: Uuid) {
+        let _ = self.tx.send(Command::RefreshIfUnloaded(member));
     }
 
-    /// Tell the worker whether a tab of the connection has a live session.
-    /// Only then does it refresh the connection by itself.
-    pub fn set_warm(&self, warm: bool) {
-        let _ = self.tx.send(Command::SetWarm(warm));
+    /// Tell the worker whether a tab of `member` has a live session. Only
+    /// then does it refresh the catalog by itself, with a live member.
+    pub fn set_live(&self, member: Uuid, live: bool) {
+        let _ = self.tx.send(Command::SetLive(member, live));
     }
 
-    /// Stop the refresh in progress and remove the waiting refreshes.
+    /// Give a new shared catalog the catalog that its first member had. The
+    /// worker uses it only if the catalog was never read.
+    pub fn seed(&self, seed: Seed) {
+        let _ = self.tx.send(Command::Seed(seed));
+    }
+
+    /// Stop every refresh in progress and remove the waiting refreshes.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        if let Some(cancellation) = self.target.lock().unwrap().clone() {
+        self.cancelled.store(CANCEL_ALL, Ordering::SeqCst);
+        self.cancel_target(None);
+        let _ = self.tx.send(Command::Cancel(None));
+    }
+
+    /// Stop the refresh of `member`, if it runs, and remove its waiting
+    /// refreshes. The refreshes of other members continue.
+    pub fn stop(&self, member: Uuid) {
+        let running = *self.running.lock().unwrap();
+        if let Some((batch, runner)) = running
+            && runner == member
+        {
+            let _ = self
+                .cancelled
+                .compare_exchange(0, batch, Ordering::SeqCst, Ordering::SeqCst);
+            self.cancel_target(Some(batch));
+        }
+        let _ = self.tx.send(Command::Cancel(Some(member)));
+    }
+
+    /// Cancel the request in progress, if it belongs to `batch` or `batch`
+    /// is `None`.
+    fn cancel_target(&self, batch: Option<u64>) {
+        let target = self.target.lock().unwrap().clone();
+        if let Some((current, cancellation)) = target
+            && batch.is_none_or(|batch| batch == current)
+        {
             // Cancellation opens a separate transport, so it stays off the caller's thread.
             thread::spawn(move || {
                 let _ = cancellation.cancel();
             });
         }
-        let _ = self.tx.send(Command::Cancel);
     }
 
-    /// Apply edited settings. A different server or user clears the catalog.
-    pub fn update_profile(&self, profile: Profile) {
-        let mut current = self.profile.lock().unwrap();
-        if !Catalog::new(&current).describes(&profile) {
+    /// Apply edited settings or members. A private catalog of another
+    /// server or user is cleared. A member that leaves stops its refreshes.
+    pub fn configure(&self, config: CatalogConfig) {
+        let mut current = self.config.lock().unwrap();
+        if current.identity() != config.identity() {
             self.cancel();
+        } else {
+            for member in &current.members {
+                if config.member(member.id).is_none() {
+                    self.stop(member.id);
+                }
+            }
         }
-        *current = profile.clone();
-        let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
+        *current = config.clone();
+        let _ = self.tx.send(Command::Configure(Box::new(config)));
     }
 
-    /// Stop the worker and delete the cache file of its profile.
+    /// Stop the worker and delete its cache file.
     pub fn delete(&self) {
         if !self.stopped.swap(true, Ordering::SeqCst) {
             self.cancel();
@@ -258,7 +358,7 @@ impl Drop for CatalogWorker {
 
 /// Why a refresh stopped before its end.
 enum Interrupt {
-    /// A cancellation or a profile change. The catalog keeps its data.
+    /// A cancellation or a settings change. The catalog keeps its data.
     Cancelled,
     /// Shutdown or deletion.
     Stopped,
@@ -266,20 +366,21 @@ enum Interrupt {
     Unavailable(String),
     /// The refresh took longer than the timeout. The catalog keeps its data.
     TimedOut,
-    /// No tab of the connection has a live session any more, so an
-    /// automatic refresh stops. The catalog keeps its data.
+    /// No tab of the member that runs an automatic refresh has a live
+    /// session any more, so the refresh stops. The catalog keeps its data.
     Cold,
 }
 
 struct Runner {
-    profile: Profile,
+    config: CatalogConfig,
     cache: Option<PathBuf>,
     catalog: Arc<Catalog>,
-    queue: VecDeque<Scope>,
+    queue: VecDeque<Request>,
     /// Commands that arrived while a request ran. Refresh commands do not wait here.
     deferred: VecDeque<Command>,
     status: Status,
-    session: Option<Box<dyn Session>>,
+    /// The open session, and the member whose profile opened it.
+    session: Option<(Uuid, Box<dyn Session>)>,
     /// Set when a command cancels the refresh in progress.
     interrupted: bool,
     /// The catalog has changes that are not in the cache file.
@@ -288,18 +389,21 @@ struct Runner {
     published: Option<(Arc<Catalog>, Instant)>,
     connector: Arc<dyn Connector>,
     passwords: PasswordProvider,
-    cancelled: Arc<AtomicBool>,
+    cancelled: Arc<AtomicU64>,
     target: Target,
+    running: Running,
     rx: mpsc::Receiver<Command>,
     tx: mpsc::Sender<Event>,
-    activity: mpsc::Sender<ActivityEvent>,
+    activity: mpsc::Sender<(Uuid, ActivityEvent)>,
     /// The Logs batch of the refresh in progress.
     batch: u64,
+    /// The profile of the member that runs the refresh in progress.
+    profile: Profile,
     /// The nodes that the refresh in progress could not read.
     failures: usize,
     wake: Arc<dyn Fn() + Send + Sync>,
-    /// Whether a tab of the connection has a live session.
-    warm: bool,
+    /// The members that have a tab with a live session.
+    live: BTreeSet<Uuid>,
     minute: Duration,
     /// When the last connection refresh started.
     last_refresh: Option<SystemTime>,
@@ -382,7 +486,7 @@ fn watchdog(deadline: Instant, target: Target) -> mpsc::Sender<()> {
         // Release the lock before the network call, so `cancel` and
         // `shutdown` on the window thread do not wait for it.
         let cancellation = target.lock().unwrap().clone();
-        if let Some(cancellation) = cancellation {
+        if let Some((_, cancellation)) = cancellation {
             let _ = cancellation.cancel();
         }
     });
@@ -403,37 +507,40 @@ fn format_minutes(minutes: u32) -> String {
 
 impl Runner {
     fn run(mut self) {
+        let identity = self.config.identity();
         if let Some(cached) = self
             .cache
             .as_deref()
             .and_then(storage::load_catalog)
-            .filter(|catalog| catalog.describes(&self.profile))
+            .filter(|catalog| catalog.describes(self.config.id, identity.as_ref()))
         {
-            self.catalog = Arc::new(cached);
-            Arc::make_mut(&mut self.catalog).retain(&self.profile.catalog);
-            self.last_refresh = self
-                .catalog
-                .fetched_at
-                .map(|at| UNIX_EPOCH + Duration::from_secs(at));
+            self.adopt(cached);
         }
         self.publish(true);
         'commands: while let Some(command) = self.next_command() {
             if !self.handle(command) {
                 break;
             }
-            while let Some(scope) = self.queue.pop_front() {
+            while let Some(request) = self.queue.pop_front() {
+                let Some(profile) = self.config.member(request.member).cloned() else {
+                    continue;
+                };
+                let scope = request.scope;
+                self.profile = profile;
+                self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
+                *self.running.lock().unwrap() = Some((self.batch, self.profile.id));
                 self.status = Status {
                     active: Some(scope.clone()),
+                    runner: Some(self.profile.id),
                     queued: self.queue.iter().cloned().collect(),
                     done: 0,
                     total: 0,
                 };
                 self.interrupted = false;
                 self.publish(true);
-                self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
                 self.failures = 0;
                 let started = Instant::now();
-                let timeout = self.profile.catalog.timeout_minutes;
+                let timeout = self.config.settings.timeout_minutes;
                 let deadline = started + self.minute * timeout;
                 self.deadline = Some(deadline);
                 let watchdog = watchdog(deadline, self.target.clone());
@@ -450,6 +557,14 @@ impl Runner {
                 drop(watchdog);
                 self.deadline = None;
                 self.automatic = false;
+                let cancelled_all = self.cancelled.load(Ordering::SeqCst) == CANCEL_ALL;
+                *self.running.lock().unwrap() = None;
+                let _ = self.cancelled.compare_exchange(
+                    self.batch,
+                    0,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                );
                 let duration = started.elapsed();
                 let outcome = match &result {
                     Ok(()) if self.failures == 1 => {
@@ -487,24 +602,33 @@ impl Runner {
                     ),
                     Some(duration),
                 );
+                let member = self.profile.id;
                 match result {
                     Ok(()) => {}
                     // The `Cancel` command can arrive after the flag stops the
                     // request. It also clears the queue, so do it here.
-                    Err(Interrupt::Cancelled) => self.queue.clear(),
+                    Err(Interrupt::Cancelled) if cancelled_all => self.queue.clear(),
+                    Err(Interrupt::Cancelled) => {
+                        self.queue.retain(|queued| queued.member != member)
+                    }
                     Err(Interrupt::Stopped) => break 'commands,
                     Err(Interrupt::Unavailable(message)) => {
-                        // The other refreshes would fail in the same way.
-                        self.update(|catalog| {
-                            catalog.set_error(&scope, message.clone());
-                        });
-                        for scope in std::mem::take(&mut self.queue) {
-                            self.update(|catalog| catalog.set_error(&scope, message.clone()));
+                        // The other refreshes of the member would fail in the
+                        // same way. Other members connect with other settings.
+                        self.update(|catalog| catalog.set_error(&scope, message.clone(), member));
+                        let (failed, kept) = std::mem::take(&mut self.queue)
+                            .into_iter()
+                            .partition(|queued| queued.member == member);
+                        self.queue = kept;
+                        for queued in failed {
+                            self.update(|catalog| {
+                                catalog.set_error(&queued.scope, message.clone(), member)
+                            });
                         }
                     }
                     Err(Interrupt::TimedOut) => {
                         let message = format!("Refresh stopped after {}", format_minutes(timeout));
-                        self.update(|catalog| catalog.set_error(&scope, message));
+                        self.update(|catalog| catalog.set_error(&scope, message, member));
                         // The cancelled request can still hold the session.
                         self.close_session();
                     }
@@ -519,6 +643,34 @@ impl Runner {
         self.close_session();
     }
 
+    /// Use a catalog that was read before: the cache file, or the seed of a
+    /// new shared catalog.
+    fn adopt(&mut self, mut catalog: Catalog) {
+        catalog.owner = self.config.id;
+        catalog.identity = self.config.identity();
+        catalog.retain(&self.config.settings);
+        self.last_refresh = catalog
+            .fetched_at
+            .map(|at| UNIX_EPOCH + Duration::from_secs(at));
+        self.catalog = Arc::new(catalog);
+    }
+
+    /// The member that runs an automatic refresh: the preferred member while
+    /// it has a live session, else the first member with a live session.
+    fn automatic_runner(&self) -> Option<Uuid> {
+        self.config
+            .preferred
+            .filter(|preferred| self.live.contains(preferred))
+            .or_else(|| {
+                self.config
+                    .members
+                    .iter()
+                    .map(|member| member.id)
+                    .find(|member| self.live.contains(member))
+            })
+            .filter(|member| self.config.member(*member).is_some())
+    }
+
     /// Wait for the next command. While an automatic refresh is pending,
     /// wake at its time and return a connection refresh.
     fn next_command(&mut self) -> Option<Command> {
@@ -526,9 +678,10 @@ impl Runner {
             return Some(command);
         }
         loop {
+            let runner = self.automatic_runner();
             let Some(due) = refresh_due(
-                &self.profile.catalog,
-                self.warm,
+                &self.config.settings,
+                runner.is_some(),
                 self.last_refresh,
                 self.minute,
             ) else {
@@ -536,13 +689,18 @@ impl Runner {
             };
             // A due time in the past is an error, which means no wait.
             let wait = due.duration_since(SystemTime::now()).unwrap_or_default();
-            if wait.is_zero() {
+            if wait.is_zero()
+                && let Some(member) = runner
+            {
                 // A waiting command can change the policy or the live session.
                 if let Ok(command) = self.rx.try_recv() {
                     return Some(command);
                 }
                 self.automatic = true;
-                return Some(Command::Refresh(Scope::Connection));
+                return Some(Command::Refresh(Request {
+                    member,
+                    scope: Scope::Connection,
+                }));
             }
             match self.rx.recv_timeout(wait.min(CLOCK_CHECK)) {
                 Ok(command) => return Some(command),
@@ -555,53 +713,63 @@ impl Runner {
     /// Apply one command. Returns `false` when the worker must stop.
     fn handle(&mut self, command: Command) -> bool {
         match command {
-            Command::Refresh(scope) => {
+            Command::Refresh(request) => {
+                if self.config.member(request.member).is_none() {
+                    return true;
+                }
+                // A refresh of any member fills the catalog for all of them.
                 let covered = self
                     .status
                     .active
                     .iter()
-                    .chain(&self.queue)
-                    .any(|queued| queued.covers(&scope));
+                    .chain(self.queue.iter().map(|queued| &queued.scope))
+                    .any(|queued| queued.covers(&request.scope));
                 if !covered {
-                    self.queue.retain(|queued| !scope.covers(queued));
-                    self.queue.push_back(scope);
+                    self.queue
+                        .retain(|queued| !request.scope.covers(&queued.scope));
+                    self.queue.push_back(request);
                     self.status.queued = self.queue.iter().cloned().collect();
                     self.publish(true);
                 }
             }
-            Command::RefreshIfUnloaded => {
+            Command::RefreshIfUnloaded(member) => {
                 if self.catalog.fetched_at.is_none() {
-                    return self.handle(Command::Refresh(Scope::Connection));
+                    return self.handle(Command::Refresh(Request {
+                        member,
+                        scope: Scope::Connection,
+                    }));
                 }
             }
-            Command::Cancel => {
-                self.cancelled.store(false, Ordering::SeqCst);
+            Command::Cancel(None) => {
+                self.cancelled.store(0, Ordering::SeqCst);
                 self.interrupted = true;
                 self.queue.clear();
                 self.status.queued.clear();
             }
-            Command::UpdateProfile(profile) => {
-                if !self.catalog.describes(&profile) {
-                    self.close_session();
-                    self.catalog = Arc::new(Catalog::new(&profile));
-                    self.last_refresh = None;
-                    self.dirty = false;
-                    if let Some(path) = &self.cache {
-                        storage::delete_catalog(path);
-                    }
-                } else {
-                    if !self.profile.connection_identity_eq(&profile) {
-                        // The next refresh opens a session with the new settings.
-                        self.close_session();
-                    }
-                    if profile.catalog != self.profile.catalog {
-                        self.update(|catalog| catalog.retain(&profile.catalog));
-                    }
+            Command::Cancel(Some(member)) => {
+                let active = self.status.active.is_some();
+                // A flag of the refresh in progress belongs to a later stop.
+                let _ = self
+                    .cancelled
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |flag| {
+                        (flag != CANCEL_ALL && !(active && flag == self.batch)).then_some(0)
+                    });
+                if active && self.profile.id == member {
+                    self.interrupted = true;
                 }
-                self.profile = *profile;
+                self.queue.retain(|queued| queued.member != member);
+                self.status.queued = self.queue.iter().cloned().collect();
                 self.publish(true);
             }
-            Command::SetWarm(warm) => self.warm = warm,
+            Command::Configure(config) => self.configure(*config),
+            Command::SetLive(member, live) => {
+                if live {
+                    self.live.insert(member);
+                } else {
+                    self.live.remove(&member);
+                }
+            }
+            Command::Seed(seed) => self.seed(seed),
             Command::Delete => {
                 if let Some(path) = &self.cache {
                     storage::delete_catalog(path);
@@ -612,6 +780,69 @@ impl Runner {
             Command::Shutdown => return false,
         }
         true
+    }
+
+    fn configure(&mut self, config: CatalogConfig) {
+        if self.catalog.identity != config.identity() {
+            self.close_session();
+            self.catalog = Arc::new(Catalog::empty(config.id, config.identity()));
+            self.last_refresh = None;
+            self.dirty = false;
+            if let Some(path) = &self.cache {
+                storage::delete_catalog(path);
+            }
+        } else {
+            // The next refresh opens a session with the new settings.
+            let stale = self.session.as_ref().is_some_and(|(member, _)| {
+                config
+                    .member(*member)
+                    .is_none_or(|profile| !profile.connection_identity_eq(&self.profile))
+            });
+            if stale {
+                self.close_session();
+            }
+            if config.settings != self.config.settings {
+                let settings = config.settings.clone();
+                self.update(|catalog| catalog.retain(&settings));
+            }
+        }
+        if let Some(profile) = config.member(self.profile.id) {
+            self.profile = profile.clone();
+        }
+        self.live.retain(|member| config.member(*member).is_some());
+        self.queue
+            .retain(|queued| config.member(queued.member).is_some());
+        self.status.queued = self.queue.iter().cloned().collect();
+        self.config = config;
+        self.publish(true);
+    }
+
+    /// Start a new shared catalog with the private catalog of its first
+    /// member, if the shared catalog was never read.
+    fn seed(&mut self, seed: Seed) {
+        let catalog = match seed {
+            Seed::Catalog(catalog) => Some(Arc::unwrap_or_clone(catalog)),
+            Seed::File {
+                path,
+                owner,
+                identity,
+            } => {
+                let catalog = storage::load_catalog(&path)
+                    .filter(|catalog| catalog.describes(owner, Some(&identity)));
+                storage::delete_catalog(&path);
+                catalog
+            }
+        };
+        if let Some(catalog) = catalog
+            && self.catalog.fetched_at.is_none()
+            && catalog.fetched_at.is_some()
+        {
+            self.adopt(catalog);
+            Arc::make_mut(&mut self.catalog).error = None;
+            self.dirty = true;
+            self.save();
+            self.publish(true);
+        }
     }
 
     /// Apply the commands that arrived during a refresh, then stop the
@@ -626,16 +857,28 @@ impl Runner {
                 return Err(Interrupt::Stopped);
             }
         }
-        if self.interrupted || self.cancelled.load(Ordering::SeqCst) {
+        if self.interrupted || self.cancel_requested() {
             return Err(Interrupt::Cancelled);
         }
         if self.expired() {
             return Err(Interrupt::TimedOut);
         }
-        if self.automatic && !self.warm {
+        if self.cold() {
             return Err(Interrupt::Cold);
         }
         Ok(())
+    }
+
+    /// Whether a cancellation stops the refresh in progress.
+    fn cancel_requested(&self) -> bool {
+        let flag = self.cancelled.load(Ordering::SeqCst);
+        flag == CANCEL_ALL || flag == self.batch
+    }
+
+    /// Whether the refresh in progress is automatic and its member has no
+    /// live session any more.
+    fn cold(&self) -> bool {
+        self.automatic && !self.live.contains(&self.profile.id)
     }
 
     /// Whether the refresh in progress took longer than its timeout.
@@ -644,9 +887,9 @@ impl Runner {
     }
 
     /// Whether the refresh in progress must stop: it timed out, or it is
-    /// automatic and the connection has no live session.
+    /// automatic and its member has no live session.
     fn must_stop(&self) -> bool {
-        self.expired() || (self.automatic && !self.warm)
+        self.expired() || self.cold()
     }
 
     fn refresh(&mut self, scope: &Scope) -> Result<(), Interrupt> {
@@ -666,7 +909,7 @@ impl Runner {
                 return Ok(());
             }
         };
-        let settings = self.profile.catalog.clone();
+        let settings = self.config.settings.clone();
         let started = now();
         self.update(|catalog| catalog.apply_schemas(names, &settings, started));
         // A refresh that stopped in the refresh period continues: the schemas
@@ -853,7 +1096,8 @@ impl Runner {
     /// Record an error on the node of `scope`. The refresh reports it at its end.
     fn fail(&mut self, scope: &Scope, message: String) {
         self.failures += 1;
-        self.update(|catalog| catalog.set_error(scope, message));
+        let member = self.profile.id;
+        self.update(|catalog| catalog.set_error(scope, message, member));
     }
 
     /// Read all rows of a catalog request. An outer error stops the refresh;
@@ -881,7 +1125,7 @@ impl Runner {
                     && self
                         .session
                         .as_mut()
-                        .is_some_and(|session| session.close_operation().is_ok());
+                        .is_some_and(|(_, session)| session.close_operation().is_ok());
                 if healthy {
                     Ok(Err(message))
                 } else {
@@ -896,10 +1140,19 @@ impl Runner {
         // Opening a session and starting a request can take until the
         // network timeout of the connector, and the watchdog cannot cancel them.
         anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
+        // Each member reads with its own user and settings.
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|(member, _)| *member != self.profile.id)
+        {
+            self.close_session();
+        }
         if self.session.is_none() {
             let started = Instant::now();
             let password = (self.passwords)(&self.profile)?;
-            self.session = Some(self.connector.connect(&self.profile, password)?);
+            let session = self.connector.connect(&self.profile, password)?;
+            self.session = Some((self.profile.id, session));
             let duration = started.elapsed();
             self.log(
                 Severity::Info,
@@ -911,10 +1164,10 @@ impl Runner {
             );
             anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
         }
-        let session = self.session.as_mut().unwrap();
+        let session = self.session();
         let cancellation = session.execute_metadata(request)?;
-        *self.target.lock().unwrap() = Some(cancellation.clone());
-        if self.cancelled.load(Ordering::SeqCst) {
+        *self.target.lock().unwrap() = Some((self.batch, cancellation.clone()));
+        if self.cancel_requested() {
             cancellation.cancel()?;
         }
         if self.must_stop() {
@@ -922,7 +1175,7 @@ impl Runner {
             anyhow::bail!("The catalog request was stopped");
         }
         let has_results = loop {
-            match self.session.as_mut().unwrap().poll()? {
+            match self.session().poll()? {
                 QueryState::Finished { has_results } => break has_results,
                 QueryState::Cancelled => anyhow::bail!("The catalog request was cancelled"),
                 QueryState::Running => {}
@@ -930,7 +1183,7 @@ impl Runner {
             // Do not wait for the server to confirm a cancellation. The next
             // request closes the operation.
             anyhow::ensure!(
-                !self.cancelled.load(Ordering::SeqCst),
+                !self.cancel_requested(),
                 "The catalog request was cancelled"
             );
             self.accept_refreshes();
@@ -941,17 +1194,17 @@ impl Runner {
             thread::sleep(POLL_INTERVAL);
         };
         if !has_results {
-            self.session.as_mut().unwrap().close_operation()?;
+            self.session().close_operation()?;
             return Ok(MetadataRows {
                 columns: vec![],
                 rows: vec![],
             });
         }
-        let columns = self.session.as_mut().unwrap().columns()?;
+        let columns = self.session().columns()?;
         let mut rows: Vec<Row> = Vec::new();
         let mut bytes = 0usize;
         loop {
-            let batch = self.session.as_mut().unwrap().fetch(METADATA_BATCH)?;
+            let batch = self.session().fetch(METADATA_BATCH)?;
             if batch.rows.is_empty() {
                 break;
             }
@@ -970,7 +1223,7 @@ impl Runner {
                 "The catalog request returned more than {MAX_METADATA_ROWS} rows or {} MB. Hide some schemas in the connection settings.",
                 MAX_RESULT_BYTES / 1024 / 1024
             );
-            if self.cancelled.load(Ordering::SeqCst) {
+            if self.cancel_requested() {
                 anyhow::bail!("The catalog request was cancelled");
             }
             self.accept_refreshes();
@@ -979,8 +1232,12 @@ impl Runner {
                 anyhow::bail!("The catalog request was stopped");
             }
         }
-        self.session.as_mut().unwrap().close_operation()?;
+        self.session().close_operation()?;
         Ok(MetadataRows { columns, rows })
+    }
+
+    fn session(&mut self) -> &mut Box<dyn Session> {
+        &mut self.session.as_mut().unwrap().1
     }
 
     /// Cancel a request through the separate cancel transport, off this thread.
@@ -992,12 +1249,15 @@ impl Runner {
     }
 
     /// Queue the refreshes that arrived while a request runs, so the UI shows
-    /// them as waiting, and apply the live-session state. Keep the other
-    /// commands for the next checkpoint.
+    /// them as waiting, and apply the live-session state and the stops of
+    /// members. Keep the other commands for the next checkpoint.
     fn accept_refreshes(&mut self) {
         while let Ok(command) = self.rx.try_recv() {
             match command {
-                Command::Refresh(_) | Command::RefreshIfUnloaded | Command::SetWarm(_) => {
+                Command::Refresh(_)
+                | Command::RefreshIfUnloaded(_)
+                | Command::SetLive(..)
+                | Command::Cancel(Some(_)) => {
                     self.handle(command);
                 }
                 command => self.deferred.push_back(command),
@@ -1006,7 +1266,7 @@ impl Runner {
     }
 
     /// Send a Logs entry of the refresh in progress: an error, or any entry
-    /// if the profile enables refresh logs.
+    /// if its member enables refresh logs.
     fn log(&self, severity: Severity, text: String, duration: Option<Duration>) {
         // Errors always go to Logs, because the tree shows only a summary.
         if !self.profile.catalog.log_refreshes && severity != Severity::Error {
@@ -1016,7 +1276,7 @@ impl Runner {
             .with_connection(self.profile.name.clone())
             .with_batch(self.batch);
         event.duration = duration;
-        let _ = self.activity.send(event);
+        let _ = self.activity.send((self.profile.id, event));
         (self.wake)();
     }
 
@@ -1061,7 +1321,7 @@ impl Runner {
     }
 
     fn close_session(&mut self) {
-        if let Some(mut session) = self.session.take() {
+        if let Some((_, mut session)) = self.session.take() {
             let _ = session.close();
         }
     }

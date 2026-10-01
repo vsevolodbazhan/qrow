@@ -26,8 +26,8 @@ use crate::{
         AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
         MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
-        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, conversation_tab_title,
-        copied_tab_title, unique_tab_title,
+        Settings, SharedCatalog, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
+        conversation_tab_title, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -350,6 +350,8 @@ pub struct Qrow {
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
+    /// The schema catalogs that several connections share.
+    shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
@@ -525,6 +527,7 @@ impl Qrow {
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
+            shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
@@ -567,6 +570,7 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
+        this.sync_catalog_keys();
         this.assistant_state.composer_target = this
             .tabs
             .get(this.active)
@@ -674,6 +678,7 @@ impl Qrow {
                 assistant
             },
             profiles: self.profiles.clone(),
+            shared_catalogs: self.shared_catalogs.clone(),
             tabs: self
                 .tabs
                 .iter()
@@ -1222,7 +1227,7 @@ impl Qrow {
                         }
                     }
                 }
-                self.catalog_profile_saved(&profile, cx);
+                self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
                 }
@@ -2383,7 +2388,8 @@ impl Qrow {
         }
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
-        self.catalog_profile_deleted(id, cx);
+        crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
+        self.sync_catalogs(None, cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),
@@ -2557,16 +2563,27 @@ fn menu_section(title: &'static str) -> PopupMenuItem {
 }
 
 fn demo_workspace() -> Workspace {
+    let catalog = CatalogSettings {
+        refresh: CatalogRefresh::Manual,
+        ..CatalogSettings::default()
+    };
+    // The two Rivendell clusters read the same metastore.
+    let shared_catalogs = vec![SharedCatalog {
+        id: Uuid::new_v4(),
+        name: "Rivendell".into(),
+        settings: catalog.clone(),
+        preferred: None,
+    }];
     let profiles: Vec<_> = ["rivendell-s", "rivendell-xl", "analytics-s"]
         .into_iter()
         .map(|name| Profile {
             name: name.into(),
             host: "demo.local".into(),
             username: format!("kyuubi-{name}"),
-            catalog: CatalogSettings {
-                refresh: CatalogRefresh::Manual,
-                ..CatalogSettings::default()
-            },
+            catalog: catalog.clone(),
+            shared_catalog: name
+                .starts_with("rivendell")
+                .then_some(shared_catalogs[0].id),
             ..Default::default()
         })
         .collect();
@@ -2581,6 +2598,7 @@ fn demo_workspace() -> Workspace {
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
         active_tabs: BTreeMap::new(),
+        shared_catalogs,
     }
 }
 
