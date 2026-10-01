@@ -113,6 +113,8 @@ pub(super) struct CatalogTree {
     /// The laid-out width of each label in the last frame, to know which
     /// names the rows truncate.
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
+    /// The current tooltip of each row, for its open tooltip view.
+    tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
     /// The workspace file. Caches are next to it. `None` keeps them in memory.
     workspace: Option<PathBuf>,
 }
@@ -127,6 +129,7 @@ impl CatalogTree {
             connections: HashMap::new(),
             nodes: Rc::new(HashMap::new()),
             widths: Rc::new(RefCell::new(HashMap::new())),
+            tips: Rc::new(RefCell::new(HashMap::new())),
             workspace,
         }
     }
@@ -1006,6 +1009,7 @@ impl Qrow {
             tree: self.catalog.state.clone(),
             scale: self.settings.ui_scale,
             widths: self.catalog.widths.clone(),
+            tips: self.catalog.tips.clone(),
             // A tooltip would cover the open menu.
             menu_open: self.menu.is_some(),
         });
@@ -1091,6 +1095,7 @@ struct RowContext {
     tree: Entity<TreeState>,
     scale: f32,
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
+    tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
     menu_open: bool,
 }
 
@@ -1111,17 +1116,20 @@ impl RowContext {
     }
 }
 
-/// Whether a row cuts its name or its type. Rows ask when GPUI builds their
-/// tooltip, after the pointer rests. By then the row has its laid-out width.
+/// The labels of a row whose cut text a tooltip can show.
 struct Truncation {
-    widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
     /// Each label: its width key, its text, and its font size in rems.
     labels: Vec<(SharedString, String, f32)>,
 }
 
 impl Truncation {
-    fn is_truncated(&self, window: &Window, cx: &App) -> bool {
-        let widths = self.widths.borrow();
+    /// Whether the last laid-out frame cut one of the labels.
+    fn is_truncated(
+        &self,
+        widths: &HashMap<SharedString, Pixels>,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
         self.labels.iter().any(|(key, text, rems)| {
             let Some(width) = widths.get(key).copied() else {
                 return false;
@@ -1147,12 +1155,46 @@ impl Truncation {
     }
 }
 
-/// The tooltip of a row whose name fits and that has nothing else to show.
-struct NoTooltip;
+/// The current tooltip of a row. The row writes it in each frame.
+struct RowTip {
+    text: String,
+    /// `None` when the tooltip has a comment or an error, so it always shows.
+    truncation: Option<Truncation>,
+}
 
-impl Render for NoTooltip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
+/// The tooltip that GPUI opens for a row. GPUI keeps an open tooltip while
+/// the pointer stays on its row, so the view reads the row's current tooltip
+/// in each frame: an error that arrives during a hover shows at once, and a
+/// name that fits shows nothing.
+struct LiveTooltip {
+    id: SharedString,
+    tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
+    widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
+    /// The tooltip on screen and its text. It changes only with the text.
+    shown: Option<(String, AnyView)>,
+}
+
+impl Render for LiveTooltip {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let text = self.tips.borrow().get(&self.id).and_then(|tip| {
+            tip.truncation
+                .as_ref()
+                .is_none_or(|truncation| truncation.is_truncated(&self.widths.borrow(), window, cx))
+                .then(|| tip.text.clone())
+        });
+        match text {
+            Some(text) => {
+                if self.shown.as_ref().is_none_or(|(shown, _)| *shown != text) {
+                    let view = row_tooltip_view(&text, window, cx);
+                    self.shown = Some((text, view));
+                }
+                div().children(self.shown.as_ref().map(|(_, view)| view.clone()))
+            }
+            None => {
+                self.shown = None;
+                div()
+            }
+        }
     }
 }
 
@@ -1298,7 +1340,6 @@ fn render_entry(
         _ => false,
     };
     let truncation = (!has_comment && error.is_none()).then(|| Truncation {
-        widths: context.widths.clone(),
         labels: [(label_key.clone(), label.to_string(), 0.875)]
             .into_iter()
             .chain(
@@ -1308,6 +1349,19 @@ fn render_entry(
             )
             .collect(),
     });
+    if let Some(text) = &tooltip {
+        let mut tips = context.tips.borrow_mut();
+        if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(&id) {
+            tips.clear();
+        }
+        tips.insert(
+            id.clone(),
+            RowTip {
+                text: text.clone(),
+                truncation,
+            },
+        );
+    }
     let menu_id = id.clone();
     let row = h_flex()
         .id(id.clone())
@@ -1372,16 +1426,17 @@ fn render_entry(
                     .text_color(cx.theme().danger),
             )
         })
-        .when_some(tooltip.filter(|_| !*menu_open), |el, tooltip| {
-            el.tooltip(move |window, cx| {
-                if truncation
-                    .as_ref()
-                    .is_none_or(|truncation| truncation.is_truncated(window, cx))
-                {
-                    row_tooltip_view(&tooltip, window, cx)
-                } else {
-                    cx.new(|_| NoTooltip).into()
-                }
+        .when(tooltip.is_some() && !*menu_open, |el| {
+            let (id, tips, widths) = (id.clone(), context.tips.clone(), context.widths.clone());
+            el.tooltip(move |_, cx| {
+                let (id, tips, widths) = (id.clone(), tips.clone(), widths.clone());
+                cx.new(|_| LiveTooltip {
+                    id,
+                    tips,
+                    widths,
+                    shown: None,
+                })
+                .into()
             })
         })
         .on_mouse_down(MouseButton::Left, focus)
