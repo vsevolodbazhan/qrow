@@ -1160,6 +1160,33 @@ struct RowContext {
 }
 
 impl RowContext {
+    /// Records the current tooltip of the row `id` for its open tooltip view.
+    fn record_tip(&self, id: &SharedString, text: String, truncation: Option<Truncation>) {
+        let mut tips = self.tips.borrow_mut();
+        if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(id) {
+            tips.clear();
+        }
+        tips.insert(id.clone(), RowTip { text, truncation });
+    }
+
+    /// A tooltip that follows the tooltip that the row `id` records.
+    fn live_tooltip(
+        &self,
+        id: &SharedString,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        let (id, tips, widths) = (id.clone(), self.tips.clone(), self.widths.clone());
+        move |_, cx| {
+            let (id, tips, widths) = (id.clone(), tips.clone(), widths.clone());
+            cx.new(|_| LiveTooltip {
+                id,
+                tips,
+                widths,
+                shown: None,
+            })
+            .into()
+        }
+    }
+
     /// Records the laid-out width of the label `key` during prepaint.
     fn record_width(
         &self,
@@ -1320,7 +1347,7 @@ fn render_entry(
             .h(ui_px(ROW_HEIGHT))
             .py_0p5()
             .child(
-                connection_row(*profile, row, selected, disclosure, context, cx)
+                connection_row(&id, *profile, row, selected, disclosure, context, cx)
                     .pl(ui_px(4.))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, focus),
@@ -1414,17 +1441,7 @@ fn render_entry(
             .collect(),
     });
     if let Some(text) = &tooltip {
-        let mut tips = context.tips.borrow_mut();
-        if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(&id) {
-            tips.clear();
-        }
-        tips.insert(
-            id.clone(),
-            RowTip {
-                text: text.clone(),
-                truncation,
-            },
-        );
+        context.record_tip(&id, text.clone(), truncation);
     }
     let menu_id = id.clone();
     let row = h_flex()
@@ -1489,17 +1506,7 @@ fn render_entry(
             )
         })
         .when(tooltip.is_some() && !*menu_open, |el| {
-            let (id, tips, widths) = (id.clone(), context.tips.clone(), context.widths.clone());
-            el.tooltip(move |_, cx| {
-                let (id, tips, widths) = (id.clone(), tips.clone(), widths.clone());
-                cx.new(|_| LiveTooltip {
-                    id,
-                    tips,
-                    widths,
-                    shown: None,
-                })
-                .into()
-            })
+            el.tooltip(context.live_tooltip(&id))
         })
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
@@ -1584,6 +1591,7 @@ fn status_slot(id: String, width: Pixels) -> impl IntoElement + ParentElement {
 
 /// The row of a connection: the disclosure and the connection button.
 fn connection_row(
+    entry: &SharedString,
     id: Uuid,
     row: &ConnectionRow,
     selected: bool,
@@ -1594,7 +1602,10 @@ fn connection_row(
     let (menu_open, weak) = (context.menu_open, &context.weak);
     // As wide as the header's New Connection button.
     let slot_width = px(context.scale * 28.);
-    let has_status = row.busy || row.refreshing || row.unread_error;
+    let has_status = row.busy || row.refreshing || row.unread_error || row.refresh_error;
+    // The tooltip can change while it is open: a refresh error arrives or
+    // goes away.
+    context.record_tip(entry, row.tooltip.clone(), None);
     let accessibility_label = format!(
         "{}{}{}{}{}",
         row.name,
@@ -1674,7 +1685,6 @@ fn connection_row(
                     )
                 }),
         )
-        .when(!menu_open, |button| button.tooltip(row.tooltip.clone()))
         .on_click({
             let weak = weak.clone();
             move |_, window, cx| {
@@ -1683,6 +1693,7 @@ fn connection_row(
         });
     h_flex()
         .id(SharedString::from(format!("connection-{id}")))
+        .when(!menu_open, |el| el.tooltip(context.live_tooltip(entry)))
         .w_full()
         .gap_0p5()
         .rounded(cx.theme().radius)

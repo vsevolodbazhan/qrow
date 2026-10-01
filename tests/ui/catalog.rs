@@ -697,3 +697,54 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         saved.refresh == CatalogRefresh::Manual && saved.timeout_minutes == 45
     });
 }
+
+#[gpui_kit::test]
+fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut TestAppContext) {
+    // The server accepts the session, then closes it after a second, so the
+    // refresh fails while the tooltip is open.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            std::thread::sleep(Duration::from_secs(1));
+            drop(stream);
+        }
+    });
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port,
+        ..offline_profile("Closing")
+    };
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let tooltip = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| label(window, "catalog-tooltip"))
+    };
+
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.hover_labelled(cx, "Closing, refreshing schemas");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("127.0.0.1 · synthetic"));
+
+    // The pointer stays on the row. The open tooltip adds the error.
+    app.wait_until(
+        cx,
+        "the error in the tooltip",
+        Duration::from_secs(20),
+        |window, _| {
+            label(window, "catalog-tooltip")
+                .is_some_and(|text| text.starts_with("127.0.0.1 · synthetic\n"))
+        },
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, connection_row(profile.id)).as_deref(),
+            Some("Closing, schema refresh error")
+        );
+    });
+}
