@@ -787,6 +787,77 @@ impl Qrow {
         });
     }
 
+    /// The ID prefixes of the rows below a connection, or below one of its
+    /// schemas.
+    fn descendant_prefixes(profile: Uuid, schema: Option<&str>) -> Vec<String> {
+        match schema {
+            None => vec![
+                format!("s{SEPARATOR}{profile}{SEPARATOR}"),
+                format!("r{SEPARATOR}{profile}{SEPARATOR}"),
+            ],
+            Some(schema) => vec![format!(
+                "r{SEPARATOR}{profile}{SEPARATOR}{schema}{SEPARATOR}"
+            )],
+        }
+    }
+
+    /// Whether Collapse All has rows to collapse below the connection or schema.
+    pub(super) fn has_expanded_descendants(
+        &self,
+        profile: Uuid,
+        schema: Option<&str>,
+        cx: &App,
+    ) -> bool {
+        let prefixes = Self::descendant_prefixes(profile, schema);
+        let searching = !self.catalog.search.read(cx).value().trim().is_empty();
+        self.catalog.expanded.iter().any(|id| {
+            prefixes
+                .iter()
+                .any(|prefix| id.starts_with(prefix.as_str()))
+        }) || (searching
+            && schema.is_none()
+            && self.catalog.catalog(profile).is_some_and(|catalog| {
+                catalog
+                    .schemas
+                    .keys()
+                    .any(|name| !self.catalog.collapsed.contains(&schema_id(profile, name)))
+            }))
+    }
+
+    /// Collapses every row below the connection, or below one of its schemas.
+    /// The row itself stays expanded. During a search, this also collapses
+    /// the schemas that the search expands.
+    pub(super) fn collapse_catalog(
+        &mut self,
+        profile: Uuid,
+        schema: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let prefixes = Self::descendant_prefixes(profile, schema);
+        self.catalog.expanded.retain(|id| {
+            !prefixes
+                .iter()
+                .any(|prefix| id.starts_with(prefix.as_str()))
+        });
+        let searching = !self.catalog.search.read(cx).value().trim().is_empty();
+        if searching && schema.is_none() {
+            let schemas: Vec<SharedString> = self
+                .catalog
+                .catalog(profile)
+                .map(|catalog| {
+                    catalog
+                        .schemas
+                        .keys()
+                        .map(|name| schema_id(profile, name))
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.catalog.collapsed.extend(schemas);
+        }
+        self.rebuild_catalog_tree(cx);
+        cx.notify();
+    }
+
     /// The names of the row that the tree selects.
     fn selected_catalog_names(&self, cx: &App) -> Option<(String, String)> {
         let state = self.catalog.state.read(cx);
@@ -839,6 +910,7 @@ impl Qrow {
                 .status(profile)
                 .is_some_and(|status| status.includes(scope))
         });
+        let has_commands = scope.is_some();
         let copy_label = if matches!(node, Node::Relation { .. }) {
             "Copy Qualified Name"
         } else {
@@ -855,19 +927,39 @@ impl Qrow {
         let insert = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.insert_into_editor(insert.clone(), window, cx)
         });
+        let collapse = match &node {
+            Node::Schema { name, .. } => {
+                let has_expanded = self.has_expanded_descendants(profile, Some(name), cx);
+                let schema = name.clone();
+                Some((
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.collapse_catalog(profile, Some(&schema), cx)
+                    }),
+                    has_expanded,
+                ))
+            }
+            _ => None,
+        };
         self.open_context_menu(
             position,
             move |menu, _, _| {
                 let menu = match refresh {
-                    Some(refresh) => menu
-                        .item(
-                            PopupMenuItem::new("Refresh")
-                                .on_click(refresh)
-                                .disabled(refreshing),
-                        )
-                        .separator(),
+                    Some(refresh) => menu.item(
+                        PopupMenuItem::new("Refresh")
+                            .on_click(refresh)
+                            .disabled(refreshing),
+                    ),
                     None => menu,
                 };
+                let menu = match collapse {
+                    Some((collapse, has_expanded)) => menu.item(
+                        PopupMenuItem::new("Collapse All")
+                            .on_click(collapse)
+                            .disabled(!has_expanded),
+                    ),
+                    None => menu,
+                };
+                let menu = if has_commands { menu.separator() } else { menu };
                 menu.item(PopupMenuItem::new(copy_label).on_click(copy))
                     .item(PopupMenuItem::new("Insert into Editor").on_click(insert))
             },

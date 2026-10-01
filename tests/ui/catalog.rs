@@ -529,3 +529,50 @@ fn each_row_shows_its_full_name_on_hover(cx: &mut TestAppContext) {
         );
     }
 }
+
+#[gpui_kit::test]
+fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    let gone = |app: &TestApp, cx: &mut TestAppContext, text: &str| {
+        app.wait_until(
+            cx,
+            &format!("{text} to collapse"),
+            Duration::from_secs(10),
+            |window, _| labelled(window, text).is_none(),
+        );
+    };
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+
+    // A schema keeps its relations open, but their columns close.
+    app.context_menu_labelled(cx, "avia");
+    app.choose(cx, "popup-menu", "Collapse All");
+    gone(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "bookings");
+
+    // A connection keeps its schemas, but they close.
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Collapse All");
+    gone(&app, cx, "bookings");
+    wait_shows(&app, cx, "avia");
+
+    // A search expands the schemas with matches. Collapse All closes them too.
+    app.fill_labelled(cx, "Search Tables", "book");
+    wait_shows(&app, cx, "bookings");
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Collapse All");
+    gone(&app, cx, "bookings");
+    wait_shows(&app, cx, "avia");
+}

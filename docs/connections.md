@@ -62,6 +62,10 @@ name and its type. A schema row shows the number of its tables and views.
 - Click a connection to select it. This does not expand the connection.
 - Click the arrow before a connection to expand or collapse it.
 - Click a schema, a table, or a view to expand or collapse it.
+- To collapse all rows below a connection or a schema, right-click it and
+  select **Collapse All**. The connection or the schema stays expanded. During
+  a search, **Collapse All** on a connection also collapses the schemas that
+  the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
   connection puts the cursor in the SQL editor.

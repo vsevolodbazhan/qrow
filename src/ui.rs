@@ -1899,6 +1899,9 @@ impl Qrow {
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
+        let has_expanded = self.has_expanded_descendants(id, None, cx);
+        let collapse =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.collapse_catalog(id, None, cx));
         let refreshing = self.catalog.is_refreshing(id);
         let refresh = cx.listener(move |this, _: &ClickEvent, _, cx| {
             if refreshing {
@@ -1917,6 +1920,11 @@ impl Qrow {
                         "Refresh Schemas"
                     })
                     .on_click(refresh),
+                )
+                .item(
+                    PopupMenuItem::new("Collapse All")
+                        .on_click(collapse)
+                        .disabled(!has_expanded),
                 )
                 .separator()
                 .item(
