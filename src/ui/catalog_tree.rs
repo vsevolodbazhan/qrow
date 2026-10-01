@@ -641,10 +641,7 @@ impl Qrow {
         for index in 0..self.profiles.len() {
             let profile = &self.profiles[index];
             let id = profile.id;
-            let automatic = matches!(
-                profile.catalog.refresh,
-                CatalogRefresh::WhileConnected { .. }
-            );
+            let automatic = profile.catalog.refresh == CatalogRefresh::WhileConnected;
             let warm = self.catalog_warm(id);
             let connection = self.catalog.connections.get_mut(&id);
             match connection.and_then(|connection| {
@@ -834,16 +831,33 @@ impl Qrow {
             {
                 worker.shutdown();
             }
+            // The row has no children now, so it is not expanded. A later
+            // enable then starts with a collapsed connection.
+            let connection = connection_id(profile.id);
+            let prefixes = Self::descendant_prefixes(profile.id, None);
+            let below = |id: &SharedString| {
+                *id == connection
+                    || prefixes
+                        .iter()
+                        .any(|prefix| id.starts_with(prefix.as_str()))
+            };
+            self.catalog.expanded.retain(|id| !below(id));
+            self.catalog.collapsed.retain(|id| !below(id));
             self.rebuild_catalog_tree(cx);
             return;
         }
-        if let Some(worker) = self
+        match self
             .catalog
             .connections
             .get(&profile.id)
             .and_then(|connection| connection.worker.as_ref())
         {
-            worker.update_profile(profile.clone());
+            Some(worker) => worker.update_profile(profile.clone()),
+            // An expanded connection shows its cache at once.
+            None if self.catalog.expanded.contains(&connection_id(profile.id)) => {
+                self.ensure_catalog(profile.id)
+            }
+            None => {}
         }
         self.rebuild_catalog_tree(cx);
     }

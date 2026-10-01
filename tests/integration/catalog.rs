@@ -364,7 +364,7 @@ fn profile() -> Profile {
         username: "synthetic-user".into(),
         ..Profile::default()
     };
-    profile.catalog.refresh = CatalogRefresh::WhileConnected { minutes: 60 };
+    profile.catalog.refresh = CatalogRefresh::WhileConnected;
     profile
 }
 
@@ -815,25 +815,34 @@ fn cached_warehouse(path: &std::path::Path, profile: &Profile, at: u64) {
 
 #[test]
 fn an_automatic_refresh_is_due_only_while_warm_and_after_its_period() {
-    let every = CatalogRefresh::WhileConnected { minutes: 60 };
+    let every = CatalogSettings {
+        refresh: CatalogRefresh::WhileConnected,
+        ..CatalogSettings::default()
+    };
     let last = UNIX_EPOCH + Duration::from_secs(1_000_000);
     let hour = Duration::from_secs(3600);
     assert_eq!(
-        refresh_due(every, true, Some(last), MINUTE),
+        refresh_due(&every, true, Some(last), MINUTE),
         Some(last + hour)
     );
     // A catalog that Qrow never read is due at once.
-    assert_eq!(refresh_due(every, true, None, MINUTE), Some(UNIX_EPOCH));
-    // No live session, or a manual policy: nothing is due.
-    assert_eq!(refresh_due(every, false, Some(last), MINUTE), None);
+    assert_eq!(refresh_due(&every, true, None, MINUTE), Some(UNIX_EPOCH));
+    // No live session, or another choice: nothing is due.
+    assert_eq!(refresh_due(&every, false, Some(last), MINUTE), None);
+    for refresh in [CatalogRefresh::Manual, CatalogRefresh::Disabled] {
+        let settings = CatalogSettings {
+            refresh,
+            ..every.clone()
+        };
+        assert_eq!(refresh_due(&settings, true, None, MINUTE), None);
+    }
+    // A period change moves the due time.
+    let often = CatalogSettings {
+        refresh_minutes: 5,
+        ..every
+    };
     assert_eq!(
-        refresh_due(CatalogRefresh::Manual, true, None, MINUTE),
-        None
-    );
-    // A policy change moves the due time.
-    let often = CatalogRefresh::WhileConnected { minutes: 5 };
-    assert_eq!(
-        refresh_due(often, true, Some(last), MINUTE),
+        refresh_due(&often, true, Some(last), MINUTE),
         Some(last + Duration::from_secs(300))
     );
 }
@@ -842,7 +851,8 @@ fn an_automatic_refresh_is_due_only_while_warm_and_after_its_period() {
 fn a_warm_connection_refreshes_by_itself_and_a_cold_one_never_connects() {
     let server = warehouse();
     let mut profile = profile();
-    profile.catalog.refresh = CatalogRefresh::WhileConnected { minutes: 5 };
+    profile.catalog.refresh = CatalogRefresh::WhileConnected;
+    profile.catalog.refresh_minutes = 5;
     // One "minute" is 40 ms, so the period is 200 ms.
     let mut h = Harness::timed(
         server.clone(),

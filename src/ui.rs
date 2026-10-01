@@ -2139,12 +2139,7 @@ impl Qrow {
             profile.lifecycle.keep_alive_sql.clone(),
             profile.catalog.include.join(", "),
             profile.catalog.exclude.join(", "),
-            match profile.catalog.refresh {
-                CatalogRefresh::WhileConnected { minutes } => minutes.to_string(),
-                CatalogRefresh::Disabled | CatalogRefresh::Manual => {
-                    CatalogRefresh::default_minutes().to_string()
-                }
-            },
+            profile.catalog.refresh_minutes.to_string(),
             profile.catalog.timeout_minutes.to_string(),
         ];
         let fields = values

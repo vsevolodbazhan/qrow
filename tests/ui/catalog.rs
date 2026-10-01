@@ -699,7 +699,8 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.wait_gone(cx, "connection-name");
     app.wait_until(cx, "the saved policy", Duration::from_secs(10), |_, _| {
         let saved = saved(&app);
-        saved.refresh == CatalogRefresh::WhileConnected { minutes: 15 }
+        saved.refresh == CatalogRefresh::WhileConnected
+            && saved.refresh_minutes == 15
             && saved.timeout_minutes == 45
     });
 
@@ -723,9 +724,24 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         Duration::from_secs(10),
         |_, _| {
             let saved = saved(&app);
-            saved.refresh == CatalogRefresh::Disabled && saved.timeout_minutes == 45
+            saved.refresh == CatalogRefresh::Disabled
+                && saved.refresh_minutes == 15
+                && saved.timeout_minutes == 45
         },
     );
+
+    // The hidden period stays for a change back to While connected.
+    edit(cx);
+    app.select(cx, "connection-schema-refresh", "While connected");
+    app.wait_for(cx, "connection-refresh-period");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-refresh-period").as_deref(),
+            Some("15")
+        );
+    });
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "connection-name");
 
     // A new connection does not browse schemas.
     app.click(cx, "add-connection");
@@ -738,6 +754,53 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         );
         assert!(window.try_find("connection-show-schemas").is_none());
     });
+}
+
+#[gpui_kit::test]
+fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = offline_profile("Warehouse");
+    cache(&directory, &profile, &[("avia", None)]);
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    let set_mode = |cx: &mut TestAppContext, mode: &str| {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit Connection…");
+        app.scroll_to(cx, "connection-schema-refresh");
+        app.select(cx, "connection-schema-refresh", mode);
+        app.click(cx, "save-profile");
+        app.wait_gone(cx, "connection-name");
+    };
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cached schema",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "avia").is_some(),
+    );
+
+    set_mode(cx, "Disabled");
+    app.wait_until(cx, "no tree", Duration::from_secs(10), |window, _| {
+        labelled(window, "avia").is_none()
+    });
+
+    // Browsing starts collapsed and reads the cache when expanded.
+    set_mode(cx, "Manual");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "avia").is_none());
+        assert!(!shows(window, "Loading…"));
+    });
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cache again",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "avia").is_some(),
+    );
 }
 
 #[gpui_kit::test]

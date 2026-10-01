@@ -36,7 +36,7 @@ impl RefreshMode {
         match refresh {
             CatalogRefresh::Disabled => Self::Disabled,
             CatalogRefresh::Manual => Self::Manual,
-            CatalogRefresh::WhileConnected { .. } => Self::WhileConnected,
+            CatalogRefresh::WhileConnected => Self::WhileConnected,
         }
     }
 }
@@ -56,11 +56,12 @@ pub(super) fn parse_refresh_policy(
     }
     settings.refresh = match mode {
         RefreshMode::Disabled | RefreshMode::Manual => CatalogRefresh::Manual,
-        RefreshMode::WhileConnected => CatalogRefresh::WhileConnected {
-            minutes: period.trim().parse().map_err(|_| {
+        RefreshMode::WhileConnected => {
+            settings.refresh_minutes = period.trim().parse().map_err(|_| {
                 anyhow::anyhow!("Refresh period must be a whole number of minutes.")
-            })?,
-        },
+            })?;
+            CatalogRefresh::WhileConnected
+        }
     };
     settings.timeout_minutes = timeout
         .trim()
@@ -359,21 +360,23 @@ mod tests {
         assert_eq!(settings.refresh, CatalogRefresh::Manual);
         assert_eq!(settings.timeout_minutes, 10);
         parse_refresh_policy(" 15 ", "10", RefreshMode::WhileConnected, &mut settings).unwrap();
-        assert_eq!(
-            settings.refresh,
-            CatalogRefresh::WhileConnected { minutes: 15 }
-        );
-        // Disabled keeps the hidden timeout.
+        assert_eq!(settings.refresh, CatalogRefresh::WhileConnected);
+        assert_eq!(settings.refresh_minutes, 15);
+        // Disabled and Manual keep the hidden period, and Disabled keeps the
+        // hidden timeout.
         parse_refresh_policy("invalid", "invalid", RefreshMode::Disabled, &mut settings).unwrap();
         assert_eq!(settings.refresh, CatalogRefresh::Disabled);
         assert_eq!(settings.timeout_minutes, 10);
+        assert_eq!(settings.refresh_minutes, 15);
+        parse_refresh_policy("invalid", "10", RefreshMode::Manual, &mut settings).unwrap();
+        assert_eq!(settings.refresh_minutes, 15);
         let mode = RefreshMode::WhileConnected;
         assert!(parse_refresh_policy("invalid", "10", mode, &mut settings).is_err());
         assert!(parse_refresh_policy("4", "10", mode, &mut settings).is_err());
         assert!(parse_refresh_policy("15", "0", mode, &mut settings).is_err());
         assert!(parse_refresh_policy("15", "1.5", RefreshMode::Manual, &mut settings).is_err());
         assert_eq!(
-            RefreshMode::of(CatalogRefresh::WhileConnected { minutes: 5 }),
+            RefreshMode::of(CatalogRefresh::WhileConnected),
             RefreshMode::WhileConnected
         );
     }

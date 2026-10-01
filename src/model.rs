@@ -336,17 +336,12 @@ pub enum CatalogRefresh {
     /// Only an explicit Refresh, or the expansion of an unread row while
     /// connected, reads the catalog.
     Manual,
-    /// Read the connection again after `minutes`, but only while a tab of
-    /// the connection has a live session.
-    WhileConnected { minutes: u32 },
+    /// As `Manual`, and read the connection again after each refresh
+    /// period, but only while a tab of the connection has a live session.
+    WhileConnected,
 }
 
 impl CatalogRefresh {
-    /// The refresh period that the connection form offers.
-    pub const fn default_minutes() -> u32 {
-        60
-    }
-
     /// Settings saved before this choice existed keep their behavior: the
     /// schema tree with refreshes on request.
     fn saved_before_choice() -> Self {
@@ -367,6 +362,9 @@ pub struct CatalogSettings {
     pub log_refreshes: bool,
     #[serde(default = "CatalogRefresh::saved_before_choice")]
     pub refresh: CatalogRefresh,
+    /// The period of [`CatalogRefresh::WhileConnected`]. The other choices
+    /// keep it for a later change back.
+    pub refresh_minutes: u32,
     /// The longest time of one refresh, manual or automatic.
     pub timeout_minutes: u32,
 }
@@ -378,6 +376,7 @@ impl Default for CatalogSettings {
             exclude: Vec::new(),
             log_refreshes: false,
             refresh: CatalogRefresh::default(),
+            refresh_minutes: 60,
             timeout_minutes: 30,
         }
     }
@@ -390,14 +389,12 @@ impl CatalogSettings {
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let CatalogRefresh::WhileConnected { minutes } = self.refresh {
-            anyhow::ensure!(
-                CATALOG_REFRESH_MINUTES.contains(&minutes),
-                "Refresh period must be between {} and {} minutes.",
-                CATALOG_REFRESH_MINUTES.start(),
-                CATALOG_REFRESH_MINUTES.end()
-            );
-        }
+        anyhow::ensure!(
+            CATALOG_REFRESH_MINUTES.contains(&self.refresh_minutes),
+            "Refresh period must be between {} and {} minutes.",
+            CATALOG_REFRESH_MINUTES.start(),
+            CATALOG_REFRESH_MINUTES.end()
+        );
         anyhow::ensure!(
             CATALOG_TIMEOUT_MINUTES.contains(&self.timeout_minutes),
             "Refresh timeout must be between {} and {} minutes.",
@@ -916,9 +913,17 @@ mod tests {
             defaults
         );
 
+        // Settings of an earlier build kept the period in the choice. They
+        // still load, with the default period.
+        let earlier: CatalogSettings =
+            serde_json::from_str(r#"{"refresh":{"mode":"while_connected","minutes":15}}"#).unwrap();
+        assert_eq!(earlier.refresh, CatalogRefresh::WhileConnected);
+        assert_eq!(earlier.refresh_minutes, 60);
+
         for (minutes, valid) in [(4, false), (5, true), (10_080, true), (10_081, false)] {
             let settings = CatalogSettings {
-                refresh: CatalogRefresh::WhileConnected { minutes },
+                refresh: CatalogRefresh::WhileConnected,
+                refresh_minutes: minutes,
                 ..defaults.clone()
             };
             assert_eq!(settings.validate().is_ok(), valid, "{minutes}");

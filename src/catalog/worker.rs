@@ -12,7 +12,7 @@ use crate::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
         hive::HiveConnector,
     },
-    model::{CatalogRefresh, MAX_RESULT_BYTES, Profile, Row},
+    model::{CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
     storage::{self, Credentials},
     worker::PasswordProvider,
 };
@@ -47,18 +47,15 @@ const CLOCK_CHECK: Duration = Duration::from_secs(60);
 /// `last` is the start of the last connection refresh. A catalog that Qrow
 /// never read is due at once.
 pub fn refresh_due(
-    refresh: CatalogRefresh,
+    settings: &CatalogSettings,
     warm: bool,
     last: Option<SystemTime>,
     minute: Duration,
 ) -> Option<SystemTime> {
-    let CatalogRefresh::WhileConnected { minutes } = refresh else {
-        return None;
-    };
-    if !warm {
+    if settings.refresh != CatalogRefresh::WhileConnected || !warm {
         return None;
     }
-    Some(last.map_or(UNIX_EPOCH, |last| last + minute * minutes))
+    Some(last.map_or(UNIX_EPOCH, |last| last + minute * settings.refresh_minutes))
 }
 
 /// The refreshes that a worker performs.
@@ -528,7 +525,7 @@ impl Runner {
         }
         loop {
             let Some(due) = refresh_due(
-                self.profile.catalog.refresh,
+                &self.profile.catalog,
                 self.warm,
                 self.last_refresh,
                 self.minute,
