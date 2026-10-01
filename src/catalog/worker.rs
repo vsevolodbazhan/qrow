@@ -259,7 +259,7 @@ fn describe_scope(scope: &Scope) -> String {
     match scope {
         Scope::Connection => "the connection".into(),
         Scope::Schema(schema) => format!("schema {schema}"),
-        Scope::Relation(schema, relation) => format!("table {schema}.{relation}"),
+        Scope::Relation(schema, relation) => format!("relation {schema}.{relation}"),
     }
 }
 
@@ -269,19 +269,46 @@ fn describe_request(request: &MetadataRequest) -> String {
         MetadataRequest::Relations {
             schema,
             relation: None,
-        } => format!("List tables in {schema}"),
+        } => format!("List relations in {schema}"),
         MetadataRequest::Relations {
             schema,
             relation: Some(relation),
-        } => format!("Find table {schema}.{relation}"),
+        } => format!("Find relation {schema}.{relation}"),
         MetadataRequest::Columns {
             schema,
             relation: None,
-        } => format!("List columns in {schema}"),
+        } => format!("List columns of all relations in {schema}"),
         MetadataRequest::Columns {
             schema,
             relation: Some(relation),
         } => format!("List columns of {schema}.{relation}"),
+    }
+}
+
+/// The number of items that a request returned, with their name.
+fn describe_count(request: &MetadataRequest, count: usize) -> String {
+    let (one, many) = match request {
+        MetadataRequest::Schemas => ("schema", "schemas"),
+        MetadataRequest::Relations { .. } => ("relation", "relations"),
+        MetadataRequest::Columns { .. } => ("column", "columns"),
+    };
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// Parsed catalog results that can tell how many items they hold.
+trait Count {
+    fn count(&self) -> usize;
+}
+
+impl<T> Count for Vec<T> {
+    fn count(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<K, T> Count for std::collections::BTreeMap<K, Vec<T>> {
+    fn count(&self) -> usize {
+        self.values().map(Vec::len).sum()
     }
 }
 
@@ -570,25 +597,41 @@ impl Runner {
 
     /// Read a catalog request and parse its rows. A parse error is a failed
     /// request too, so it gets its own Logs entry.
-    fn read_parsed<T>(
+    fn read_parsed<T: Count>(
         &mut self,
         request: &MetadataRequest,
         parse: impl FnOnce(&MetadataRows) -> Result<T>,
     ) -> Result<Result<T, String>, Interrupt> {
-        Ok(self.read(request)?.and_then(|rows| {
-            parse(&rows).map_err(|error| {
+        let label = describe_request(request);
+        let (rows, duration) = match self.read(request)? {
+            Ok(read) => read,
+            Err(message) => return Ok(Err(message)),
+        };
+        match parse(&rows) {
+            // The count is of the requested names only. The server can also
+            // return rows of names that match `_` as a pattern.
+            Ok(parsed) => {
+                self.log(
+                    Severity::Info,
+                    format!(
+                        "{label}: {} (client measurement: {})",
+                        describe_count(request, parsed.count()),
+                        format_duration(duration)
+                    ),
+                    Some(duration),
+                );
+                Ok(Ok(parsed))
+            }
+            Err(error) => {
                 let message = format!("{error:#}");
                 self.log(
                     Severity::Error,
-                    format!(
-                        "{} returned an unexpected result: {message}",
-                        describe_request(request)
-                    ),
-                    None,
+                    format!("{label} returned an unexpected result: {message}"),
+                    Some(duration),
                 );
-                message
-            })
-        }))
+                Ok(Err(message))
+            }
+        }
     }
 
     /// Record an error on the node of `scope`. The refresh reports it at its end.
@@ -602,7 +645,7 @@ impl Runner {
     fn read(
         &mut self,
         request: &MetadataRequest,
-    ) -> Result<Result<MetadataRows, String>, Interrupt> {
+    ) -> Result<Result<(MetadataRows, Duration), String>, Interrupt> {
         let started = Instant::now();
         let result = self.read_rows(request);
         let duration = started.elapsed();
@@ -610,18 +653,7 @@ impl Runner {
         self.checkpoint()?;
         let label = describe_request(request);
         match result {
-            Ok(rows) => {
-                self.log(
-                    Severity::Info,
-                    format!(
-                        "{label}: {} rows (client measurement: {})",
-                        rows.rows.len(),
-                        format_duration(duration)
-                    ),
-                    Some(duration),
-                );
-                Ok(Ok(rows))
-            }
+            Ok(rows) => Ok(Ok((rows, duration))),
             Err(error) => {
                 let message = crate::connector::error_message(&error);
                 self.log(

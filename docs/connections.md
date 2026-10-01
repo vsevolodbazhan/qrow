@@ -149,7 +149,10 @@ records each refresh in the Logs of the tab that the connection shows:
 
 - The start of the refresh.
 - The session that the refresh opens.
-- Each request, with its number of rows and its duration.
+- Each request, with its duration and the number of schemas, relations, or
+  columns that it returned. For example, `List columns of all relations in
+  sales: 769 columns` is one request for the columns of all tables and views
+  in the schema `sales`.
 - The result of the refresh: completed, cancelled, or failed. If some schemas
   or tables could not be read, the result tells how many.
 

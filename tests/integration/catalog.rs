@@ -589,12 +589,13 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
     assert!(
         texts
             .iter()
-            .any(|text| text.starts_with("List schemas: 4 rows"))
+            .any(|text| text.starts_with("List schemas: 4 schemas (client measurement:"))
     );
     assert!(
         texts
             .iter()
-            .any(|text| text.starts_with("List tables in sales: 2 rows"))
+            .any(|text| text
+                .starts_with("List relations in sales: 2 relations (client measurement:"))
     );
     assert!(
         texts
@@ -641,5 +642,42 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         entries
             .iter()
             .any(|entry| entry.text.starts_with("List columns of sales.daily failed"))
+    );
+}
+
+#[test]
+fn logs_entries_count_only_the_requested_names() {
+    // `_` in `my_db` also matches `myxdb` on the server.
+    let server = Server::with(&[
+        ("my_db", "orders", "TABLE", &["id"]),
+        ("myxdb", "other", "TABLE", &["a", "b"]),
+    ]);
+    let mut logged = profile();
+    logged.catalog.log_refreshes = true;
+    let mut h = Harness::new(server, logged, None);
+    h.refresh(Scope::Connection);
+    let texts: Vec<_> = h
+        .worker
+        .activities
+        .try_iter()
+        .map(|entry| entry.text)
+        .collect();
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("List relations in my_db: 1 relation (")),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("List columns of all relations in my_db: 1 column (")),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.starts_with("List columns of all relations in myxdb: 2 columns (")),
+        "{texts:?}"
     );
 }
