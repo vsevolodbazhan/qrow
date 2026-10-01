@@ -377,9 +377,13 @@ fn watchdog(deadline: Instant, target: Target) -> mpsc::Sender<()> {
     let (stop, stopped) = mpsc::channel::<()>();
     thread::spawn(move || {
         let wait = deadline.saturating_duration_since(Instant::now());
-        if stopped.recv_timeout(wait) == Err(RecvTimeoutError::Timeout)
-            && let Some(cancellation) = target.lock().unwrap().clone()
-        {
+        if stopped.recv_timeout(wait) != Err(RecvTimeoutError::Timeout) {
+            return;
+        }
+        // Release the lock before the network call, so `cancel` and
+        // `shutdown` on the window thread do not wait for it.
+        let cancellation = target.lock().unwrap().clone();
+        if let Some(cancellation) = cancellation {
             let _ = cancellation.cancel();
         }
     });
@@ -853,6 +857,9 @@ impl Runner {
     }
 
     fn read_rows(&mut self, request: &MetadataRequest) -> Result<MetadataRows> {
+        // Opening a session and starting a request can take until the
+        // network timeout of the connector, and the watchdog cannot cancel them.
+        anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
         if self.session.is_none() {
             let started = Instant::now();
             let password = (self.passwords)(&self.profile)?;
@@ -866,12 +873,17 @@ impl Runner {
                 ),
                 Some(duration),
             );
+            anyhow::ensure!(!self.must_stop(), "The catalog request was stopped");
         }
         let session = self.session.as_mut().unwrap();
         let cancellation = session.execute_metadata(request)?;
         *self.target.lock().unwrap() = Some(cancellation.clone());
         if self.cancelled.load(Ordering::SeqCst) {
             cancellation.cancel()?;
+        }
+        if self.must_stop() {
+            Self::cancel_request(&cancellation);
+            anyhow::bail!("The catalog request was stopped");
         }
         let has_results = loop {
             match self.session.as_mut().unwrap().poll()? {

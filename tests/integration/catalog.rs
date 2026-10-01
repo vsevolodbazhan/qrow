@@ -37,6 +37,10 @@ struct Server {
     hang_schema: Mutex<Option<String>>,
     /// Requests for this schema return rows without an end.
     endless_schema: Mutex<Option<String>>,
+    /// How long opening a session takes.
+    connect_delay: Mutex<Duration>,
+    /// How long the cancel transport takes.
+    cancel_delay: Mutex<Duration>,
     /// How many requests the worker cancelled.
     cancels: AtomicUsize,
     refuse: AtomicBool,
@@ -72,6 +76,7 @@ impl Connector for Fake {
     fn connect(&self, _: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
         assert_eq!(password.as_str(), "synthetic-password");
         self.0.connects.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.0.connect_delay.lock().unwrap());
         anyhow::ensure!(!self.0.refuse.load(Ordering::SeqCst), "Connection refused");
         Ok(Box::new(FakeSession {
             server: self.0.clone(),
@@ -97,6 +102,7 @@ impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
         self.0.store(true, Ordering::SeqCst);
         self.1.cancels.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.1.cancel_delay.lock().unwrap());
         Ok(())
     }
 }
@@ -1027,4 +1033,44 @@ fn an_automatic_refresh_stops_between_fetches_when_the_connection_becomes_cold()
     h.wait(|h| h.status.is_idle());
     wait_for_cancel(&server);
     assert_eq!(h.catalog().error, None);
+}
+
+#[test]
+fn a_slow_cancel_transport_does_not_block_a_cancel_from_the_window() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 100 ms, so the timeout is 200 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(100));
+    h.refresh(Scope::Connection);
+    *server.hang_schema.lock().unwrap() = Some("sales".into());
+    *server.cancel_delay.lock().unwrap() = Duration::from_secs(2);
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    // The watchdog is now in its slow cancellation.
+    wait_for_cancel(&server);
+    let started = Instant::now();
+    h.worker.cancel();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    h.wait(|h| h.status.is_idle());
+}
+
+#[test]
+fn a_refresh_that_times_out_while_it_connects_sends_no_request() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 100 ms, so the timeout is 200 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(100));
+    h.refresh(Scope::Connection);
+    let earlier = server.requests().len();
+    *server.connect_delay.lock().unwrap() = Duration::from_millis(400);
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(server.requests().len(), earlier);
+    assert_eq!(
+        h.catalog().schema("sales").unwrap().error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
+    );
 }
