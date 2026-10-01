@@ -123,7 +123,7 @@ tree in the sidebar and give them to the assistant.
     exclude patterns. Changes to these fields, like the Lifecycle fields, do
     not release sessions.
 
-## Phase 2: refresh while connected
+## Phase 2: refresh while connected (implemented on feat/schema-refresh-policy)
 
 Both the refresh period and the refresh timeout are configurable for each
 connection (user decision, 2026-10-01).
