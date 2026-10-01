@@ -144,7 +144,8 @@ records each refresh in the Logs of the tab that the connection shows:
 - The start of the refresh.
 - The session that the refresh opens.
 - Each request, with its number of rows and its duration.
-- The result of the refresh: completed, cancelled, or failed.
+- The result of the refresh: completed, cancelled, or failed. If some schemas
+  or tables could not be read, the result tells how many.
 
 The entries of one refresh share one place in the Logs history. A large
 refresh does not remove the history of queries. A refresh error does not mark

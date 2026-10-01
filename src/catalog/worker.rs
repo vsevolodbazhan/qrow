@@ -139,6 +139,7 @@ impl CatalogWorker {
             tx: events_tx,
             activity: activity_tx,
             batch: 0,
+            failures: 0,
             wake,
         };
         thread::spawn(move || {
@@ -249,6 +250,8 @@ struct Runner {
     activity: mpsc::Sender<ActivityEvent>,
     /// The Logs batch of the refresh in progress.
     batch: u64,
+    /// The nodes that the refresh in progress could not read.
+    failures: usize,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -314,6 +317,7 @@ impl Runner {
                 self.interrupted = false;
                 self.publish(true);
                 self.batch = NEXT_BATCH.fetch_add(1, Ordering::Relaxed);
+                self.failures = 0;
                 let started = Instant::now();
                 self.log(
                     Severity::Info,
@@ -323,6 +327,12 @@ impl Runner {
                 let result = self.refresh(&scope);
                 let duration = started.elapsed();
                 let outcome = match &result {
+                    Ok(()) if self.failures == 1 => {
+                        "Schema refresh completed with 1 error".to_owned()
+                    }
+                    Ok(()) if self.failures > 1 => {
+                        format!("Schema refresh completed with {} errors", self.failures)
+                    }
                     Ok(()) => "Schema refresh completed".to_owned(),
                     Err(Interrupt::Cancelled) => "Schema refresh cancelled".to_owned(),
                     Err(Interrupt::Stopped) => "Schema refresh stopped".to_owned(),
@@ -330,11 +340,12 @@ impl Runner {
                         format!("Schema refresh failed: {message}")
                     }
                 };
-                let severity = if matches!(result, Err(Interrupt::Unavailable(_))) {
-                    Severity::Error
-                } else {
-                    Severity::Info
-                };
+                let severity =
+                    if self.failures > 0 || matches!(result, Err(Interrupt::Unavailable(_))) {
+                        Severity::Error
+                    } else {
+                        Severity::Info
+                    };
                 self.log(
                     severity,
                     format!(
@@ -455,13 +466,10 @@ impl Runner {
     }
 
     fn refresh_connection(&mut self) -> Result<(), Interrupt> {
-        let names = match self
-            .read(&MetadataRequest::Schemas)?
-            .and_then(|rows| parse_schemas(&rows).map_err(|error| format!("{error:#}")))
-        {
+        let names = match self.read_parsed(&MetadataRequest::Schemas, parse_schemas)? {
             Ok(names) => names,
             Err(message) => {
-                self.update(|catalog| catalog.set_error(&Scope::Connection, message));
+                self.fail(&Scope::Connection, message);
                 return Ok(());
             }
         };
@@ -488,14 +496,13 @@ impl Runner {
             schema: schema.into(),
             relation: None,
         };
-        match self.read(&request)?.and_then(|rows| {
-            parse_columns(&rows, schema, None).map_err(|error| format!("{error:#}"))
-        }) {
+        match self.read_parsed(&request, |rows| parse_columns(rows, schema, None))? {
             Ok(columns) => {
                 self.update(|catalog| catalog.apply_columns(schema, None, columns, now()));
                 Ok(())
             }
-            // One broken view can fail the request for the whole schema.
+            // One broken view can fail the request for the whole schema. The
+            // requests for each relation decide which relations fail.
             Err(_) => {
                 let relations: Vec<String> = self
                     .catalog
@@ -533,15 +540,13 @@ impl Runner {
             Some(relation) => Scope::Relation(schema.into(), relation.into()),
             None => Scope::Schema(schema.into()),
         };
-        match self.read(&request)?.and_then(|rows| {
-            parse_relations(&rows, schema, relation).map_err(|error| format!("{error:#}"))
-        }) {
+        match self.read_parsed(&request, |rows| parse_relations(rows, schema, relation))? {
             Ok(entries) => {
                 self.update(|catalog| catalog.apply_relations(schema, relation, entries, now()));
                 Ok(true)
             }
             Err(message) => {
-                self.update(|catalog| catalog.set_error(&scope, message));
+                self.fail(&scope, message);
                 Ok(false)
             }
         }
@@ -552,17 +557,42 @@ impl Runner {
             schema: schema.into(),
             relation: Some(relation.into()),
         };
-        match self.read(&request)?.and_then(|rows| {
-            parse_columns(&rows, schema, Some(relation)).map_err(|error| format!("{error:#}"))
-        }) {
+        match self.read_parsed(&request, |rows| parse_columns(rows, schema, Some(relation)))? {
             Ok(columns) => {
                 self.update(|catalog| catalog.apply_columns(schema, Some(relation), columns, now()))
             }
-            Err(message) => self.update(|catalog| {
-                catalog.set_error(&Scope::Relation(schema.into(), relation.into()), message)
-            }),
+            Err(message) => self.fail(&Scope::Relation(schema.into(), relation.into()), message),
         }
         Ok(())
+    }
+
+    /// Read a catalog request and parse its rows. A parse error is a failed
+    /// request too, so it gets its own Logs entry.
+    fn read_parsed<T>(
+        &mut self,
+        request: &MetadataRequest,
+        parse: impl FnOnce(&MetadataRows) -> Result<T>,
+    ) -> Result<Result<T, String>, Interrupt> {
+        Ok(self.read(request)?.and_then(|rows| {
+            parse(&rows).map_err(|error| {
+                let message = format!("{error:#}");
+                self.log(
+                    Severity::Error,
+                    format!(
+                        "{} returned an unexpected result: {message}",
+                        describe_request(request)
+                    ),
+                    None,
+                );
+                message
+            })
+        }))
+    }
+
+    /// Record an error on the node of `scope`. The refresh reports it at its end.
+    fn fail(&mut self, scope: &Scope, message: String) {
+        self.failures += 1;
+        self.update(|catalog| catalog.set_error(scope, message));
     }
 
     /// Read all rows of a catalog request. An outer error stops the refresh;

@@ -596,4 +596,29 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         next.iter()
             .all(|entry| entry.batch.is_some() && entry.batch != batch)
     );
+
+    // A broken view fails its relation. The refresh reports it at its end.
+    // The failed request for the whole schema does not count, because the
+    // requests for each relation replace it.
+    h.server.broken_schemas.lock().unwrap().push("sales".into());
+    h.server
+        .broken_relations
+        .lock()
+        .unwrap()
+        .push("daily".into());
+    h.refresh(Scope::Schema("sales".into()));
+    let entries: Vec<_> = h.worker.activities.try_iter().collect();
+    let last = entries.last().unwrap();
+    assert!(
+        last.text
+            .starts_with("Schema refresh completed with 1 error"),
+        "{}",
+        last.text
+    );
+    assert_eq!(last.severity, qrow::activity::Severity::Error);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.text.starts_with("List columns of sales.daily failed"))
+    );
 }
