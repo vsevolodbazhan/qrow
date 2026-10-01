@@ -311,6 +311,81 @@ pub struct Profile {
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
+    #[serde(default)]
+    pub catalog: CatalogSettings,
+}
+
+/// The maximum number of include or exclude patterns of one connection.
+pub const MAX_SCHEMA_PATTERNS: usize = 100;
+/// The maximum length of one schema pattern, in characters.
+pub const MAX_SCHEMA_PATTERN: usize = 256;
+
+/// Which schemas the schema tree and the assistant show for a connection.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CatalogSettings {
+    /// Glob patterns of the schemas to show. Empty shows all schemas.
+    pub include: Vec<String>,
+    /// Glob patterns of the schemas to hide, also when an include matches.
+    pub exclude: Vec<String>,
+}
+
+impl CatalogSettings {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for patterns in [&self.include, &self.exclude] {
+            anyhow::ensure!(
+                patterns.len() <= MAX_SCHEMA_PATTERNS,
+                "Enter {MAX_SCHEMA_PATTERNS} schema patterns or fewer."
+            );
+            for pattern in patterns {
+                anyhow::ensure!(
+                    !pattern.trim().is_empty(),
+                    "Schema patterns cannot be empty."
+                );
+                anyhow::ensure!(
+                    pattern.chars().count() <= MAX_SCHEMA_PATTERN,
+                    "Each schema pattern must be {MAX_SCHEMA_PATTERN} characters or fewer."
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Return whether the schema tree shows `schema`. `*` matches any text and
+    /// `?` matches one character. Letter case does not matter.
+    pub fn shows(&self, schema: &str) -> bool {
+        (self.include.is_empty() || self.include.iter().any(|p| glob_match(p, schema)))
+            && !self.exclude.iter().any(|p| glob_match(p, schema))
+    }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.trim().to_lowercase().chars().collect();
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+    // Iterative matching with one backtrack point keeps the cost linear in practice.
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -360,6 +435,7 @@ impl Default for Profile {
             database: "avia".into(),
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
+            catalog: CatalogSettings::default(),
         }
     }
 }
@@ -396,7 +472,8 @@ impl Profile {
             !self.database.trim().is_empty(),
             "Enter an initial database."
         );
-        self.lifecycle.validate()
+        self.lifecycle.validate()?;
+        self.catalog.validate()
     }
 }
 
@@ -704,6 +781,43 @@ pub struct Batch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_patterns_match_globs_without_case_and_exclude_wins() {
+        let settings = CatalogSettings {
+            include: vec!["sales_*".into(), "o?s".into()],
+            exclude: vec!["*_tmp".into()],
+        };
+        assert!(settings.shows("Sales_EU"));
+        assert!(settings.shows("ops"));
+        assert!(!settings.shows("sales_eu_tmp"));
+        assert!(!settings.shows("oops"));
+        assert!(!settings.shows("hr"));
+        assert!(CatalogSettings::default().shows("anything"));
+        assert!(glob_match("a*b*c", "axxbyyc"));
+        assert!(glob_match("*", ""));
+        assert!(!glob_match("a*b", "a"));
+        assert!(!glob_match("?", ""));
+    }
+
+    #[test]
+    fn schema_patterns_must_be_bounded_and_not_blank() {
+        let mut settings = CatalogSettings {
+            include: vec![" ".into()],
+            exclude: vec![],
+        };
+        assert!(settings.validate().is_err());
+        settings.include = vec!["x".repeat(MAX_SCHEMA_PATTERN + 1)];
+        assert!(settings.validate().is_err());
+        settings.include = vec!["a".into(); MAX_SCHEMA_PATTERNS + 1];
+        assert!(settings.validate().is_err());
+        settings.include = vec!["a*".into()];
+        assert!(settings.validate().is_ok());
+        let restored: Profile =
+            serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000001","name":"a","host":"h","port":1,"username":"u","database":"d","parameters":{}}"#)
+                .unwrap();
+        assert_eq!(restored.catalog, CatalogSettings::default());
+    }
 
     #[test]
     fn default_profile_uses_a_neutral_spark_name() {

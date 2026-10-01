@@ -2,6 +2,7 @@ mod about_view;
 mod assistant_tools;
 mod assistant_view;
 mod button_pair;
+mod catalog_tree;
 mod connection_form;
 mod environment;
 mod output;
@@ -357,6 +358,8 @@ pub struct Qrow {
     quit_confirmed: bool,
     finished: bool,
     wake: async_channel::Sender<()>,
+    catalog: catalog_tree::CatalogTree,
+    _catalog_subscriptions: [Subscription; 2],
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
@@ -479,6 +482,20 @@ impl Qrow {
                 cx.notify();
             }
         });
+        let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
+        let catalog_subscriptions = [
+            cx.subscribe(
+                &catalog.state,
+                |this, _, event: &gpui_kit::base::TreeEvent, cx| {
+                    this.catalog_expansion_changed(event, cx)
+                },
+            ),
+            cx.subscribe(&catalog.search, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.catalog_search_changed(cx);
+                }
+            }),
+        ];
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -515,6 +532,8 @@ impl Qrow {
             quit_confirmed: false,
             finished: false,
             wake,
+            catalog,
+            _catalog_subscriptions: catalog_subscriptions,
         };
         for tab in workspace.tabs {
             let tab = this.make_tab(tab, window, cx);
@@ -536,6 +555,10 @@ impl Qrow {
         if demo {
             this.seed_demo(this.active, cx);
         }
+        if demo {
+            this.expand_demo_catalog();
+        }
+        this.rebuild_catalog_tree(cx);
         this.tabs[this.active]
             .input
             .update(cx, |s, cx| s.focus(window, cx));
@@ -676,12 +699,14 @@ impl Qrow {
                 worker.shutdown();
             }
         }
+        self.catalog.shutdown();
         let deadline = Instant::now() + Duration::from_secs(1);
         for tab in &self.tabs {
             if let Some(worker) = &tab.worker {
                 worker.wait_for_shutdown(deadline.saturating_duration_since(Instant::now()));
             }
         }
+        self.catalog.wait_for_shutdown(deadline);
     }
     fn active_work_description(&self) -> Option<&'static str> {
         let assistant = self.assistant_working();
@@ -910,6 +935,7 @@ impl Qrow {
     /// step still waits: an autosave, a quit, or a connection form save.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
+        changed |= self.drain_catalogs(cx);
         changed |= self.tick_assistant(window, cx);
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
@@ -1176,6 +1202,7 @@ impl Qrow {
                         }
                     }
                 }
+                self.catalog_profile_saved(&profile, cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
                 }
@@ -1858,10 +1885,27 @@ impl Qrow {
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
+        let refreshing = self.catalog.is_refreshing(id);
+        let refresh = cx.listener(move |this, _: &ClickEvent, _, cx| {
+            if refreshing {
+                this.cancel_catalog_refresh(id);
+            } else {
+                this.refresh_catalog(id, crate::catalog::Scope::Connection, cx);
+            }
+        });
         self.open_context_menu(
             position,
             move |menu, _, _| {
                 menu.item(
+                    PopupMenuItem::new(if refreshing {
+                        "Stop Refresh"
+                    } else {
+                        "Refresh Schemas"
+                    })
+                    .on_click(refresh),
+                )
+                .separator()
+                .item(
                     PopupMenuItem::new("Edit Connection…")
                         .on_click(edit)
                         .disabled(busy),
@@ -2058,6 +2102,8 @@ impl Qrow {
                 profile.lifecycle.keep_alive_seconds.to_string()
             },
             profile.lifecycle.keep_alive_sql.clone(),
+            profile.catalog.include.join(", "),
+            profile.catalog.exclude.join(", "),
         ];
         let fields = values
             .into_iter()
@@ -2138,8 +2184,10 @@ impl Qrow {
                         "Session parameters must be a JSON object with string values: {e}"
                     )
                 })?;
+            profile.catalog.include = connection_form::parse_patterns(&values[10]);
+            profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
             profile.lifecycle = connection_form::parse_lifecycle(
-                &values[7..],
+                &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
@@ -2272,6 +2320,7 @@ impl Qrow {
         }
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
+        self.catalog_profile_deleted(id, cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),

@@ -2,7 +2,7 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable, TitleBar, h_flex,
+    Icon, TitleBar, h_flex,
     input::Editor,
     shimmer::ShimmerText,
     spinner::Spinner,
@@ -18,7 +18,7 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-fn connection_tooltip(profile: &Profile) -> String {
+pub(super) fn connection_tooltip(profile: &Profile) -> String {
     format!("{} · {}", profile.host, profile.username)
 }
 
@@ -63,144 +63,6 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
-    fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.active_profile();
-        let action_size = self.ui_px(28.);
-        v_flex()
-            .size_full()
-            .bg(cx.theme().sidebar)
-            .child(
-                h_flex()
-                    .h(self.ui_px(TAB_BAR_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl_3()
-                    .pr_2()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Connections"),
-                    )
-                    .child(
-                        Button::new("add-connection")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .accessibility_label("New Connection")
-                            .tooltip("New Connection…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.edit_profile(Profile::default(), true, window, cx)
-                            })),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .id("connections-list")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pt_2()
-                    .gap_1()
-                    .children(self.profiles.iter().map(|profile| {
-                        let id = profile.id;
-                        let busy = self.profile_busy(id);
-                        let unread_error = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
-                        let accessibility_label = format!(
-                            "{}{}{}",
-                            profile.name,
-                            if busy { ", running" } else { "" },
-                            if unread_error { ", unread error" } else { "" }
-                        );
-                        let button = Button::new(SharedString::from(format!("profile-{id}")))
-                            .ghost()
-                            .small()
-                            .h_full()
-                            .flex_1()
-                            .min_w_0()
-                            .accessibility_label(accessibility_label)
-                            .child(
-                                h_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .min_w_0()
-                                    .text_base()
-                                    .line_height(relative(1.25))
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        gpui_kit::component::Icon::default()
-                                            .path(crate::assets::SPARK_ICON)
-                                            .size_4()
-                                            .flex_shrink_0(),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .child(profile.name.clone()),
-                                    )
-                                    .when(busy, |el| {
-                                        el.child(
-                                            div()
-                                                // Keep the loading glyph on the header action's centerline.
-                                                .mr_0p5()
-                                                .child(
-                                                    Spinner::new()
-                                                        .xsmall()
-                                                        .color(cx.theme().muted_foreground),
-                                                ),
-                                        )
-                                    })
-                                    .when(unread_error, |el| {
-                                        el.child(
-                                            Icon::new(AssetIconName::TriangleAlert)
-                                                .small()
-                                                .text_color(cx.theme().danger),
-                                        )
-                                    }),
-                            )
-                            .selected(active == Some(id))
-                            .text_color(cx.theme().sidebar_foreground)
-                            .when(active == Some(id), |button| {
-                                button
-                                    .bg(cx.theme().sidebar_accent)
-                                    .text_color(cx.theme().sidebar_accent_foreground)
-                            })
-                            .tooltip(connection_tooltip(profile))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.switch_profile(id, window, cx)
-                            }));
-                        h_flex()
-                            .id(SharedString::from(format!("connection-{id}")))
-                            .h(self.ui_px(32.))
-                            .flex_shrink_0()
-                            .child(button)
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |_, event: &MouseDownEvent, window, cx| {
-                                    let position = event.position;
-                                    cx.defer_in(window, move |this, window, cx| {
-                                        this.open_profile_menu(id, position, window, cx)
-                                    });
-                                }),
-                            )
-                    })),
-            )
-    }
-
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();

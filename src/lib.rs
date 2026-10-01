@@ -3,6 +3,7 @@ pub mod activity;
 mod assets;
 pub mod assistant;
 pub mod build_info;
+pub mod catalog;
 pub mod connector;
 pub mod model;
 pub mod pagination;

@@ -6,6 +6,15 @@ pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -
         .any(|profile| profile.id != candidate.id && profile.name == candidate.name)
 }
 
+/// Schema patterns from a form field: separated by commas, without blanks.
+pub(super) fn parse_patterns(text: &str) -> Vec<String> {
+    text.split(',')
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 pub(super) fn parse_lifecycle(
     values: &[String],
     keep_connected: bool,
@@ -43,7 +52,7 @@ use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 10] = [
+pub(super) const FIELD_IDS: [&str; 12] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -54,6 +63,8 @@ pub(super) const FIELD_IDS: [&str; 10] = [
     "connection-idle-timeout",
     "connection-keep-alive-interval",
     "connection-keep-alive-query",
+    "connection-show-schemas",
+    "connection-hide-schemas",
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
@@ -153,9 +164,39 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
+pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
+    let saving = form.saving.is_some();
+    let input = |index: usize, label: &'static str| {
+        Input::new(&form.fields[index])
+            .id(FIELD_IDS[index])
+            .w_full()
+            .disabled(saving)
+            .aria_label(label)
+            .into_any_element()
+    };
+    Form::vertical()
+        .w_full()
+        .child(field(
+            "Show schemas",
+            Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
+            input(10, "Show schemas"),
+        ))
+        .child(field(
+            "Hide schemas",
+            Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
+            input(11, "Hide schemas"),
+        ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_patterns_are_split_at_commas_without_blanks() {
+        assert_eq!(parse_patterns(" sales_*, ,ops ,"), ["sales_*", "ops"]);
+        assert!(parse_patterns("  ").is_empty());
+    }
 
     #[test]
     fn connection_names_are_unique_except_for_the_profile_being_edited() {

@@ -59,6 +59,15 @@ default path is:
 ~/Library/Application Support/Qrow/workspace.json
 ```
 
+Qrow keeps the [schema copy](connections.md#browse-schemas) of each connection
+in a separate file, in the `catalog` folder next to the workspace file. The
+file name is the profile identifier. A schema copy contains schema, table,
+view, and column names, their types, and their comments. It does not contain
+refresh errors. Qrow deletes the file when you delete the connection. Qrow
+ignores a file that belongs to another host, port, username, or set of session
+parameters, and makes a new copy. If Qrow cannot open the workspace, it does
+not write schema copies.
+
 Passwords remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords and result sets are not written to the workspace file. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.

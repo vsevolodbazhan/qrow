@@ -15,7 +15,9 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 4. Enter your LDAP username and password.
 5. Enter the initial database.
 6. Enter session parameters as a JSON object with string values.
-7. Click **Save**.
+7. Optional: Enter [schema patterns](#show-or-hide-schemas) in **Show schemas**
+   and **Hide schemas**.
+8. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
 form open and shows the error above the form actions.
@@ -36,7 +38,7 @@ has a new profile identifier, a unique name based on the source name, and
 requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name or the Connection Lifecycle fields. The worker applies the new lifecycle
+name, the Connection Lifecycle fields, or the schema patterns. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -49,6 +51,114 @@ Deletion requires confirmation. Qrow closes sessions that use the deleted
 profile, even when another profile is selected. Qrow removes the profile and requests deletion
 of its stored password. Keychain deletion failures are not reported in the UI,
 so a failed deletion can leave the password in Keychain.
+
+## Browse schemas
+
+The Connections sidebar is a tree. Each connection is a root row. Under a
+connection, the tree shows its schemas, then the tables and views of each
+schema, then the columns of each table or view. A column row shows the column
+name and its type. A schema row shows the number of its tables and views.
+
+- Click a connection to select it. This does not expand the connection.
+- Click the arrow before a connection to expand or collapse it.
+- Click a schema, a table, or a view to expand or collapse it.
+- After you click an arrow or a row below a connection, use the arrow keys to
+  move through the tree, expand rows, and collapse rows. A click on a
+  connection puts the cursor in the SQL editor.
+- Point to a table or a view to see its comment. Point to a column to see its
+  comment.
+
+Qrow keeps a copy of the schemas of each connection on your computer. The tree
+shows this copy, also when the connection has no session. Qrow reads the copy
+when you first expand the connection or search the tree. Qrow does not read
+the copy or open a session at startup.
+
+### Refresh schemas
+
+A refresh reads the schemas from the server again. Qrow opens a separate
+session for the refresh and closes it when the refresh ends. This session does
+not change the idle timer, the keep-alive, or the results of a tab.
+
+- To refresh the schema list and the tables of each schema, right-click the
+  connection and select **Refresh Schemas**. You can also select the connection
+  and click the refresh button beside **+**.
+- To refresh one schema and the columns of all its tables, right-click the
+  schema and select **Refresh**.
+- To refresh one table or view and its columns, right-click it and select
+  **Refresh**.
+- To stop a connection refresh, right-click the connection and select **Stop
+  Refresh**. The tree keeps the schemas that it had before the refresh.
+
+A connection refresh does not read columns, because a server with many tables
+can need much time to send them. Qrow reads the columns of a schema or a table
+when you refresh it.
+
+Qrow does not start a session to read schemas by itself. When a tab of the
+connection has a live session, Qrow reads the missing data when you expand a
+row:
+
+- A connection that Qrow never read.
+- A schema without its list of tables.
+- A table or a view without its columns.
+
+When the connection has no live session, an unread row shows **Not loaded**.
+Click **Refresh** in that row to read it. This opens a session.
+
+If a refresh fails, the row of the failed part shows the error. Point to the
+row to read the full message. The tree keeps the data that it had before the
+refresh. If Qrow cannot connect, it stops the refreshes that wait for that
+connection.
+
+### Search the tree
+
+Type in **Search tables…** to find schemas and tables in all connections. The
+search does not find columns. Qrow expands the connections and schemas that
+contain matches. A schema that matches by name shows all its tables when you
+expand it. The search shows the first 500 matches. Clear the search field to
+show the full tree again.
+
+### Use names in SQL
+
+Right-click a schema, a table, a view, or a column, then select:
+
+- **Copy Name** or **Copy Qualified Name** to copy the name. A table name
+  includes its schema, for example `sales.orders`.
+- **Insert into Editor** to put the name at the cursor of the SQL editor. The
+  name replaces the selected text.
+
+Double-click a table, a view, or a column to insert its name. Qrow adds
+backticks to a name that is not a plain identifier.
+
+### Show or hide schemas
+
+Use **Show schemas** and **Hide schemas** in the connection settings to select
+which schemas the tree shows. Each field takes glob patterns separated by
+commas. `*` matches any text, and `?` matches one character. Letter case does
+not matter.
+
+- If **Show schemas** is empty, the tree shows all schemas.
+- **Hide schemas** hides a schema also when **Show schemas** matches it.
+
+For example, `sales_*, ops` in **Show schemas** and `*_tmp` in **Hide
+schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
+
+When you save new patterns, the tree hides schemas at once. A schema that you
+add to **Show schemas** shows after the next connection refresh. A connection
+with many schemas refreshes faster when you hide the schemas that you do not
+use.
+
+### Schema limitations
+
+- With the Kyuubi share level `CONNECTION`, each refresh session starts its own
+  Spark engine. The default share level, `USER`, uses the engine of your
+  other sessions.
+- The tree does not show temporary views, because they belong to the session
+  of a tab.
+- The tree does not show which columns are partition columns. HiveServer2 does
+  not report this.
+- Qrow does not save which rows are expanded.
+- One catalog request can return at most 200,000 rows or 64 MB. If a schema
+  has more columns, its refresh fails. Hide schemas or refresh single tables.
 
 ## Sessions and idle behavior
 
@@ -145,6 +255,13 @@ opening a session, then selects the initial database.
 session deadline. A lifecycle update wakes the worker so it can recalculate the
 next deadline. It does not require continuous UI polling. The keep-alive uses a
 separate operation in the same session so it can preserve the result cursor.
+
+The [catalog worker](../src/catalog/worker.rs) of each connection owns its
+schema copy. It loads the copy from disk, runs the queued refreshes in one
+session, and saves the copy after each refresh. Qrow sends names to the server
+as given. HiveServer2 reads `_` in a name as a pattern, so the worker removes
+the rows of other names. Refresh requests that wait are merged: a schema
+refresh includes the refreshes of its tables.
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable

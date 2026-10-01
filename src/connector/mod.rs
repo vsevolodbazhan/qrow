@@ -34,8 +34,36 @@ pub trait Cancellation: Send + Sync {
     fn cancel(&self) -> Result<()>;
 }
 
+/// A catalog request. The connector answers it with a result set that uses
+/// the JDBC `DatabaseMetaData` column names:
+///
+/// - [`Schemas`](Self::Schemas): `TABLE_SCHEM`.
+/// - [`Relations`](Self::Relations): `TABLE_SCHEM`, `TABLE_NAME`, `TABLE_TYPE`,
+///   and `REMARKS`.
+/// - [`Columns`](Self::Columns): `TABLE_SCHEM`, `TABLE_NAME`, `COLUMN_NAME`,
+///   `TYPE_NAME`, `REMARKS`, and `ORDINAL_POSITION`.
+///
+/// Names select exact objects. A connector can return more rows than the
+/// names select, so the caller keeps only the rows with the requested names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MetadataRequest {
+    Schemas,
+    Relations {
+        schema: String,
+        relation: Option<String>,
+    },
+    Columns {
+        schema: String,
+        relation: Option<String>,
+    },
+}
+
 pub trait Session: Send {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
+    /// Start a catalog request as the current operation. Read its rows with
+    /// [`poll`](Self::poll), [`columns`](Self::columns), and
+    /// [`fetch`](Self::fetch), like the rows of a query.
+    fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>>;
     fn poll(&mut self) -> Result<QueryState>;
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
@@ -108,6 +136,9 @@ mod tests {
 
     impl Session for Scripted {
         fn execute(&mut self, _: &str) -> Result<Arc<dyn Cancellation>> {
+            unreachable!()
+        }
+        fn execute_metadata(&mut self, _: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
             unreachable!()
         }
         fn poll(&mut self) -> Result<QueryState> {

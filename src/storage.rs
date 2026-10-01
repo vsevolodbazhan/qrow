@@ -1,4 +1,7 @@
-use crate::model::{WORKSPACE_VERSION, Workspace};
+use crate::{
+    catalog::{CATALOG_VERSION, Catalog},
+    model::{WORKSPACE_VERSION, Workspace},
+};
 use anyhow::{Context, Result};
 use std::{
     fs,
@@ -82,31 +85,63 @@ impl WorkspaceFile {
     }
 
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
-        let parent = self.path.parent().context("Invalid workspace path")?;
-        let temporary =
-            TemporaryWorkspace(self.path.with_extension(format!("{}.tmp", Uuid::new_v4())));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let json = serde_json::to_vec_pretty(workspace)?;
-        let mut file = options.open(&temporary.0)?;
-        file.write_all(&json)?;
-        file.sync_all()?;
-        fs::rename(&temporary.0, &self.path)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
+        write_atomically(&self.path, &serde_json::to_vec_pretty(workspace)?)
     }
 }
 
-struct TemporaryWorkspace(PathBuf);
-impl Drop for TemporaryWorkspace {
+/// Replace `path` with `data` so that a crash leaves the old or the new file,
+/// never a partial one. Only the owner can read the file.
+fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    let parent = path.parent().context("Invalid file path")?;
+    let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary.0)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    fs::rename(&temporary.0, path)?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+struct TemporaryFile(PathBuf);
+impl Drop for TemporaryFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
+}
+
+/// The schema cache of a profile, next to the workspace file. The workspace
+/// lock also protects this directory.
+pub fn catalog_path(workspace: &Path, profile: Uuid) -> PathBuf {
+    workspace
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("catalog")
+        .join(format!("{profile}.json"))
+}
+
+/// Read a schema cache. A missing, unreadable, or outdated file gives `None`,
+/// because Qrow can read the schemas from the server again.
+pub fn load_catalog(path: &Path) -> Option<Catalog> {
+    let data = fs::read(path).ok()?;
+    let catalog: Catalog = serde_json::from_slice(&data).ok()?;
+    (catalog.version == CATALOG_VERSION).then_some(catalog)
+}
+
+pub fn save_catalog(path: &Path, catalog: &Catalog) -> Result<()> {
+    fs::create_dir_all(path.parent().context("Invalid schema cache path")?)
+        .context("Could not create the schema cache directory")?;
+    write_atomically(path, &serde_json::to_vec(catalog)?).context("Could not save the schema cache")
+}
+
+pub fn delete_catalog(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 pub type SaveResult = std::result::Result<(), String>;

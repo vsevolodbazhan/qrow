@@ -145,7 +145,8 @@ impl Qrow {
                                     .into_any_element(),
                             )),
                     )
-                    .child(connection_form::render_lifecycle(form, cx)),
+                    .child(connection_form::render_lifecycle(form, cx))
+                    .child(connection_form::render_schemas(form)),
             )
             .into_any_element()
     }

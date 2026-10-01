@@ -20,6 +20,9 @@ gpui_kit::assets::icon_assets!(
         CircleStop,
         Activity,
         Table,
+        Database,
+        Eye,
+        RefreshCw,
         ListPlus,
         ScrollText,
     ]

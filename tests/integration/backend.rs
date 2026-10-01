@@ -589,3 +589,127 @@ fn evidence_uses_executor_and_driver_markers() -> Result<()> {
     ensure!(evidence::count_in(root, "query", "ended").is_err());
     Ok(())
 }
+
+#[test]
+#[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
+fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
+    use qrow::catalog::{self, CatalogWorker, RelationKind, Scope, Status};
+    let client = Client::new()?;
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    // As a server pattern, `_` in the first name also matches the second one.
+    let schema = format!("qrow_c_{id}");
+    let sibling = format!("qrowxcx{id}");
+    for sql in [
+        format!("CREATE DATABASE {schema}"),
+        format!("CREATE DATABASE {sibling}"),
+        format!(
+            "CREATE TABLE {schema}.orders (id INT COMMENT 'Order key', total DECIMAL(10,2), day STRING) USING parquet PARTITIONED BY (day) COMMENT 'Paid orders'"
+        ),
+        format!("CREATE VIEW {schema}.recent AS SELECT id FROM {schema}.orders"),
+        format!("CREATE TABLE {sibling}.other (x INT) USING parquet"),
+    ] {
+        client.query(&sql)?;
+    }
+    let mut profile = client.profile.clone();
+    profile.catalog.include = vec![schema.clone(), sibling.clone()];
+    let worker = CatalogWorker::with_connector(
+        profile,
+        None,
+        Arc::new(|| {}),
+        Arc::new(HiveConnector),
+        Arc::new(|_| Ok(Zeroizing::new("qrow-test-password".into()))),
+    );
+    let mut latest: Option<Arc<catalog::Catalog>> = None;
+    let mut refresh = |scope: Scope| -> Result<Arc<catalog::Catalog>> {
+        worker.refresh(scope.clone());
+        let deadline = Instant::now() + TIMEOUT;
+        let mut started = false;
+        loop {
+            match worker
+                .events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .context("Timed out waiting for the catalog worker")?
+            {
+                catalog::Event::Catalog(catalog) => latest = Some(catalog),
+                catalog::Event::Status(status) => {
+                    started |= status.includes(&scope);
+                    if started && status == Status::default() {
+                        return latest.clone().context("No catalog");
+                    }
+                }
+            }
+        }
+    };
+    let result = (|| -> Result<()> {
+        let catalog = refresh(Scope::Connection)?;
+        ensure!(catalog.error.is_none(), "{:?}", catalog.error);
+        let mut names: Vec<_> = catalog.schemas.keys().cloned().collect();
+        names.sort();
+        let mut expected = vec![schema.clone(), sibling.clone()];
+        expected.sort();
+        assert_eq!(names, expected);
+        let relations: Vec<_> = catalog
+            .schema(&schema)
+            .and_then(|node| node.relations.as_ref())
+            .context("No relations")?
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(relations, ["orders", "recent"]);
+        let orders = catalog.relation(&schema, "orders").context("No orders")?;
+        assert_eq!(orders.kind, RelationKind::Table);
+        assert_eq!(orders.comment.as_deref(), Some("Paid orders"));
+        assert_eq!(
+            catalog.relation(&schema, "recent").context("No view")?.kind,
+            RelationKind::View
+        );
+
+        let catalog = refresh(Scope::Schema(schema.clone()))?;
+        let columns = catalog
+            .relation(&schema, "orders")
+            .and_then(|relation| relation.columns.clone())
+            .context("No columns")?;
+        let names: Vec<_> = columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["id", "total", "day"]);
+        assert_eq!(columns[0].data_type, "INT");
+        assert_eq!(columns[0].comment.as_deref(), Some("Order key"));
+        assert!(
+            columns[1].data_type.starts_with("DECIMAL"),
+            "{}",
+            columns[1].data_type
+        );
+        let view: Vec<_> = catalog
+            .relation(&schema, "recent")
+            .and_then(|relation| relation.columns.clone())
+            .context("No view columns")?
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        assert_eq!(view, ["id"]);
+
+        client.query(&format!(
+            "ALTER TABLE {schema}.orders ADD COLUMNS (currency STRING)"
+        ))?;
+        let catalog = refresh(Scope::Relation(schema.clone(), "orders".into()))?;
+        let names: Vec<_> = catalog
+            .relation(&schema, "orders")
+            .and_then(|relation| relation.columns.clone())
+            .context("No columns")?
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        ensure!(names.contains(&"currency".to_owned()), "{names:?}");
+
+        client.query(&format!("DROP VIEW {schema}.recent"))?;
+        let catalog = refresh(Scope::Relation(schema.clone(), "recent".into()))?;
+        ensure!(catalog.relation(&schema, "recent").is_none());
+        ensure!(catalog.relation(&schema, "orders").is_some());
+        Ok(())
+    })();
+    worker.shutdown();
+    worker.wait_for_shutdown(Duration::from_secs(5));
+    for name in [&schema, &sibling] {
+        let _ = client.query(&format!("DROP DATABASE IF EXISTS {name} CASCADE"));
+    }
+    result
+}
