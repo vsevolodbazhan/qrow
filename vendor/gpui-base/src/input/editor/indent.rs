@@ -4,8 +4,7 @@ use crate::input::{
     element::TextElement, layout::LastLayout, mode::LayoutMode,
 };
 use gpui::{
-    Bounds, Context, Hsla, Path, PathBuilder, Pixels, SharedString, TextRun, TextStyle, Window,
-    point, px,
+    Bounds, Context, Hsla, Pixels, Point, SharedString, TextRun, TextStyle, Window, point, px, size,
 };
 use ropey::RopeSlice;
 
@@ -101,6 +100,12 @@ impl<M: InputModeKind> TextElement<M> {
         layout.width
     }
 
+    /// Lays out the indent guides as 1-pixel columns, one quad for each run of
+    /// lines.
+    ///
+    /// Qrow patch: the guides were one stroked path. A path makes GPUI draw
+    /// each frame through a window-sized intermediate texture, and the texture
+    /// then stays in GPU memory.
     pub(super) fn layout_indent_guides(
         &self,
         state: &InputBaseState<M>,
@@ -108,9 +113,9 @@ impl<M: InputModeKind> TextElement<M> {
         last_layout: &LastLayout,
         text_style: &TextStyle,
         window: &mut Window,
-    ) -> Option<Path<Pixels>> {
+    ) -> Vec<Bounds<Pixels>> {
         if !state.is_multi_line() || !state.mode.has_indent_guides() {
-            return None;
+            return Vec::new();
         }
 
         let indent_width =
@@ -118,49 +123,69 @@ impl<M: InputModeKind> TextElement<M> {
 
         let tab_size = state.mode.tab_size();
         let line_height = last_layout.line_height;
-        let mut builder = PathBuilder::stroke(px(1.));
-        let mut offset_y = last_layout.visible_top;
         let mut last_indents = vec![];
 
-        for (&buffer_line, line_layout) in last_layout
+        let lines = last_layout
             .visible_buffer_lines
             .iter()
             .zip(last_layout.lines.iter())
-        {
-            let line = state.text.slice_line(buffer_line);
-            let mut current_indents = vec![];
-            if line.len() > 0 {
-                let indent_count = tab_size.indent_count(&line);
-                for offset in (0..indent_count).step_by(tab_size.tab_size) {
-                    let x = if indent_count > 0 {
-                        indent_width * offset as f32 / tab_size.tab_size as f32
-                    } else {
-                        px(0.)
-                    };
-
-                    let pos = point(x + last_layout.line_number_width, offset_y);
-
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                    current_indents.push(pos.x);
+            .map(|(&buffer_line, line_layout)| {
+                let line = state.text.slice_line(buffer_line);
+                let mut current_indents = vec![];
+                if line.len() > 0 {
+                    let indent_count = tab_size.indent_count(&line);
+                    for offset in (0..indent_count).step_by(tab_size.tab_size) {
+                        let x = indent_width * offset as f32 / tab_size.tab_size as f32;
+                        current_indents.push(x + last_layout.line_number_width);
+                    }
+                } else {
+                    current_indents = last_indents.clone();
                 }
-            } else if last_indents.len() > 0 {
-                for x in &last_indents {
-                    let pos = point(*x, offset_y);
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                }
-                current_indents = last_indents.clone();
-            }
+                last_indents = current_indents.clone();
+                (
+                    current_indents,
+                    line_layout.wrapped_lines.len() * line_height,
+                )
+            });
 
-            offset_y += line_layout.wrapped_lines.len() * line_height;
-            last_indents = current_indents;
-        }
-
-        builder.translate(bounds.origin);
-        let path = builder.build().unwrap();
-        Some(path)
+        indent_guide_columns(
+            lines,
+            bounds.origin + point(px(0.), last_layout.visible_top),
+        )
     }
+}
+
+/// Joins the guides of consecutive lines at the same x into one column.
+/// `lines` gives the guide positions and the height of each line, from the
+/// top. A guide is 1 pixel wide and centered on its position.
+fn indent_guide_columns(
+    lines: impl IntoIterator<Item = (Vec<Pixels>, Pixels)>,
+    origin: Point<Pixels>,
+) -> Vec<Bounds<Pixels>> {
+    let mut columns = Vec::new();
+    // The columns that reach the top of the current line.
+    let mut open: Vec<Bounds<Pixels>> = Vec::new();
+    let mut offset_y = origin.y;
+
+    for (indents, height) in lines {
+        let mut next_open = Vec::with_capacity(indents.len());
+        for x in indents {
+            let x = origin.x + x - px(0.5);
+            match open.iter().position(|column| column.origin.x == x) {
+                Some(index) => {
+                    let mut column = open.swap_remove(index);
+                    column.size.height += height;
+                    next_open.push(column);
+                }
+                None => next_open.push(Bounds::new(point(x, offset_y), size(px(1.), height))),
+            }
+        }
+        columns.append(&mut open);
+        open = next_open;
+        offset_y += height;
+    }
+    columns.append(&mut open);
+    columns
 }
 
 /// Indent guides are a code-editor affordance.
@@ -443,9 +468,36 @@ enum IndentDirection {
 
 #[cfg(test)]
 mod tests {
+    use gpui::{Bounds, point, px, size};
     use ropey::RopeSlice;
 
-    use super::TabSize;
+    use super::{TabSize, indent_guide_columns};
+
+    #[test]
+    fn test_indent_guide_columns() {
+        let lines = vec![
+            (vec![], px(20.)),
+            (vec![px(10.)], px(20.)),
+            (vec![px(10.), px(30.)], px(40.)),
+            (vec![px(10.)], px(20.)),
+            (vec![], px(20.)),
+            (vec![px(10.)], px(20.)),
+        ];
+        let mut columns = indent_guide_columns(lines, point(px(100.), px(5.)));
+        columns.sort_by(|a, b| {
+            (a.origin.y, a.origin.x)
+                .partial_cmp(&(b.origin.y, b.origin.x))
+                .unwrap()
+        });
+        assert_eq!(
+            columns,
+            vec![
+                Bounds::new(point(px(109.5), px(25.)), size(px(1.), px(80.))),
+                Bounds::new(point(px(129.5), px(45.)), size(px(1.), px(40.))),
+                Bounds::new(point(px(109.5), px(125.)), size(px(1.), px(20.))),
+            ]
+        );
+    }
 
     #[test]
     fn test_tab_size() {
