@@ -62,8 +62,8 @@ row shows the column name and its type. A schema row shows the number of its
 tables and views.
 
 Schema browsing is off for a new connection. To turn it on, open the
-connection settings and set **Schema refresh**, the first field of the
-Schemas section:
+connection settings. In **Schema refresh**, the first field of the Schemas
+section, select **Manual** or **While connected**. The choices are:
 
 - **Disabled**: Qrow does not read or show the schemas of the connection. The
   connection row has no arrow, and its menu has no **Refresh Schemas**. The

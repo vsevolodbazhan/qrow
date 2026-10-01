@@ -636,6 +636,31 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     wait_shows(&app, cx, "avia");
 }
 
+/// The choices of Schema refresh, in their order.
+const SCHEMA_REFRESH: [&str; 3] = ["Disabled", "Manual", "While connected"];
+
+/// The checked choice of Schema refresh.
+fn schema_refresh(window: &gpui_kit::Window) -> Option<String> {
+    let group = gpui_kit::ElementId::from("connection-schema-refresh");
+    crate::support::elements(window)
+        .into_iter()
+        .filter(|element| element.path().contains(&group) && element.checked() == Some(true))
+        .find_map(|element| element.label().map(str::to_owned))
+}
+
+/// Clicks the Schema refresh choice `choice`.
+fn choose_schema_refresh(app: &TestApp, cx: &mut TestAppContext, choice: &str) {
+    let index = SCHEMA_REFRESH.iter().position(|c| *c == choice).unwrap();
+    app.update(cx, |window, cx| {
+        window
+            .within("connection-schema-refresh".to_owned())
+            .click(index, cx)
+    });
+    app.wait_until(cx, choice, Duration::from_secs(10), |window, _| {
+        schema_refresh(window).as_deref() == Some(choice)
+    });
+}
+
 #[gpui_kit::test]
 fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     let profile = offline_profile("Warehouse");
@@ -659,10 +684,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     // Manual: Schema refresh comes first, with no refresh period.
     edit(cx);
     app.update(cx, |window, _| {
-        assert_eq!(
-            value(window, "connection-schema-refresh").as_deref(),
-            Some("Manual")
-        );
+        assert_eq!(schema_refresh(window).as_deref(), Some("Manual"));
         assert!(window.try_find("connection-refresh-period").is_none());
         let refresh = bounds_of(window, "connection-schema-refresh");
         let show = bounds_of(window, "connection-show-schemas");
@@ -678,7 +700,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
 
     // While connected shows the period, and both fields are validated.
     app.scroll_to(cx, "connection-schema-refresh");
-    app.select(cx, "connection-schema-refresh", "While connected");
+    choose_schema_refresh(&app, cx, "While connected");
     app.wait_for(cx, "connection-refresh-period");
     app.update(cx, |window, _| {
         assert_eq!(
@@ -706,7 +728,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
 
     // Disabled hides the other Schemas fields and keeps their values.
     edit(cx);
-    app.select(cx, "connection-schema-refresh", "Disabled");
+    choose_schema_refresh(&app, cx, "Disabled");
     for hidden in [
         "connection-refresh-period",
         "connection-show-schemas",
@@ -732,7 +754,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
 
     // The hidden period stays for a change back to While connected.
     edit(cx);
-    app.select(cx, "connection-schema-refresh", "While connected");
+    choose_schema_refresh(&app, cx, "While connected");
     app.wait_for(cx, "connection-refresh-period");
     app.update(cx, |window, _| {
         assert_eq!(
@@ -748,10 +770,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.wait_for(cx, "connection-name");
     app.scroll_to(cx, "connection-schema-refresh");
     app.update(cx, |window, _| {
-        assert_eq!(
-            value(window, "connection-schema-refresh").as_deref(),
-            Some("Disabled")
-        );
+        assert_eq!(schema_refresh(window).as_deref(), Some("Disabled"));
         assert!(window.try_find("connection-show-schemas").is_none());
     });
 }
@@ -770,7 +789,7 @@ fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppCont
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit Connection…");
         app.scroll_to(cx, "connection-schema-refresh");
-        app.select(cx, "connection-schema-refresh", mode);
+        choose_schema_refresh(&app, cx, mode);
         app.click(cx, "save-profile");
         app.wait_gone(cx, "connection-name");
     };
