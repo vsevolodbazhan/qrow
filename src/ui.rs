@@ -1923,7 +1923,7 @@ impl Qrow {
             position,
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
-                menu.label("Connection")
+                menu.item(menu_section("Connection"))
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(
@@ -1933,7 +1933,7 @@ impl Qrow {
                     )
                     .when(browses, |menu| {
                         menu.separator()
-                            .label("Schemas")
+                            .item(menu_section("Schemas"))
                             .item(
                                 PopupMenuItem::new(if refreshing {
                                     "Stop Refresh"
@@ -2525,6 +2525,23 @@ impl Qrow {
         tab.panel.success();
     }
 }
+/// The title of a section of a context menu. GPUI Kit draws its menu labels
+/// like disabled items, so the title uses the style of a native menu section
+/// header instead: smaller, semibold, and muted.
+fn menu_section(title: &'static str) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, cx| {
+        div()
+            .id(SharedString::from(format!("menu-section-{title}")))
+            .test_support()
+            .aria_label(title)
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(cx.theme().muted_foreground)
+            .child(title)
+    })
+    .disabled(true)
+}
+
 fn demo_workspace() -> Workspace {
     let profiles: Vec<_> = ["rivendell-s", "rivendell-xl", "analytics-s"]
         .into_iter()

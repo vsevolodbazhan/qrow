@@ -148,7 +148,21 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
 
     app.context_menu(cx, connection_row(original));
     app.update(cx, |window, _| {
-        // The connection section, then the schemas section, in this order.
+        // The connection section, then the schemas section, from top to
+        // bottom. Section titles are not items, so they have their own IDs.
+        let top = |window: &mut gpui_kit::Window, entry: &str| {
+            if let Some(title) = window.try_find(format!("menu-section-{entry}")) {
+                return title.bounds().origin.y;
+            }
+            let index = menu_item(window, "popup-menu", entry)
+                .unwrap_or_else(|| panic!("The menu has no {entry}"));
+            window
+                .within("popup-menu".to_owned())
+                .find(index)
+                .bounds()
+                .origin
+                .y
+        };
         let order = [
             "Connection",
             "Edit",
@@ -158,11 +172,13 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
             "Refresh",
             "Collapse",
         ]
-        .map(|item| {
-            menu_item(window, "popup-menu", item)
-                .unwrap_or_else(|| panic!("The menu has no {item}"))
-        });
+        .map(|entry| top(window, entry));
         assert!(order.is_sorted_by(|a, b| a < b), "{order:?}");
+        // A section title is not a command.
+        assert_eq!(
+            window.find("menu-section-Connection").label(),
+            Some("Connection")
+        );
     });
     // A dismissed menu is released; the leak detector fails the test otherwise.
     app.press(cx, "escape");

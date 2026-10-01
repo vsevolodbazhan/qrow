@@ -842,7 +842,8 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
     app.update(cx, |window, _| {
         assert!(menu_item(window, "popup-menu", "Edit").is_some());
         // Without schema browsing, the menu has no Schemas section.
-        for item in ["Schemas", "Refresh", "Collapse"] {
+        assert!(window.try_find("menu-section-Schemas").is_none());
+        for item in ["Refresh", "Collapse"] {
             assert!(menu_item(window, "popup-menu", item).is_none(), "{item}");
         }
     });
