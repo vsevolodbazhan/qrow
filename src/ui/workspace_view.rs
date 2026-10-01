@@ -2,7 +2,9 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable, TitleBar, h_flex,
+    Icon, Selectable, TitleBar,
+    alert::Alert,
+    h_flex,
     input::Editor,
     shimmer::ShimmerText,
     spinner::Spinner,
@@ -929,16 +931,7 @@ impl Qrow {
                 )
             })
             .when_some(self.message.clone(), |el, message| {
-                el.child(
-                    div()
-                        .id("workspace-message")
-                        .px_3()
-                        .py_2()
-                        .text_color(cx.theme().warning)
-                        .role(Role::Status)
-                        .aria_label(message.clone())
-                        .child(message),
-                )
+                el.child(Alert::warning("workspace-message", message).banner())
             })
             .child(self.status_bar())
     }
