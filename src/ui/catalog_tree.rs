@@ -296,6 +296,10 @@ impl Builder<'_> {
             profile.name.clone(),
             Node::Connection(profile.id),
         );
+        // A connection without schema browsing is a row without children.
+        if !profile.catalog.browses() {
+            return item;
+        }
         let catalog = self.tree.catalog(profile.id);
         let searching = !self.search.is_empty();
         let has_matches = searching
@@ -597,7 +601,12 @@ impl Qrow {
                 });
             return;
         }
-        let Some(saved) = self.profiles.iter().find(|p| p.id == profile).cloned() else {
+        let Some(saved) = self
+            .profiles
+            .iter()
+            .find(|p| p.id == profile && p.catalog.browses())
+            .cloned()
+        else {
             return;
         };
         let warm = self.catalog_warm(profile);
@@ -632,7 +641,10 @@ impl Qrow {
         for index in 0..self.profiles.len() {
             let profile = &self.profiles[index];
             let id = profile.id;
-            let automatic = profile.catalog.refresh != CatalogRefresh::Manual;
+            let automatic = matches!(
+                profile.catalog.refresh,
+                CatalogRefresh::WhileConnected { .. }
+            );
             let warm = self.catalog_warm(id);
             let connection = self.catalog.connections.get_mut(&id);
             match connection.and_then(|connection| {
@@ -812,6 +824,19 @@ impl Qrow {
 
     /// Gives an edited profile to its catalog worker.
     pub(super) fn catalog_profile_saved(&mut self, profile: &Profile, cx: &mut Context<Self>) {
+        if !profile.catalog.browses() {
+            // Stop reading schemas. The cache file stays for a later enable.
+            if let Some(worker) = self
+                .catalog
+                .connections
+                .remove(&profile.id)
+                .and_then(|connection| connection.worker)
+            {
+                worker.shutdown();
+            }
+            self.rebuild_catalog_tree(cx);
+            return;
+        }
         if let Some(worker) = self
             .catalog
             .connections

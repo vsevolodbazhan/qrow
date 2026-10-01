@@ -23,10 +23,11 @@ use crate::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        AssistantWorkspace, CatalogRefresh, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE,
-        MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT,
-        MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP,
-        WORKSPACE_VERSION, Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
+        AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
+        MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
+        MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
+        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, conversation_tab_title,
+        copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -1905,6 +1906,10 @@ impl Qrow {
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
+        let browses = self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == id && profile.catalog.browses());
         let has_expanded = self.has_expanded_descendants(id, None, cx);
         let collapse =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.collapse_catalog(id, None, cx));
@@ -1919,20 +1924,22 @@ impl Qrow {
         self.open_context_menu(
             position,
             move |menu, _, _| {
-                menu.item(
-                    PopupMenuItem::new(if refreshing {
-                        "Stop Refresh"
-                    } else {
-                        "Refresh Schemas"
-                    })
-                    .on_click(refresh),
-                )
-                .item(
-                    PopupMenuItem::new("Collapse All")
-                        .on_click(collapse)
-                        .disabled(!has_expanded),
-                )
-                .separator()
+                menu.when(browses, |menu| {
+                    menu.item(
+                        PopupMenuItem::new(if refreshing {
+                            "Stop Refresh"
+                        } else {
+                            "Refresh Schemas"
+                        })
+                        .on_click(refresh),
+                    )
+                    .item(
+                        PopupMenuItem::new("Collapse All")
+                            .on_click(collapse)
+                            .disabled(!has_expanded),
+                    )
+                    .separator()
+                })
                 .item(
                     PopupMenuItem::new("Edit Connection…")
                         .on_click(edit)
@@ -2134,7 +2141,9 @@ impl Qrow {
             profile.catalog.exclude.join(", "),
             match profile.catalog.refresh {
                 CatalogRefresh::WhileConnected { minutes } => minutes.to_string(),
-                CatalogRefresh::Manual => CatalogRefresh::default_minutes().to_string(),
+                CatalogRefresh::Disabled | CatalogRefresh::Manual => {
+                    CatalogRefresh::default_minutes().to_string()
+                }
             },
             profile.catalog.timeout_minutes.to_string(),
         ];
@@ -2165,11 +2174,11 @@ impl Qrow {
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
         let schema_refresh = connection_form::schema_refresh_select(
-            profile.catalog.refresh != CatalogRefresh::Manual,
+            connection_form::RefreshMode::of(profile.catalog.refresh),
             window,
             cx,
         );
-        // The refresh period shows only for an automatic refresh.
+        // The choice decides which Schemas fields show.
         let schema_refresh_subscription =
             cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
                 if matches!(event, SelectEvent::Confirm(Some(_))) {
@@ -2234,13 +2243,17 @@ impl Qrow {
                         "Session parameters must be a JSON object with string values: {e}"
                     )
                 })?;
-            profile.catalog.include = connection_form::parse_patterns(&values[10]);
-            profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
-            profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+            let mode = connection_form::refresh_mode(&form.schema_refresh, cx);
+            // Disabled hides the other Schemas fields and keeps their values.
+            if mode != connection_form::RefreshMode::Disabled {
+                profile.catalog.include = connection_form::parse_patterns(&values[10]);
+                profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
+                profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+            }
             connection_form::parse_refresh_policy(
                 &values[12],
                 &values[13],
-                connection_form::refreshes_automatically(&form.schema_refresh, cx),
+                mode,
                 &mut profile.catalog,
             )?;
             profile.lifecycle = connection_form::parse_lifecycle(
@@ -2540,6 +2553,10 @@ fn demo_workspace() -> Workspace {
             name: name.into(),
             host: "demo.local".into(),
             username: format!("kyuubi-{name}"),
+            catalog: CatalogSettings {
+                refresh: CatalogRefresh::Manual,
+                ..CatalogSettings::default()
+            },
             ..Default::default()
         })
         .collect();

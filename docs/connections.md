@@ -15,9 +15,9 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 4. Enter your LDAP username and password.
 5. Enter the initial database.
 6. Enter session parameters as a JSON object with string values.
-7. Optional: Enter [schema patterns](#show-or-hide-schemas) in **Show schemas**
-   and **Hide schemas**, and set the
-   [automatic schema refresh](#refresh-schemas-automatically).
+7. Optional: To [browse the schemas](#browse-schemas) of the connection, set
+   **Schema refresh** to **Manual** or **While connected**. Then you can enter
+   [schema patterns](#show-or-hide-schemas).
 8. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
@@ -56,9 +56,26 @@ so a failed deletion can leave the password in Keychain.
 ## Browse schemas
 
 The Connections sidebar is a tree. Each connection is a root row. Under a
-connection, the tree shows its schemas, then the tables and views of each
-schema, then the columns of each table or view. A column row shows the column
-name and its type. A schema row shows the number of its tables and views.
+connection that browses schemas, the tree shows its schemas, then the tables
+and views of each schema, then the columns of each table or view. A column
+row shows the column name and its type. A schema row shows the number of its
+tables and views.
+
+Schema browsing is off for a new connection. To turn it on, open the
+connection settings and set **Schema refresh**, the first field of the
+Schemas section:
+
+- **Disabled**: Qrow does not read or show the schemas of the connection. The
+  connection row has no arrow, and its menu has no **Refresh Schemas**. The
+  other Schemas fields do not show, and they keep their values. Qrow keeps
+  the copy of the schemas on your computer, so the tree shows it again when
+  you turn browsing on.
+- **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
+  expand an unread row while a tab of the connection is connected.
+- **While connected**: as **Manual**, and Qrow also
+  [refreshes the schemas automatically](#refresh-schemas-automatically).
+
+To use the tree:
 
 - Click a connection to select it. This does not expand the connection.
 - Click the arrow before a connection to expand or collapse it.
@@ -140,8 +157,9 @@ refreshes that wait for that connection.
 
 ### Refresh schemas automatically
 
-By default, Qrow refreshes the schemas of a connection each 60 minutes, but
-only while a tab of the connection has a live session. The refresh then uses
+When **Schema refresh** is **While connected**, Qrow refreshes the schemas of
+the connection after each refresh period, but only while a tab of the
+connection has a live session. The refresh then uses
 the engine that the tab already started. Qrow never opens a session for an
 automatic refresh on a connection without one.
 
@@ -156,14 +174,13 @@ automatic refresh on a connection without one.
 - When no tab of the connection has a live session any more, Qrow stops an
   automatic refresh in progress. The tree keeps what the refresh read.
 
-To change the policy, open the connection settings:
+Set these fields in the Schemas section of the connection settings:
 
-- **Schema refresh**: **While connected** refreshes automatically. **Manual**
-  refreshes only when you select **Refresh**.
 - **Refresh period**: the minutes between automatic refreshes, from 5 to
-  10,080 (7 days). This field shows only for **While connected**.
+  10,080 (7 days). The default is 60. This field shows only for **While
+  connected**.
 - **Refresh timeout**: the longest time of one refresh, manual or automatic,
-  from 1 to 1,440 minutes (1 day).
+  from 1 to 1,440 minutes (1 day). The default is 30.
 
 ### Search the tree
 

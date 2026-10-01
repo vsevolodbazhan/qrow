@@ -60,6 +60,7 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     // Other tests make schemas too. The filter keeps the tree to this one.
     workspace.profiles[1].catalog.include = vec![schema.clone()];
     workspace.profiles[1].catalog.log_refreshes = true;
+    workspace.profiles[1].catalog.refresh = CatalogRefresh::WhileConnected { minutes: 60 };
     let reader = workspace.profiles[1].clone();
     let app = TestApp::launch_with(cx, workspace, credentials);
 

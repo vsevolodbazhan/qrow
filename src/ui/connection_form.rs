@@ -17,20 +17,50 @@ pub(super) fn parse_patterns(text: &str) -> Vec<String> {
 
 /// Read the schema refresh fields into `settings`. Only an automatic
 /// refresh reads the period.
+/// The choices of the Schema refresh dropdown, in their order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefreshMode {
+    Disabled,
+    Manual,
+    WhileConnected,
+}
+
+const REFRESH_MODES: [(RefreshMode, &str); 3] = [
+    (RefreshMode::Disabled, "Disabled"),
+    (RefreshMode::Manual, "Manual"),
+    (RefreshMode::WhileConnected, "While connected"),
+];
+
+impl RefreshMode {
+    pub(super) fn of(refresh: CatalogRefresh) -> Self {
+        match refresh {
+            CatalogRefresh::Disabled => Self::Disabled,
+            CatalogRefresh::Manual => Self::Manual,
+            CatalogRefresh::WhileConnected { .. } => Self::WhileConnected,
+        }
+    }
+}
+
+/// Read the schema refresh fields into `settings`. A mode reads only the
+/// fields that it shows: Disabled reads none, and only While connected
+/// reads the period.
 pub(super) fn parse_refresh_policy(
     period: &str,
     timeout: &str,
-    automatic: bool,
+    mode: RefreshMode,
     settings: &mut CatalogSettings,
 ) -> anyhow::Result<()> {
-    settings.refresh = if automatic {
-        let minutes = period
-            .trim()
-            .parse()
-            .map_err(|_| anyhow::anyhow!("Refresh period must be a whole number of minutes."))?;
-        CatalogRefresh::WhileConnected { minutes }
-    } else {
-        CatalogRefresh::Manual
+    if mode == RefreshMode::Disabled {
+        settings.refresh = CatalogRefresh::Disabled;
+        return Ok(());
+    }
+    settings.refresh = match mode {
+        RefreshMode::Disabled | RefreshMode::Manual => CatalogRefresh::Manual,
+        RefreshMode::WhileConnected => CatalogRefresh::WhileConnected {
+            minutes: period.trim().parse().map_err(|_| {
+                anyhow::anyhow!("Refresh period must be a whole number of minutes.")
+            })?,
+        },
     };
     settings.timeout_minutes = timeout
         .trim()
@@ -94,8 +124,6 @@ pub(super) const FIELD_IDS: [&str; 14] = [
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
-const MANUAL: &str = "Manual";
-const WHILE_CONNECTED: &str = "While connected";
 const DISABLED: &str = "Disabled";
 const ENABLED: &str = "Enabled";
 
@@ -117,27 +145,37 @@ pub(super) fn idle_behavior_select(
     })
 }
 
-/// A choice between Manual and While connected schema refresh.
+/// The Schema refresh dropdown, with `mode` selected.
 pub(super) fn schema_refresh_select(
-    automatic: bool,
+    mode: RefreshMode,
     window: &mut Window,
     cx: &mut Context<Qrow>,
 ) -> ChoiceSelect {
+    let row = REFRESH_MODES
+        .iter()
+        .position(|(choice, _)| *choice == mode)
+        .unwrap_or_default();
     cx.new(|cx| {
         SelectState::new(
-            SearchableVec::new(vec![MANUAL.into(), WHILE_CONNECTED.into()]),
-            Some(IndexPath::default().row(usize::from(automatic))),
+            SearchableVec::new(
+                REFRESH_MODES
+                    .iter()
+                    .map(|(_, label)| (*label).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+            Some(IndexPath::default().row(row)),
             window,
             cx,
         )
     })
 }
 
-pub(super) fn refreshes_automatically(select: &ChoiceSelect, cx: &App) -> bool {
-    select
-        .read(cx)
-        .selected_value()
-        .is_some_and(|choice| choice == WHILE_CONNECTED)
+pub(super) fn refresh_mode(select: &ChoiceSelect, cx: &App) -> RefreshMode {
+    let selected = select.read(cx).selected_value().cloned();
+    REFRESH_MODES
+        .iter()
+        .find(|(_, label)| selected.as_deref() == Some(*label))
+        .map_or(RefreshMode::Disabled, |(mode, _)| *mode)
 }
 
 /// A choice between Disabled and Enabled.
@@ -243,7 +281,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
 
 pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement {
     let saving = form.saving.is_some();
-    let automatic = refreshes_automatically(&form.schema_refresh, cx);
+    let mode = refresh_mode(&form.schema_refresh, cx);
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
             .id(FIELD_IDS[index])
@@ -255,19 +293,9 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement
     Form::vertical()
         .w_full()
         .child(field(
-            "Show schemas",
-            Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
-            input(10, "Show schemas"),
-        ))
-        .child(field(
-            "Hide schemas",
-            Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
-            input(11, "Hide schemas"),
-        ))
-        .child(field(
             "Schema refresh",
             Some(
-                "While connected reads the schemas again after each refresh period, only while a tab of this connection is connected. Manual reads them only when you select Refresh.",
+                "Disabled hides the schema tree of this connection. Manual reads schemas when you select Refresh, or when you open an unread row while a tab is connected. While connected also reads them again after each refresh period.",
             ),
             Select::new(&form.schema_refresh)
                 .id("connection-schema-refresh")
@@ -276,30 +304,42 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement
                 .accessibility_label("Schema refresh")
                 .into_any_element(),
         ))
-        .when(automatic, |el| {
+        .when(mode == RefreshMode::WhileConnected, |el| {
             el.child(field(
                 "Refresh period",
                 Some("Minutes between automatic schema refreshes, from 5 to 10080."),
                 input(12, "Refresh period in minutes"),
             ))
         })
-        .child(field(
-            "Refresh timeout",
-            Some(
-                "Minutes before Qrow stops a schema refresh, from 1 to 1440. The schemas that it read stay in the tree.",
-            ),
-            input(13, "Refresh timeout in minutes"),
-        ))
-        .child(field(
-            "Schema refresh logs",
-            Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
-            Select::new(&form.refresh_logs)
-                .id("connection-refresh-logs")
-                .w_full()
-                .disabled(saving)
-                .accessibility_label("Schema refresh logs")
-                .into_any_element(),
-        ))
+        .when(mode != RefreshMode::Disabled, |el| {
+            el.child(field(
+                "Show schemas",
+                Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
+                input(10, "Show schemas"),
+            ))
+            .child(field(
+                "Hide schemas",
+                Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
+                input(11, "Hide schemas"),
+            ))
+            .child(field(
+                "Refresh timeout",
+                Some(
+                    "Minutes before Qrow stops a schema refresh, from 1 to 1440. The schemas that it read stay in the tree.",
+                ),
+                input(13, "Refresh timeout in minutes"),
+            ))
+            .child(field(
+                "Schema refresh logs",
+                Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
+                Select::new(&form.refresh_logs)
+                    .id("connection-refresh-logs")
+                    .w_full()
+                    .disabled(saving)
+                    .accessibility_label("Schema refresh logs")
+                    .into_any_element(),
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -313,20 +353,29 @@ mod tests {
     }
 
     #[test]
-    fn only_an_automatic_schema_refresh_reads_its_period() {
+    fn each_schema_refresh_mode_reads_only_the_fields_that_it_shows() {
         let mut settings = CatalogSettings::default();
-        parse_refresh_policy("invalid", " 10 ", false, &mut settings).unwrap();
+        parse_refresh_policy("invalid", " 10 ", RefreshMode::Manual, &mut settings).unwrap();
         assert_eq!(settings.refresh, CatalogRefresh::Manual);
         assert_eq!(settings.timeout_minutes, 10);
-        parse_refresh_policy(" 15 ", "10", true, &mut settings).unwrap();
+        parse_refresh_policy(" 15 ", "10", RefreshMode::WhileConnected, &mut settings).unwrap();
         assert_eq!(
             settings.refresh,
             CatalogRefresh::WhileConnected { minutes: 15 }
         );
-        assert!(parse_refresh_policy("invalid", "10", true, &mut settings).is_err());
-        assert!(parse_refresh_policy("4", "10", true, &mut settings).is_err());
-        assert!(parse_refresh_policy("15", "0", true, &mut settings).is_err());
-        assert!(parse_refresh_policy("15", "1.5", false, &mut settings).is_err());
+        // Disabled keeps the hidden timeout.
+        parse_refresh_policy("invalid", "invalid", RefreshMode::Disabled, &mut settings).unwrap();
+        assert_eq!(settings.refresh, CatalogRefresh::Disabled);
+        assert_eq!(settings.timeout_minutes, 10);
+        let mode = RefreshMode::WhileConnected;
+        assert!(parse_refresh_policy("invalid", "10", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("4", "10", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("15", "0", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("15", "1.5", RefreshMode::Manual, &mut settings).is_err());
+        assert_eq!(
+            RefreshMode::of(CatalogRefresh::WhileConnected { minutes: 5 }),
+            RefreshMode::WhileConnected
+        );
     }
 
     #[test]

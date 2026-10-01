@@ -358,12 +358,14 @@ impl Harness {
 }
 
 fn profile() -> Profile {
-    Profile {
+    let mut profile = Profile {
         name: "Catalog".into(),
         host: "127.0.0.1".into(),
         username: "synthetic-user".into(),
         ..Profile::default()
-    }
+    };
+    profile.catalog.refresh = CatalogRefresh::WhileConnected { minutes: 60 };
+    profile
 }
 
 fn warehouse() -> Arc<Server> {

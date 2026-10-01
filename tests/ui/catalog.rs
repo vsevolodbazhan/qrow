@@ -1,10 +1,11 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, label, labelled, offline_profile, press_at, shows,
-    value,
+    MemoryCredentials, TestApp, bounds_of, connection_row, label, labelled, menu_item,
+    offline_profile, press_at, shows, value,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, Workspace},
@@ -651,29 +652,45 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     let edit = |cx: &mut TestAppContext| {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit Connection…");
-        app.scroll_to(cx, "connection-refresh-timeout");
+        app.scroll_to(cx, "connection-schema-refresh");
     };
+    let saved = |app: &TestApp| app.saved().profiles[0].catalog.clone();
 
-    // The defaults: refresh every 60 minutes while connected, stop after 30.
+    // Manual: Schema refresh comes first, with no refresh period.
     edit(cx);
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-schema-refresh").as_deref(),
-            Some("While connected")
+            Some("Manual")
         );
-        assert_eq!(
-            value(window, "connection-refresh-period").as_deref(),
-            Some("60")
-        );
+        assert!(window.try_find("connection-refresh-period").is_none());
+        let refresh = bounds_of(window, "connection-schema-refresh");
+        let show = bounds_of(window, "connection-show-schemas");
+        assert!(refresh.origin.y < show.origin.y);
+    });
+    app.scroll_to(cx, "connection-refresh-timeout");
+    app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-refresh-timeout").as_deref(),
             Some("30")
+        );
+    });
+
+    // While connected shows the period, and both fields are validated.
+    app.scroll_to(cx, "connection-schema-refresh");
+    app.select(cx, "connection-schema-refresh", "While connected");
+    app.wait_for(cx, "connection-refresh-period");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-refresh-period").as_deref(),
+            Some("60")
         );
     });
     app.fill(cx, "connection-refresh-period", "4");
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh period must be between 5 and 10080 minutes.");
     app.fill(cx, "connection-refresh-period", "15");
+    app.scroll_to(cx, "connection-refresh-timeout");
     app.fill(cx, "connection-refresh-timeout", "0");
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh timeout must be between 1 and 1440 minutes.");
@@ -681,20 +698,69 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
     app.wait_until(cx, "the saved policy", Duration::from_secs(10), |_, _| {
-        let saved = &app.saved().profiles[0].catalog;
+        let saved = saved(&app);
         saved.refresh == CatalogRefresh::WhileConnected { minutes: 15 }
             && saved.timeout_minutes == 45
     });
 
-    // Manual hides the period and keeps the timeout.
+    // Disabled hides the other Schemas fields and keeps their values.
     edit(cx);
-    app.select(cx, "connection-schema-refresh", "Manual");
-    app.wait_gone(cx, "connection-refresh-period");
+    app.select(cx, "connection-schema-refresh", "Disabled");
+    for hidden in [
+        "connection-refresh-period",
+        "connection-show-schemas",
+        "connection-hide-schemas",
+        "connection-refresh-timeout",
+        "connection-refresh-logs",
+    ] {
+        app.wait_gone(cx, hidden);
+    }
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
-    app.wait_until(cx, "the manual policy", Duration::from_secs(10), |_, _| {
-        let saved = &app.saved().profiles[0].catalog;
-        saved.refresh == CatalogRefresh::Manual && saved.timeout_minutes == 45
+    app.wait_until(
+        cx,
+        "the disabled policy",
+        Duration::from_secs(10),
+        |_, _| {
+            let saved = saved(&app);
+            saved.refresh == CatalogRefresh::Disabled && saved.timeout_minutes == 45
+        },
+    );
+
+    // A new connection does not browse schemas.
+    app.click(cx, "add-connection");
+    app.wait_for(cx, "connection-name");
+    app.scroll_to(cx, "connection-schema-refresh");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-refresh").as_deref(),
+            Some("Disabled")
+        );
+        assert!(window.try_find("connection-show-schemas").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut profile = offline_profile("Warehouse");
+    // The cache stays from a time when the connection browsed schemas.
+    cache(&directory, &profile, &[("avia", None)]);
+    profile.catalog.refresh = CatalogRefresh::Disabled;
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    app.toggle_connection(cx, profile.id);
+    app.settle(cx);
+    app.update(cx, |window, _| assert!(labelled(window, "avia").is_none()));
+    app.context_menu(cx, connection_row(profile.id));
+    app.update(cx, |window, _| {
+        assert!(menu_item(window, "popup-menu", "Edit Connection…").is_some());
+        assert!(menu_item(window, "popup-menu", "Refresh Schemas").is_none());
+        assert!(menu_item(window, "popup-menu", "Collapse All").is_none());
     });
 }
 

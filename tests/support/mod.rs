@@ -712,16 +712,19 @@ impl TestApp {
     }
 }
 
-/// A synthetic connection that no test connects to.
+/// A synthetic connection that no test connects to. It browses schemas on
+/// request, so tests can show a cached schema tree.
 pub fn offline_profile(name: &str) -> Profile {
-    Profile {
+    let mut profile = Profile {
         name: name.into(),
         host: "example.invalid".into(),
         port: 10009,
         username: "synthetic".into(),
         database: "default".into(),
         ..Profile::default()
-    }
+    };
+    profile.catalog.refresh = qrow::model::CatalogRefresh::Manual;
+    profile
 }
 
 /// Presses the left button at `position` `count` times in a row, like a
