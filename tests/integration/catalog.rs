@@ -777,6 +777,16 @@ fn logs_entries_count_only_the_requested_names() {
     );
 }
 
+/// Wait until the worker cancelled a request. A cancellation runs on its own
+/// thread, and the watchdog and the worker can both cancel a timed-out request.
+fn wait_for_cancel(server: &Server) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.cancels.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "no request was cancelled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn connects(server: &Server) -> usize {
     server.connects.load(Ordering::SeqCst)
 }
@@ -933,7 +943,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
     assert!(catalog.schema("empty").unwrap().relations.is_some());
     assert!(catalog.schema("salesx").unwrap().relations.is_none());
-    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    wait_for_cancel(&server);
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
     assert!(
@@ -969,7 +979,7 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     h.wait(|h| h.status.is_idle());
     assert_eq!(h.catalog().error, None);
     assert!(h.catalog().schema("empty").unwrap().relations.is_some());
-    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    wait_for_cancel(&server);
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
     assert!(
@@ -997,7 +1007,7 @@ fn a_timeout_cancels_a_call_that_blocks() {
     h.worker.refresh(Scope::Schema("sales".into()));
     h.wait(|h| h.status.active.is_some());
     h.wait(|h| h.status.is_idle());
-    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    wait_for_cancel(&server);
     assert_eq!(
         h.catalog().schema("sales").unwrap().error.as_deref(),
         Some("Refresh stopped after 2 minutes")
@@ -1015,6 +1025,6 @@ fn an_automatic_refresh_stops_between_fetches_when_the_connection_becomes_cold()
     std::thread::sleep(Duration::from_millis(200));
     h.worker.set_warm(false);
     h.wait(|h| h.status.is_idle());
-    assert_eq!(server.cancels.load(Ordering::SeqCst), 1);
+    wait_for_cancel(&server);
     assert_eq!(h.catalog().error, None);
 }
