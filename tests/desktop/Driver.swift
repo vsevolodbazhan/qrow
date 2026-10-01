@@ -673,8 +673,8 @@ final class Driver {
         guard let item else { throw Failure("The application menu has no item: \(label)") }
         return item
     }
-    func selectApplicationMenuItem(_ label: String) throws {
-        let menu = try openApplicationMenu()
+    func selectApplicationMenuItem(_ label: String, from openedMenu: AXUIElement? = nil) throws {
+        let menu = try openedMenu ?? openApplicationMenu()
         let item = try applicationMenuItem(label, in: menu)
         try require(attribute(item, kAXEnabledAttribute) as? Bool == true, "The application menu item is disabled: \(label)")
         try require(AXUIElementPerformAction(item, kAXPressAction as CFString) == .success, "Cannot select \(label)")
@@ -687,10 +687,11 @@ final class Driver {
                         "\(label) is disabled after \(close) of the conversation delete dialog")
         }
         try snapshot("assistant-delete-menu-\(close)")
-        key(53)
+        // Finish menu tracking by selecting About from the menu we checked.
+        try testAbout(from: menu)
     }
-    func testAbout() throws {
-        try selectApplicationMenuItem("About Qrow")
+    func testAbout(from menu: AXUIElement? = nil) throws {
+        try selectApplicationMenuItem("About Qrow", from: menu)
         let copyright = "Copyright © 2026 Vsevolod Bazhan"
         _ = try wait(copyright, timeout: 10)
         let deadline = clock.now.advanced(by: .seconds(10))
@@ -999,7 +1000,6 @@ final class Driver {
             // No click in the workspace may repair focus before this check.
             try checkApplicationMenuCommands(after: close)
         }
-        try testAbout()
         try testSettingsMenu()
         print("PASS: About Qrow, Settings, and Quit Qrow stay enabled after Delete, Cancel, and Escape")
     }
