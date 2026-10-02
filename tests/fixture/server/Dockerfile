@@ -5,14 +5,17 @@ FROM apache/spark:3.5.3@sha256:d0f5d63bfbbffdbec08debb4911554ba671a2fa7398374db8
 USER root
 COPY --from=java /opt/java/openjdk /opt/java/openjdk
 ENV JAVA_HOME=/opt/java/openjdk PATH=/opt/java/openjdk/bin:$PATH
-COPY Blocking.java /tmp/Blocking.java
-RUN mkdir /tmp/classes && javac -cp '/opt/spark/jars/*' -d /tmp/classes /tmp/Blocking.java \
-    && jar cf /opt/spark/jars/qrow-fixture.jar -C /tmp/classes .
 COPY --from=kyuubi /opt/kyuubi /opt/kyuubi
+COPY Blocking.java Certificates.java Oidc.java TlsProxy.java TokenOrLdap.java /tmp/fixture/
+# One jar for Spark (Blocking), the Kyuubi server (TokenOrLdap), and the JDK-only fixture servers.
+RUN mkdir /tmp/classes && javac -cp '/opt/spark/jars/*:/opt/kyuubi/jars/*' -d /tmp/classes /tmp/fixture/*.java \
+    && jar cf /opt/spark/jars/qrow-fixture.jar -C /tmp/classes . \
+    && cp /opt/spark/jars/qrow-fixture.jar /opt/kyuubi/jars/qrow-fixture.jar \
+    && rm -rf /tmp/classes /tmp/fixture
 COPY kyuubi-defaults.conf /opt/kyuubi/conf/kyuubi-defaults.conf
 ENV KYUUBI_HOME=/opt/kyuubi SPARK_HOME=/opt/spark KYUUBI_LOG_DIR=/opt/kyuubi/logs
-RUN mkdir -p /evidence /opt/kyuubi/logs /opt/kyuubi/pid /opt/kyuubi/work \
-    && chmod -R a+rwX /evidence /opt/kyuubi /opt/spark/work-dir
+RUN mkdir -p /evidence /security /opt/kyuubi/logs /opt/kyuubi/pid /opt/kyuubi/work \
+    && chmod -R a+rwX /evidence /security /opt/kyuubi /opt/spark/work-dir
 WORKDIR /opt/kyuubi
 ENTRYPOINT []
 CMD ["/opt/kyuubi/bin/kyuubi", "run"]

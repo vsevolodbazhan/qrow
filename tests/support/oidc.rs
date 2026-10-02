@@ -465,3 +465,92 @@ fn token(state: &State, body: &[u8]) -> (u16, Value) {
     response["id_token"] = json!(sign(&state.key, claims));
     (200, response)
 }
+
+/// The OpenID Connect provider and the TLS port of the server fixture that
+/// `./qtest run backend` and `./qtest run e2e` provide.
+pub struct FixtureProvider {
+    pub issuer: String,
+    /// The TLS proxy in front of the binary port of Kyuubi.
+    pub tls_port: u16,
+    pub trust: Trust,
+}
+
+impl FixtureProvider {
+    pub fn get() -> Self {
+        let variable = |name: &str| {
+            std::env::var(name)
+                .unwrap_or_else(|_| panic!("No server fixture: {name} is not set. Use ./qtest run"))
+        };
+        let ca = std::fs::read(variable("QROW_E2E_TLS_CA")).expect("the fixture CA");
+        Self {
+            issuer: variable("QROW_E2E_OIDC_ISSUER"),
+            tls_port: variable("QROW_E2E_TLS_PORT")
+                .parse()
+                .expect("the TLS port is a number"),
+            trust: Trust::from_pem(&ca).expect("a valid fixture CA"),
+        }
+    }
+
+    /// A sign-in for the fixture provider. Tokens can go to 127.0.0.1.
+    pub fn sign_in(&self, name: &str) -> SignIn {
+        SignIn {
+            name: name.into(),
+            issuer: self.issuer.clone(),
+            client_id: CLIENT_ID.into(),
+            scopes: vec!["kyuubi".into()],
+            allowed_hosts: vec!["127.0.0.1".into()],
+            ..SignIn::default()
+        }
+    }
+
+    /// A browser that signs in as the fixture user `user` (alice, bob, or
+    /// mallory) with the fixture options `options`, for example
+    /// `("fixture_access_ttl", "2")`.
+    pub fn browser(
+        &self,
+        user: &str,
+        options: &[(&str, &str)],
+    ) -> impl Fn(&str) -> Result<()> + Send + Sync + 'static {
+        let trust = self.trust.clone();
+        let mut parameters = vec![("fixture_user".to_owned(), user.to_owned())];
+        parameters.extend(
+            options
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+        move |url: &str| {
+            let mut url = Url::parse(url)?;
+            for (name, value) in &parameters {
+                url.query_pairs_mut().append_pair(name, value);
+            }
+            let response = qrow::oidc::http::get(&trust, &url)?;
+            anyhow::ensure!(
+                response.status == 302,
+                "authorize returned {}",
+                response.status
+            );
+            let location = response.location.unwrap_or_default();
+            anyhow::ensure!(location.starts_with("http://127.0.0.1:"));
+            thread::spawn(move || callback(&location));
+            Ok(())
+        }
+    }
+
+    /// Revokes the refresh tokens of a fixture user.
+    pub fn revoke(&self, user: &str) {
+        let url = Url::parse(&format!("{}/fixture/revoke?user={user}", self.issuer)).unwrap();
+        let response = qrow::oidc::http::post_form(&self.trust, &url, &[]).unwrap();
+        assert_eq!(response.status, 200);
+    }
+
+    /// The successful token responses: (authorization code, refresh).
+    pub fn grants(&self) -> (u64, u64) {
+        let url = Url::parse(&format!("{}/fixture/stats", self.issuer)).unwrap();
+        let response = qrow::oidc::http::get(&self.trust, &url).unwrap();
+        let stats: Value = serde_json::from_slice(&response.body).unwrap();
+        (
+            stats["authorization_code"].as_u64().unwrap(),
+            stats["refresh_token"].as_u64().unwrap(),
+        )
+    }
+}
