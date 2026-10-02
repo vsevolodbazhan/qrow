@@ -1,7 +1,7 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, bounds_of, connection_row, label, labelled, menu_item,
+    MemoryCredentials, TestApp, bounds_of, connection_row, elements, label, labelled, menu_item,
     offline_profile, press_at, shows, value,
 };
 use gpui_kit::test::TestWindowExt as _;
@@ -520,6 +520,28 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         Duration::from_secs(10),
         |window, _| label(window, "toggle-activity").as_deref() == Some("Activity"),
     );
+    // The rows follow the UI scale while Activity is open.
+    let row_height = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            elements(window)
+                .iter()
+                .filter(|element| {
+                    element
+                        .path()
+                        .last()
+                        .is_some_and(|id| format!("{id:?}").contains("activity-entry"))
+                })
+                .map(|element| f32::from(element.bounds().size.height))
+                // A row without buttons has only text.
+                .fold(f32::MAX, f32::min)
+        })
+    };
+    let before = row_height(&app, cx);
+    app.press(cx, "cmd-=");
+    app.settle(cx);
+    let after = row_height(&app, cx);
+    assert!(after > before, "{before} -> {after}");
+    app.press(cx, "cmd--");
     app.click(cx, "activity-errors");
     let errors = app.copy_activity(cx);
     assert!(!errors.contains("Started a schema refresh"), "{errors}");

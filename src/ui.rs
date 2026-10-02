@@ -934,6 +934,8 @@ impl Qrow {
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
+        // The UI scale and the Logs font settings change here.
+        self.sync_activity_typography(cx);
         cx.notify();
     }
     fn record_log(tab: &mut Tab, event: LogEvent) {
@@ -2004,12 +2006,12 @@ impl Qrow {
                 menu.item(menu_section("Connection"))
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                    .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
                             .disabled(in_use),
                     )
-                    .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
                     .when(browses, |menu| {
                         menu.separator()
                             .item(menu_section("Schemas"))

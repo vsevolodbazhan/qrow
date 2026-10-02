@@ -16,7 +16,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::HashSet;
+use std::{collections::HashSet, ops::Range};
 use uuid::Uuid;
 
 actions!(qrow_activity, [CloseActivity]);
@@ -155,8 +155,15 @@ impl ActivityView {
             self.activity.mark_seen(connection);
         }
         if removed > 0 {
-            self.rebuild_rows(cx);
-        } else if let Some(row) = self.row_of_last() {
+            // Remove the rows of the removed entries, so the other rows keep
+            // their place and the reader keeps the position.
+            let header = !self.errors_only;
+            let (rows, gone, added) = trim_rows(&self.rows, removed, header);
+            self.rows = rows;
+            self.scroller
+                .update(cx, |list, cx| list.splice(gone, added, cx));
+        }
+        if let Some(row) = self.row_of_last() {
             self.rows.push(row);
             self.scroller.update(cx, |list, cx| list.append(1, cx));
         }
@@ -553,6 +560,29 @@ impl ActivityView {
     }
 }
 
+/// The rows that stay after a log removed its oldest `removed` entries, with
+/// the positions of the remaining entries. Also returns the range of `rows`
+/// to remove and the number of rows to insert there: the header line, when
+/// `header` asks for it and `rows` do not have it yet.
+fn trim_rows(rows: &[Row], removed: usize, header: bool) -> (Vec<Row>, Range<usize>, usize) {
+    let had_header = rows.first() == Some(&Row::Trimmed);
+    let start = usize::from(had_header);
+    let gone = rows[start..]
+        .iter()
+        .take_while(|row| matches!(row, Row::Entry(position) if *position < removed))
+        .count();
+    let added = usize::from(header && !had_header);
+    let mut kept = Vec::with_capacity(rows.len() - gone + added);
+    if had_header || added > 0 {
+        kept.push(Row::Trimmed);
+    }
+    kept.extend(rows[start + gone..].iter().map(|row| match row {
+        Row::Entry(position) => Row::Entry(position - removed),
+        Row::Trimmed => Row::Trimmed,
+    }));
+    (kept, start..start + gone, added)
+}
+
 impl Focusable for ActivityView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -604,27 +634,39 @@ impl Qrow {
             .iter()
             .map(|profile| (profile.id, profile.name.clone()))
             .collect();
-        let typography = Typography {
-            family: self.settings.logs_font_family.clone().into(),
-            size: self.ui_px(self.settings.logs_font_size),
-            line_height: self.settings.logs_line_height,
-        };
+        self.sync_activity_typography(cx);
         self.activity.update(cx, |view, cx| {
-            view.set_typography(typography, cx);
             view.open(connection, connections, window, cx);
         });
         cx.notify();
     }
 
-    /// Add `entry` to the Activity of `connection`.
+    /// Give Activity the Logs font settings at the current UI scale. A
+    /// change measures its rows again.
+    pub(super) fn sync_activity_typography(&self, cx: &mut Context<Self>) {
+        let typography = Typography {
+            family: self.settings.logs_font_family.clone().into(),
+            size: self.ui_px(self.settings.logs_font_size),
+            line_height: self.settings.logs_line_height,
+        };
+        self.activity
+            .update(cx, |view, cx| view.set_typography(typography, cx));
+    }
+
+    /// Add `entry` to the Activity of `connection`. An unseen error
+    /// changes the status bar, which a closed Activity view does not redraw.
     pub(super) fn record_activity(
         &self,
         connection: Uuid,
         entry: ActivityEntry,
         cx: &mut Context<Self>,
     ) {
+        let counts = entry.counts();
         self.activity
             .update(cx, |view, cx| view.record(connection, entry, cx));
+        if counts {
+            cx.notify();
+        }
     }
 
     pub(super) fn activity_event(
@@ -643,5 +685,28 @@ impl Qrow {
             }
             ActivityViewEvent::Closed => cx.notify(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn trimming_removes_only_the_rows_of_removed_entries() {
+        use Row::{Entry, Trimmed};
+        // The first trim adds the header in place of the removed rows.
+        let rows = [Entry(0), Entry(1), Entry(3), Entry(4)];
+        let (kept, gone, added) = trim_rows(&rows, 2, true);
+        assert_eq!(kept, [Trimmed, Entry(1), Entry(2)]);
+        assert_eq!((gone, added), (0..2, 1));
+        // A later trim keeps the header.
+        let (kept, gone, added) = trim_rows(&kept, 2, true);
+        assert_eq!(kept, [Trimmed, Entry(0)]);
+        assert_eq!((gone, added), (1..2, 0));
+        // Errors only has no header.
+        let (kept, gone, added) = trim_rows(&[Entry(5), Entry(9)], 6, false);
+        assert_eq!(kept, [Entry(3)]);
+        assert_eq!((gone, added), (0..1, 0));
     }
 }
