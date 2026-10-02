@@ -540,3 +540,30 @@ fn a_connection_without_a_sign_in_fails_before_connecting() {
         Failure::SignInRequired
     );
 }
+
+#[test]
+fn configuration_does_not_wait_for_a_running_refresh() {
+    let setup = setup();
+    let sign_in = signed_in(&setup, "alice");
+    setup.clock.advance(300);
+    setup.provider.set_refresh_delay(Duration::from_millis(800));
+    let refresh = {
+        let service = setup.service.clone();
+        let id = sign_in.id;
+        thread::spawn(move || service.access_token(id, &subject("alice"), "127.0.0.1"))
+    };
+    thread::sleep(Duration::from_millis(150));
+    let mut changed = sign_in.clone();
+    changed.scopes.push("profile".into());
+    let started = std::time::Instant::now();
+    setup.service.configure(std::slice::from_ref(&changed));
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "configure waited for the refresh"
+    );
+    // The refresh that started before the change does not publish tokens.
+    let error = refresh.join().unwrap().unwrap_err();
+    assert_eq!(failure(&error), Failure::SignInRequired);
+    // Sign-out still completes after the change.
+    setup.service.sign_out(sign_in.id).unwrap();
+}
