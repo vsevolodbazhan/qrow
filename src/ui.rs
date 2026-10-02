@@ -11,26 +11,28 @@ mod profile_view;
 mod results;
 mod setting_row;
 mod settings_view;
+mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
-pub use environment::Environment;
+pub use environment::{Browser, Environment};
 pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
+    connector::hive::HiveConnector,
     logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
-        AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
+        AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
         MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
         Settings, SharedCatalog, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
         conversation_tab_title, copied_tab_title, unique_tab_title,
     },
-    sql,
+    oidc, sql,
     storage::{self, Saver},
     worker::{Event, Worker},
 };
@@ -41,7 +43,7 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
-    select::SelectEvent,
+    select::{SearchableVec, SelectEvent},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -69,6 +71,7 @@ actions!(
         ToggleActivity,
         OpenAbout,
         OpenSettings,
+        OpenSignIns,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
@@ -148,6 +151,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::action("About Qrow", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action("Sign-ins…", OpenSignIns),
                 MenuItem::separator(),
                 MenuItem::action("Quit Qrow", Quit),
             ],
@@ -329,6 +333,12 @@ struct ProfileEditor {
     shared_name: Entity<InputState>,
     preferred_select: connection_form::RowSelect,
     preferred_choices: Vec<(Option<Uuid>, String)>,
+    authentication: connection_form::AuthenticationSelect,
+    /// The sign-ins in the order of the sign-in picker.
+    sign_in_ids: Vec<Uuid>,
+    sign_in: connection_form::AuthenticationSelect,
+    tls: bool,
+    _authentication_subscriptions: [Subscription; 2],
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -450,6 +460,8 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The page that Settings shows when it opens.
+    settings_page: usize,
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
@@ -468,6 +480,11 @@ pub struct Qrow {
     message: Option<String>,
     demo: bool,
     credentials: Arc<dyn storage::Credentials>,
+    /// Reusable sign-ins. The service owns their tokens and identities.
+    sign_ins: Vec<crate::model::SignIn>,
+    oidc: Arc<oidc::Service>,
+    sign_in_ui: sign_in_view::SignInState,
+    connector: Arc<HiveConnector>,
     sidebar: bool,
     sidebar_width: Pixels,
     editor_height: Pixels,
@@ -603,6 +620,12 @@ impl Qrow {
                 }
             },
         );
+        let oidc = oidc::Service::new(environment.tokens(), environment.trust());
+        oidc.configure(&workspace.sign_ins);
+        let status_wake = wake.clone();
+        oidc.set_on_change(Arc::new(move || {
+            let _ = status_wake.try_send(());
+        }));
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.theme == SYSTEM_THEME {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
@@ -635,6 +658,7 @@ impl Qrow {
             assistant_pane,
             fonts,
             settings_open: false,
+            settings_page: 0,
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -651,6 +675,10 @@ impl Qrow {
             message,
             demo,
             credentials: environment.credentials(),
+            sign_ins: workspace.sign_ins,
+            oidc,
+            sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
+            connector: Arc::new(HiveConnector::new(environment.trust())),
             sidebar: true,
             sidebar_width: px(240. * scale),
             editor_height: px(285. * scale),
@@ -804,6 +832,7 @@ impl Qrow {
                 .collect(),
             active_tab: self.active,
             active_tabs: self.active_tabs.clone(),
+            sign_ins: self.sign_ins.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -811,6 +840,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        self.sign_in_ui.cancel_all();
         if self.demo {
             self.assistant_state.shutdown_demo(
                 self.assistant
@@ -1074,6 +1104,9 @@ impl Qrow {
         changed |= self.drain_catalogs(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
+        changed |= self.tick_sign_ins(cx);
+        // A refresh on a worker thread can change the status of a sign-in.
+        changed |= self.settings_open;
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1229,6 +1262,7 @@ impl Qrow {
             Event::Error {
                 message: _,
                 disconnected,
+                sign_in_required,
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
@@ -1238,7 +1272,9 @@ impl Qrow {
                     tab.connected = false;
                 }
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                if disconnected {
+                if sign_in_required {
+                    tab.set_status_detail("Error", "Sign-in required");
+                } else if disconnected {
                     tab.set_status_detail("Error", "Connection lost");
                 } else {
                     tab.set_status_detail("Error", "Query failed");
@@ -1659,13 +1695,17 @@ impl Qrow {
         }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
-            tab.worker = Some(Worker::new(
+            let credentials = self.credential_provider();
+            let tab = &mut self.tabs[index];
+            tab.worker = Some(Worker::with_connector(
                 Arc::new(move || {
                     let _ = wake.try_send(());
                 }),
-                self.credentials.clone(),
+                self.connector.clone(),
+                credentials,
             ));
         }
+        let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
             t.delegate_mut().empty_message = Some("Waiting for query results…");
@@ -1779,7 +1819,14 @@ impl Qrow {
         cx.notify();
     }
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_page(0, window, cx);
+    }
+    fn open_sign_ins(&mut self, _: &OpenSignIns, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_page(settings_view::SIGN_INS_PAGE, window, cx);
+    }
+    fn open_settings_page(&mut self, page: usize, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dialog_open() {
+            self.settings_page = page;
             self.settings_open = true;
             self.init_settings_form(window, cx);
             self.open_settings_dialog(window, cx);
@@ -2398,6 +2445,36 @@ impl Qrow {
                     cx.notify();
                 }
             });
+        let sign_in_ids: Vec<Uuid> = self.sign_ins.iter().map(|sign_in| sign_in.id).collect();
+        let authentication = connection_form::authentication_select(
+            profile.authentication.sign_in().is_some(),
+            window,
+            cx,
+        );
+        let sign_in = connection_form::sign_in_select(
+            &self.sign_ins,
+            profile.authentication.sign_in(),
+            window,
+            cx,
+        );
+        let authentication_subscriptions = [
+            cx.subscribe_in(&authentication, window, |this, _, event, _, cx| {
+                if let Some(uses_sign_in) = connection_form::uses_sign_in_from_event(event)
+                    && let Some(form) = &mut this.form
+                {
+                    // An access token needs a protected transport.
+                    if uses_sign_in {
+                        form.tls = true;
+                    }
+                    cx.notify();
+                }
+            }),
+            cx.subscribe_in(
+                &sign_in,
+                window,
+                |_, _, _: &SelectEvent<SearchableVec<String>>, _, cx| cx.notify(),
+            ),
+        ];
         self.form = Some(ProfileEditor {
             parameters,
             idle_behavior,
@@ -2411,6 +2488,11 @@ impl Qrow {
             shared_name,
             preferred_select,
             preferred_choices,
+            authentication,
+            sign_in_ids,
+            sign_in,
+            tls: profile.tls,
+            _authentication_subscriptions: authentication_subscriptions,
             profile,
             fields,
             is_new,
@@ -2622,6 +2704,27 @@ impl Qrow {
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
+            profile.tls = form.tls;
+            profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
+                let sign_in = form
+                    .sign_in
+                    .read(cx)
+                    .selected_index(cx)
+                    .and_then(|index| form.sign_in_ids.get(index.row))
+                    .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == *id))
+                    .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
+                anyhow::ensure!(
+                    sign_in.allows_host(&profile.host),
+                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the sign-in in Settings > Sign-ins.",
+                    sign_in.name,
+                    profile.host
+                );
+                Authentication::Oidc {
+                    sign_in: sign_in.id,
+                }
+            } else {
+                Authentication::Password
+            };
             profile.validate()?;
             anyhow::ensure!(
                 !connection_form::profile_name_is_taken(&self.profiles, &profile),
@@ -2634,9 +2737,19 @@ impl Qrow {
             cx.notify();
             return;
         }
-        let password = Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string());
-        if form.is_new && password.is_empty() && !self.demo {
-            form.error = Some("Enter the LDAP password for this connection.".into());
+        let password = if profile.authentication == Authentication::Password {
+            Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string())
+        } else {
+            Zeroizing::new(String::new())
+        };
+        // A profile that used a sign-in may have no stored password.
+        let needs_password = form.is_new || form.profile.authentication != Authentication::Password;
+        if profile.authentication == Authentication::Password
+            && needs_password
+            && password.is_empty()
+            && !self.demo
+        {
+            form.error = Some("Enter the password for this connection.".into());
             cx.notify();
             return;
         }
@@ -2972,6 +3085,7 @@ fn demo_workspace() -> Workspace {
         active_tab: 0,
         active_tabs: BTreeMap::new(),
         shared_catalogs,
+        sign_ins: vec![],
     }
 }
 

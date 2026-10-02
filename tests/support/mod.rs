@@ -6,6 +6,7 @@
 pub mod assistant;
 pub mod evidence;
 pub mod fixture;
+pub mod oidc;
 pub mod perf;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
@@ -18,8 +19,9 @@ use gpui_kit::{
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
-    storage::{self, Credentials},
-    ui::{self, Environment, Qrow},
+    storage::{self, Credentials, MemoryTokenStore, TokenStore},
+    tls::Trust,
+    ui::{self, Browser, Environment, Qrow},
 };
 use std::{
     collections::HashMap,
@@ -344,6 +346,24 @@ pub fn header(window: &Window, column: usize) -> Option<String> {
         .and_then(|header| header.label().map(str::to_owned))
 }
 
+/// The sign-in tokens, trusted authorities, and browser of a test window.
+#[derive(Clone)]
+pub struct SignIns {
+    pub tokens: Arc<MemoryTokenStore>,
+    pub trust: Trust,
+    pub browser: Option<Browser>,
+}
+
+impl SignIns {
+    pub fn new(trust: Trust, browser: Option<Browser>) -> Self {
+        Self {
+            tokens: Arc::default(),
+            trust,
+            browser,
+        }
+    }
+}
+
 pub struct TestApp {
     pub window: AnyWindowHandle,
     /// The view of the window, for state that no control reaches, like the
@@ -351,6 +371,7 @@ pub struct TestApp {
     /// so a closed window releases it and its workspace lock.
     pub qrow: WeakEntity<Qrow>,
     pub credentials: Arc<MemoryCredentials>,
+    pub sign_ins: Option<SignIns>,
     workspace: PathBuf,
     _directory: TempDir,
 }
@@ -369,6 +390,23 @@ impl TestApp {
         Self::launch_in(cx, tempfile::tempdir().unwrap(), workspace, credentials)
     }
 
+    /// Opens Qrow on `workspace` with these sign-in tokens, authorities, and
+    /// browser.
+    pub fn launch_with_sign_ins(
+        cx: &mut TestAppContext,
+        workspace: Workspace,
+        credentials: MemoryCredentials,
+        sign_ins: SignIns,
+    ) -> Self {
+        Self::open(
+            cx,
+            tempfile::tempdir().unwrap(),
+            Some(workspace),
+            credentials,
+            Some(sign_ins),
+        )
+    }
+
     /// Opens Qrow with its built-in demo data, which saves nothing.
     pub fn launch_demo(cx: &mut TestAppContext) -> Self {
         Self::open(
@@ -376,6 +414,7 @@ impl TestApp {
             tempfile::tempdir().unwrap(),
             None,
             MemoryCredentials::default(),
+            None,
         )
     }
 
@@ -386,7 +425,7 @@ impl TestApp {
         workspace: Workspace,
         credentials: MemoryCredentials,
     ) -> Self {
-        Self::open(cx, directory, Some(workspace), credentials)
+        Self::open(cx, directory, Some(workspace), credentials, None)
     }
 
     /// Opens Qrow on `workspace` in `directory`, or on the demo data.
@@ -395,6 +434,7 @@ impl TestApp {
         directory: TempDir,
         workspace: Option<Workspace>,
         credentials: MemoryCredentials,
+        sign_ins: Option<SignIns>,
     ) -> Self {
         // Worker and saver threads wake the UI. GPUI's deterministic
         // scheduler rejects wakes from other threads unless parking is allowed.
@@ -414,7 +454,15 @@ impl TestApp {
                     ..workspace
                 };
                 std::fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
-                Environment::isolated(path.clone(), credentials.clone())
+                let environment = Environment::isolated(path.clone(), credentials.clone());
+                match &sign_ins {
+                    Some(sign_ins) => environment.with_sign_ins(
+                        sign_ins.tokens.clone() as Arc<dyn TokenStore>,
+                        sign_ins.trust.clone(),
+                        sign_ins.browser.clone(),
+                    ),
+                    None => environment,
+                }
             }
             None => Environment::demo(),
         };
@@ -428,6 +476,7 @@ impl TestApp {
             window: window.into(),
             qrow: qrow.expect("The window has a Qrow view"),
             credentials,
+            sign_ins,
             workspace: path,
             _directory: directory,
         };

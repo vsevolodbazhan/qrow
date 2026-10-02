@@ -1,13 +1,25 @@
 use super::{
-    Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Session, sasl,
-    t_c_l_i_service::*, wait_for_completion,
+    Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
+    sasl, t_c_l_i_service::*, wait_for_completion,
 };
-use crate::model::{Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row};
+use crate::{
+    model::{Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
+    tls::Trust,
+};
 use anyhow::{Context, Result, ensure};
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
-pub struct HiveConnector;
+/// Opens HiveServer2 sessions. `trust` verifies the servers of TLS connections.
+#[derive(Clone, Debug, Default)]
+pub struct HiveConnector {
+    pub trust: Trust,
+}
+
+impl HiveConnector {
+    pub fn new(trust: Trust) -> Self {
+        Self { trust }
+    }
+}
 
 struct ConnectionFailure {
     message: String,
@@ -54,8 +66,46 @@ impl std::error::Error for ErrorDetails {}
 struct ErrorDetails(String);
 struct Credentials {
     profile: Profile,
-    password: Zeroizing<String>,
+    secret: Secret,
+    trust: Trust,
 }
+
+impl Credentials {
+    /// Authenticates a new transport. A sign-in supplies a token that is
+    /// valid now, for the identity that opened the session.
+    fn connect(&self) -> Result<sasl::Client> {
+        let profile = &self.profile;
+        let token = matches!(profile.authentication, Authentication::Oidc { .. });
+        ensure!(
+            matches!(self.secret, Secret::Token(_)) == token,
+            "The credentials do not match the authentication of the connection"
+        );
+        // Never send an access token over an unencrypted transport.
+        ensure!(profile.tls || !token, "Sign-in authentication requires TLS");
+        let secret = self.secret.value()?;
+        let endpoint = sasl::Endpoint {
+            host: &profile.host,
+            port: profile.port,
+            tls: profile.tls.then_some(&self.trust),
+            read_timeout: profile.lifecycle.response_timeout(),
+        };
+        sasl::connect(&endpoint, &profile.username, &secret).map_err(|error| {
+            if error.downcast_ref::<sasl::Rejected>().is_none() {
+                return error;
+            }
+            let advice = if token {
+                format!(
+                    "Kyuubi did not accept the access token for the database account \"{}\". The account may not be available to the signed-in identity, or the server may not accept access tokens.",
+                    profile.username
+                )
+            } else {
+                "Check the username, password, and server authentication mode.".to_owned()
+            };
+            error.context(advice)
+        })
+    }
+}
+
 struct Cancel {
     credentials: Arc<Credentials>,
     handle: TOperationHandle,
@@ -63,15 +113,8 @@ struct Cancel {
 
 impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
-        let p = &self.credentials.profile;
         // A separate authenticated transport keeps CancelOperation independent of blocked fetching/polling.
-        let mut client = sasl::connect(
-            &p.host,
-            p.port,
-            &p.username,
-            &self.credentials.password,
-            p.lifecycle.response_timeout(),
-        )?;
+        let mut client = self.credentials.connect()?;
         check(
             client
                 .cancel_operation(TCancelOperationReq::new(self.handle.clone()))?
@@ -90,15 +133,14 @@ pub struct HiveSession {
 }
 
 impl Connector for HiveConnector {
-    fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
+    fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
         profile.validate()?;
-        let mut client = sasl::connect(
-            &profile.host,
-            profile.port,
-            &profile.username,
-            &password,
-            profile.lifecycle.response_timeout(),
-        )?;
+        let credentials = Arc::new(Credentials {
+            profile: profile.clone(),
+            secret,
+            trust: self.trust.clone(),
+        });
+        let mut client = credentials.connect()?;
         let opened = client.open_session(TOpenSessionReq::new(
             TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
             Some(profile.username.clone()),
@@ -111,10 +153,7 @@ impl Connector for HiveConnector {
             .context("Kyuubi returned no session handle")?;
         let mut connection = HiveSession {
             client,
-            credentials: Arc::new(Credentials {
-                profile: profile.clone(),
-                password,
-            }),
+            credentials,
             session: Some(session),
             operation: None,
             preview_operation: None,

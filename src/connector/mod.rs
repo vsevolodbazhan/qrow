@@ -107,8 +107,51 @@ pub fn wait_for_completion<S: Session + ?Sized>(
     }
 }
 
+/// Supplies access tokens for one connection. Each call returns a token
+/// that is valid now, and refreshes it when necessary.
+pub trait TokenSource: Send + Sync {
+    fn access_token(&self) -> Result<Zeroizing<String>>;
+}
+
+/// What authenticates a connection: a password, or the access tokens of a
+/// sign-in. Cancellation opens a second transport, so the session keeps it.
+#[derive(Clone)]
+pub enum Secret {
+    Password(Arc<Zeroizing<String>>),
+    Token(Arc<dyn TokenSource>),
+}
+
+impl Secret {
+    pub fn password(password: impl Into<String>) -> Self {
+        Self::Password(Arc::new(Zeroizing::new(password.into())))
+    }
+
+    /// The password, or an access token that is valid now.
+    pub fn value(&self) -> Result<Zeroizing<String>> {
+        match self {
+            Self::Password(password) => Ok(Zeroizing::new(password.as_str().to_owned())),
+            Self::Token(source) => source.access_token(),
+        }
+    }
+}
+
+impl From<Zeroizing<String>> for Secret {
+    fn from(password: Zeroizing<String>) -> Self {
+        Self::Password(Arc::new(password))
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Password(_) => "Secret::Password(..)",
+            Self::Token(_) => "Secret::Token(..)",
+        })
+    }
+}
+
 pub trait Connector: Send + Sync {
-    fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>>;
+    fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>>;
 }
 
 /// Include the diagnostic that Thrift omits from its Display implementation.

@@ -4,6 +4,8 @@ use gpui_kit::component::{
     form::{Field, Form},
     h_flex,
     input::Textarea,
+    select::Select,
+    switch::Switch,
     v_flex,
 };
 
@@ -82,6 +84,23 @@ impl Qrow {
             });
         }
         let saving = form.saving.is_some();
+        let uses_sign_in = connection_form::uses_sign_in(&form.authentication, cx);
+        let sign_in_description = form
+            .sign_in
+            .read(cx)
+            .selected_index(cx)
+            .and_then(|index| form.sign_in_ids.get(index.row))
+            .map(|id| match self.oidc.identity(*id) {
+                Some(identity) => format!("Signed in as {}.", identity.display()),
+                None => "Not signed in. Sign in from Settings > Sign-ins.".to_owned(),
+            })
+            .unwrap_or_else(|| {
+                if self.sign_ins.is_empty() {
+                    "Add a sign-in in Settings > Sign-ins first.".to_owned()
+                } else {
+                    "Choose the sign-in that this connection uses.".to_owned()
+                }
+            });
         let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
                 .id(connection_form::FIELD_IDS[index])
@@ -125,15 +144,66 @@ impl Qrow {
                                 input(2, "Port"),
                             ))
                             .child(field(
-                                "Username",
-                                Some("Used for LDAP authentication."),
-                                input(3, "Username"),
+                                "TLS",
+                                Some(if uses_sign_in {
+                                    "Sign-in authentication sends an access token, so it always uses TLS."
+                                } else {
+                                    "Encrypts the connection. The server must accept TLS on this port."
+                                }),
+                                Switch::new("connection-tls")
+                                    .checked(form.tls || uses_sign_in)
+                                    .disabled(saving || uses_sign_in)
+                                    .accessibility_label("TLS")
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        if let Some(form) = &mut this.form {
+                                            form.tls = *checked;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .into_any_element(),
                             ))
                             .child(field(
-                                "Password",
-                                Some("Used for LDAP authentication."),
-                                input(4, "Password"),
+                                "Authentication",
+                                Some("A sign-in can serve several connections. Each connection keeps its own username."),
+                                Select::new(&form.authentication)
+                                    .id("connection-authentication")
+                                    .w_full()
+                                    .disabled(saving)
+                                    .accessibility_label("Authentication")
+                                    .into_any_element(),
                             ))
+                            .when(uses_sign_in, |el| {
+                                el.child(
+                                    Field::new()
+                                        .label("Sign-in")
+                                        .child(
+                                            Select::new(&form.sign_in)
+                                                .id("connection-sign-in")
+                                                .w_full()
+                                                .disabled(saving)
+                                                .placeholder("Choose a sign-in")
+                                                .accessibility_label("Sign-in")
+                                                .into_any_element(),
+                                        )
+                                        .description(sign_in_description),
+                                )
+                            })
+                            .child(field(
+                                "Username",
+                                Some(if uses_sign_in {
+                                    "The database account. Kyuubi checks that the signed-in identity can use it."
+                                } else {
+                                    "The database account for LDAP authentication."
+                                }),
+                                input(3, "Username"),
+                            ))
+                            .when(!uses_sign_in, |el| {
+                                el.child(field(
+                                    "Password",
+                                    Some("Used for LDAP authentication."),
+                                    input(4, "Password"),
+                                ))
+                            })
                             .child(field(
                                 "Initial database",
                                 Some("Selected when the session opens."),

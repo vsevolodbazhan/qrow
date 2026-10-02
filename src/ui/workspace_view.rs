@@ -791,6 +791,7 @@ impl Qrow {
             }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
+            .on_action(cx.listener(Self::open_sign_ins))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
