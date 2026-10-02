@@ -5228,8 +5228,15 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64",
+ "form_urlencoded",
  "gpui-kit",
+ "httparse",
  "proptest",
+ "ring",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "security-framework",
  "serde",
  "serde_json",
@@ -5237,6 +5244,7 @@ dependencies = [
  "tempfile",
  "thrift",
  "tree-sitter-sequel",
+ "url",
  "uuid",
  "zeroize",
 ]

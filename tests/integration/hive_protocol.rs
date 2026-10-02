@@ -1,7 +1,7 @@
 //! Local wire-level fixture. No Java, Kyuubi installation, or real credentials required.
 use qrow::{
     connector::{
-        Connector, MetadataRequest, QueryState,
+        Connector, MetadataRequest, QueryState, Secret,
         hive::HiveConnector,
         sasl::{FrameReader, FrameWriter, MAX_FRAME},
         t_c_l_i_service::*,
@@ -16,7 +16,6 @@ use std::{
     time::Duration,
 };
 use thrift::protocol::*;
-use zeroize::Zeroizing;
 
 struct Peer {
     input: TBinaryInputProtocol<FrameReader<TcpStream>>,
@@ -228,8 +227,8 @@ fn ldap_session_parameters_async_query_exact_values_and_fetch_exhaustion() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute("SELECT amount FROM ledger").unwrap();
     assert_eq!(session.poll().unwrap(), QueryState::Running);
@@ -268,8 +267,8 @@ fn cancellation_uses_an_independent_authenticated_transport() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     let cancel = session.execute("SELECT long_running_query()").unwrap();
     cancel.cancel().unwrap();
@@ -289,8 +288,8 @@ fn dropped_transport_returns_error_without_resubmitting_statement() {
         assert_eq!(req.statement, "SELECT 1");
         // Close without acknowledging; execution outcome is intentionally unknown.
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     assert!(session.execute("SELECT 1").is_err());
     server.join().unwrap();
@@ -351,14 +350,15 @@ fn wrapped_engine_failure_reconnects_only_on_explicit_run() {
         });
         let worker = Worker::with_connector(
             Arc::new(|| {}),
-            Arc::new(HiveConnector),
-            Arc::new(|_| Ok(Zeroizing::new("test-password".into()))),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
         );
         worker.run(p.clone(), "SELECT original".into());
         loop {
             if let Event::Error {
                 disconnected,
                 message,
+                ..
             } = worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
             {
                 assert!(disconnected);
@@ -421,8 +421,8 @@ fn heartbeat_closes_its_own_operation_and_preserves_the_preview_cursor() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute("SELECT data").unwrap();
     session.execute_keep_alive("SELECT 42").unwrap();
@@ -479,7 +479,7 @@ fn connector_rejects_aggregate_response_before_reading_oversized_string() {
             peer.socket.write_all(frame).unwrap();
         }
     });
-    let error = match HiveConnector.connect(&p, Zeroizing::new("test-password".into())) {
+    let error = match HiveConnector::default().connect(&p, Secret::password("test-password")) {
         Ok(_) => panic!("Oversized server response was accepted"),
         Err(error) => error,
     };
@@ -571,8 +571,8 @@ fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute_metadata(&MetadataRequest::Schemas).unwrap();
     assert_eq!(
@@ -621,16 +621,17 @@ fn a_silent_server_fails_after_the_response_timeout() {
         drop(socket);
     });
     let started = std::time::Instant::now();
-    let error = match qrow::connector::sasl::connect(
-        "127.0.0.1",
+    let endpoint = qrow::connector::sasl::Endpoint {
+        host: "127.0.0.1",
         port,
-        "synthetic-user",
-        "synthetic-password",
-        Duration::from_secs(1),
-    ) {
-        Ok(_) => panic!("A silent server must not authenticate"),
-        Err(error) => format!("{error:#}"),
+        tls: None,
+        read_timeout: Duration::from_secs(1),
     };
+    let error =
+        match qrow::connector::sasl::connect(&endpoint, "synthetic-user", "synthetic-password") {
+            Ok(_) => panic!("A silent server must not authenticate"),
+            Err(error) => format!("{error:#}"),
+        };
     assert!(started.elapsed() < Duration::from_secs(3));
     assert!(
         error.contains("Kyuubi did not answer within 1 seconds"),

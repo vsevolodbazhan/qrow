@@ -72,8 +72,10 @@ parameters, and makes a new copy. A change to one of these settings does not
 clear a shared catalog. If Qrow cannot open the workspace, it does not write
 schema copies.
 
-Passwords remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
-Passwords and result sets are not written to the workspace file. SQL text is
+Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
+Passwords, tokens, and result sets are not written to the workspace file. The
+workspace keeps each [sign-in](connections.md#sign-in-with-openid-connect)
+configuration and the issuer, subject, name, and email of its account. SQL text is
 stored as plain text. Do not put passwords into saved SQL or session parameters.
 
 Workspace version 3 adds the optional assistant state. Qrow gives version 1
@@ -91,6 +93,10 @@ workspace.
 Qrow ignores the removed **Schema refresh logs** option of a connection, because
 [Activity](activity.md) always records refreshes. The next save removes the
 option from the file.
+Workspace version 6 adds sign-ins, and the TLS and authentication choices of
+each connection. Earlier connections load with password authentication and
+without TLS. They keep their identifiers and stored passwords. An earlier
+version of Qrow cannot open a version 6 workspace.
 
 ## Quit and save
 
@@ -130,6 +136,8 @@ saved.
 
 For isolated development, see [Development](development.md#check-the-native-ui).
 `QROW_DATA_DIR` changes the workspace directory, but does not isolate Keychain.
+Passwords and sign-in tokens are keyed by profile and sign-in identifiers, so
+a copy of a workspace shares them with the original.
 The [demo](../README.md#preview) uses an in-memory workspace and does not access
 databases or Keychain.
 

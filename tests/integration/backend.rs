@@ -2,7 +2,7 @@
 //! Ignored tests must fail, never silently skip, when explicitly requested without a fixture.
 use anyhow::{Context, Result, ensure};
 use qrow::{
-    connector::{Connector, hive::HiveConnector},
+    connector::{Connector, Secret, hive::HiveConnector},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
     worker::{Event, Worker},
 };
@@ -12,7 +12,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use zeroize::Zeroizing;
 
 #[path = "../support/evidence.rs"]
 mod evidence;
@@ -41,14 +40,21 @@ struct Client {
 }
 impl Client {
     fn new() -> Result<Self> {
-        Ok(Self {
-            profile: profile()?,
-            worker: Worker::with_connector(
-                Arc::new(|| {}),
-                Arc::new(HiveConnector),
-                Arc::new(|_| Ok(Zeroizing::new("qrow-test-password".into()))),
-            ),
-        })
+        Ok(Self::with(
+            profile()?,
+            HiveConnector::default(),
+            Arc::new(|_| Ok(Secret::password("qrow-test-password"))),
+        ))
+    }
+    fn with(
+        profile: Profile,
+        connector: HiveConnector,
+        credentials: qrow::worker::CredentialProvider,
+    ) -> Self {
+        Self {
+            profile,
+            worker: Worker::with_connector(Arc::new(|| {}), Arc::new(connector), credentials),
+        }
     }
     fn run(&self, sql: &str) {
         self.worker.run(self.profile.clone(), sql.into());
@@ -90,6 +96,7 @@ impl Client {
                 Event::Error {
                     message,
                     disconnected,
+                    ..
                 } => {
                     println!("Expected failure: {message}");
                     return Ok(disconnected);
@@ -194,14 +201,14 @@ fn readiness() -> Result<()> {
 fn ldap_rejects_wrong_password_and_unknown_user() -> Result<()> {
     let mut p = profile()?;
     ensure!(
-        HiveConnector
-            .connect(&p, Zeroizing::new("incorrect".into()))
+        HiveConnector::default()
+            .connect(&p, Secret::password("incorrect"))
             .is_err()
     );
     p.username = "missing-user".into();
     ensure!(
-        HiveConnector
-            .connect(&p, Zeroizing::new("qrow-test-password".into()))
+        HiveConnector::default()
+            .connect(&p, Secret::password("qrow-test-password"))
             .is_err()
     );
     scalar(&Client::new()?.query("SELECT 1")?, "1");
@@ -516,10 +523,10 @@ fn cancellation_during_setup_prevents_user_sql_submission() -> Result<()> {
     let passwords = std::sync::Mutex::new(gate);
     let worker = Worker::with_connector(
         Arc::new(|| {}),
-        Arc::new(HiveConnector),
+        Arc::new(HiveConnector::default()),
         Arc::new(move |_| {
             passwords.lock().unwrap().recv_timeout(TIMEOUT)?;
-            Ok(Zeroizing::new("qrow-test-password".into()))
+            Ok(Secret::password("qrow-test-password"))
         }),
     );
     let client = Client {
@@ -617,8 +624,8 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
         catalog::CatalogConfig::private(profile),
         None,
         Arc::new(|| {}),
-        Arc::new(HiveConnector),
-        Arc::new(|_| Ok(Zeroizing::new("qrow-test-password".into()))),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("qrow-test-password"))),
         catalog::MINUTE,
     );
     let mut latest: Option<Arc<catalog::Catalog>> = None;
