@@ -706,7 +706,7 @@ fn the_cache_restores_without_a_session_and_profile_changes_update_it() {
 }
 
 #[test]
-fn every_refresh_sends_its_entries_in_one_batch() {
+fn every_refresh_sends_its_entries() {
     let server = warehouse();
     let mut h = Harness::new(server, profile(), None);
     h.refresh(Scope::Connection);
@@ -739,20 +739,10 @@ fn every_refresh_sends_its_entries_in_one_batch() {
             .starts_with("Schema refresh completed")
     );
     assert_eq!(entries.last().unwrap().kind, LogKind::SchemaRefreshFinished);
-    let batch = entries[0].batch;
-    assert!(batch.is_some());
-    assert!(entries.iter().all(|entry| entry.batch == batch));
     assert!(
         entries
             .iter()
             .all(|entry| entry.connection.as_deref() == Some("Catalog"))
-    );
-
-    h.refresh(Scope::Relation("sales".into(), "orders".into()));
-    let next: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
-    assert!(
-        next.iter()
-            .all(|entry| entry.batch.is_some() && entry.batch != batch)
     );
 
     // A broken view fails its relation. The refresh reports it at its end.

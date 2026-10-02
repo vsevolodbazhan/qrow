@@ -49,9 +49,6 @@ pub struct LogEvent {
     pub connection: Option<String>,
     pub sql: Option<String>,
     pub duration: Option<Duration>,
-    /// Groups events without an execution, such as the requests of one
-    /// schema refresh, so they share one place in the history.
-    pub batch: Option<u64>,
 }
 
 impl LogEvent {
@@ -70,7 +67,6 @@ impl LogEvent {
             connection: None,
             sql: None,
             duration: None,
-            batch: None,
         }
     }
 
@@ -95,11 +91,6 @@ impl LogEvent {
         self.sql = Some(sql.into());
         self
     }
-
-    pub fn with_batch(mut self, batch: u64) -> Self {
-        self.batch = Some(batch);
-        self
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -112,7 +103,6 @@ pub struct LogEntry {
     pub connection: Option<String>,
     pub sql: Option<String>,
     pub duration: Option<Duration>,
-    pub batch: Option<u64>,
     entry_id: u64,
     group_id: u64,
 }
@@ -128,7 +118,6 @@ impl From<LogEvent> for LogEntry {
             connection: event.connection,
             sql: event.sql,
             duration: event.duration,
-            batch: event.batch,
             entry_id: 0,
             group_id: 0,
         }
@@ -153,7 +142,6 @@ impl LogEntry {
 pub struct LogGroup {
     pub id: u64,
     pub execution_id: Option<ExecutionId>,
-    pub batch: Option<u64>,
     text_bytes: usize,
 }
 
@@ -186,17 +174,11 @@ impl LogHistory {
         let mut entry: LogEntry = event.into();
         entry.entry_id = self.next_entry_id;
         self.next_entry_id += 1;
-        let existing = match (entry.execution_id, entry.batch) {
-            (Some(execution_id), _) => self
-                .groups
+        let existing = entry.execution_id.and_then(|execution_id| {
+            self.groups
                 .iter()
-                .rposition(|group| group.execution_id == Some(execution_id)),
-            (None, Some(batch)) => self
-                .groups
-                .iter()
-                .rposition(|group| group.execution_id.is_none() && group.batch == Some(batch)),
-            (None, None) => None,
-        };
+                .rposition(|group| group.execution_id == Some(execution_id))
+        });
         let index = existing.unwrap_or_else(|| {
             let id = self.next_group_id;
             self.next_group_id += 1;
@@ -204,7 +186,6 @@ impl LogHistory {
             self.groups.push(LogGroup {
                 id,
                 execution_id: entry.execution_id,
-                batch: entry.batch,
                 text_bytes: 0,
             });
             self.groups.len() - 1
@@ -392,36 +373,6 @@ impl PanelState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_batch_without_an_execution_is_one_group() {
-        let mut log = LogHistory::default();
-        for batch in [7, 7, 8, 7] {
-            log.record(
-                LogEvent::new(None, Severity::Info, LogKind::SchemaRefresh, "request")
-                    .with_batch(batch),
-            );
-        }
-        log.record(LogEvent::new(
-            None,
-            Severity::Info,
-            LogKind::Disconnected,
-            "Disconnected",
-        ));
-        assert_eq!(log.groups().len(), 3);
-        assert_eq!(log.group_entries(log.groups()[0].id).count(), 3);
-        // Many requests of one refresh do not remove other history.
-        for _ in 0..MAX_NON_EXECUTION_GROUPS * 4 {
-            log.record(
-                LogEvent::new(None, Severity::Info, LogKind::SchemaRefresh, "request")
-                    .with_batch(9),
-            );
-        }
-        assert!(
-            log.entries()
-                .any(|entry| entry.kind == LogKind::Disconnected)
-        );
-    }
 
     fn event(id: Option<u64>, kind: LogKind, text: &str) -> LogEvent {
         LogEvent::at(

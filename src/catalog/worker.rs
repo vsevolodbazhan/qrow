@@ -1273,9 +1273,8 @@ impl Runner {
     }
 
     fn log_as(&self, kind: LogKind, severity: Severity, text: String, duration: Option<Duration>) {
-        let mut event = LogEvent::new(None, severity, kind, text)
-            .with_connection(self.profile.name.clone())
-            .with_batch(self.batch);
+        let mut event =
+            LogEvent::new(None, severity, kind, text).with_connection(self.profile.name.clone());
         event.duration = duration;
         let _ = self.log_tx.send((self.profile.id, event));
         (self.wake)();
