@@ -108,13 +108,17 @@ pub(super) fn parse_lifecycle(
 
 use super::{ProfileEditor, Qrow};
 use gpui_kit::component::{
-    Icon, IconName, IndexPath, Sizable as _,
+    IconName, IndexPath, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    combobox::{Combobox, ComboboxState},
     form::{Field, Form},
-    h_flex,
     input::Input,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
-use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, SharedString, Window, prelude::*};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, IntoElement, Role, SharedString, TestSupportExt as _,
+    WeakEntity, Window, div, prelude::*,
+};
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
@@ -153,8 +157,8 @@ pub(super) enum CatalogChoice {
     New,
 }
 
-/// The choices of the Schema catalog dropdown: the catalog of the
-/// connection, each shared catalog, and a new shared catalog.
+/// The choices of the Schema catalog list: the catalog of the connection
+/// and each shared catalog. The New shared catalog button adds a new one.
 pub(super) fn catalog_choices(shared: &[SharedCatalog]) -> Vec<(CatalogChoice, String)> {
     std::iter::once((CatalogChoice::Private, PRIVATE_CATALOG.to_owned()))
         .chain(
@@ -162,11 +166,21 @@ pub(super) fn catalog_choices(shared: &[SharedCatalog]) -> Vec<(CatalogChoice, S
                 .iter()
                 .map(|catalog| (CatalogChoice::Shared(catalog.id), catalog.name.clone())),
         )
-        .chain(std::iter::once((
-            CatalogChoice::New,
-            NEW_SHARED_CATALOG.to_owned(),
-        )))
         .collect()
+}
+
+/// Add the choice of a new shared catalog, if it is not there. Returns its row.
+pub(super) fn add_new_catalog(choices: &mut Vec<(CatalogChoice, String)>) -> usize {
+    match choices
+        .iter()
+        .position(|(choice, _)| *choice == CatalogChoice::New)
+    {
+        Some(row) => row,
+        None => {
+            choices.push((CatalogChoice::New, NEW_SHARED_CATALOG.to_owned()));
+            choices.len() - 1
+        }
+    }
 }
 
 /// Whether a shared catalog can have `name`: the dropdown must tell it
@@ -227,20 +241,6 @@ pub(super) fn preferred_choices(
 pub(super) struct Row {
     label: SharedString,
     index: usize,
-    /// An icon before the label, for a row that makes something new.
-    icon: Option<IconName>,
-}
-
-impl Row {
-    fn content(&self) -> impl IntoElement {
-        h_flex()
-            .gap_2()
-            .items_center()
-            .when_some(self.icon.clone(), |row, icon| {
-                row.child(Icon::new(icon).small())
-            })
-            .child(self.label.clone())
-    }
 }
 
 impl SelectItem for Row {
@@ -248,16 +248,6 @@ impl SelectItem for Row {
 
     fn title(&self) -> SharedString {
         self.label.clone()
-    }
-
-    fn display_title(&self) -> Option<AnyElement> {
-        self.icon
-            .is_some()
-            .then(|| self.content().into_any_element())
-    }
-
-    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        self.content()
     }
 
     fn value(&self) -> &usize {
@@ -268,6 +258,30 @@ impl SelectItem for Row {
 /// A dropdown of choices whose labels can repeat.
 pub(super) type RowSelect = Entity<SelectState<SearchableVec<Row>>>;
 
+/// A dropdown of choices whose labels can repeat, searchable, with room
+/// for a command below the list.
+pub(super) type RowCombobox = Entity<ComboboxState<SearchableVec<Row>>>;
+
+fn rows<T>(choices: &[(T, String)]) -> SearchableVec<Row> {
+    SearchableVec::new(
+        choices
+            .iter()
+            .enumerate()
+            .map(|(index, (_, label))| Row {
+                label: label.clone().into(),
+                index,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn row_of<T: PartialEq>(choices: &[(T, String)], selected: &T) -> usize {
+    choices
+        .iter()
+        .position(|(choice, _)| choice == selected)
+        .unwrap_or_default()
+}
+
 /// A dropdown of `choices` with `selected` chosen, or the first choice.
 pub(super) fn choice_select<T: PartialEq>(
     choices: &[(T, String)],
@@ -275,54 +289,35 @@ pub(super) fn choice_select<T: PartialEq>(
     window: &mut Window,
     cx: &mut Context<Qrow>,
 ) -> RowSelect {
-    icon_choice_select(choices, selected, |_| None, window, cx)
+    let row = row_of(choices, selected);
+    let rows = rows(choices);
+    cx.new(|cx| SelectState::new(rows, Some(IndexPath::default().row(row)), window, cx))
 }
 
-/// The Schema catalog dropdown. The row that makes a new shared catalog
-/// has a plus icon.
-pub(super) fn catalog_select(
+/// The Schema catalog list, with `selected` chosen.
+pub(super) fn catalog_combobox(
     choices: &[(CatalogChoice, String)],
     selected: &CatalogChoice,
     window: &mut Window,
     cx: &mut Context<Qrow>,
-) -> RowSelect {
-    icon_choice_select(
-        choices,
-        selected,
-        |choice| (*choice == CatalogChoice::New).then_some(IconName::Plus),
-        window,
-        cx,
-    )
+) -> RowCombobox {
+    let row = row_of(choices, selected);
+    let rows = rows(choices);
+    cx.new(|cx| {
+        ComboboxState::new(rows, vec![IndexPath::default().row(row)], window, cx).searchable(true)
+    })
 }
 
-fn icon_choice_select<T: PartialEq>(
-    choices: &[(T, String)],
-    selected: &T,
-    icon: impl Fn(&T) -> Option<IconName>,
-    window: &mut Window,
-    cx: &mut Context<Qrow>,
-) -> RowSelect {
-    let row = choices
-        .iter()
-        .position(|(choice, _)| choice == selected)
-        .unwrap_or_default();
-    let rows: Vec<Row> = choices
-        .iter()
-        .enumerate()
-        .map(|(index, (choice, label))| Row {
-            label: label.clone().into(),
-            index,
-            icon: icon(choice),
-        })
-        .collect();
-    cx.new(|cx| {
-        SelectState::new(
-            SearchableVec::new(rows),
-            Some(IndexPath::default().row(row)),
-            window,
-            cx,
-        )
-    })
+/// The catalog that the Schema catalog list shows.
+pub(super) fn chosen_catalog(
+    combobox: &RowCombobox,
+    choices: &[(CatalogChoice, String)],
+    cx: &App,
+) -> CatalogChoice {
+    let row = combobox.read(cx).selected_value().unwrap_or_default();
+    choices
+        .get(row)
+        .map_or(CatalogChoice::Private, |(choice, _)| *choice)
 }
 
 /// The choice that `select` shows, or the first choice.
@@ -484,10 +479,24 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement {
+pub(super) fn render_schemas(
+    form: &ProfileEditor,
+    qrow: WeakEntity<Qrow>,
+    cx: &App,
+) -> impl IntoElement {
     let saving = form.saving.is_some();
     let mode = refresh_mode(&form.schema_refresh, cx);
-    let catalog = chosen(&form.catalog_select, &form.catalog_choices, cx);
+    let catalog = chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
+    let catalog_label = form
+        .catalog_choices
+        .iter()
+        .find(|(choice, _)| *choice == catalog)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_default();
+    let has_new = form
+        .catalog_choices
+        .iter()
+        .any(|(choice, _)| *choice == CatalogChoice::New);
     let shared = catalog != CatalogChoice::Private;
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
@@ -517,11 +526,37 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement
                 } else {
                     "Only this connection uses the catalog. Connections that read the same metastore can share one."
                 }),
-                Select::new(&form.catalog_select)
+                // The combobox has no accessibility of its own in GPUI Kit
+                // 0.6.6, so this element names it and gives its value.
+                div()
                     .id("connection-schema-catalog")
+                    .test_support()
+                    .role(Role::ComboBox)
+                    .aria_label("Schema catalog")
+                    .aria_value(catalog_label)
                     .w_full()
-                    .disabled(saving)
-                    .accessibility_label("Schema catalog")
+                    .child(
+                        Combobox::new(&form.catalog_select)
+                            .w_full()
+                            .disabled(saving)
+                            .search_placeholder("Search catalogs…")
+                            // One save makes at most one new shared catalog.
+                            .when(!has_new, |list| list.footer(move |_, _| {
+                                let qrow = qrow.clone();
+                                Button::new("connection-new-shared-catalog")
+                                    .ghost()
+                                    .small()
+                                    .w_full()
+                                    .justify_start()
+                                    .icon(IconName::Plus)
+                                    .label("New shared catalog…")
+                                    .on_click(move |_, window, cx| {
+                                        let _ = qrow.update(cx, |this, cx| {
+                                            this.new_shared_catalog(window, cx)
+                                        });
+                                    })
+                            })),
+                    )
                     .into_any_element(),
             ))
         })
@@ -692,10 +727,17 @@ mod tests {
             settings: CatalogSettings::default(),
             preferred: None,
         };
-        let choices = catalog_choices(std::slice::from_ref(&lake));
+        let mut choices = catalog_choices(std::slice::from_ref(&lake));
         let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
-        assert_eq!(labels, [PRIVATE_CATALOG, "Lake", NEW_SHARED_CATALOG]);
+        assert_eq!(labels, [PRIVATE_CATALOG, "Lake"]);
         assert_eq!(choices[1].0, CatalogChoice::Shared(lake.id));
+        // The New shared catalog button adds its choice once.
+        assert_eq!(add_new_catalog(&mut choices), 2);
+        assert_eq!(add_new_catalog(&mut choices), 2);
+        assert_eq!(
+            choices[2],
+            (CatalogChoice::New, NEW_SHARED_CATALOG.to_owned())
+        );
 
         let shared = std::slice::from_ref(&lake);
         assert!(!shared_name_is_taken(shared, &lake));

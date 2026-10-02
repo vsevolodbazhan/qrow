@@ -230,9 +230,11 @@ struct ProfileEditor {
     refresh_logs: connection_form::ChoiceSelect,
     /// The catalog that the connection uses. A change loads the settings of
     /// the chosen catalog into the Schemas fields.
-    catalog_select: connection_form::RowSelect,
+    catalog_select: connection_form::RowCombobox,
     catalog_choices: Vec<(connection_form::CatalogChoice, String)>,
-    _catalog_subscription: Subscription,
+    /// The catalog whose settings the fields show. The dialog compares it
+    /// with the list, because the list does not report each choice.
+    catalog_choice: connection_form::CatalogChoice,
     /// The ID that a new shared catalog gets.
     new_catalog: Uuid,
     shared_name: Entity<InputState>,
@@ -2226,13 +2228,7 @@ impl Qrow {
             None => connection_form::CatalogChoice::Private,
         };
         let catalog_select =
-            connection_form::catalog_select(&catalog_choices, &catalog, window, cx);
-        let catalog_subscription =
-            cx.subscribe_in(&catalog_select, window, |this, _, event, window, cx| {
-                if matches!(event, SelectEvent::Confirm(Some(_))) {
-                    this.catalog_choice_changed(window, cx);
-                }
-            });
+            connection_form::catalog_combobox(&catalog_choices, &catalog, window, cx);
         let shared_name = cx.new(|cx| {
             InputState::new(window, cx).default_value(
                 shared
@@ -2268,7 +2264,7 @@ impl Qrow {
             refresh_logs,
             catalog_select,
             catalog_choices,
-            _catalog_subscription: catalog_subscription,
+            catalog_choice: catalog,
             new_catalog: Uuid::new_v4(),
             shared_name,
             preferred_select,
@@ -2282,13 +2278,35 @@ impl Qrow {
         self.open_profile_dialog(window, cx);
         cx.notify();
     }
-    /// Load the settings of the chosen catalog into the Schemas fields. A new
-    /// shared catalog starts with the settings in the fields.
-    fn catalog_choice_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Choose a new shared catalog, and move to its name. A new list
+    /// replaces the open one, because GPUI Kit 0.6.6 cannot close it.
+    fn new_shared_catalog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(form) = &mut self.form else {
             return;
         };
-        let choice = connection_form::chosen(&form.catalog_select, &form.catalog_choices, cx);
+        connection_form::add_new_catalog(&mut form.catalog_choices);
+        form.catalog_select = connection_form::catalog_combobox(
+            &form.catalog_choices,
+            &connection_form::CatalogChoice::New,
+            window,
+            cx,
+        );
+        let name = form.shared_name.clone();
+        self.catalog_choice_changed(connection_form::CatalogChoice::New, window, cx);
+        name.update(cx, |input, cx| input.focus(window, cx));
+    }
+    /// Load the settings of the chosen catalog into the Schemas fields. A new
+    /// shared catalog starts with the settings in the fields.
+    fn catalog_choice_changed(
+        &mut self,
+        choice: connection_form::CatalogChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        form.catalog_choice = choice;
         let shared = match choice {
             connection_form::CatalogChoice::Shared(id) => {
                 self.shared_catalogs.iter().find(|catalog| catalog.id == id)
@@ -2382,8 +2400,11 @@ impl Qrow {
                         .cloned()
                 });
             } else {
-                let choice =
-                    connection_form::chosen(&form.catalog_select, &form.catalog_choices, cx);
+                let choice = connection_form::chosen_catalog(
+                    &form.catalog_select,
+                    &form.catalog_choices,
+                    cx,
+                );
                 let preferred =
                     connection_form::chosen(&form.preferred_select, &form.preferred_choices, cx);
                 profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);

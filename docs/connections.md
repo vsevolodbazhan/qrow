@@ -207,8 +207,9 @@ tree of each connection.
 To share a catalog:
 
 1. Open the settings of a connection that browses schemas.
-2. In **Schema catalog**, select **New shared catalog**. The connection
-   brings its copy of the schemas to the new catalog.
+2. Open the **Schema catalog** list, then select **New shared catalog…** below
+   the list. The connection brings its copy of the schemas to the new
+   catalog.
 3. Enter a **Shared catalog name**, then select **Save**.
 4. Open the settings of each other connection, select the shared catalog in
    **Schema catalog**, then select **Save**.
@@ -332,6 +333,9 @@ use.
   does not answer. Thus, a refresh can take longer than its timeout.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   has more columns, its refresh fails. Hide schemas or refresh single tables.
+- The keyboard cannot reach **New shared catalog…** below the **Schema
+  catalog** list. Use the pointer. In the list, **Enter** selects a catalog
+  and **Escape** closes the list.
 
 ## Sessions and idle behavior
 

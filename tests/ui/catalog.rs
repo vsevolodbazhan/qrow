@@ -84,6 +84,26 @@ fn workspace(profiles: Vec<Profile>) -> Workspace {
     }
 }
 
+/// Opens the Schema catalog list, searches for `option`, and chooses it.
+fn choose_catalog(app: &TestApp, cx: &mut TestAppContext, option: &str) {
+    app.click(cx, "connection-schema-catalog");
+    app.settle(cx);
+    app.update(cx, |window, cx| window.input(option, cx));
+    app.settle(cx);
+    app.press(cx, "enter");
+    app.wait_until(cx, option, Duration::from_secs(10), |window, _| {
+        value(window, "connection-schema-catalog").as_deref() == Some(option)
+    });
+    // Enter chooses the row and keeps the list open. Escape closes it.
+    if app.update(cx, |window, _| {
+        window.try_find("connection-new-shared-catalog").is_some()
+    }) {
+        app.press(cx, "escape");
+    }
+    app.wait_gone(cx, "connection-new-shared-catalog");
+    app.wait_for(cx, "connection-name");
+}
+
 fn expand_connection(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) {
     app.toggle_connection(cx, profile.id);
 }
@@ -918,8 +938,40 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         );
         assert!(window.try_find("connection-shared-catalog-name").is_none());
     });
-    app.select(cx, "connection-schema-catalog", "New shared catalog");
+    // The command below the catalog list makes a new shared catalog.
+    app.click(cx, "connection-schema-catalog");
+    app.wait_for(cx, "connection-new-shared-catalog");
+    app.click(cx, "connection-new-shared-catalog");
     app.wait_for(cx, "connection-shared-catalog-name");
+    app.wait_gone(cx, "connection-new-shared-catalog");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-catalog").as_deref(),
+            Some("New shared catalog")
+        );
+    });
+    app.wait_until(
+        cx,
+        "the name focus",
+        Duration::from_secs(10),
+        |window, _| window.find("connection-shared-catalog-name").focused() == Some(true),
+    );
+    // One save makes at most one shared catalog, so the command goes away.
+    app.click(cx, "connection-schema-catalog");
+    app.wait_until(cx, "the open list", Duration::from_secs(10), |window, _| {
+        labelled(window, "Search catalogs…").is_some()
+    });
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-new-shared-catalog").is_none());
+    });
+    app.press(cx, "escape");
+    app.wait_until(
+        cx,
+        "the closed list",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "Search catalogs…").is_none(),
+    );
+    app.wait_for(cx, "connection-name");
     app.click(cx, "save-profile");
     app.wait_until(
         cx,
@@ -951,7 +1003,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
 
     // The second connection joins it and shows the same schemas.
     edit(cx, &second);
-    app.select(cx, "connection-schema-catalog", "Lake");
+    choose_catalog(&app, cx, "Lake");
     app.wait_for(cx, "connection-shared-catalog-name");
     app.update(cx, |window, _| {
         assert_eq!(
@@ -977,7 +1029,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
 
     // The catalog stays while one connection uses it.
     edit(cx, &first);
-    app.select(cx, "connection-schema-catalog", "This connection");
+    choose_catalog(&app, cx, "This connection");
     app.wait_gone(cx, "connection-shared-catalog-name");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
@@ -989,7 +1041,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
 
     // The last connection that leaves deletes the catalog and its cache.
     edit(cx, &second);
-    app.select(cx, "connection-schema-catalog", "This connection");
+    choose_catalog(&app, cx, "This connection");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
     app.wait_until(cx, "no shared catalog", Duration::from_secs(10), |_, _| {
