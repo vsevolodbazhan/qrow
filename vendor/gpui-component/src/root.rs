@@ -319,11 +319,20 @@ impl Root {
         // Opening a modal confines selection to it; drop any background
         // selection so it cannot linger (or be copied) under the modal.
         gpui_base::TextSelection::clear(window, cx);
+        self.hide_tooltip(cx);
         cx.notify();
     }
 
-    fn close_dialog_internal(&mut self) -> Option<FocusHandle> {
+    /// Hide the managed tooltip when a modal opens or closes. A modal covers
+    /// or removes the trigger, so the trigger may never get a hover-out.
+    fn hide_tooltip(&self, cx: &mut Context<'_, Root>) {
+        self.tooltip_overlay
+            .update(cx, |overlay, cx| overlay.hide(cx));
+    }
+
+    fn close_dialog_internal(&mut self, cx: &mut Context<'_, Root>) -> Option<FocusHandle> {
         self.focused_input = None;
+        self.hide_tooltip(cx);
         self.active_dialogs
             .pop()
             .and_then(|d| d.previous_focused_handle)
@@ -331,7 +340,7 @@ impl Root {
     }
 
     pub fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
-        if let Some(handle) = self.close_dialog_internal() {
+        if let Some(handle) = self.close_dialog_internal(cx) {
             window.focus(&handle, cx);
         }
         gpui_base::TextSelection::clear(window, cx);
@@ -339,7 +348,7 @@ impl Root {
     }
 
     pub(crate) fn defer_close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
-        if let Some(handle) = self.close_dialog_internal() {
+        if let Some(handle) = self.close_dialog_internal(cx) {
             let dialogs_count = self.active_dialogs.len();
 
             // Save for new dialogs opened during animation to maintain focus chain
@@ -369,6 +378,7 @@ impl Root {
             .first()
             .and_then(|d| d.previous_focused_handle.clone());
         self.active_dialogs.clear();
+        self.hide_tooltip(cx);
         if let Some(handle) = previous_focused_handle.and_then(|h| h.upgrade()) {
             window.focus(&handle, cx);
         }
@@ -404,6 +414,7 @@ impl Root {
         // Opening a modal confines selection to it; drop any background
         // selection so it cannot linger (or be copied) under the modal.
         gpui_base::TextSelection::clear(window, cx);
+        self.hide_tooltip(cx);
         cx.notify();
     }
 
@@ -418,6 +429,7 @@ impl Root {
             window.focus(&previous_handle, cx);
         }
         self.active_sheet = None;
+        self.hide_tooltip(cx);
         gpui_base::TextSelection::clear(window, cx);
         cx.notify();
     }

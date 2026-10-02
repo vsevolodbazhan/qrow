@@ -1,8 +1,8 @@
 use crate::support::{
     MemoryCredentials, TestApp, connection_row, label, menu_item, offline_profile,
 };
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext};
 use qrow::{
     model::{SavedTab, Workspace},
     storage::Credentials,
@@ -138,6 +138,41 @@ fn connection_names_stay_unique_on_create_and_rename(cx: &mut TestAppContext) {
     wait_error(&app, cx, "A connection with this name already exists.");
     cancel_form(&app, cx);
     assert_eq!(saved_names(&app), ["Other", "Qrow E2E"]);
+}
+
+#[gpui_kit::test]
+fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Qrow E2E"]);
+    let profile = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(profile));
+    app.choose(cx, "popup-menu", "Edit");
+    // The shortcut needs the focus in the form.
+    app.fill(cx, "connection-name", "Qrow E2E");
+    app.update(cx, |window, cx| {
+        let position = window.find("save-profile").bounds().center();
+        window.dispatch_event(
+            MouseMoveEvent {
+                position,
+                pressed_button: None,
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.wait_for(cx, "tooltip");
+
+    // The shortcut closes the form under the pointer, so the Save button
+    // never gets a hover-out. The tooltip closes with the form.
+    app.press(cx, "cmd-enter");
+    app.wait_gone(cx, "connection-name");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("tooltip").is_none())
+    });
 }
 
 #[gpui_kit::test]
