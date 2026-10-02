@@ -188,6 +188,9 @@ pub struct Schema {
     pub fetched_at: Option<u64>,
     #[serde(skip)]
     pub error: Option<String>,
+    /// The member whose refresh recorded `error`.
+    #[serde(skip)]
+    pub error_member: Option<Uuid>,
     /// `None` until Qrow reads the relation list.
     pub relations: Option<BTreeMap<String, Arc<Relation>>>,
 }
@@ -201,6 +204,9 @@ pub struct Relation {
     pub fetched_at: Option<u64>,
     #[serde(skip)]
     pub error: Option<String>,
+    /// The member whose refresh recorded `error`.
+    #[serde(skip)]
+    pub error_member: Option<Uuid>,
     /// `None` until Qrow reads the columns. Columns are in table order.
     pub columns: Option<Vec<CatalogColumn>>,
 }
@@ -331,6 +337,7 @@ impl Catalog {
                                 comment: entry.comment,
                                 fetched_at: kept.as_ref().and_then(|kept| kept.fetched_at),
                                 error: None,
+                                error_member: None,
                                 columns: kept.and_then(|kept| kept.columns.clone()),
                             };
                             (entry.name, Arc::new(relation))
@@ -339,6 +346,7 @@ impl Catalog {
                 );
                 node.fetched_at = Some(at);
                 node.error = None;
+                node.error_member = None;
             }
             Some(name) => {
                 // Without a relation list, one relation cannot show which others exist.
@@ -353,6 +361,7 @@ impl Catalog {
                                 comment: None,
                                 fetched_at: None,
                                 error: None,
+                                error_member: None,
                                 columns: None,
                             })
                         });
@@ -360,6 +369,7 @@ impl Catalog {
                         relation.kind = entry.kind;
                         relation.comment = entry.comment;
                         relation.error = None;
+                        relation.error_member = None;
                     }
                     None => {
                         relations.remove(name);
@@ -393,11 +403,12 @@ impl Catalog {
             node.columns = Some(columns.remove(name).unwrap_or_default());
             node.fetched_at = Some(at);
             node.error = None;
+            node.error_member = None;
         }
     }
 
-    /// Record the error of a refresh on the node of `scope`. A connection
-    /// error belongs to `member`, the connection that ran the refresh.
+    /// Record the error of a refresh on the node of `scope`. The error belongs
+    /// to `member`, the connection that ran the refresh.
     pub fn set_error(&mut self, scope: &Scope, message: String, member: Uuid) {
         match scope {
             Scope::Connection => {
@@ -406,7 +417,9 @@ impl Catalog {
             }
             Scope::Schema(schema) => {
                 if let Some(node) = self.schemas.get_mut(schema) {
-                    Arc::make_mut(node).error = Some(message);
+                    let node = Arc::make_mut(node);
+                    node.error = Some(message);
+                    node.error_member = Some(member);
                 }
             }
             Scope::Relation(schema, relation) => {
@@ -416,11 +429,34 @@ impl Catalog {
                     .and_then(|node| Arc::make_mut(node).relations.as_mut())
                     .and_then(|relations| relations.get_mut(relation))
                 {
-                    Arc::make_mut(node).error = Some(message);
+                    let node = Arc::make_mut(node);
+                    node.error = Some(message);
+                    node.error_member = Some(member);
                 }
             }
         }
     }
+}
+
+impl Schema {
+    /// The error of the last refresh of this schema that `member` ran. A
+    /// member of a shared catalog does not show the errors of the others.
+    pub fn error_for(&self, member: Uuid) -> Option<&str> {
+        error_for(&self.error, self.error_member, member)
+    }
+}
+
+impl Relation {
+    /// The error of the last refresh of this relation that `member` ran.
+    pub fn error_for(&self, member: Uuid) -> Option<&str> {
+        error_for(&self.error, self.error_member, member)
+    }
+}
+
+fn error_for(error: &Option<String>, owner: Option<Uuid>, member: Uuid) -> Option<&str> {
+    error
+        .as_deref()
+        .filter(|_| owner.is_none_or(|owner| owner == member))
 }
 
 /// Quote a Spark SQL identifier, including reserved keywords.
@@ -811,10 +847,20 @@ mod tests {
                 .as_deref(),
             Some("broken")
         );
+        // Only the member that ran the refresh sees the error.
+        let other = Uuid::from_u128(1);
+        let sales = catalog.schema("sales").unwrap();
+        assert_eq!(sales.error_for(Uuid::nil()), Some("denied"));
+        assert_eq!(sales.error_for(other), None);
+        let orders = catalog.relation("sales", "orders").unwrap();
+        assert_eq!(orders.error_for(Uuid::nil()), Some("broken"));
+        assert_eq!(orders.error_for(other), None);
         catalog.apply_relations("sales", None, vec![table("orders")], 2);
-        assert_eq!(catalog.schema("sales").unwrap().error, None);
+        let sales = catalog.schema("sales").unwrap();
+        assert_eq!((sales.error.as_deref(), sales.error_member), (None, None));
         catalog.apply_columns("sales", None, BTreeMap::new(), 2);
-        assert_eq!(catalog.relation("sales", "orders").unwrap().error, None);
+        let orders = catalog.relation("sales", "orders").unwrap();
+        assert_eq!((orders.error.as_deref(), orders.error_member), (None, None));
     }
 
     #[test]

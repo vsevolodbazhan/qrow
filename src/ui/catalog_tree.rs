@@ -424,7 +424,7 @@ impl Builder<'_> {
                     name: name.clone(),
                     relations: schema.relations.as_ref().map(BTreeMap::len),
                     loading: status.includes(&Scope::Schema(name.clone())),
-                    error: schema.error.clone(),
+                    error: schema.error_for(profile).map(str::to_owned),
                 },
             );
             // A search shows only the matching relations of a schema that
@@ -455,25 +455,19 @@ impl Builder<'_> {
         let scope = Scope::Schema(schema.into());
         let mut children = vec![];
         let loading = status.includes(&scope) || status.includes(&Scope::Connection);
-        match (&node.relations, &node.error) {
+        match (&node.relations, node.error_for(profile)) {
             (None, _) if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
             }
             (None, Some(error)) => {
-                children.push(self.notice(id, profile, error.clone(), Tone::Error, Some(scope)))
+                children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))
             }
             (None, None) => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             (Some(relations), error) => {
                 if let Some(error) = error {
-                    children.push(self.notice(
-                        id,
-                        profile,
-                        error.clone(),
-                        Tone::Error,
-                        Some(scope),
-                    ));
+                    children.push(self.notice(id, profile, error, Tone::Error, Some(scope)));
                 } else if relations.is_empty() {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
@@ -499,7 +493,7 @@ impl Builder<'_> {
                             comment: relation.comment.clone(),
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
-                            error: relation.error.clone(),
+                            error: relation.error_for(profile).map(str::to_owned),
                         },
                     );
                     let expanded = self.is_expanded(&item_id);
@@ -527,20 +521,15 @@ impl Builder<'_> {
             || status.includes(&Scope::Schema(schema.into()))
             || status.includes(&Scope::Connection);
         let mut children = vec![];
-        if let Some(error) = &node.error {
-            children.push(self.notice(
-                id,
-                profile,
-                error.clone(),
-                Tone::Error,
-                Some(scope.clone()),
-            ));
+        let error = node.error_for(profile);
+        if let Some(error) = error {
+            children.push(self.notice(id, profile, error, Tone::Error, Some(scope.clone())));
         }
         match &node.columns {
             None if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
             }
-            None if node.error.is_none() => {
+            None if error.is_none() => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             None => {}

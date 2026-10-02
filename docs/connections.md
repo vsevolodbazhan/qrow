@@ -234,10 +234,10 @@ For a connection that uses a shared catalog:
 Each refresh uses the session, the user, and the cluster of the connection
 that asked for it. Qrow runs one refresh of a shared catalog at a time. A
 refresh that a running or waiting refresh includes does not wait again.
-Only the connection that runs a refresh shows its progress and a connection
-error. A connection whose refresh waits shows **Waiting…**. **Stop Refresh**
-stops only the refreshes of its connection. Errors of schemas, tables, and
-views show in the tree of each connection.
+Only the connection that runs a refresh shows its progress and its errors.
+This includes the errors of schemas, tables, and views. A connection whose
+refresh waits shows **Waiting…**. **Stop Refresh** stops only the refreshes of its
+connection.
 
 To stop sharing, select **This connection** in **Schema catalog**. The
 connection then starts with an empty copy of the schemas. When the last

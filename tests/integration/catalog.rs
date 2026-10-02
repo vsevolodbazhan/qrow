@@ -1436,6 +1436,20 @@ fn a_connection_error_belongs_to_the_member_that_ran_the_refresh() {
     h.worker.refresh(large.id, Scope::Connection);
     h.wait(|h| h.catalog().error.is_none() && h.status.is_idle());
     assert!(h.catalog().fetched_at.is_some());
+
+    // The error of a relation also belongs to the member that read it.
+    *server.broken_schemas.lock().unwrap() = vec!["sales".into()];
+    *server.broken_relations.lock().unwrap() = vec!["orders".into()];
+    h.worker.refresh(small.id, Scope::Schema("sales".into()));
+    h.wait(|h| {
+        h.catalog()
+            .relation("sales", "orders")
+            .is_some_and(|relation| relation.error.is_some())
+            && h.status.is_idle()
+    });
+    let orders = h.catalog().relation("sales", "orders").unwrap();
+    assert!(orders.error_for(small.id).is_some());
+    assert_eq!(orders.error_for(large.id), None);
 }
 
 #[test]
