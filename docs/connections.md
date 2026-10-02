@@ -68,10 +68,11 @@ name and its type. A schema row shows the number of its tables and views.
   the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
-  connection puts the cursor in the SQL editor.
+  connection puts the cursor in the SQL editor. The tree shows the selected
+  row only while it has the focus.
 - Point to a row to see its full name when the sidebar cuts it. A tooltip
-  also shows the comment of a table, a view, or a column, and the error of a
-  failed refresh. A row whose name fits and that has no comment or error
+  also shows the comment of a table, a view, or a column, and the first line
+  of the error of a failed refresh. A row whose name fits and that has no comment or error
   shows no tooltip. The tree shows no tooltips while a context menu is open.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
@@ -111,7 +112,8 @@ When the connection has no live session, an unread row shows **Not loaded**.
 Click **Refresh** in that row to read it. This opens a session.
 
 If a refresh fails, the row of the failed part shows the error. Point to the
-row to read the full message. The tree keeps the data that it had before the
+row to read the first line of the error. The Logs of each tab of the
+connection show the full error. The tree keeps the data that it had before the
 refresh. If Qrow cannot connect, it stops the refreshes that wait for that
 connection.
 
@@ -145,7 +147,7 @@ Qrow adds backticks to a name that is not a plain identifier.
 
 To see the requests of each refresh, open the connection settings and set
 **Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
-records each refresh in the Logs of the tab that the connection shows:
+records each refresh in the Logs of each tab of the connection:
 
 - The start of the refresh.
 - The session that the refresh opens.
@@ -155,6 +157,9 @@ records each refresh in the Logs of the tab that the connection shows:
   in the schema `sales`.
 - The result of the refresh: completed, cancelled, or failed. If some schemas
   or tables could not be read, the result tells how many.
+
+When the option is **Disabled**, Logs show only the errors of a refresh: each
+failed request and the result of a failed refresh, with the full error.
 
 The entries of one refresh share one place in the Logs history. A large
 refresh does not remove the history of queries. A refresh error does not mark

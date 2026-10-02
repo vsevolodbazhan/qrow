@@ -822,7 +822,7 @@ impl Render for Qrow {
                     div()
                         .w(self.sidebar_width)
                         .flex_shrink_0()
-                        .child(self.connections(cx)),
+                        .child(self.connections(window, cx)),
                 )
                 .child(self.splitter(true, cx))
             })

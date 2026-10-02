@@ -115,6 +115,9 @@ pub(super) struct CatalogTree {
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
     /// The current tooltip of each row, for its open tooltip view.
     tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
+    /// The list around the tree. The tree shows its selection only while
+    /// it has the focus.
+    focus: FocusHandle,
     /// The workspace file. Caches are next to it. `None` keeps them in memory.
     workspace: Option<PathBuf>,
 }
@@ -130,6 +133,7 @@ impl CatalogTree {
             nodes: Rc::new(HashMap::new()),
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
+            focus: cx.focus_handle(),
             workspace,
         }
     }
@@ -666,12 +670,16 @@ impl Qrow {
                 }
             }
         }
-        // A refresh belongs to a connection. Its Logs entries go to the tab
-        // that the connection shows. They do not mark an unread error,
-        // because the tree shows refresh errors.
+        // A refresh belongs to a connection. Its Logs entries go to each tab
+        // of the connection. They do not mark an unread error, because the
+        // tree shows refresh errors.
         for (profile, event) in activities {
-            if let Some(index) = self.active_tab_for_profile(profile) {
-                Self::record_activity(&mut self.tabs[index], event);
+            for tab in self
+                .tabs
+                .iter_mut()
+                .filter(|tab| tab.saved.profile == Some(profile))
+            {
+                Self::record_activity(tab, event.clone());
                 changed = true;
             }
         }
@@ -977,7 +985,7 @@ impl Qrow {
     }
 
     /// The Connections sidebar: its header, the search, and the tree.
-    pub(super) fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(28.);
         let active = self.active_profile();
         let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
@@ -1012,6 +1020,7 @@ impl Qrow {
             tips: self.catalog.tips.clone(),
             // A tooltip would cover the open menu.
             menu_open: self.menu.is_some(),
+            focused: self.catalog.focus.contains_focused(window, cx),
         });
         let tree = self.catalog.state.clone();
         v_flex()
@@ -1063,6 +1072,7 @@ impl Qrow {
                 div()
                     .id("connections-list")
                     .test_support()
+                    .track_focus(&self.catalog.focus)
                     .on_action(
                         cx.listener(|this, _: &CopyCatalogName, _, cx| this.copy_catalog_name(cx)),
                     )
@@ -1097,6 +1107,8 @@ struct RowContext {
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
     tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
     menu_open: bool,
+    /// Whether the tree has the focus. A selection without it is not shown.
+    focused: bool,
 }
 
 impl RowContext {
@@ -1218,6 +1230,10 @@ fn render_entry(
     } = context;
     let scale = *scale;
     let ui_px = |value: f32| px(scale * value);
+    // The highlights follow the focus and the menu: a row stays selected in
+    // the tree, but it shows that only while the tree has the focus.
+    let selected = state.is_selected() && context.focused;
+    let right_clicked = state.is_right_clicked() && *menu_open;
     let id = entry.item().id.clone();
     let disclosure = div()
         .w(ui_px(16.))
@@ -1256,7 +1272,7 @@ fn render_entry(
             .h(ui_px(ROW_HEIGHT))
             .py_0p5()
             .child(
-                connection_row(*profile, row, state, disclosure, *menu_open, weak, cx)
+                connection_row(*profile, row, selected, disclosure, context, cx)
                     .pl(ui_px(4.))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, focus),
@@ -1326,7 +1342,7 @@ fn render_entry(
                 return div().h(ui_px(ROW_HEIGHT)).into_any_element();
             }
             return notice_row(&id, *profile, text, *tone, refresh.clone(), weak, scale, cx)
-                .pl(indent + ui_px(16.))
+                .pl(indent)
                 .into_any_element();
         }
         Node::Connection(_) => unreachable!(),
@@ -1371,11 +1387,9 @@ fn render_entry(
         .gap_1()
         .text_sm()
         .rounded(cx.theme().radius)
-        .when(state.is_selected(), |el| el.bg(cx.theme().list_active))
-        .when(state.is_right_clicked() && !state.is_selected(), |el| {
-            el.bg(cx.theme().accent)
-        })
-        .when(!state.is_selected() && !state.is_right_clicked(), |el| {
+        .when(selected, |el| el.bg(cx.theme().list_active))
+        .when(right_clicked && !selected, |el| el.bg(cx.theme().accent))
+        .when(!selected && !right_clicked, |el| {
             el.hover(|el| el.bg(cx.theme().tokens.list_hover))
         })
         .text_color(cx.theme().sidebar_foreground)
@@ -1473,27 +1487,66 @@ fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
     .build(window, cx)
 }
 
+/// The longest error summary in a tooltip, in characters.
+const ERROR_SUMMARY_CHARS: usize = 200;
+
+/// The tooltip text of a refresh error: its first line, cut to
+/// [`ERROR_SUMMARY_CHARS`]. A server error can have a long stack trace, so
+/// the tooltip points to Logs, which keep the full error.
+pub(super) fn error_summary(error: &str) -> String {
+    let line = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    let mut summary: String = line.chars().take(ERROR_SUMMARY_CHARS).collect();
+    if summary.len() < line.len() {
+        summary.push('…');
+    }
+    summary.push_str("\nThe Logs of each tab of the connection show the full error.");
+    summary
+}
+
 /// The tooltip of a tree row: its full name, which the row can truncate,
 /// then its comment or its error.
 fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<String> {
     let mut text = name.to_owned();
-    for line in [comment, error].into_iter().flatten() {
+    for line in [comment.map(str::to_owned), error.map(error_summary)]
+        .into_iter()
+        .flatten()
+    {
         text.push('\n');
-        text.push_str(line);
+        text.push_str(&line);
     }
     Some(text)
+}
+
+/// A slot for one status icon at the end of a connection row. The header and
+/// the list have the same side padding, so a slot as wide as the header's New
+/// Connection button at the row end has the same centerline.
+fn status_slot(id: String, width: Pixels) -> impl IntoElement + ParentElement {
+    div()
+        .id(SharedString::from(id))
+        .test_support()
+        .w(width)
+        .flex_shrink_0()
+        .flex()
+        .justify_center()
 }
 
 /// The row of a connection: the disclosure and the connection button.
 fn connection_row(
     id: Uuid,
     row: &ConnectionRow,
-    state: TreeEntryState,
+    selected: bool,
     disclosure: Div,
-    menu_open: bool,
-    weak: &WeakEntity<Qrow>,
+    context: &RowContext,
     cx: &App,
 ) -> Stateful<Div> {
+    let (menu_open, weak) = (context.menu_open, &context.weak);
+    // As wide as the header's New Connection button.
+    let slot_width = px(context.scale * 28.);
+    let has_status = row.busy || row.refreshing || row.unread_error;
     let accessibility_label = format!(
         "{}{}{}{}",
         row.name,
@@ -1529,6 +1582,9 @@ fn connection_row(
         .h_full()
         .flex_1()
         .min_w_0()
+        // A status slot ends at the row end. Without one, the name keeps a
+        // margin from the highlight edge.
+        .pr_0()
         .accessibility_label(accessibility_label)
         .child(
             h_flex()
@@ -1539,6 +1595,7 @@ fn connection_row(
                 .line_height(relative(1.25))
                 .items_center()
                 .gap_2()
+                .when(!has_status, |el| el.pr_3())
                 .child(
                     gpui_kit::component::Icon::default()
                         .path(crate::assets::SPARK_ICON)
@@ -1548,17 +1605,17 @@ fn connection_row(
                 .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
                 .when(row.busy || row.refreshing, |el| {
                     el.child(
-                        div()
-                            // Keep the loading glyph on the header action's centerline.
-                            .mr_0p5()
+                        status_slot(format!("connection-busy-{id}"), slot_width)
                             .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
                     )
                 })
                 .when(row.unread_error, |el| {
                     el.child(
-                        Icon::new(AssetIconName::TriangleAlert)
-                            .small()
-                            .text_color(cx.theme().danger),
+                        status_slot(format!("connection-error-{id}"), slot_width).child(
+                            Icon::new(AssetIconName::TriangleAlert)
+                                .small()
+                                .text_color(cx.theme().danger),
+                        ),
                     )
                 }),
         )
@@ -1572,14 +1629,13 @@ fn connection_row(
     h_flex()
         .id(SharedString::from(format!("connection-{id}")))
         .w_full()
-        .pr_1()
         .gap_0p5()
         .rounded(cx.theme().radius)
         .text_color(foreground)
         .map(|el| {
             if row.active {
                 el.bg(cx.theme().sidebar_accent)
-            } else if state.is_selected() {
+            } else if selected {
                 el.bg(cx.theme().list_active)
             } else {
                 el.hover(|el| el.bg(cx.theme().tokens.list_hover))
@@ -1621,7 +1677,7 @@ fn notice_row(
     scale: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    let tooltip = (tone == Tone::Error).then(|| text.to_owned());
+    let tooltip = (tone == Tone::Error).then(|| error_summary(text));
     h_flex()
         .id(id.clone())
         .w_full()
@@ -1633,9 +1689,19 @@ fn notice_row(
             Tone::Error => cx.theme().danger,
             Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
         })
-        .when(tone == Tone::Loading, |el| {
-            el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-        })
+        // The columns of the other rows: the disclosure, the icon, and the
+        // label. The spinner takes the place of an icon.
+        .child(div().w(px(scale * 16.)).flex_shrink_0())
+        .child(
+            div()
+                .w(px(scale * 16.))
+                .flex_shrink_0()
+                .flex()
+                .justify_center()
+                .when(tone == Tone::Loading, |el| {
+                    el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+                }),
+        )
         .child(
             div()
                 .flex_1()
@@ -1707,4 +1773,22 @@ fn demo_catalog(profile: Uuid) -> Catalog {
         at,
     );
     catalog
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn an_error_summary_keeps_the_first_line_and_points_to_logs() {
+        let trace =
+            "\n  Could not open the session: host unreachable\n\tat org.apache.Foo(Foo.java:1)";
+        assert_eq!(
+            error_summary(trace),
+            "Could not open the session: host unreachable\nThe Logs of each tab of the connection show the full error."
+        );
+        let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
+        let summary = error_summary(&long);
+        assert!(summary.starts_with(&format!("{}…\n", "x".repeat(ERROR_SUMMARY_CHARS))));
+    }
 }

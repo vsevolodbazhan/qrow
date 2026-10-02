@@ -764,9 +764,11 @@ impl Runner {
         }
     }
 
-    /// Send a Logs entry of the refresh in progress, if the profile enables it.
+    /// Send a Logs entry of the refresh in progress: an error, or any entry
+    /// if the profile enables refresh logs.
     fn log(&self, severity: Severity, text: String, duration: Option<Duration>) {
-        if !self.profile.catalog.log_refreshes {
+        // Errors always go to Logs, because the tree shows only a summary.
+        if !self.profile.catalog.log_refreshes && severity != Severity::Error {
             return;
         }
         let mut event = ActivityEvent::new(None, severity, ActivityKind::SchemaRefresh, text)

@@ -214,7 +214,7 @@ pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
         ))
         .child(field(
             "Schema refresh logs",
-            Some("Records each request of a schema refresh in the Logs of the tab that the connection shows."),
+            Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
             Select::new(&form.refresh_logs)
                 .id("connection-refresh-logs")
                 .w_full()

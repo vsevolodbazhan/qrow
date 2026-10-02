@@ -429,7 +429,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut TestAppContext) {
+fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut TestAppContext) {
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -444,16 +444,33 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
     credentials
         .set_password(profile.id, "synthetic-password")
         .unwrap();
-    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let mut two_tabs = workspace(vec![profile.clone()]);
+    two_tabs.tabs.push(SavedTab::new(2, Some(profile.id)));
+    let app = TestApp::launch_with(cx, two_tabs, credentials);
 
-    // Off by default: a refresh adds nothing to Logs.
+    // Off by default: only the errors of a refresh go to Logs, in full.
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Refresh Schemas");
     app.wait_until(cx, "the first attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
+    let mut logs = String::new();
+    for _ in 0..100 {
+        app.settle(cx);
+        logs = app.logs(cx);
+        if logs.contains("Schema refresh failed") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(logs.contains("Schema refresh failed"), "{logs}");
+    assert!(!logs.contains("Started a schema refresh"), "{logs}");
+    // Each tab of the connection gets the entries.
+    app.click_labelled(cx, "Query 2");
     app.settle(cx);
-    assert!(!app.logs(cx).contains("schema refresh"));
+    assert!(app.logs(cx).contains("Schema refresh failed"));
+    app.click_labelled(cx, "Query 1");
+    app.settle(cx);
 
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit Connection…");
@@ -470,7 +487,6 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
     app.wait_until(cx, "the second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
-    let mut logs = String::new();
     app.wait_until(
         cx,
         "the refresh in Logs",
@@ -479,7 +495,7 @@ fn schema_refreshes_show_in_logs_only_when_the_connection_enables_them(cx: &mut 
     );
     for _ in 0..100 {
         logs = app.logs(cx);
-        if logs.contains("Schema refresh failed") {
+        if logs.matches("Schema refresh failed").count() == 2 {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
