@@ -686,11 +686,10 @@ impl Qrow {
             let input = editor.fields[index].clone();
             let locked = signed_in && (1..=4).contains(&index);
             let row_id = format!("{}-row", setting_id(&format!("sign-in {label}")));
-            group = group.item(row(
+            group = group.item(stacked_row(
                 row_id.into(),
                 label.into(),
                 description.into(),
-                None,
                 move |_, _| {
                     Input::new(&input)
                         .id(setting_id(&format!("sign-in {label}")))
@@ -807,6 +806,28 @@ fn row(
     error: Option<SharedString>,
     control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
 ) -> SettingItem {
+    build_row(id, title, description, error, false, control)
+}
+
+/// A [`row`] with the control below the label at the full width, for text
+/// fields with long values such as URLs.
+fn stacked_row(
+    id: SharedString,
+    title: SharedString,
+    description: SharedString,
+    control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+) -> SettingItem {
+    build_row(id, title, description, None, true, control)
+}
+
+fn build_row(
+    id: SharedString,
+    title: SharedString,
+    description: SharedString,
+    error: Option<SharedString>,
+    stacked: bool,
+    control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
+) -> SettingItem {
     let keywords = [title.clone(), description.clone()];
     SettingItem::render(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
@@ -835,7 +856,12 @@ fn row(
                     )
                 });
             let control = div().child(control(window, cx));
-            match options.layout() {
+            let layout = if stacked {
+                Axis::Vertical
+            } else {
+                options.layout()
+            };
+            match layout {
                 Axis::Horizontal => h_flex()
                     .w_full()
                     .justify_between()
