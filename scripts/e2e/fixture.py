@@ -165,6 +165,12 @@ def reference(runtime):
             "tls": "fixture proxy", "spark_master": "standalone", "runtime": runtime}
 
 
+# A state from before the TLS and OIDC servers has no ports for them. Compose
+# rejects port 0 even for `down`, so such a state uses this port in the
+# configuration. Cleanup does not publish it.
+PLACEHOLDER_PORT = 1
+
+
 class DockerFixture:
     runtime = "docker"
 
@@ -200,7 +206,8 @@ class DockerFixture:
         env = dict(os.environ, QROW_E2E_PROJECT=self.project, QROW_E2E_BIND_PORT=str(self.bind_port),
                    QROW_E2E_EVIDENCE=str(evidence_dir(self.artifacts).resolve()),
                    QROW_E2E_SECURITY=str(security_dir(self.artifacts).resolve()),
-                   QROW_E2E_TLS_BIND_PORT=str(self.tls_port), QROW_E2E_OIDC_PORT=str(self.oidc_port))
+                   QROW_E2E_TLS_BIND_PORT=str(self.tls_port or PLACEHOLDER_PORT),
+                   QROW_E2E_OIDC_PORT=str(self.oidc_port or PLACEHOLDER_PORT))
         return subprocess.run(["docker", "compose", "-f", str(COMPOSE), "-p", self.project, *args],
                               cwd=ROOT, env=env, check=check, timeout=timeout, text=True,
                               capture_output=capture)
