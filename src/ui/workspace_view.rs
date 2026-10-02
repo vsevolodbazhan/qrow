@@ -24,7 +24,7 @@ pub(super) fn connection_tooltip(profile: &Profile, refresh_error: Option<&str>)
     let mut tooltip = format!("{} · {}", profile.host, profile.username);
     if let Some(error) = refresh_error {
         tooltip.push('\n');
-        tooltip.push_str(error);
+        tooltip.push_str(&super::catalog_tree::error_summary(error));
     }
     tooltip
 }
@@ -942,7 +942,7 @@ mod tests {
         );
         assert_eq!(
             connection_tooltip(&tooltip_profile, Some("Refresh stopped after 30 minutes")),
-            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes"
+            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nThe Logs of each tab of the connection show the full error."
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(
