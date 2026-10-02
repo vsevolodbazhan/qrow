@@ -5,7 +5,9 @@
 //! cursor of a query tab. While a tab of the connection has a live session,
 //! the worker also refreshes the connection when its refresh period passes.
 
-use super::{Catalog, MetadataRows, Scope, now, parse_columns, parse_relations, parse_schemas};
+use super::{
+    Catalog, MetadataRows, Scope, Unfinished, now, parse_columns, parse_relations, parse_schemas,
+};
 use crate::{
     activity::{ActivityEvent, ActivityKind, Severity},
     connector::{
@@ -18,7 +20,7 @@ use crate::{
 };
 use anyhow::Result;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -665,18 +667,46 @@ impl Runner {
             }
         };
         let settings = self.profile.catalog.clone();
-        self.update(|catalog| catalog.apply_schemas(names, &settings, now()));
+        let started = now();
+        self.update(|catalog| catalog.apply_schemas(names, &settings, started));
+        // A refresh that stopped in the refresh period continues: the schemas
+        // that it read are not read again. Otherwise the refresh starts over.
+        let period = self.minute * settings.refresh_minutes;
+        let unfinished = self
+            .catalog
+            .unfinished
+            .clone()
+            .filter(|unfinished| {
+                Duration::from_secs(started.saturating_sub(unfinished.started)) < period
+            })
+            .unwrap_or(Unfinished {
+                started,
+                done: BTreeSet::new(),
+            });
         // The schemas that Qrow read longest ago go first. A refresh that the
         // timeout stops then does not leave the same schemas old each time.
         let mut schemas: Vec<(Option<u64>, String)> = self
             .catalog
             .schemas
             .iter()
+            .filter(|(name, _)| !unfinished.done.contains(*name))
             .map(|(name, schema)| (schema.fetched_at, name.clone()))
             .collect();
         schemas.sort();
         let schemas: Vec<String> = schemas.into_iter().map(|(_, name)| name).collect();
-        self.status.total = schemas.len();
+        self.status.total = self.catalog.schemas.len();
+        self.status.done = self.status.total - schemas.len();
+        if self.status.done > 0 {
+            self.log(
+                Severity::Info,
+                format!(
+                    "Continued a stopped schema refresh: {} of {} schemas were already read",
+                    self.status.done, self.status.total
+                ),
+                None,
+            );
+        }
+        self.update(|catalog| catalog.unfinished = Some(unfinished));
         self.publish(true);
         // Each schema is one step: its relations, then their columns. No
         // request reads the columns of the whole connection at once.
@@ -687,9 +717,15 @@ impl Runner {
                 continue;
             }
             self.refresh_schema(&schema)?;
+            self.update(|catalog| {
+                if let Some(unfinished) = &mut catalog.unfinished {
+                    unfinished.done.insert(schema);
+                }
+            });
             self.status.done += 1;
             self.publish(false);
         }
+        self.update(|catalog| catalog.unfinished = None);
         Ok(())
     }
 

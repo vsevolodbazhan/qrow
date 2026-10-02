@@ -938,6 +938,68 @@ fn a_connection_refresh_reads_the_oldest_schemas_first() {
     assert_eq!(order, ["empty", "sales_tmp", "salesx", "sales"]);
 }
 
+/// The schemas whose relation lists the server returned, in order.
+fn relation_lists(server: &Server) -> Vec<String> {
+    server
+        .requests()
+        .into_iter()
+        .filter_map(|request| match request {
+            MetadataRequest::Relations {
+                schema,
+                relation: None,
+            } => Some(schema),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("salesx".into());
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    profile.catalog.log_refreshes = true;
+    // One "minute" is 250 ms: the timeout is 500 ms, and the refresh period
+    // of 60 minutes is 15 s.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
+    h.worker.refresh(Scope::Connection);
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(
+        relation_lists(&server),
+        ["empty", "sales", "sales_tmp", "salesx"]
+    );
+    let unfinished = h.catalog().unfinished.clone().unwrap();
+    assert_eq!(
+        unfinished.done.into_iter().collect::<Vec<_>>(),
+        ["empty", "sales", "sales_tmp"]
+    );
+    wait_for_cancel(&server);
+
+    // The next connection refresh reads only the schema that it did not read.
+    *server.block_schema.lock().unwrap() = None;
+    let before = relation_lists(&server).len();
+    let _ = h.worker.activities.try_iter().count();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server)[before..], ["salesx"]);
+    assert_eq!(h.columns("salesx", "other").unwrap(), ["y"]);
+    assert!(h.catalog().unfinished.is_none());
+    let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text
+                == "Continued a stopped schema refresh: 3 of 4 schemas were already read"),
+        "{texts:?}"
+    );
+
+    // A completed refresh does not continue: the next one reads all schemas.
+    let before = relation_lists(&server).len();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server).len() - before, 4);
+}
+
 #[test]
 fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     let server = warehouse();

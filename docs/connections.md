@@ -124,8 +124,15 @@ do not use.
 Each refresh stops when it takes longer than **Refresh timeout** in the
 connection settings. The default is 30 minutes. The tree keeps what the
 refresh read before it stopped. The error **Refresh stopped after 30
-minutes** shows like other [refresh errors](#refresh-errors). The next
-connection refresh starts with the schemas that it did not read.
+minutes** shows like other [refresh errors](#refresh-errors).
+
+When a connection refresh stops before its end, for example at its timeout,
+when you stop it, or when the session fails, the next connection refresh in
+the **Refresh period** continues it. It does not read again the schemas that
+the stopped refresh read, and its progress starts at their number. After the
+refresh period, the next connection refresh reads all schemas again. With
+**Manual** refresh, the period is the last saved **Refresh period**, 60
+minutes by default.
 
 Qrow does not start a session to read schemas when no tab of the connection
 has a live session. When a tab of the connection has a live session, Qrow

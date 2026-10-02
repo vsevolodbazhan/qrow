@@ -7,7 +7,7 @@ use crate::model::{CatalogSettings, Column, Profile, Row};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -79,7 +79,21 @@ pub struct Catalog {
     /// The error of the last connection refresh. Errors are not saved.
     #[serde(skip)]
     pub error: Option<String>,
+    /// A connection refresh that stopped before its end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unfinished: Option<Unfinished>,
     pub schemas: BTreeMap<String, Arc<Schema>>,
+}
+
+/// A connection refresh that stopped before its end, for example at its
+/// timeout or when the session failed. The next connection refresh in the
+/// refresh period continues it and does not read these schemas again.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Unfinished {
+    /// When the refresh started, in seconds since the Unix epoch.
+    pub started: u64,
+    /// The schemas that the refresh read completely.
+    pub done: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -135,6 +149,7 @@ impl Catalog {
             identity: CatalogIdentity::of(profile),
             fetched_at: None,
             error: None,
+            unfinished: None,
             schemas: BTreeMap::new(),
         }
     }
