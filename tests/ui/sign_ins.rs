@@ -305,3 +305,69 @@ fn the_lifecycle_fields_stay_reachable_below_the_authentication_fields(cx: &mut 
     app.select(cx, "connection-idle-behavior", "Keep connected");
     app.wait_for(cx, "connection-keep-alive-query");
 }
+
+#[gpui_kit::test]
+fn the_pointer_moves_between_the_fields_of_the_sign_in_form(cx: &mut TestAppContext) {
+    use gpui_kit::{InputEvent as _, MouseButton, MouseDownEvent, MouseUpEvent, point};
+    let provider = Provider::start();
+    let app = launch(cx, &provider, Workspace::default());
+    open_sign_ins(&app, cx);
+    app.click(cx, "add-sign-in");
+    app.wait_for(cx, "setting-sign-in-name");
+    // Fields take the width of the page, so a long issuer URL stays readable.
+    app.update(cx, |window, _| {
+        let width = f32::from(window.find("setting-sign-in-issuer").bounds().size.width);
+        assert!(width > 400., "the issuer field is {width} px wide");
+    });
+    let mut typed = std::collections::HashMap::<&str, String>::new();
+    // The name field has focus when the form opens. Each click moves the
+    // focus, also back to the name field, at the center or near an edge.
+    for (field, across, text) in [
+        ("setting-sign-in-issuer", 0.5, "i"),
+        ("setting-sign-in-name", 0.5, "n"),
+        ("setting-sign-in-client-id", 0.9, "c"),
+        ("setting-sign-in-name", 0.05, "m"),
+    ] {
+        app.update(cx, |window, cx| {
+            let bounds = window.find(field).bounds();
+            let position = point(
+                bounds.origin.x + bounds.size.width * across,
+                bounds.origin.y + bounds.size.height / 2.,
+            );
+            let modifiers = Default::default();
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.input(text, cx);
+        });
+        app.settle(cx);
+        typed.entry(field).or_default().push_str(text);
+        app.update(cx, |window, _| {
+            for (field, expected) in &typed {
+                assert_eq!(
+                    window.find(*field).value(),
+                    Some(expected.as_str()),
+                    "{field}"
+                );
+            }
+        });
+    }
+}
