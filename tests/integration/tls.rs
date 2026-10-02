@@ -142,17 +142,44 @@ fn a_rejected_token_names_the_database_account() {
 }
 
 #[test]
-fn a_token_is_never_sent_without_tls_or_with_a_password_secret() {
+fn a_token_can_use_plain_tcp_like_a_password() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut response = vec![];
+        for _ in [1, 2] {
+            let mut header = [0; 5];
+            stream.read_exact(&mut header).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(header[1..].try_into().unwrap()) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            response = payload;
+        }
+        stream.write_all(&[4, 0, 0, 0, 0]).unwrap();
+        response
+    });
+    let tokens = Arc::new(Tokens(AtomicUsize::new(0)));
+    let error = HiveConnector::new(trust())
+        .connect(&oidc_profile(port, false), Secret::Token(tokens))
+        .err()
+        .unwrap();
+    assert!(
+        format!("{error:#}").contains("did not accept the access token"),
+        "{error:#}"
+    );
+    assert_eq!(server.join().unwrap(), b"\0kyuubi-analytics\0token-0");
+}
+
+#[test]
+fn the_secret_must_match_the_authentication_of_the_connection() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     listener.set_nonblocking(true).unwrap();
     let tokens = Arc::new(Tokens(AtomicUsize::new(0)));
     let connector = HiveConnector::new(trust());
-    let error = connector
-        .connect(&oidc_profile(port, false), Secret::Token(tokens.clone()))
-        .err()
-        .unwrap();
-    assert!(error.to_string().contains("requires TLS"), "{error}");
     let error = connector
         .connect(&oidc_profile(port, true), Secret::password("password"))
         .err()

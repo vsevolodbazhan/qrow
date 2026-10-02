@@ -73,6 +73,27 @@ fn an_access_token_opens_a_session_over_tls_as_the_connection_user() -> Result<(
 
 #[test]
 #[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
+fn an_access_token_also_works_over_plain_tcp() -> Result<()> {
+    let signed = sign_in("alice", &[])?;
+    let plain = Profile {
+        tls: false,
+        ..profile()?
+    };
+    let service = signed.service.clone();
+    let client = Client::with(
+        Profile {
+            authentication: signed.profile("qrow")?.authentication,
+            ..plain
+        },
+        HiveConnector::new(signed.fixture.trust),
+        Arc::new(move |profile: &Profile| service.secret(profile)),
+    );
+    scalar(&client.query("SELECT current_user()")?, "qrow");
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
 fn a_valid_token_without_access_to_the_account_is_rejected() -> Result<()> {
     let signed = sign_in("mallory", &[])?;
     let error = HiveConnector::new(signed.fixture.trust.clone())

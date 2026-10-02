@@ -233,6 +233,8 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
             &"connection-password".into()
         ));
     });
+    // A sign-in does not turn on TLS. The form warns about the token instead.
+    app.wait_for(cx, "connection-tls");
     app.click(cx, "save-profile");
     app.wait_until(cx, "the missing sign-in", WAIT, |window, _| {
         label(window, "connection-form-error-accessibility")
@@ -262,7 +264,7 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
             sign_in: sign_in.id
         }
     );
-    assert!(profile.tls);
+    assert!(!profile.tls);
     assert_eq!(profile.username, "kyuubi-analytics-xl");
     assert_eq!(app.credentials.count(), 0, "no password was saved");
 }

@@ -91,9 +91,11 @@ the sign-in there. Qrow waits up to five minutes. Click **Cancel** to stop.
 Qrow then shows the email or name of the account.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
-**Authentication**, and select the sign-in. Sign-in authentication always uses
-TLS. The host of the connection must be one of the database hosts of the
-sign-in. Qrow does not send a token to another host.
+**Authentication**, and select the sign-in. The host of the connection must be
+one of the database hosts of the sign-in. Qrow does not send a token to
+another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
+on the network path can read the access token and use it until it expires, so
+use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
 | State | Recovery |
 | --- | --- |
@@ -145,8 +147,9 @@ Kyuubi must accept the access token in the SASL PLAIN password field of the
 binary transport. Kyuubi does not do this by default. A custom
 `PasswdAuthenticationProvider` must validate the token and check that the
 identity can use the database username. The HTTP bearer authenticator of
-Kyuubi does not apply to the binary transport. The port must accept TLS, for
-example through the TLS settings of the Kyuubi binary frontend or a TLS proxy.
+Kyuubi does not apply to the binary transport. To protect the token, the port
+must accept TLS, for example through the TLS settings of the Kyuubi binary
+frontend or a TLS proxy.
 
 Limitations:
 
@@ -537,8 +540,8 @@ busy.
 Qrow supports HiveServer2 over TCP with SASL PLAIN authentication. The SASL
 PLAIN password is an LDAP password or the access token of a
 [sign-in](#sign-in-with-openid-connect). SASL PLAIN does not encrypt the
-transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN for
-a password. Sign-in authentication always uses TLS. Qrow verifies the server
+transport. Turn on **TLS** to encrypt it, or use a trusted network or VPN.
+Qrow verifies the server
 certificate and the host name against the macOS trust store. To trust a
 company certificate authority, add it to Keychain and trust it. Kerberos, HTTP
 transport, and SSH tunneling are not implemented.
@@ -598,4 +601,4 @@ discovery, PKCE with `S256`, a new `state` and `nonce` for each attempt, and a
 callback listener bound to `127.0.0.1` that closes after the attempt. The
 [ID token check](../src/oidc/jwt.rs) verifies the signature (RS256, PS256, or
 ES256), issuer, audience, expiry, and nonce. The worker asks for credentials
-before each new session. The connector sends a token only over TLS.
+before each new session.

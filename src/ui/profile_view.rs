@@ -145,14 +145,14 @@ impl Qrow {
                             ))
                             .child(field(
                                 "TLS",
-                                Some(if uses_sign_in {
-                                    "Sign-in authentication sends an access token, so it always uses TLS."
+                                Some(if uses_sign_in && !form.tls {
+                                    "Without TLS, anyone on the network path can read the access token and use it until it expires. Use only a trusted network or VPN."
                                 } else {
                                     "Encrypts the connection. The server must accept TLS on this port."
                                 }),
                                 Switch::new("connection-tls")
-                                    .checked(form.tls || uses_sign_in)
-                                    .disabled(saving || uses_sign_in)
+                                    .checked(form.tls)
+                                    .disabled(saving)
                                     .accessibility_label("TLS")
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         if let Some(form) = &mut this.form {

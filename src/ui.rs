@@ -2458,14 +2458,8 @@ impl Qrow {
             cx,
         );
         let authentication_subscriptions = [
-            cx.subscribe_in(&authentication, window, |this, _, event, _, cx| {
-                if let Some(uses_sign_in) = connection_form::uses_sign_in_from_event(event)
-                    && let Some(form) = &mut this.form
-                {
-                    // An access token needs a protected transport.
-                    if uses_sign_in {
-                        form.tls = true;
-                    }
+            cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
+                if connection_form::uses_sign_in_from_event(event).is_some() {
                     cx.notify();
                 }
             }),
