@@ -6,6 +6,7 @@ use qrow::{
         refresh_due,
     },
     connector::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Session},
+    logs::LogKind,
     model::{Batch, CatalogRefresh, CatalogSettings, Column, Profile, Row},
     storage,
 };
@@ -705,16 +706,9 @@ fn the_cache_restores_without_a_session_and_profile_changes_update_it() {
 }
 
 #[test]
-fn logs_entries_share_one_batch_and_follow_the_profile_option() {
+fn every_refresh_sends_its_entries_in_one_batch() {
     let server = warehouse();
     let mut h = Harness::new(server, profile(), None);
-    h.refresh(Scope::Schema("sales".into()));
-    assert_eq!(h.worker.logs.try_iter().count(), 0);
-
-    let mut logged = profile();
-    logged.id = h.catalog().owner;
-    logged.catalog.log_refreshes = true;
-    h.worker.configure(CatalogConfig::private(logged));
     h.refresh(Scope::Connection);
     let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
@@ -744,6 +738,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
             .unwrap()
             .starts_with("Schema refresh completed")
     );
+    assert_eq!(entries.last().unwrap().kind, LogKind::SchemaRefreshFinished);
     let batch = entries[0].batch;
     assert!(batch.is_some());
     assert!(entries.iter().all(|entry| entry.batch == batch));
@@ -793,8 +788,7 @@ fn logs_entries_count_only_the_requested_names() {
         ("my_db", "orders", "TABLE", &["id"]),
         ("myxdb", "other", "TABLE", &["a", "b"]),
     ]);
-    let mut logged = profile();
-    logged.catalog.log_refreshes = true;
+    let logged = profile();
     let mut h = Harness::new(server, logged, None);
     h.refresh(Scope::Connection);
     let texts: Vec<_> = h
@@ -998,7 +992,6 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
     *server.block_schema.lock().unwrap() = Some("salesx".into());
     let mut profile = profile();
     profile.catalog.timeout_minutes = 2;
-    profile.catalog.log_refreshes = true;
     // One "minute" is 250 ms: the timeout is 500 ms, and the refresh period
     // of 60 minutes is 15 s.
     let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
@@ -1132,7 +1125,6 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     *server.block_schema.lock().unwrap() = Some("salesx".into());
     let mut profile = profile();
     profile.catalog.timeout_minutes = 2;
-    profile.catalog.log_refreshes = true;
     // One "minute" is 250 ms, so the timeout is 500 ms.
     let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
     let started = Instant::now();
@@ -1180,8 +1172,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
 fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     let server = warehouse();
     *server.block_schema.lock().unwrap() = Some("sales".into());
-    let mut profile = profile();
-    profile.catalog.log_refreshes = true;
+    let profile = profile();
     let mut h = Harness::new(server.clone(), profile, None);
     h.worker.set_live(h.id, true);
     h.wait(|h| h.status.active == Some(Scope::Connection));
@@ -1490,9 +1481,7 @@ fn a_member_that_leaves_stops_its_refreshes() {
 #[test]
 fn logs_entries_name_the_member_that_ran_the_refresh() {
     let server = warehouse();
-    let (mut config, small, large) = shared(None);
-    config.members[0].catalog.log_refreshes = true;
-    config.members[1].catalog.log_refreshes = false;
+    let (config, small, large) = shared(None);
     let mut h = Harness::with_config(server, config, None, MINUTE);
     h.worker.refresh(small.id, Scope::Schema("sales".into()));
     h.wait(|h| h.status.runner == Some(small.id));
@@ -1501,9 +1490,15 @@ fn logs_entries_name_the_member_that_ran_the_refresh() {
     h.wait(|h| h.status.runner == Some(large.id));
     h.wait(|h| h.status.is_idle());
     let entries: Vec<_> = h.worker.logs.try_iter().collect();
-    assert!(!entries.is_empty());
+    assert!(entries.iter().any(|(member, _)| *member == small.id));
+    assert!(entries.iter().any(|(member, _)| *member == large.id));
     assert!(entries.iter().all(|(member, event)| {
-        *member == small.id && event.connection.as_deref() == Some("small")
+        let name = if *member == small.id {
+            "small"
+        } else {
+            "large"
+        };
+        event.connection.as_deref() == Some(name)
     }));
 }
 

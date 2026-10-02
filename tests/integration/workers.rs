@@ -252,7 +252,7 @@ fn lifecycle_update_recomputes_the_heartbeat_deadline() {
 
     let logs: Vec<_> = worker.logs.try_iter().collect();
     assert!(logs.iter().any(|event| {
-        event.kind == LogKind::KeepAliveStarted && event.sql.as_deref() == Some("SELECT new")
+        event.kind == LogKind::KeepAliveCompleted && event.sql.as_deref() == Some("SELECT new")
     }));
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
@@ -480,16 +480,11 @@ fn keep_alive_overrides_idle_disconnect_and_stops_after_manual_disconnect() {
         assert!(matches!(next(&worker), Event::KeepAliveStarted));
         assert!(matches!(next(&worker), Event::KeepAliveFinished));
         let logs: Vec<_> = worker.logs.try_iter().collect();
-        assert_eq!(logs.len(), 2, "Log each keep-alive query and outcome");
-        assert_eq!(logs[0].kind, LogKind::KeepAliveStarted);
-        assert_eq!(
-            logs[0].text,
-            format!("Submitted keep-alive query:\n{keep_alive_sql}")
-        );
+        assert_eq!(logs.len(), 1, "Log the outcome of each keep-alive");
+        assert_eq!(logs[0].kind, LogKind::KeepAliveCompleted);
+        assert!(logs[0].text.starts_with("Keep-alive completed"));
         assert_eq!(logs[0].sql.as_deref(), Some(keep_alive_sql.as_str()));
-        assert_eq!(logs[1].kind, LogKind::KeepAliveCompleted);
-        assert!(logs[1].text.starts_with("Keep-alive completed"));
-        assert!(logs[1].duration.is_some());
+        assert!(logs[0].duration.is_some());
         assert!(logs.iter().all(|event| {
             event.execution_id.is_none()
                 && event.severity == Severity::Info
@@ -539,15 +534,16 @@ fn failed_keep_alive_disconnects_without_background_retry() {
         _ => panic!("Expected keep-alive failure"),
     }
     let logs: Vec<_> = worker.logs.try_iter().collect();
-    assert_eq!(logs.len(), 2, "Log the failed keep-alive SQL and error");
-    assert_eq!(logs[0].kind, LogKind::KeepAliveStarted);
-    assert_eq!(logs[0].text, "Submitted keep-alive query:\nbroken");
+    assert_eq!(logs.len(), 1, "Log the failed keep-alive with its SQL");
+    assert_eq!(logs[0].kind, LogKind::KeepAliveFailed);
+    assert_eq!(logs[0].severity, Severity::Error);
+    assert!(
+        logs[0]
+            .text
+            .starts_with("Keep-alive failed and closed the session: syntax error")
+    );
     assert_eq!(logs[0].sql.as_deref(), Some("broken"));
-    assert_eq!(logs[0].severity, Severity::Info);
-    assert_eq!(logs[1].kind, LogKind::Error);
-    assert_eq!(logs[1].severity, Severity::Error);
-    assert!(logs[1].text.contains("Keep-alive failed: syntax error"));
-    assert!(logs[1].duration.is_some());
+    assert!(logs[0].duration.is_some());
     assert!(logs.iter().all(|event| event.execution_id.is_none()));
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
     assert!(

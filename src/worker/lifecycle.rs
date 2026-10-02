@@ -36,16 +36,6 @@ impl Runner {
         }
         let sql = policy.keep_alive_sql.clone();
         self.cancelled.store(false, Ordering::SeqCst);
-        self.emit_log(
-            LogEvent::new(
-                None,
-                Severity::Info,
-                LogKind::KeepAliveStarted,
-                format!("Submitted keep-alive query:\n{sql}"),
-            )
-            .with_connection(self.profile.as_ref().unwrap().name.clone())
-            .with_sql(sql.clone()),
-        );
         self.emit(Event::KeepAliveStarted);
         let started = Instant::now();
         let result = self.keep_alive(&sql);
@@ -53,26 +43,26 @@ impl Runner {
         if let Err(error) = result {
             // A failed maintenance query must not repeat unattended.
             self.disconnect();
-            let message = format!(
-                "Keep-alive failed: {}",
-                crate::connector::error_message(&error)
-            );
-            self.log(
+            let reason = crate::connector::error_message(&error);
+            let message = format!("Keep-alive failed: {reason}");
+            let mut event = LogEvent::new(
                 None,
                 Severity::Error,
-                LogKind::Error,
+                LogKind::KeepAliveFailed,
                 format!(
-                    "{message} (client measurement: {})",
+                    "Keep-alive failed and closed the session: {reason} (client measurement: {})",
                     format_duration(duration)
                 ),
-                Some(duration),
-            );
+            )
+            .with_sql(sql.clone());
+            event.duration = Some(duration);
+            self.emit_log(event);
             self.emit(Event::Error {
                 message,
                 disconnected: true,
             });
         } else {
-            self.log(
+            let mut event = LogEvent::new(
                 None,
                 Severity::Info,
                 LogKind::KeepAliveCompleted,
@@ -80,8 +70,10 @@ impl Runner {
                     "Keep-alive completed (client measurement: {})",
                     format_duration(duration)
                 ),
-                Some(duration),
-            );
+            )
+            .with_sql(sql);
+            event.duration = Some(duration);
+            self.emit_log(event);
             self.emit(Event::KeepAliveFinished);
         }
     }

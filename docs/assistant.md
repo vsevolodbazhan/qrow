@@ -81,7 +81,7 @@ tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
-Logs. It can also read the [schema catalog](#look-up-tables-and-columns) that
+Logs of query tabs. It cannot read [Activity](activity.md). It can also read the [schema catalog](#look-up-tables-and-columns) that
 Qrow keeps for each connection.
 Each message includes the SQL of the tab of the conversation. If this SQL is
 larger than 32 KB, Qrow sends only a 32 KB part around the selection or the

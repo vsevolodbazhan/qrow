@@ -14,6 +14,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
+| [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
 | [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection or of a shared catalog, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
@@ -39,6 +40,8 @@ flowchart LR
     Connector --> Worker
     Worker -->|Events and bounded batches| Results[Results UI]
     Worker -->|Timestamped Logs events| Logs[Logs history]
+    Worker -->|Timestamped Logs events| Activity[Connection Activity]
+    Catalog[Catalog worker] -->|Refresh events| Activity
 ```
 
 The UI reads the selection and validates statement boundaries. The workspace
@@ -50,6 +53,10 @@ connection changes the visible tab group and does not stop hidden workers.
 The worker sends Logs events through a separate channel. Logs events carry a
 wall-clock timestamp, an execution ID, an event kind, and a measured duration
 when available. The UI stores them in the tab's in-memory Logs history. It does not save them in the workspace.
+Each event also goes to the in-memory [Activity](activity.md) of the
+connection of the tab, without SQL. Events that change nothing for the tab,
+like a completed keep-alive, go only to Activity. Catalog workers send their
+refresh events only to Activity.
 
 Each tab owns one session and can perform one active query. Tabs can work
 concurrently. A catalog worker for each connection, or for each shared

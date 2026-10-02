@@ -113,6 +113,12 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
         evidence(&keep_alive, "started") >= 1,
         "No keep-alive query ran"
     );
+    // A completed keep-alive shows in Activity without its SQL. It stays out
+    // of the tab Logs.
+    let activity = app.activity(cx, alpha.id);
+    assert!(activity.contains(": Keep-alive completed"), "{activity}");
+    assert!(!activity.contains("qrow_keep_alive"), "{activity}");
+    assert!(!app.logs(cx).contains("Keep-alive"));
 }
 
 #[gpui_kit::test]

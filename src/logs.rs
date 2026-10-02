@@ -4,7 +4,7 @@ use std::{
 };
 
 pub const MAX_EXECUTION_GROUPS: usize = 100;
-/// Groups without an execution, such as keep-alive queries, disconnects, and rejected SQL, have
+/// Groups without an execution, such as failed keep-alives, disconnects, and rejected SQL, have
 /// their own cap, so they cannot remove query history.
 pub const MAX_NON_EXECUTION_GROUPS: usize = 50;
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
@@ -26,9 +26,12 @@ pub enum LogKind {
     ExecutionCompleted,
     FetchStarted,
     FetchCompleted,
-    KeepAliveStarted,
     KeepAliveCompleted,
+    /// A keep-alive failed and closed the session of the tab.
+    KeepAliveFailed,
     SchemaRefresh,
+    /// The outcome of a schema refresh: completed, stopped, or failed.
+    SchemaRefreshFinished,
     CancelRequested,
     Cancelled,
     Error,
@@ -519,7 +522,6 @@ mod tests {
             log.record(event(Some(id), LogKind::ExecutionCompleted, "complete"));
         }
         for _ in 0..1_000 {
-            log.record(event(None, LogKind::KeepAliveStarted, "keep-alive"));
             log.record(event(None, LogKind::KeepAliveCompleted, "complete"));
         }
 

@@ -1,3 +1,4 @@
+pub mod activity;
 #[cfg(feature = "ui")]
 mod assets;
 pub mod assistant;

@@ -12,8 +12,9 @@ use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    Action, AnyWindowHandle, App, AppContext, Bounds, ElementId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, Window, point, px, size,
+    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, Window, point, px,
+    size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -669,6 +670,29 @@ impl TestApp {
     }
 
     /// The workspace as Qrow last saved it.
+    /// The text of the Activity of `profile`, as Copy All copies it with
+    /// the filter that shows. Activity opens from the connection menu and
+    /// closes again.
+    pub fn activity(&self, cx: &mut TestAppContext, profile: Uuid) -> String {
+        self.context_menu(cx, connection_row(profile));
+        self.choose(cx, "popup-menu", "Show Activity");
+        self.wait_for(cx, "activity");
+        let text = self.copy_activity(cx);
+        self.press(cx, "escape");
+        self.wait_gone(cx, "activity");
+        text
+    }
+
+    /// The text that Copy All copies from the open Activity.
+    pub fn copy_activity(&self, cx: &mut TestAppContext) -> String {
+        cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+        self.click(cx, "activity-copy-all");
+        self.settle(cx);
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    }
+
     pub fn saved(&self) -> Workspace {
         storage::load(&self.workspace).unwrap()
     }

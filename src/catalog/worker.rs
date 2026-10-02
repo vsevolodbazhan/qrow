@@ -594,7 +594,8 @@ impl Runner {
                 } else {
                     Severity::Info
                 };
-                self.log(
+                self.log_as(
+                    LogKind::SchemaRefreshFinished,
                     severity,
                     format!(
                         "{outcome} (client measurement: {})",
@@ -1265,14 +1266,14 @@ impl Runner {
         }
     }
 
-    /// Send a Logs entry of the refresh in progress: an error, or any entry
-    /// if its member enables refresh logs.
+    /// Send an Activity entry of the refresh in progress, for the member
+    /// that runs it.
     fn log(&self, severity: Severity, text: String, duration: Option<Duration>) {
-        // Errors always go to Logs, because the tree shows only a summary.
-        if !self.profile.catalog.log_refreshes && severity != Severity::Error {
-            return;
-        }
-        let mut event = LogEvent::new(None, severity, LogKind::SchemaRefresh, text)
+        self.log_as(LogKind::SchemaRefresh, severity, text, duration);
+    }
+
+    fn log_as(&self, kind: LogKind, severity: Severity, text: String, duration: Option<Duration>) {
+        let mut event = LogEvent::new(None, severity, kind, text)
             .with_connection(self.profile.name.clone())
             .with_batch(self.batch);
         event.duration = duration;
