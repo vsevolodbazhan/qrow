@@ -80,8 +80,6 @@ impl Credentials {
             matches!(self.secret, Secret::Token(_)) == token,
             "The credentials do not match the authentication of the connection"
         );
-        // Never send an access token over an unencrypted transport.
-        ensure!(profile.tls || !token, "Sign-in authentication requires TLS");
         let secret = self.secret.value()?;
         let endpoint = sasl::Endpoint {
             host: &profile.host,

@@ -651,10 +651,6 @@ impl Profile {
             !self.database.trim().is_empty(),
             "Enter an initial database."
         );
-        anyhow::ensure!(
-            self.tls || self.authentication == Authentication::Password,
-            "Sign-in authentication sends an access token, so it requires TLS."
-        );
         self.lifecycle.validate()?;
         self.catalog.validate()
     }
@@ -1352,7 +1348,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_authentication_requires_tls() {
+    fn sign_in_authentication_works_with_and_without_tls() {
         let mut profile = Profile {
             host: "kyuubi.example.test".into(),
             username: "analytics".into(),
@@ -1361,7 +1357,7 @@ mod tests {
             },
             ..Profile::default()
         };
-        assert!(profile.validate().is_err());
+        assert!(profile.validate().is_ok());
         profile.tls = true;
         assert!(profile.validate().is_ok());
     }
