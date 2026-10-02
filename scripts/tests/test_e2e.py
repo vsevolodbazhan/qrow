@@ -118,6 +118,11 @@ class FixtureTests(unittest.TestCase):
                                                    "processes": [], "beeline": [], "server_env": {}})
         # Port 0 never answers, so such a fixture is not healthy and is not reused.
         self.assertEqual((docker.tls_port, docker.oidc_port, native.tls_port, native.oidc_port), (0, 0, 0, 0))
+        # Compose still gets a valid configuration, so `fixture down` can remove the old servers.
+        with patch.object(fixture.subprocess, "run") as run:
+            docker.compose("down")
+        env = run.call_args.kwargs["env"]
+        self.assertEqual((env["QROW_E2E_TLS_BIND_PORT"], env["QROW_E2E_OIDC_PORT"]), ("1", "1"))
 
     def test_kyuubi_server_jars_include_the_fixture_jar_without_changing_the_download(self):
         with tempfile.TemporaryDirectory() as directory:
