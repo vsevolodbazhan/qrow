@@ -279,7 +279,7 @@ fn running_without_a_sign_in_explains_the_recovery_and_keeps_the_sql(cx: &mut Te
     app.click(cx, "run");
     app.wait_until(cx, "the sign-in error", WAIT, |window, _| {
         label(window, "query-status")
-            .is_some_and(|status| status.starts_with("Error · Sign-in required"))
+            .is_some_and(|status| status.starts_with("Error: Sign-in required"))
     });
     app.click(cx, "output-copy-error");
     let copied = cx

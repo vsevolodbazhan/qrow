@@ -42,7 +42,7 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     app.click(cx, "run");
     app.wait_until(cx, "the sign-in error", QUERY_TIMEOUT, |window, _| {
         label(window, "query-status")
-            .is_some_and(|status| status.starts_with("Error · Sign-in required"))
+            .is_some_and(|status| status.starts_with("Error: Sign-in required"))
     });
 
     app.dispatch(cx, OpenSignIns);

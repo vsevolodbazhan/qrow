@@ -7,7 +7,7 @@ use crate::{
     tls::Trust,
 };
 use anyhow::{Context, Result, ensure};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 /// Opens HiveServer2 sessions. `trust` verifies the servers of TLS connections.
 #[derive(Clone, Debug, Default)]
@@ -18,6 +18,41 @@ pub struct HiveConnector {
 impl HiveConnector {
     pub fn new(trust: Trust) -> Self {
         Self { trust }
+    }
+}
+
+/// Whether an error is a read or write that did not finish in time.
+fn is_timeout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<thrift::Error>(),
+            Some(thrift::Error::Transport(transport))
+                if transport.kind == thrift::TransportErrorKind::TimedOut
+        ) || cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::TimedOut)
+    })
+}
+
+/// Names the setup step of a failure. A timeout during setup usually means
+/// that Kyuubi still starts the engine, so the message says that. `timeout`
+/// is the response timeout of the connection. `hint`
+/// follows the step when the server reported an error.
+fn setup_error(
+    error: anyhow::Error,
+    step: &str,
+    hint: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Error {
+    if is_timeout(&error) {
+        return anyhow::anyhow!(
+            "Kyuubi did not answer within {} seconds when Qrow tried to {step}. A new Spark engine can take several minutes to start. Run the query again later, raise Response timeout in the connection, or ask the Kyuubi administrators to check the engine logs.",
+            timeout.as_secs()
+        );
+    }
+    match hint {
+        Some(hint) => error.context(format!("Could not {step}. {hint}")),
+        None => error.context(format!("Could not {step}")),
     }
 }
 
@@ -138,14 +173,19 @@ impl Connector for HiveConnector {
             secret,
             trust: self.trust.clone(),
         });
+        let timeout = profile.lifecycle.response_timeout();
         let mut client = credentials.connect()?;
-        let opened = client.open_session(TOpenSessionReq::new(
-            TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
-            Some(profile.username.clone()),
-            None,
-            Some(profile.parameters.clone()),
-        ))?;
-        check(opened.status)?;
+        let opened = (|| -> Result<_> {
+            let opened = client.open_session(TOpenSessionReq::new(
+                TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
+                Some(profile.username.clone()),
+                None,
+                Some(profile.parameters.clone()),
+            ))?;
+            check(opened.status.clone())?;
+            Ok(opened)
+        })()
+        .map_err(|error| setup_error(error, "open a session", None, timeout))?;
         let session = opened
             .session_handle
             .context("Kyuubi returned no session handle")?;
@@ -162,16 +202,23 @@ impl Connector for HiveConnector {
                 opened.server_protocol_version.0 >= 5,
                 "Kyuubi does not support columnar results (HiveServer2 protocol V6)"
             );
-            connection.execute(&format!("USE `{}`", profile.database.replace('`', "``")))?;
-            if wait_for_completion(&mut connection, None)? == Completion::Cancelled {
-                anyhow::bail!("Initial database selection was cancelled");
-            }
-            connection.close_operation()?;
+            let database = (|| -> Result<()> {
+                connection.execute(&format!("USE `{}`", profile.database.replace('`', "``")))?;
+                if wait_for_completion(&mut connection, None)? == Completion::Cancelled {
+                    anyhow::bail!("Initial database selection was cancelled");
+                }
+                connection.close_operation()
+            })();
+            database.map_err(|error| {
+                let step = format!("select the initial database \"{}\"", profile.database);
+                let hint = "Check that it exists on this server, or change Initial database in the connection";
+                setup_error(error, &step, Some(hint), timeout)
+            })?;
             Ok(())
         })();
         if let Err(error) = setup {
             let _ = connection.close();
-            return Err(error.context("Could not initialize the session"));
+            return Err(error);
         }
         Ok(Box::new(connection))
     }

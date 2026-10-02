@@ -105,7 +105,7 @@ use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 | The sign-in has expired | Click **Sign in…**. |
 | Qrow could not reach the provider | Click **Retry**. Qrow keeps the account. |
 
-A query that needs a sign-in fails with **Error · Sign-in required**, and Logs
+A query that needs a sign-in fails with **Error: Sign-in required**, and Logs
 names the sign-in. Qrow does not open the browser by itself, and it does not
 run the SQL again after a sign-in. If Kyuubi does not accept the token, the
 error names the database username. SASL PLAIN does not tell why the server
@@ -563,6 +563,14 @@ answer within 300 seconds`. A change applies to the sessions that open after
 you save. The timeout does not limit the duration of a query, because Qrow
 asks for the status of a running query again and again. See
 [Cancel work](queries.md#cancel-work).
+
+A new session opens and then selects the initial database. Kyuubi can hold
+these steps while it starts a Spark engine. If Kyuubi does not answer within
+the response timeout, the error names the step and tells that the engine can
+still start. If the initial database does
+not exist, the error names the database and includes the message of Spark.
+The status bar shows **Error: Connection failed** when a session could not
+open, and **Error: Connection lost** when an open session failed.
 
 Qrow discards a failed connection and reports the error. This includes recognized
 Kyuubi errors that wrap an engine transport failure. The next explicit Run can

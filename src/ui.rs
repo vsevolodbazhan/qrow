@@ -1268,12 +1268,16 @@ impl Qrow {
                 tab.cancelling = false;
                 tab.more = false;
                 tab.pending_page = None;
+                // A session that never opened failed to connect; it was not lost.
+                let was_connected = tab.connected;
                 if disconnected {
                     tab.connected = false;
                 }
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
                 if sign_in_required {
                     tab.set_status_detail("Error", "Sign-in required");
+                } else if disconnected && !was_connected {
+                    tab.set_status_detail("Error", "Connection failed");
                 } else if disconnected {
                     tab.set_status_detail("Error", "Connection lost");
                 } else {
