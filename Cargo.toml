@@ -24,7 +24,7 @@ base64 = "0.22"
 form_urlencoded = "1"
 httparse = "1"
 ring = "0.17"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["derive", "rc"] }
