@@ -438,6 +438,14 @@ impl Catalog {
     }
 }
 
+impl Catalog {
+    /// The error of the last connection refresh that `member` ran. A member
+    /// of a shared catalog does not get the errors of the others.
+    pub fn error_for(&self, member: Uuid) -> Option<&str> {
+        error_for(&self.error, self.error_member, member)
+    }
+}
+
 impl Schema {
     /// The error of the last refresh of this schema that `member` ran. A
     /// member of a shared catalog does not show the errors of the others.

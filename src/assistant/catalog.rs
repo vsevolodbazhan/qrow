@@ -34,8 +34,8 @@ fn cut(text: &str, limit: usize) -> String {
     format!("{}…", &text[..end])
 }
 
-fn short(text: &Option<String>) -> Option<String> {
-    text.as_deref().map(|text| cut(text, MAX_TEXT_BYTES))
+fn short(text: Option<&str>) -> Option<String> {
+    text.map(|text| cut(text, MAX_TEXT_BYTES))
 }
 
 /// Why a view has no data. The tool decides to read it or to tell the model.
@@ -149,75 +149,141 @@ fn schema_name<'a>(catalog: &'a Catalog, name: &str) -> Option<&'a String> {
         })
 }
 
-/// The schema list of `catalog`, from `offset`.
-pub fn schemas(
-    catalog: &Catalog,
-    settings: &CatalogSettings,
-    now: u64,
-    offset: usize,
-    limit: usize,
-) -> Result<Value, Missing> {
-    if catalog.fetched_at.is_none() && catalog.schemas.is_empty() {
-        return Err(Missing::Schemas);
-    }
-    let entries: Vec<(&String, _)> = catalog.schemas.iter().collect();
-    Ok(bounded_page(&entries, offset, limit, |page, next| {
-        json!({
-            "fetched_at": catalog.fetched_at,
-            "stale": stale(catalog.fetched_at, settings, now),
-            "error": short(&catalog.error),
-            "schema_count": entries.len(),
-            "offset": offset,
-            "next_offset": next,
-            "schemas": page.iter().map(|(name, schema)| json!({
-                "name": name,
-                "relation_count": schema.relations.as_ref().map(|relations| relations.len()),
-                "fetched_at": schema.fetched_at,
-                "error": short(&schema.error),
-            })).collect::<Vec<_>>(),
-        })
-    }))
+/// The catalog of one connection, as its catalog tools read it.
+pub struct Reader<'a> {
+    pub catalog: &'a Catalog,
+    /// The connection. It gets only the errors of the refreshes that it ran.
+    pub member: uuid::Uuid,
+    pub settings: &'a CatalogSettings,
+    pub now: u64,
 }
 
-/// The relations of `schema` whose names match `pattern`, from `offset`.
-pub fn relations(
-    catalog: &Catalog,
-    settings: &CatalogSettings,
-    now: u64,
-    schema: &str,
-    pattern: Option<&str>,
-    offset: usize,
-    limit: usize,
-) -> Result<Value, Missing> {
-    let name = find_schema(catalog, settings, schema)?;
-    let node = catalog.schema(name).unwrap();
-    let Some(relations) = &node.relations else {
-        return Err(Missing::Relations(Scope::Schema(name.clone())));
-    };
-    let pattern = pattern.map(str::trim).filter(|pattern| !pattern.is_empty());
-    let entries: Vec<(&String, &Relation)> = relations
-        .iter()
-        .filter(|(relation, _)| pattern.is_none_or(|pattern| glob_match(pattern, relation)))
-        .map(|(relation, node)| (relation, node.as_ref()))
-        .collect();
-    Ok(bounded_page(&entries, offset, limit, |page, next| {
-        json!({
-            "schema": name,
-            "pattern": pattern,
-            "fetched_at": node.fetched_at,
-            "stale": stale(node.fetched_at, settings, now),
-            "error": short(&node.error),
-            "relation_count": entries.len(),
-            "offset": offset,
-            "next_offset": next,
-            "relations": page.iter().map(|(relation, node)| json!({
-                "name": relation,
+impl Reader<'_> {
+    /// The schema list, from `offset`.
+    pub fn schemas(&self, offset: usize, limit: usize) -> Result<Value, Missing> {
+        let Self {
+            catalog,
+            member,
+            settings,
+            now,
+        } = *self;
+        if catalog.fetched_at.is_none() && catalog.schemas.is_empty() {
+            return Err(Missing::Schemas);
+        }
+        let entries: Vec<(&String, _)> = catalog.schemas.iter().collect();
+        Ok(bounded_page(&entries, offset, limit, |page, next| {
+            json!({
+                "fetched_at": catalog.fetched_at,
+                "stale": stale(catalog.fetched_at, settings, now),
+                "error": short(catalog.error_for(member)),
+                "schema_count": entries.len(),
+                "offset": offset,
+                "next_offset": next,
+                "schemas": page.iter().map(|(name, schema)| json!({
+                    "name": name,
+                    "relation_count": schema.relations.as_ref().map(|relations| relations.len()),
+                    "fetched_at": schema.fetched_at,
+                    "error": short(schema.error_for(member)),
+                })).collect::<Vec<_>>(),
+            })
+        }))
+    }
+
+    /// The relations of `schema` whose names match `pattern`, from `offset`.
+    pub fn relations(
+        &self,
+        schema: &str,
+        pattern: Option<&str>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Value, Missing> {
+        let Self {
+            catalog,
+            member,
+            settings,
+            now,
+        } = *self;
+        let name = find_schema(catalog, settings, schema)?;
+        let node = catalog.schema(name).unwrap();
+        let Some(relations) = &node.relations else {
+            return Err(Missing::Relations(Scope::Schema(name.clone())));
+        };
+        let pattern = pattern.map(str::trim).filter(|pattern| !pattern.is_empty());
+        let entries: Vec<(&String, &Relation)> = relations
+            .iter()
+            .filter(|(relation, _)| pattern.is_none_or(|pattern| glob_match(pattern, relation)))
+            .map(|(relation, node)| (relation, node.as_ref()))
+            .collect();
+        Ok(bounded_page(&entries, offset, limit, |page, next| {
+            json!({
+                "schema": name,
+                "pattern": pattern,
+                "fetched_at": node.fetched_at,
+                "stale": stale(node.fetched_at, settings, now),
+                "error": short(node.error_for(member)),
+                "relation_count": entries.len(),
+                "offset": offset,
+                "next_offset": next,
+                "relations": page.iter().map(|(relation, node)| json!({
+                    "name": relation,
+                    "kind": kind(node.kind),
+                    "comment": short(node.comment.as_deref()),
+                    "columns_loaded": node.columns.is_some(),
+                })).collect::<Vec<_>>(),
+            })
+        }))
+    }
+
+    /// The columns and details of one relation.
+    pub fn relation(&self, schema: &str, relation: &str) -> Result<Value, Missing> {
+        let Self {
+            catalog,
+            member,
+            settings,
+            now,
+        } = *self;
+        let schema = find_schema(catalog, settings, schema)?;
+        let Some(relations) = &catalog.schema(schema).unwrap().relations else {
+            return Err(Missing::Relations(Scope::Schema(schema.clone())));
+        };
+        let (name, node) = relations
+            .get_key_value(relation)
+            .or_else(|| {
+                relations
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(relation))
+            })
+            .ok_or(Missing::RelationNotFound)?;
+        let Some(columns) = &node.columns else {
+            return Err(Missing::Columns(Scope::Relation(
+                schema.clone(),
+                name.clone(),
+            )));
+        };
+        let mut count = columns.len();
+        loop {
+            let value = json!({
+                "schema": schema,
+                "relation": name,
                 "kind": kind(node.kind),
-                "comment": short(&node.comment),
-                "columns_loaded": node.columns.is_some(),
-            })).collect::<Vec<_>>(),
-        })
-    }))
+                "comment": short(node.comment.as_deref()),
+                "fetched_at": node.fetched_at,
+                "stale": stale(node.fetched_at, settings, now),
+                "error": short(node.error_for(member)),
+                "column_count": columns.len(),
+                "columns_truncated": count < columns.len(),
+                "columns": columns[..count].iter().map(|column| json!({
+                    "name": column.name,
+                    "data_type": cut(&column.data_type, MAX_TYPE_BYTES),
+                    "comment": short(column.comment.as_deref()),
+                })).collect::<Vec<_>>(),
+            });
+            if fits(&value) || count == 0 {
+                return Ok(value);
+            }
+            count /= 2;
+        }
+    }
 }
 
 fn find_schema<'a>(
@@ -232,57 +298,6 @@ fn find_schema<'a>(
         Some(name) => Ok(name),
         None if !settings.shows(schema) => Err(Missing::SchemaHidden),
         None => Err(Missing::SchemaNotFound),
-    }
-}
-
-/// The columns and details of one relation.
-pub fn relation(
-    catalog: &Catalog,
-    settings: &CatalogSettings,
-    now: u64,
-    schema: &str,
-    relation: &str,
-) -> Result<Value, Missing> {
-    let schema = find_schema(catalog, settings, schema)?;
-    let Some(relations) = &catalog.schema(schema).unwrap().relations else {
-        return Err(Missing::Relations(Scope::Schema(schema.clone())));
-    };
-    let (name, node) = relations
-        .get_key_value(relation)
-        .or_else(|| {
-            relations
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(relation))
-        })
-        .ok_or(Missing::RelationNotFound)?;
-    let Some(columns) = &node.columns else {
-        return Err(Missing::Columns(Scope::Relation(
-            schema.clone(),
-            name.clone(),
-        )));
-    };
-    let mut count = columns.len();
-    loop {
-        let value = json!({
-            "schema": schema,
-            "relation": name,
-            "kind": kind(node.kind),
-            "comment": short(&node.comment),
-            "fetched_at": node.fetched_at,
-            "stale": stale(node.fetched_at, settings, now),
-            "error": short(&node.error),
-            "column_count": columns.len(),
-            "columns_truncated": count < columns.len(),
-            "columns": columns[..count].iter().map(|column| json!({
-                "name": column.name,
-                "data_type": cut(&column.data_type, MAX_TYPE_BYTES),
-                "comment": short(&column.comment),
-            })).collect::<Vec<_>>(),
-        });
-        if fits(&value) || count == 0 {
-            return Ok(value);
-        }
-        count /= 2;
     }
 }
 
@@ -523,6 +538,20 @@ mod tests {
     use std::collections::BTreeMap;
 
     const NOW: u64 = 100_000;
+    const MEMBER: uuid::Uuid = uuid::Uuid::nil();
+
+    fn reader<'a>(
+        catalog: &'a Catalog,
+        member: uuid::Uuid,
+        settings: &'a CatalogSettings,
+    ) -> Reader<'a> {
+        Reader {
+            catalog,
+            member,
+            settings,
+            now: NOW,
+        }
+    }
 
     fn settings() -> CatalogSettings {
         CatalogSettings {
@@ -582,7 +611,9 @@ mod tests {
     #[test]
     fn schemas_page_through_the_list_with_counts() {
         let catalog = catalog();
-        let all = schemas(&catalog, &settings(), NOW, 0, DEFAULT_PAGE).unwrap();
+        let all = reader(&catalog, MEMBER, &settings())
+            .schemas(0, DEFAULT_PAGE)
+            .unwrap();
         assert_eq!(all["schema_count"], 3);
         assert_eq!(all["next_offset"], Value::Null);
         assert_eq!(all["stale"], false);
@@ -596,22 +627,55 @@ mod tests {
         assert_eq!(all["schemas"][1]["relation_count"], Value::Null);
         assert_eq!(all["schemas"][2]["relation_count"], 3);
 
-        let page = schemas(&catalog, &settings(), NOW, 1, 1).unwrap();
+        let page = reader(&catalog, MEMBER, &settings()).schemas(1, 1).unwrap();
         assert_eq!(page["schemas"][0]["name"], "hr");
         assert_eq!(page["next_offset"], 2);
 
         let never = Catalog::empty(uuid::Uuid::nil(), None);
         assert_eq!(
-            schemas(&never, &settings(), NOW, 0, 10),
+            reader(&never, MEMBER, &settings()).schemas(0, 10),
             Err(Missing::Schemas)
         );
     }
 
     #[test]
+    fn a_member_gets_only_the_errors_of_its_own_refreshes() {
+        let mut catalog = catalog();
+        let other = uuid::Uuid::from_u128(1);
+        catalog.set_error(&Scope::Connection, "unreachable".into(), other);
+        catalog.set_error(&Scope::Schema("sales".into()), "denied".into(), other);
+        catalog.set_error(
+            &Scope::Relation("sales".into(), "orders".into()),
+            "broken".into(),
+            other,
+        );
+        for (member, connection, schema, table) in [
+            (MEMBER, Value::Null, Value::Null, Value::Null),
+            (
+                other,
+                json!("unreachable"),
+                json!("denied"),
+                json!("broken"),
+            ),
+        ] {
+            let list = reader(&catalog, member, &settings())
+                .schemas(0, 10)
+                .unwrap();
+            assert_eq!(list["error"], connection);
+            assert_eq!(list["schemas"][2]["error"], schema);
+            let sales = reader(&catalog, member, &settings()).relations("sales", None, 0, 10);
+            assert_eq!(sales.unwrap()["error"], schema);
+            let orders = reader(&catalog, member, &settings()).relation("sales", "orders");
+            assert_eq!(orders.unwrap()["error"], table);
+        }
+    }
+
+    #[test]
     fn relations_match_a_pattern_and_tell_what_is_missing() {
         let catalog = catalog();
-        let matched =
-            relations(&catalog, &settings(), NOW, "Sales", Some("ORDER*"), 0, 10).unwrap();
+        let matched = reader(&catalog, MEMBER, &settings())
+            .relations("Sales", Some("ORDER*"), 0, 10)
+            .unwrap();
         assert_eq!(matched["schema"], "sales");
         assert_eq!(matched["relation_count"], 2);
         assert_eq!(matched["relations"][0]["name"], "order_items");
@@ -620,11 +684,11 @@ mod tests {
         assert_eq!(matched["relations"][1]["kind"], "table");
 
         assert_eq!(
-            relations(&catalog, &settings(), NOW, "hr", None, 0, 10),
+            reader(&catalog, MEMBER, &settings()).relations("hr", None, 0, 10),
             Err(Missing::Relations(Scope::Schema("hr".into())))
         );
         assert_eq!(
-            relations(&catalog, &settings(), NOW, "finance", None, 0, 10),
+            reader(&catalog, MEMBER, &settings()).relations("finance", None, 0, 10),
             Err(Missing::SchemaNotFound)
         );
         let hiding = CatalogSettings {
@@ -632,7 +696,7 @@ mod tests {
             ..settings()
         };
         assert_eq!(
-            relations(&catalog, &hiding, NOW, "finance", None, 0, 10),
+            reader(&catalog, MEMBER, &hiding).relations("finance", None, 0, 10),
             Err(Missing::SchemaHidden)
         );
     }
@@ -640,20 +704,22 @@ mod tests {
     #[test]
     fn a_relation_has_its_columns_or_the_refresh_that_reads_them() {
         let catalog = catalog();
-        let orders = relation(&catalog, &settings(), NOW, "sales", "ORDERS").unwrap();
+        let orders = reader(&catalog, MEMBER, &settings())
+            .relation("sales", "ORDERS")
+            .unwrap();
         assert_eq!(orders["relation"], "orders");
         assert_eq!(orders["columns"][1]["data_type"], "DECIMAL(10,2)");
         assert_eq!(orders["columns_truncated"], false);
         assert_eq!(orders["comment"], "About orders");
         assert_eq!(
-            relation(&catalog, &settings(), NOW, "sales", "daily"),
+            reader(&catalog, MEMBER, &settings()).relation("sales", "daily"),
             Err(Missing::Columns(Scope::Relation(
                 "sales".into(),
                 "daily".into()
             )))
         );
         assert_eq!(
-            relation(&catalog, &settings(), NOW, "sales", "nothing"),
+            reader(&catalog, MEMBER, &settings()).relation("sales", "nothing"),
             Err(Missing::RelationNotFound)
         );
         assert_eq!(Missing::Schemas.scope(), Some(Scope::Connection));
@@ -671,7 +737,9 @@ mod tests {
             })
             .collect();
         catalog.apply_relations("hr", None, entries, NOW);
-        let page = relations(&catalog, &settings(), NOW, "hr", None, 0, MAX_PAGE).unwrap();
+        let page = reader(&catalog, MEMBER, &settings())
+            .relations("hr", None, 0, MAX_PAGE)
+            .unwrap();
         assert!(fits(&page));
         let listed = page["relations"].as_array().unwrap().len();
         assert!(listed < MAX_PAGE);
@@ -690,7 +758,9 @@ mod tests {
             BTreeMap::from([("relation_0000".into(), wide)]),
             NOW,
         );
-        let described = relation(&catalog, &settings(), NOW, "hr", "relation_0000").unwrap();
+        let described = reader(&catalog, MEMBER, &settings())
+            .relation("hr", "relation_0000")
+            .unwrap();
         assert!(fits(&described));
         assert_eq!(described["columns_truncated"], true);
         assert_eq!(described["column_count"], 2_000);
@@ -717,7 +787,9 @@ mod tests {
             ],
             NOW,
         );
-        let page = relations(&catalog, &settings(), NOW, "hr", None, 0, 10).unwrap();
+        let page = reader(&catalog, MEMBER, &settings())
+            .relations("hr", None, 0, 10)
+            .unwrap();
         assert!(fits(&page));
         assert_eq!(page["relations"].as_array().unwrap().len(), 2);
         let comment = page["relations"][0]["comment"].as_str().unwrap();
@@ -735,7 +807,9 @@ mod tests {
             )]),
             NOW,
         );
-        let described = relation(&catalog, &settings(), NOW, "hr", "a").unwrap();
+        let described = reader(&catalog, MEMBER, &settings())
+            .relation("hr", "a")
+            .unwrap();
         assert!(fits(&described));
         assert_eq!(described["columns_truncated"], false);
         assert_eq!(cut("short", 10), "short");

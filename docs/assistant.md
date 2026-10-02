@@ -165,7 +165,9 @@ Each result tells when Qrow read the data, and whether it is older than the
 **Refresh period** of the connection. The tools read the catalog of any
 connection that browses schemas, also a [shared
 catalog](connections.md#share-schemas). They do not read the catalog of a
-connection with **Schema refresh** set to **Disabled**.
+connection with **Schema refresh** set to **Disabled**. A result includes
+only the errors of the refreshes that its connection ran, as the sidebar
+does.
 
 When the catalog does not have the data, and a tab of the connection has a
 live session, Qrow reads it before it answers: the schemas of a connection

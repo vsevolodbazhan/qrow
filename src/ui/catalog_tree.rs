@@ -231,11 +231,9 @@ impl CatalogTree {
         let running = self
             .status(profile)
             .is_some_and(|status| status.active == Some(Scope::Connection));
-        let catalog = self.catalog(profile)?;
-        catalog
-            .error
-            .as_deref()
-            .filter(|_| !running && catalog.error_member.is_none_or(|member| member == profile))
+        self.catalog(profile)?
+            .error_for(profile)
+            .filter(|_| !running)
     }
 
     /// Whether a refresh of the connection is in progress or waits.

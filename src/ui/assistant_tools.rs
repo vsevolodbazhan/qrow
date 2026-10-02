@@ -1265,27 +1265,23 @@ impl Qrow {
         let Some(catalog) = self.catalog.catalog(id) else {
             return CatalogStep::Wait { refreshed: false };
         };
-        let now = crate::catalog::now();
+        let reader = catalog::Reader {
+            catalog,
+            member: id,
+            settings: &settings,
+            now: crate::catalog::now(),
+        };
         let result = match &request {
-            CatalogRequest::Schemas(input) => catalog::schemas(
-                catalog,
-                &settings,
-                now,
-                input.offset,
-                input.limit.unwrap_or(catalog::DEFAULT_PAGE),
-            ),
-            CatalogRequest::Relations(input) => catalog::relations(
-                catalog,
-                &settings,
-                now,
+            CatalogRequest::Schemas(input) => {
+                reader.schemas(input.offset, input.limit.unwrap_or(catalog::DEFAULT_PAGE))
+            }
+            CatalogRequest::Relations(input) => reader.relations(
                 &input.schema,
                 input.pattern.as_deref(),
                 input.offset,
                 input.limit.unwrap_or(catalog::DEFAULT_PAGE),
             ),
-            CatalogRequest::Relation(input) => {
-                catalog::relation(catalog, &settings, now, &input.schema, &input.relation)
-            }
+            CatalogRequest::Relation(input) => reader.relation(&input.schema, &input.relation),
         };
         let missing = match result {
             Ok(mut value) => {
@@ -1302,12 +1298,12 @@ impl Qrow {
             // A refresh that ran and could not read the data left its error.
             let error = match &scope {
                 crate::catalog::Scope::Schema(schema) => {
-                    catalog.schema(schema).and_then(|node| node.error.clone())
+                    catalog.schema(schema).and_then(|node| node.error_for(id))
                 }
                 crate::catalog::Scope::Relation(schema, relation) => catalog
                     .relation(schema, relation)
-                    .and_then(|node| node.error.clone()),
-                crate::catalog::Scope::Connection => catalog.error.clone(),
+                    .and_then(|node| node.error_for(id)),
+                crate::catalog::Scope::Connection => catalog.error_for(id),
             };
             if let Some(error) = error.filter(|_| !may_refresh) {
                 return CatalogStep::Done(failure(
