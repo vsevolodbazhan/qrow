@@ -526,6 +526,14 @@ you save. The timeout does not limit the duration of a query, because Qrow
 asks for the status of a running query again and again. See
 [Cancel work](queries.md#cancel-work).
 
+A new session opens and then selects the initial database. Kyuubi can hold
+these steps while it starts a Spark engine. If Kyuubi does not answer within
+the response timeout, the error names the step and tells that the engine can
+still start. If the initial database does
+not exist, the error names the database and includes the message of Spark.
+The status bar shows **Error · Connection failed** when a session could not
+open, and **Error · Connection lost** when an open session failed.
+
 Qrow discards a failed connection and reports the error. This includes recognized
 Kyuubi errors that wrap an engine transport failure. The next explicit Run can
 reconnect. Qrow never automatically resubmits failed SQL. An ordinary SQL error

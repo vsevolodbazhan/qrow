@@ -723,3 +723,25 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
     }
     result
 }
+
+#[test]
+#[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
+fn a_missing_initial_database_names_the_database_and_the_spark_error() -> Result<()> {
+    let p = Profile {
+        database: "qrow_missing_database".into(),
+        ..profile()?
+    };
+    let error = HiveConnector::default()
+        .connect(&p, Secret::password("qrow-test-password"))
+        .err()
+        .context("the database does not exist")?;
+    let message = qrow::connector::error_message(&error);
+    ensure!(
+        message.starts_with("Could not select the initial database \"qrow_missing_database\"."),
+        "{message}"
+    );
+    ensure!(message.contains("SCHEMA_NOT_FOUND"), "{message}");
+    // The session is usable with a database that exists.
+    scalar(&Client::new()?.query("SELECT 46")?, "46");
+    Ok(())
+}

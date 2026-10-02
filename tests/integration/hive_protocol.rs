@@ -609,6 +609,66 @@ fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
     server.join().unwrap();
 }
 
+/// Answers OpenSession and returns the request to select the database.
+fn open_session_then_use(peer: &mut Peer) -> TExecuteStatementReq {
+    let _: TOpenSessionReq = peer.read("OpenSession");
+    peer.reply(TOpenSessionResp::new(
+        success(),
+        TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
+        Some(TSessionHandle::new(THandleIdentifier::new(
+            vec![1; 16],
+            vec![2; 16],
+        ))),
+        None,
+    ));
+    peer.read("ExecuteStatement")
+}
+
+#[test]
+fn a_missing_initial_database_is_named_with_the_server_message() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut p = profile(listener.local_addr().unwrap().port());
+    p.database = "missing".into();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        let request = open_session_then_use(&mut peer);
+        assert_eq!(request.statement, "USE `missing`");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(TGetOperationStatusResp::new(
+            success(),
+            Some(TOperationState::ERROR_STATE),
+            Some("42000".to_owned()),
+            None,
+            Some(
+                "Error operating ExecuteStatement: [SCHEMA_NOT_FOUND] The schema `missing` cannot be found."
+                    .to_owned(),
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
+    });
+    let error = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .err()
+        .expect("the database does not exist");
+    let message = qrow::connector::error_message(&error);
+    assert!(
+        message.starts_with(
+            "Could not select the initial database \"missing\". Check that it exists on this server, or change Initial database in the connection: "
+        ),
+        "{message}"
+    );
+    assert!(message.contains("[SCHEMA_NOT_FOUND]"), "{message}");
+    server.join().unwrap();
+}
+
 #[test]
 fn a_silent_server_fails_after_the_response_timeout() {
     // The server accepts the connection and never answers.
@@ -637,6 +697,37 @@ fn a_silent_server_fails_after_the_response_timeout() {
         error.contains("Kyuubi did not answer within 1 seconds"),
         "{error}"
     );
+    done.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn a_setup_step_without_an_answer_explains_the_engine_start() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut p = profile(listener.local_addr().unwrap().port());
+    // The shortest response timeout that a connection accepts.
+    p.lifecycle.response_timeout_seconds = 10;
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        open_session_then_use(&mut peer);
+        // Like Kyuubi while it starts an engine: no answer for a while.
+        let _ = wait.recv_timeout(Duration::from_secs(30));
+    });
+    let started = std::time::Instant::now();
+    let error = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .err()
+        .expect("the server did not answer");
+    let message = qrow::connector::error_message(&error);
+    assert!(
+        message.starts_with(
+            "Kyuubi did not answer within 10 seconds when Qrow tried to select the initial database \"avia\"."
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("os error"), "{message}");
+    assert!(started.elapsed() < Duration::from_secs(20));
     done.send(()).unwrap();
     server.join().unwrap();
 }
