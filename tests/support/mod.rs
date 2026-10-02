@@ -562,7 +562,15 @@ impl TestApp {
                 let middle = f32::from(window.viewport_size().height) / 2.;
                 elements(window)
                     .into_iter()
-                    .filter(|other| other.visible() && other.path().starts_with(container))
+                    .filter(|other| {
+                        // An element without area, like a focus marker, can
+                        // sit outside the scroll viewport.
+                        let size = other.bounds().size;
+                        other.visible()
+                            && other.path().starts_with(container)
+                            && f32::from(size.width) >= 4.
+                            && f32::from(size.height) >= 4.
+                    })
                     .min_by(|a, b| {
                         let key = |e: &ElementSnapshot| {
                             (
