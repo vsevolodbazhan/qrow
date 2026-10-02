@@ -1,10 +1,10 @@
-pub mod activity;
 #[cfg(feature = "ui")]
 mod assets;
 pub mod assistant;
 pub mod build_info;
 pub mod catalog;
 pub mod connector;
+pub mod logs;
 pub mod model;
 pub mod pagination;
 pub mod sql;

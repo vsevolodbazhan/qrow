@@ -11,9 +11,9 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Application](../src/main.rs) | Select the user or demo environment and open the window. |
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
 | [UI environment](../src/ui/environment.rs) | Select the workspace file and the password store of a window. |
-| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, activity history, and commands. |
+| [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
-| [Activity model](../src/activity.rs) | Group activity entries, apply retention, and define panel transitions. |
+| [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
 | [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection or of a shared catalog, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
@@ -38,7 +38,7 @@ flowchart LR
     Kyuubi -->|Status and rows| Connector
     Connector --> Worker
     Worker -->|Events and bounded batches| Results[Results UI]
-    Worker -->|Timestamped activity| Activity[Logs history]
+    Worker -->|Timestamped Logs events| Logs[Logs history]
 ```
 
 The UI reads the selection and validates statement boundaries. The workspace
@@ -47,10 +47,9 @@ tab. The worker opens a session when needed, runs the SQL, and fetches a bounded
 preview. Worker events wake the UI to update status and results. Selecting a
 connection changes the visible tab group and does not stop hidden workers.
 
-The worker sends activity events through a separate channel. Activity events
-carry a wall-clock timestamp, an execution ID, an event kind, and a measured
-duration when available. The UI stores them in the tab's in-memory activity
-model. It does not save them in the workspace.
+The worker sends Logs events through a separate channel. Logs events carry a
+wall-clock timestamp, an execution ID, an event kind, and a measured duration
+when available. The UI stores them in the tab's in-memory Logs history. It does not save them in the workspace.
 
 Each tab owns one session and can perform one active query. Tabs can work
 concurrently. A catalog worker for each connection, or for each shared

@@ -12,11 +12,11 @@ use super::{
     parse_relations, parse_schemas,
 };
 use crate::{
-    activity::{ActivityEvent, ActivityKind, Severity},
     connector::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
         hive::HiveConnector,
     },
+    logs::{LogEvent, LogKind, Severity},
     model::{CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
     storage::{self, Credentials},
     worker::PasswordProvider,
@@ -162,7 +162,7 @@ pub struct CatalogWorker {
     pub events: mpsc::Receiver<Event>,
     /// Logs entries, with the member that ran the refresh. Only for members
     /// that enable them.
-    pub activities: mpsc::Receiver<(Uuid, ActivityEvent)>,
+    pub logs: mpsc::Receiver<(Uuid, LogEvent)>,
     cancelled: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
     target: Target,
@@ -201,7 +201,7 @@ impl CatalogWorker {
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
-        let (activity_tx, activities) = mpsc::channel();
+        let (log_tx, logs) = mpsc::channel();
         let (done_tx, done) = mpsc::channel();
         let cancelled = Arc::new(AtomicU64::new(0));
         let stopped = Arc::new(AtomicBool::new(false));
@@ -225,7 +225,7 @@ impl CatalogWorker {
             running: running.clone(),
             rx,
             tx: events_tx,
-            activity: activity_tx,
+            log_tx,
             batch: 0,
             profile: config.members.first().cloned().unwrap_or_default(),
             failures: 0,
@@ -243,7 +243,7 @@ impl CatalogWorker {
         Self {
             tx,
             events,
-            activities,
+            logs,
             cancelled,
             stopped,
             target,
@@ -394,7 +394,7 @@ struct Runner {
     running: Running,
     rx: mpsc::Receiver<Command>,
     tx: mpsc::Sender<Event>,
-    activity: mpsc::Sender<(Uuid, ActivityEvent)>,
+    log_tx: mpsc::Sender<(Uuid, LogEvent)>,
     /// The Logs batch of the refresh in progress.
     batch: u64,
     /// The profile of the member that runs the refresh in progress.
@@ -1272,11 +1272,11 @@ impl Runner {
         if !self.profile.catalog.log_refreshes && severity != Severity::Error {
             return;
         }
-        let mut event = ActivityEvent::new(None, severity, ActivityKind::SchemaRefresh, text)
+        let mut event = LogEvent::new(None, severity, LogKind::SchemaRefresh, text)
             .with_connection(self.profile.name.clone())
             .with_batch(self.batch);
         event.duration = duration;
-        let _ = self.activity.send((self.profile.id, event));
+        let _ = self.log_tx.send((self.profile.id, event));
         (self.wake)();
     }
 

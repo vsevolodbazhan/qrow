@@ -1,9 +1,9 @@
 use crate::{
-    activity::{ActivityEvent, ActivityKind, ExecutionId, Severity},
     connector::{
         Cancellation, Completion, Connector, QueryError, Session, hive::HiveConnector,
         wait_for_completion,
     },
+    logs::{ExecutionId, LogEvent, LogKind, Severity},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
     storage::Credentials,
 };
@@ -50,7 +50,7 @@ pub type PasswordProvider = Arc<dyn Fn(&Profile) -> Result<Zeroizing<String>> + 
 pub struct Worker {
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
-    pub activities: mpsc::Receiver<ActivityEvent>,
+    pub logs: mpsc::Receiver<LogEvent>,
     event_tx: mpsc::Sender<Event>,
     cancelled: Arc<AtomicBool>,
     target: Target,
@@ -76,7 +76,7 @@ impl Worker {
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
-        let (activity_tx, activities) = mpsc::channel();
+        let (log_tx, logs) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let target = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
@@ -91,7 +91,7 @@ impl Worker {
             cancelled: cancelled.clone(),
             target: target.clone(),
             tx: event_tx.clone(),
-            activity_tx,
+            log_tx,
             wake: wake.clone(),
             connector,
             passwords,
@@ -125,10 +125,10 @@ impl Worker {
                     Command::More => runner.fetch_preview(),
                     Command::Disconnect => {
                         runner.disconnect();
-                        runner.activity(
+                        runner.log(
                             None,
                             Severity::Info,
-                            ActivityKind::Disconnected,
+                            LogKind::Disconnected,
                             "Disconnected",
                             None,
                         );
@@ -155,18 +155,18 @@ impl Worker {
                         runner.disconnect();
                     }
                     *runner.target.lock().unwrap() = None;
-                    runner.activity(
+                    runner.log(
                         runner.execution_id(),
                         Severity::Error,
-                        ActivityKind::Error,
+                        LogKind::Error,
                         message.clone(),
                         runner.execution_duration(),
                     );
                     if !execution_completed {
-                        runner.activity(
+                        runner.log(
                             runner.execution_id(),
                             Severity::Info,
-                            ActivityKind::ExecutionCompleted,
+                            LogKind::ExecutionCompleted,
                             format_execution_failure(runner.execution_duration()),
                             runner.execution_duration(),
                         );
@@ -183,7 +183,7 @@ impl Worker {
         Self {
             tx,
             events,
-            activities,
+            logs,
             event_tx,
             cancelled,
             target,
@@ -274,7 +274,7 @@ struct Runner {
     cancelled: Arc<AtomicBool>,
     target: Target,
     tx: mpsc::Sender<Event>,
-    activity_tx: mpsc::Sender<ActivityEvent>,
+    log_tx: mpsc::Sender<LogEvent>,
     wake: Arc<dyn Fn() + Send + Sync>,
     connector: Arc<dyn Connector>,
     passwords: PasswordProvider,
@@ -302,20 +302,20 @@ impl Runner {
         let _ = self.tx.send(event);
         (self.wake)();
     }
-    fn activity(
+    fn log(
         &self,
         execution_id: Option<ExecutionId>,
         severity: Severity,
-        kind: ActivityKind,
+        kind: LogKind,
         text: impl Into<String>,
         duration: Option<Duration>,
     ) {
-        let mut event = ActivityEvent::at(SystemTime::now(), execution_id, severity, kind, text);
+        let mut event = LogEvent::at(SystemTime::now(), execution_id, severity, kind, text);
         event.duration = duration;
-        self.emit_activity(event);
+        self.emit_log(event);
     }
-    fn emit_activity(&self, event: ActivityEvent) {
-        let _ = self.activity_tx.send(event);
+    fn emit_log(&self, event: LogEvent) {
+        let _ = self.log_tx.send(event);
         (self.wake)();
     }
     fn execution_id(&self) -> Option<ExecutionId> {
@@ -336,10 +336,10 @@ impl Runner {
         execution.execution_completed = true;
         let duration = execution.started.elapsed();
         let execution_id = execution.id;
-        self.activity(
+        self.log(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::ExecutionCompleted,
+            LogKind::ExecutionCompleted,
             format!(
                 "Execution completed on the server, result set: {has_results} (client measurement: {})",
                 format_duration(duration)
@@ -382,10 +382,10 @@ impl Runner {
             let password = (self.passwords)(&profile)?;
             self.session = Some(self.connector.connect(&profile, password)?);
             self.profile = Some(profile);
-            self.activity(
+            self.log(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Connected,
+                LogKind::Connected,
                 format!(
                     "Connected to {} (client measurement: {})",
                     self.profile.as_ref().unwrap().name,
@@ -398,10 +398,10 @@ impl Runner {
             self.profile = Some(profile);
         }
         if self.cancelled.load(Ordering::SeqCst) {
-            self.activity(
+            self.log(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Cancelled,
+                LogKind::Cancelled,
                 "Execution cancelled before submission",
                 self.execution_duration(),
             );
@@ -418,10 +418,10 @@ impl Runner {
         *self.target.lock().unwrap() = None;
         let cancellation = self.session.as_mut().unwrap().execute(&sql)?;
         *self.target.lock().unwrap() = Some(cancellation.clone());
-        self.activity(
+        self.log(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::ExecutionStarted,
+            LogKind::ExecutionStarted,
             "SQL accepted by the server",
             None,
         );
@@ -433,10 +433,10 @@ impl Runner {
             Completion::Cancelled => {
                 self.session.as_mut().unwrap().close_operation()?;
                 *self.target.lock().unwrap() = None;
-                self.activity(
+                self.log(
                     Some(execution_id),
                     Severity::Info,
-                    ActivityKind::Cancelled,
+                    LogKind::Cancelled,
                     "Query cancelled by the server",
                     self.execution_duration(),
                 );
@@ -447,10 +447,10 @@ impl Runner {
                 if self.cancelled.load(Ordering::SeqCst) {
                     self.session.as_mut().unwrap().close_operation()?;
                     *self.target.lock().unwrap() = None;
-                    self.activity(
+                    self.log(
                         Some(execution_id),
                         Severity::Info,
-                        ActivityKind::Cancelled,
+                        LogKind::Cancelled,
                         "Query finished after cancellation was requested",
                         self.execution_duration(),
                     );
@@ -489,10 +489,10 @@ impl Runner {
                 execution.fetch_page
             })
             .unwrap_or(1);
-        self.activity(
+        self.log(
             execution_id,
             Severity::Info,
-            ActivityKind::FetchStarted,
+            LogKind::FetchStarted,
             format!("Fetching preview page {page}"),
             None,
         );
@@ -580,10 +580,10 @@ impl Runner {
         } else {
             format!("rows {}–{}", start_row + 1, start_row + fetched)
         };
-        self.activity(
+        self.log(
             execution_id,
             Severity::Info,
-            ActivityKind::FetchCompleted,
+            LogKind::FetchCompleted,
             format!(
                 "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
                 self.rows,
@@ -603,10 +603,10 @@ impl Runner {
             .context("Session is disconnected")?
             .close_operation()?;
         *self.target.lock().unwrap() = None;
-        self.activity(
+        self.log(
             self.execution_id(),
             Severity::Info,
-            ActivityKind::Cancelled,
+            LogKind::Cancelled,
             "Preview fetch cancelled; downloaded rows retained",
             self.execution_duration(),
         );

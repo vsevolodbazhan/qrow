@@ -709,19 +709,14 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
     let server = warehouse();
     let mut h = Harness::new(server, profile(), None);
     h.refresh(Scope::Schema("sales".into()));
-    assert_eq!(h.worker.activities.try_iter().count(), 0);
+    assert_eq!(h.worker.logs.try_iter().count(), 0);
 
     let mut logged = profile();
     logged.id = h.catalog().owner;
     logged.catalog.log_refreshes = true;
     h.worker.configure(CatalogConfig::private(logged));
     h.refresh(Scope::Connection);
-    let entries: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
+    let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
     assert!(
         texts[0].starts_with("Started a schema refresh of the connection"),
@@ -759,12 +754,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
     );
 
     h.refresh(Scope::Relation("sales".into(), "orders".into()));
-    let next: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
+    let next: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     assert!(
         next.iter()
             .all(|entry| entry.batch.is_some() && entry.batch != batch)
@@ -780,12 +770,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         .unwrap()
         .push("daily".into());
     h.refresh(Scope::Schema("sales".into()));
-    let entries: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
+    let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     let last = entries.last().unwrap();
     assert!(
         last.text
@@ -793,7 +778,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         "{}",
         last.text
     );
-    assert_eq!(last.severity, qrow::activity::Severity::Error);
+    assert_eq!(last.severity, qrow::logs::Severity::Error);
     assert!(
         entries
             .iter()
@@ -814,7 +799,7 @@ fn logs_entries_count_only_the_requested_names() {
     h.refresh(Scope::Connection);
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|entry| entry.text)
@@ -1034,17 +1019,12 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
     // The next connection refresh reads only the schema that it did not read.
     *server.block_schema.lock().unwrap() = None;
     let before = relation_lists(&server).len();
-    let _ = h.worker.activities.try_iter().count();
+    let _ = h.worker.logs.try_iter().count();
     h.refresh(Scope::Connection);
     assert_eq!(relation_lists(&server)[before..], ["salesx"]);
     assert_eq!(h.columns("salesx", "other").unwrap(), ["y"]);
     assert!(h.catalog().unfinished.is_none());
-    let texts: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, e)| e.text)
-        .collect();
+    let texts: Vec<_> = h.worker.logs.try_iter().map(|(_, e)| e.text).collect();
     assert!(
         texts
             .iter()
@@ -1173,7 +1153,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|e| e.text)
@@ -1215,7 +1195,7 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|e| e.text)
@@ -1520,7 +1500,7 @@ fn logs_entries_name_the_member_that_ran_the_refresh() {
     h.worker.refresh(large.id, Scope::Schema("salesx".into()));
     h.wait(|h| h.status.runner == Some(large.id));
     h.wait(|h| h.status.is_idle());
-    let entries: Vec<_> = h.worker.activities.try_iter().collect();
+    let entries: Vec<_> = h.worker.logs.try_iter().collect();
     assert!(!entries.is_empty());
     assert!(entries.iter().all(|(member, event)| {
         *member == small.id && event.connection.as_deref() == Some("small")

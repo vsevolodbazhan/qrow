@@ -799,13 +799,13 @@ impl Qrow {
     /// Applies what the catalog workers sent since the last tick.
     pub(super) fn drain_catalogs(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        let mut activities = Vec::new();
+        let mut logs = Vec::new();
         let mut statuses = Vec::new();
         for (key, connection) in &mut self.catalog.connections {
             let Some(worker) = &connection.worker else {
                 continue;
             };
-            activities.extend(worker.activities.try_iter());
+            logs.extend(worker.logs.try_iter());
             for event in worker.events.try_iter() {
                 changed = true;
                 match event {
@@ -820,13 +820,13 @@ impl Qrow {
         // A refresh belongs to the connection that ran it. Its Logs entries
         // go to each tab of that connection. They do not mark an unread
         // error, because the tree shows refresh errors.
-        for (profile, event) in activities {
+        for (profile, event) in logs {
             for tab in self
                 .tabs
                 .iter_mut()
                 .filter(|tab| tab.saved.profile == Some(profile))
             {
-                Self::record_activity(tab, event.clone());
+                Self::record_log(tab, event.clone());
                 changed = true;
             }
         }

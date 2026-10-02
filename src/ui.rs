@@ -19,9 +19,7 @@ pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
-    activity::{
-        ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
-    },
+    logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -203,7 +201,7 @@ struct Tab {
     status: String,
     started: Option<Instant>,
     elapsed: Option<Duration>,
-    output: ActivityLog,
+    output: LogHistory,
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
@@ -675,7 +673,7 @@ impl Qrow {
             status: "Not connected".into(),
             started: None,
             elapsed: None,
-            output: ActivityLog::default(),
+            output: LogHistory::default(),
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
@@ -920,7 +918,7 @@ impl Qrow {
         let _ = self.wake.try_send(());
         cx.notify();
     }
-    fn record_activity(tab: &mut Tab, event: ActivityEvent) {
+    fn record_log(tab: &mut Tab, event: LogEvent) {
         let at_bottom =
             tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
         tab.output.record(event);
@@ -928,15 +926,10 @@ impl Qrow {
             tab.output_scroll.scroll_to_bottom();
         }
     }
-    fn record_local_activity(
-        tab: &mut Tab,
-        severity: Severity,
-        kind: ActivityKind,
-        text: impl Into<String>,
-    ) {
-        Self::record_activity(
+    fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
+        Self::record_log(
             tab,
-            ActivityEvent::new(tab.current_execution, severity, kind, text),
+            LogEvent::new(tab.current_execution, severity, kind, text),
         );
     }
     fn record_failure(tab: &mut Tab, active: bool) {
@@ -991,19 +984,19 @@ impl Qrow {
             || self.pending_quit.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
-    /// Applies the activity and the events that the tab workers sent.
+    /// Applies the Logs entries and the events that the tab workers sent.
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         for (index, tab) in self.tabs.iter_mut().enumerate() {
-            let activities: Vec<_> = tab
+            let logs: Vec<_> = tab
                 .worker
                 .as_ref()
-                .map(|worker| worker.activities.try_iter().collect())
+                .map(|worker| worker.logs.try_iter().collect())
                 .unwrap_or_default();
-            changed |= !activities.is_empty();
-            for activity in activities {
-                let error = activity.severity == Severity::Error;
-                Self::record_activity(tab, activity);
+            changed |= !logs.is_empty();
+            for event in logs {
+                let error = event.severity == Severity::Error;
+                Self::record_log(tab, event);
                 if error {
                     Self::record_failure(tab, index == self.active);
                 }
@@ -1128,7 +1121,7 @@ impl Qrow {
                 Self::record_failure(tab, active);
             }
             Event::CancelError(message) => {
-                Self::record_local_activity(tab, Severity::Error, ActivityKind::Error, message);
+                Self::record_local_log(tab, Severity::Error, LogKind::Error, message);
                 Self::record_failure(tab, active);
                 tab.cancelling = false;
             }
@@ -1458,7 +1451,7 @@ impl Qrow {
         if let Some(index) = self.active_tab_for_profile(id) {
             // A connection selection changes the visible tab group. It does
             // not change the owning connection of either tab, so it is not a
-            // query activity event.
+            // query Logs event.
             self.activate(index, window, cx);
         }
     }
@@ -1495,9 +1488,9 @@ impl Qrow {
         });
         if let Err(e) = sql::validate_single(&query) {
             let message = e.to_string();
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1511,9 +1504,9 @@ impl Qrow {
             .cloned()
         else {
             let message = "Choose a connection before running SQL.";
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1522,9 +1515,9 @@ impl Qrow {
         };
         if let Err(error) = profile.validate() {
             let message = error.to_string();
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1563,15 +1556,15 @@ impl Qrow {
             .unwrap()
             .run_with_id(profile.clone(), query.clone(), execution_id);
         tab.current_execution = Some(execution_id);
-        let submission = ActivityEvent::new(
+        let submission = LogEvent::new(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::Submitted,
+            LogKind::Submitted,
             format!("Submitted query:\n{query}"),
         )
         .with_connection(profile.name)
         .with_sql(query);
-        Self::record_activity(tab, submission);
+        Self::record_log(tab, submission);
         cx.notify();
         true
     }
@@ -1612,10 +1605,10 @@ impl Qrow {
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
-            Self::record_local_activity(
+            Self::record_local_log(
                 t,
                 Severity::Info,
-                ActivityKind::CancelRequested,
+                LogKind::CancelRequested,
                 "Cancellation requested by user",
             );
             t.worker.as_ref().unwrap().cancel();
@@ -1630,12 +1623,12 @@ impl Qrow {
             return;
         }
         if tab.worker.is_some() {
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(
+                LogEvent::new(
                     None,
                     Severity::Info,
-                    ActivityKind::Disconnected,
+                    LogKind::Disconnected,
                     "Disconnect requested",
                 ),
             );
@@ -2672,42 +2665,42 @@ impl Qrow {
         let execution_id = Self::allocate_execution_id(tab);
         let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);
-        Self::record_activity(
+        Self::record_log(
             tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Connected,
+                LogKind::Connected,
                 "Connected to rivendell-s (demo)",
             )
             .with_connection("rivendell-s"),
         );
-        Self::record_activity(
+        Self::record_log(
             tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Submitted,
+                LogKind::Submitted,
                 format!("Submitted query:\n{sql}"),
             )
             .with_connection("rivendell-s")
             .with_sql(sql),
         );
-        Self::record_activity(
+        Self::record_log(
             tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::ExecutionCompleted,
+                LogKind::ExecutionCompleted,
                 "Execution completed on the server, result set: true (demo)",
             ),
         );
-        Self::record_activity(
+        Self::record_log(
             tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::FetchCompleted,
+                LogKind::FetchCompleted,
                 "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
             ),
         );

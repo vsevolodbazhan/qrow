@@ -1,7 +1,7 @@
 use anyhow::Result;
 use qrow::{
-    activity::{ActivityKind, Severity},
     connector::{Cancellation, Connector, MetadataRequest, QueryState, Session},
+    logs::{LogKind, Severity},
     model::{Batch, Column, Profile},
     worker::{Event, Worker},
 };
@@ -250,9 +250,9 @@ fn lifecycle_update_recomputes_the_heartbeat_deadline() {
     assert!(matches!(next(&worker), Event::KeepAliveStarted));
     assert!(matches!(next(&worker), Event::KeepAliveFinished));
 
-    let activities: Vec<_> = worker.activities.try_iter().collect();
-    assert!(activities.iter().any(|event| {
-        event.kind == ActivityKind::KeepAliveStarted && event.sql.as_deref() == Some("SELECT new")
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    assert!(logs.iter().any(|event| {
+        event.kind == LogKind::KeepAliveStarted && event.sql.as_deref() == Some("SELECT new")
     }));
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
@@ -470,30 +470,30 @@ fn keep_alive_overrides_idle_disconnect_and_stops_after_manual_disconnect() {
     let keep_alive_sql = profile.lifecycle.keep_alive_sql.clone();
     let execution = worker.run(profile, "select".into());
     assert_eq!(ready(&worker), (1000, true));
-    let query_activities: Vec<_> = worker.activities.try_iter().collect();
+    let query_logs: Vec<_> = worker.logs.try_iter().collect();
     assert!(
-        query_activities
+        query_logs
             .iter()
             .all(|event| event.execution_id == Some(execution))
     );
     for _ in 0..2 {
         assert!(matches!(next(&worker), Event::KeepAliveStarted));
         assert!(matches!(next(&worker), Event::KeepAliveFinished));
-        let activities: Vec<_> = worker.activities.try_iter().collect();
-        assert_eq!(activities.len(), 2, "Log each keep-alive query and outcome");
-        assert_eq!(activities[0].kind, ActivityKind::KeepAliveStarted);
+        let logs: Vec<_> = worker.logs.try_iter().collect();
+        assert_eq!(logs.len(), 2, "Log each keep-alive query and outcome");
+        assert_eq!(logs[0].kind, LogKind::KeepAliveStarted);
         assert_eq!(
-            activities[0].text,
+            logs[0].text,
             format!("Submitted keep-alive query:\n{keep_alive_sql}")
         );
-        assert_eq!(activities[0].sql.as_deref(), Some(keep_alive_sql.as_str()));
-        assert_eq!(activities[1].kind, ActivityKind::KeepAliveCompleted);
-        assert!(activities[1].text.starts_with("Keep-alive completed"));
-        assert!(activities[1].duration.is_some());
-        assert!(activities.iter().all(|event| {
+        assert_eq!(logs[0].sql.as_deref(), Some(keep_alive_sql.as_str()));
+        assert_eq!(logs[1].kind, LogKind::KeepAliveCompleted);
+        assert!(logs[1].text.starts_with("Keep-alive completed"));
+        assert!(logs[1].duration.is_some());
+        assert!(logs.iter().all(|event| {
             event.execution_id.is_none()
                 && event.severity == Severity::Info
-                && event.kind != ActivityKind::ExecutionCompleted
+                && event.kind != LogKind::ExecutionCompleted
         }));
     }
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
@@ -502,7 +502,7 @@ fn keep_alive_overrides_idle_disconnect_and_stops_after_manual_disconnect() {
     assert_eq!(ready(&worker), (250, false));
     assert!(
         worker
-            .activities
+            .logs
             .try_iter()
             .all(|event| event.execution_id == Some(execution))
     );
@@ -526,7 +526,7 @@ fn failed_keep_alive_disconnects_without_background_retry() {
     profile.lifecycle.keep_alive_sql = "broken".into();
     worker.run(profile, "select".into());
     ready(&worker);
-    worker.activities.try_iter().for_each(drop);
+    worker.logs.try_iter().for_each(drop);
     assert!(matches!(next(&worker), Event::KeepAliveStarted));
     match next(&worker) {
         Event::Error {
@@ -538,25 +538,17 @@ fn failed_keep_alive_disconnects_without_background_retry() {
         }
         _ => panic!("Expected keep-alive failure"),
     }
-    let activities: Vec<_> = worker.activities.try_iter().collect();
-    assert_eq!(
-        activities.len(),
-        2,
-        "Log the failed keep-alive SQL and error"
-    );
-    assert_eq!(activities[0].kind, ActivityKind::KeepAliveStarted);
-    assert_eq!(activities[0].text, "Submitted keep-alive query:\nbroken");
-    assert_eq!(activities[0].sql.as_deref(), Some("broken"));
-    assert_eq!(activities[0].severity, Severity::Info);
-    assert_eq!(activities[1].kind, ActivityKind::Error);
-    assert_eq!(activities[1].severity, Severity::Error);
-    assert!(
-        activities[1]
-            .text
-            .contains("Keep-alive failed: syntax error")
-    );
-    assert!(activities[1].duration.is_some());
-    assert!(activities.iter().all(|event| event.execution_id.is_none()));
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    assert_eq!(logs.len(), 2, "Log the failed keep-alive SQL and error");
+    assert_eq!(logs[0].kind, LogKind::KeepAliveStarted);
+    assert_eq!(logs[0].text, "Submitted keep-alive query:\nbroken");
+    assert_eq!(logs[0].sql.as_deref(), Some("broken"));
+    assert_eq!(logs[0].severity, Severity::Info);
+    assert_eq!(logs[1].kind, LogKind::Error);
+    assert_eq!(logs[1].severity, Severity::Error);
+    assert!(logs[1].text.contains("Keep-alive failed: syntax error"));
+    assert!(logs[1].duration.is_some());
+    assert!(logs.iter().all(|event| event.execution_id.is_none()));
     assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
     assert!(
         worker
@@ -719,10 +711,10 @@ fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
             .recv_timeout(Duration::from_millis(50))
             .is_err()
     );
-    let activities: Vec<_> = worker.activities.try_iter().collect();
-    let execution_outcomes: Vec<_> = activities
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    let execution_outcomes: Vec<_> = logs
         .iter()
-        .filter(|event| event.kind == ActivityKind::ExecutionCompleted)
+        .filter(|event| event.kind == LogKind::ExecutionCompleted)
         .collect();
     assert_eq!(execution_outcomes.len(), 1);
     assert!(
@@ -730,37 +722,33 @@ fn a_failed_later_page_keeps_delivered_rows_and_never_resubmits_sql() {
             .text
             .contains("Execution completed on the server")
     );
-    assert!(activities.iter().any(|event| {
-        event.kind == ActivityKind::Error && event.text.contains("Fetch transport failed")
+    assert!(logs.iter().any(|event| {
+        event.kind == LogKind::Error && event.text.contains("Fetch transport failed")
     }));
     assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
 }
 
 #[test]
-fn activity_events_keep_execution_identity_and_page_measurements() {
+fn log_events_keep_execution_identity_and_page_measurements() {
     let fixture = Arc::new(Fixture::default());
     let worker = worker(fixture);
     let execution = worker.run(Profile::default(), "select".into());
     assert_eq!(ready(&worker), (1000, true));
 
-    let activities: Vec<_> = worker.activities.try_iter().collect();
-    assert!(activities.iter().any(|event| {
-        event.execution_id == Some(execution) && event.kind == ActivityKind::Connected
+    let logs: Vec<_> = worker.logs.try_iter().collect();
+    assert!(logs.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == LogKind::Connected
     }));
-    assert!(activities.iter().any(|event| {
-        event.execution_id == Some(execution) && event.kind == ActivityKind::ExecutionCompleted
+    assert!(logs.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == LogKind::ExecutionCompleted
     }));
-    assert!(activities.iter().any(|event| {
-        event.execution_id == Some(execution) && event.kind == ActivityKind::FetchStarted
+    assert!(logs.iter().any(|event| {
+        event.execution_id == Some(execution) && event.kind == LogKind::FetchStarted
     }));
-    assert!(activities.iter().any(|event| {
+    assert!(logs.iter().any(|event| {
         event.execution_id == Some(execution)
-            && event.kind == ActivityKind::FetchCompleted
+            && event.kind == LogKind::FetchCompleted
             && event.duration.is_some()
     }));
-    assert!(
-        activities
-            .iter()
-            .all(|event| event.severity == Severity::Info)
-    );
+    assert!(logs.iter().all(|event| event.severity == Severity::Info));
 }

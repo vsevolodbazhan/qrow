@@ -4,7 +4,7 @@ use gpui_kit::TestAppContext;
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn logs_record_when_older_activity_is_removed(cx: &mut TestAppContext) {
+fn logs_record_when_older_entries_are_removed(cx: &mut TestAppContext) {
     let (workspace, credentials) = Kyuubi::get().connections(&["Alpha"], "");
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "output-panel-tab");
@@ -24,7 +24,7 @@ fn logs_record_when_older_activity_is_removed(cx: &mut TestAppContext) {
 
     let logs = app.logs(cx);
     assert!(
-        logs.starts_with("Older activity was removed\n"),
+        logs.starts_with("Older log entries were removed\n"),
         "Logs start with {:?}",
         &logs[..logs.len().min(120)]
     );
@@ -35,6 +35,6 @@ fn logs_record_when_older_activity_is_removed(cx: &mut TestAppContext) {
     assert!(logs.contains("retention-latest"));
     assert_eq!(
         logs.matches("Run one statement at a time").count(),
-        qrow::activity::MAX_NON_EXECUTION_GROUPS
+        qrow::logs::MAX_NON_EXECUTION_GROUPS
     );
 }

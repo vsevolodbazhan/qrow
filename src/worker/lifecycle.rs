@@ -1,4 +1,4 @@
-use super::{ActivityEvent, ActivityKind, Event, Runner, Severity, format_duration};
+use super::{Event, LogEvent, LogKind, Runner, Severity, format_duration};
 use crate::connector::{Completion, wait_for_completion};
 use anyhow::Result;
 use std::{
@@ -24,10 +24,10 @@ impl Runner {
         let policy = &self.profile.as_ref().unwrap().lifecycle;
         if policy.keep_alive_seconds == 0 {
             self.disconnect();
-            self.activity(
+            self.log(
                 None,
                 Severity::Info,
-                ActivityKind::Disconnected,
+                LogKind::Disconnected,
                 "Disconnected after idle timeout",
                 None,
             );
@@ -36,11 +36,11 @@ impl Runner {
         }
         let sql = policy.keep_alive_sql.clone();
         self.cancelled.store(false, Ordering::SeqCst);
-        self.emit_activity(
-            ActivityEvent::new(
+        self.emit_log(
+            LogEvent::new(
                 None,
                 Severity::Info,
-                ActivityKind::KeepAliveStarted,
+                LogKind::KeepAliveStarted,
                 format!("Submitted keep-alive query:\n{sql}"),
             )
             .with_connection(self.profile.as_ref().unwrap().name.clone())
@@ -57,10 +57,10 @@ impl Runner {
                 "Keep-alive failed: {}",
                 crate::connector::error_message(&error)
             );
-            self.activity(
+            self.log(
                 None,
                 Severity::Error,
-                ActivityKind::Error,
+                LogKind::Error,
                 format!(
                     "{message} (client measurement: {})",
                     format_duration(duration)
@@ -72,10 +72,10 @@ impl Runner {
                 disconnected: true,
             });
         } else {
-            self.activity(
+            self.log(
                 None,
                 Severity::Info,
-                ActivityKind::KeepAliveCompleted,
+                LogKind::KeepAliveCompleted,
                 format!(
                     "Keep-alive completed (client measurement: {})",
                     format_duration(duration)

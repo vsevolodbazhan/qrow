@@ -58,7 +58,7 @@ impl Qrow {
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
         let content = if tab.output.is_empty() {
-            panel_empty_state("No activity yet", cx).into_any_element()
+            panel_empty_state("No logs yet", cx).into_any_element()
         } else {
             v_flex()
                 .w_full()
@@ -69,7 +69,7 @@ impl Qrow {
                         .map_or((entry.text.as_str(), None), |(first, rest)| {
                             (first, Some(rest))
                         });
-                    let header = if entry.kind == ActivityKind::HistoryTrimmed {
+                    let header = if entry.kind == LogKind::HistoryTrimmed {
                         first_line.to_owned()
                     } else {
                         format!("[{}] {first_line}", timestamp_label(entry.timestamp))

@@ -26,7 +26,7 @@ also clears the badge, even if you selected Logs after the failure. See
 
 ## Logs
 
-Select **Logs** beside **Results** to inspect Qrow activity. The history shows
+Select **Logs** beside **Results** to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
@@ -64,9 +64,9 @@ removes the oldest complete groups of that type. Thus keep-alive queries do not
 remove query history. When the text is more than 8 MiB, Qrow removes the oldest
 complete groups of any type. Qrow keeps the latest execution and the group
 of the latest error. A single latest execution can be more than 8 MiB. Qrow
-adds an `Older activity was removed` line at the start of Logs history when it
+adds an `Older log entries were removed` line at the start of Logs history when it
 removes old groups. The line marks the boundary before the retained entries.
-It has no timestamp because it does not describe a timed activity. The line
+It has no timestamp because it does not describe a timed event. The line
 appears in the entry count and **Copy All** output.
 
 ## Manage tabs
