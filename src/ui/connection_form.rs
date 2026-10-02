@@ -183,6 +183,13 @@ pub(super) fn add_new_catalog(choices: &mut Vec<(CatalogChoice, String)>) -> usi
     }
 }
 
+/// Remove the choice of a new shared catalog. Returns whether it was there.
+pub(super) fn remove_new_catalog(choices: &mut Vec<(CatalogChoice, String)>) -> bool {
+    let count = choices.len();
+    choices.retain(|(choice, _)| *choice != CatalogChoice::New);
+    choices.len() != count
+}
+
 /// Whether a shared catalog can have `name`: the dropdown must tell it
 /// from the other choices.
 pub(super) fn shared_name_is_taken(shared: &[SharedCatalog], candidate: &SharedCatalog) -> bool {
@@ -306,6 +313,22 @@ pub(super) fn catalog_combobox(
     cx.new(|cx| {
         ComboboxState::new(rows, vec![IndexPath::default().row(row)], window, cx).searchable(true)
     })
+}
+
+/// Give the Schema catalog list new `choices`, with `selected` chosen and
+/// an empty search.
+pub(super) fn set_catalog_choices(
+    combobox: &RowCombobox,
+    choices: &[(CatalogChoice, String)],
+    selected: &CatalogChoice,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let row = row_of(choices, selected);
+    combobox.update(cx, |combobox, cx| {
+        combobox.set_items(rows(choices), window, cx);
+        combobox.set_selected_values(&[row], window, cx);
+    });
 }
 
 /// The catalog that the Schema catalog list shows.
@@ -738,6 +761,10 @@ mod tests {
             choices[2],
             (CatalogChoice::New, NEW_SHARED_CATALOG.to_owned())
         );
+        // Another choice removes it, and the button shows again.
+        assert!(remove_new_catalog(&mut choices));
+        assert!(!remove_new_catalog(&mut choices));
+        assert_eq!(choices.len(), 2);
 
         let shared = std::slice::from_ref(&lake);
         assert!(!shared_name_is_taken(shared, &lake));

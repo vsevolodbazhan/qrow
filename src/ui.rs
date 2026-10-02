@@ -2307,6 +2307,19 @@ impl Qrow {
             return;
         };
         form.catalog_choice = choice;
+        // Another choice drops the new shared catalog, so the list shows the
+        // New shared catalog button again.
+        if choice != connection_form::CatalogChoice::New
+            && connection_form::remove_new_catalog(&mut form.catalog_choices)
+        {
+            connection_form::set_catalog_choices(
+                &form.catalog_select,
+                &form.catalog_choices,
+                &choice,
+                window,
+                cx,
+            );
+        }
         let shared = match choice {
             connection_form::CatalogChoice::Shared(id) => {
                 self.shared_catalogs.iter().find(|catalog| catalog.id == id)

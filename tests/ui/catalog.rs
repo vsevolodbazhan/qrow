@@ -971,6 +971,14 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         Duration::from_secs(10),
         |window, _| labelled(window, "Search catalogs…").is_none(),
     );
+    // Another choice drops the new shared catalog, and the command comes back.
+    choose_catalog(&app, cx, "This connection");
+    app.wait_gone(cx, "connection-shared-catalog-name");
+    app.click(cx, "connection-schema-catalog");
+    app.wait_for(cx, "connection-new-shared-catalog");
+    app.click(cx, "connection-new-shared-catalog");
+    app.wait_for(cx, "connection-shared-catalog-name");
+    app.wait_gone(cx, "connection-new-shared-catalog");
     app.wait_for(cx, "connection-name");
     app.click(cx, "save-profile");
     app.wait_until(
