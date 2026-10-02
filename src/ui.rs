@@ -2225,7 +2225,8 @@ impl Qrow {
             Some(shared) => connection_form::CatalogChoice::Shared(shared.id),
             None => connection_form::CatalogChoice::Private,
         };
-        let catalog_select = connection_form::choice_select(&catalog_choices, &catalog, window, cx);
+        let catalog_select =
+            connection_form::catalog_select(&catalog_choices, &catalog, window, cx);
         let catalog_subscription =
             cx.subscribe_in(&catalog_select, window, |this, _, event, window, cx| {
                 if matches!(event, SelectEvent::Confirm(Some(_))) {

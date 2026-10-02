@@ -108,8 +108,9 @@ pub(super) fn parse_lifecycle(
 
 use super::{ProfileEditor, Qrow};
 use gpui_kit::component::{
-    IndexPath,
+    Icon, IconName, IndexPath, Sizable as _,
     form::{Field, Form},
+    h_flex,
     input::Input,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
@@ -226,6 +227,20 @@ pub(super) fn preferred_choices(
 pub(super) struct Row {
     label: SharedString,
     index: usize,
+    /// An icon before the label, for a row that makes something new.
+    icon: Option<IconName>,
+}
+
+impl Row {
+    fn content(&self) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .items_center()
+            .when_some(self.icon.clone(), |row, icon| {
+                row.child(Icon::new(icon).small())
+            })
+            .child(self.label.clone())
+    }
 }
 
 impl SelectItem for Row {
@@ -233,6 +248,16 @@ impl SelectItem for Row {
 
     fn title(&self) -> SharedString {
         self.label.clone()
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        self.icon
+            .is_some()
+            .then(|| self.content().into_any_element())
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        self.content()
     }
 
     fn value(&self) -> &usize {
@@ -250,6 +275,33 @@ pub(super) fn choice_select<T: PartialEq>(
     window: &mut Window,
     cx: &mut Context<Qrow>,
 ) -> RowSelect {
+    icon_choice_select(choices, selected, |_| None, window, cx)
+}
+
+/// The Schema catalog dropdown. The row that makes a new shared catalog
+/// has a plus icon.
+pub(super) fn catalog_select(
+    choices: &[(CatalogChoice, String)],
+    selected: &CatalogChoice,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> RowSelect {
+    icon_choice_select(
+        choices,
+        selected,
+        |choice| (*choice == CatalogChoice::New).then_some(IconName::Plus),
+        window,
+        cx,
+    )
+}
+
+fn icon_choice_select<T: PartialEq>(
+    choices: &[(T, String)],
+    selected: &T,
+    icon: impl Fn(&T) -> Option<IconName>,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> RowSelect {
     let row = choices
         .iter()
         .position(|(choice, _)| choice == selected)
@@ -257,9 +309,10 @@ pub(super) fn choice_select<T: PartialEq>(
     let rows: Vec<Row> = choices
         .iter()
         .enumerate()
-        .map(|(index, (_, label))| Row {
+        .map(|(index, (choice, label))| Row {
             label: label.clone().into(),
             index,
+            icon: icon(choice),
         })
         .collect();
     cx.new(|cx| {
