@@ -80,3 +80,32 @@ fn the_assistant_reads_170_results_past_a_wide_row(cx: &mut TestAppContext) {
     app.wait_reply(cx, "Read all 170 row positions.");
     app.wait_idle(cx);
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn the_assistant_reads_columns_through_a_connected_tab(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let schema = format!("qrow_tools_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) = Kyuubi::get().connections(&["Alpha"], "SELECT 1");
+    // Other tests make schemas too. The filter keeps the catalog to this one.
+    workspace.profiles[0].catalog.include = vec![schema.clone()];
+    workspace.profiles[0].catalog.refresh = qrow::model::CatalogRefresh::Manual;
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    app.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.bookings (id BIGINT, gate STRING) USING parquet"),
+    );
+
+    // Qrow never read the catalog. The tab is connected, so the tool reads
+    // it before it answers.
+    app.open_assistant(cx);
+    app.send(cx, &format!("Describe the live table {schema}.bookings"));
+    app.wait_until(cx, "the live columns", QUERY_TIMEOUT, |window, _| {
+        crate::support::assistant::transcript(window)
+            .iter()
+            .any(|entry| entry.contains("Live columns: id BIGINT,gate STRING"))
+    });
+    app.wait_idle(cx);
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}

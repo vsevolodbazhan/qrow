@@ -179,8 +179,21 @@ impl CatalogTree {
         self.connection(profile)?.worker.as_ref()
     }
 
-    fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
+    pub(super) fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
         self.connection(profile)?.catalog.as_deref()
+    }
+
+    /// Whether a refresh in progress or waiting, of any connection of the
+    /// catalog of `profile`, reads `scope`.
+    pub(super) fn reads(&self, profile: Uuid, scope: &Scope) -> bool {
+        self.connection(profile).is_some_and(|connection| {
+            let status = &connection.status;
+            status
+                .active
+                .iter()
+                .chain(status.queued.iter().map(|request| &request.scope))
+                .any(|reading| reading.covers(scope))
+        })
     }
 
     /// The refreshes that `profile` runs or waits for. The refreshes of
@@ -638,7 +651,7 @@ impl Qrow {
 
     /// Start the catalog worker of `profile` if it does not exist. The worker
     /// loads the cache; it opens a session only for a refresh.
-    fn ensure_catalog(&mut self, profile: Uuid) {
+    pub(super) fn ensure_catalog(&mut self, profile: Uuid) {
         self.ensure_catalog_with_seed(profile, None);
     }
 
@@ -767,7 +780,7 @@ impl Qrow {
 
     /// Whether a tab of `profile` has a live session. A refresh then uses
     /// the engine that the tab already started.
-    fn catalog_warm(&self, profile: Uuid) -> bool {
+    pub(super) fn catalog_warm(&self, profile: Uuid) -> bool {
         self.tabs
             .iter()
             .any(|tab| tab.worker_profile == Some(profile) && tab.connected)

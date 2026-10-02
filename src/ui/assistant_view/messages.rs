@@ -113,6 +113,14 @@ impl Qrow {
         text: String,
         cx: &mut Context<Self>,
     ) -> bool {
+        // The catalog tools read the cache of the tab connection. Load it now,
+        // so it is ready when the assistant asks.
+        if let Some(profile) = self
+            .thread_tab_index(thread_id)
+            .and_then(|index| self.tabs[index].saved.profile)
+        {
+            self.ensure_catalog(profile);
+        }
         let context = self.assistant_context(thread_id, cx);
         let active_turn = self
             .thread_run(thread_id)
@@ -284,12 +292,33 @@ impl Qrow {
                 latest_error: error,
             }
         });
-        serde_json::to_value(WorkspaceContext::new(
-            self.settings.sql_style(),
-            connections,
-            tabs,
-            selected_tab,
-        ))
+        let catalog = conversation_tab.and_then(|index| {
+            let tab = &self.tabs[index];
+            let profile = self
+                .profiles
+                .iter()
+                .find(|profile| Some(profile.id) == tab.saved.profile)?;
+            let shared = profile.shared_catalog.and_then(|id| {
+                self.shared_catalogs
+                    .iter()
+                    .find(|catalog| catalog.id == id)
+                    .map(|catalog| catalog.name.clone())
+            });
+            Some(crate::assistant::catalog::CatalogContext::new(
+                profile.id,
+                profile.catalog.browses(),
+                shared,
+                self.catalog.catalog(profile.id),
+                &crate::model::effective_catalog(profile, &self.shared_catalogs),
+                &tab.input.read(cx).value(),
+                &profile.database,
+                crate::catalog::now(),
+            ))
+        });
+        serde_json::to_value(
+            WorkspaceContext::new(self.settings.sql_style(), connections, tabs, selected_tab)
+                .with_catalog(catalog),
+        )
         .unwrap_or(json!({"version": 1}))
     }
 }

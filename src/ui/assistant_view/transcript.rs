@@ -23,6 +23,9 @@ pub(in crate::ui) enum ToolKind {
     ReadResults,
     FetchRows,
     ReadLogs,
+    ListSchemas,
+    ListRelations,
+    DescribeRelation,
     Other,
 }
 
@@ -39,6 +42,9 @@ impl ToolKind {
             "read_results" => Self::ReadResults,
             "fetch_more_results" => Self::FetchRows,
             "read_query_logs" => Self::ReadLogs,
+            "list_schemas" => Self::ListSchemas,
+            "list_relations" => Self::ListRelations,
+            "describe_relation" => Self::DescribeRelation,
             _ => Self::Other,
         }
     }
@@ -55,6 +61,9 @@ impl ToolKind {
             Self::ReadResults => "Read results",
             Self::FetchRows => "Fetch more rows",
             Self::ReadLogs => "Read logs",
+            Self::ListSchemas => "List schemas",
+            Self::ListRelations => "List tables",
+            Self::DescribeRelation => "Describe table",
             Self::Other => "Use tool",
         }
     }
@@ -71,6 +80,9 @@ impl ToolKind {
             Self::ReadResults => AssetIconName::Table,
             Self::FetchRows => AssetIconName::ListPlus,
             Self::ReadLogs => AssetIconName::ScrollText,
+            Self::ListSchemas => AssetIconName::Database,
+            Self::ListRelations => AssetIconName::Table2,
+            Self::DescribeRelation => AssetIconName::Columns3,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }

@@ -1,6 +1,6 @@
 //! The complete client-defined tool surface advertised to Codex.
 
-use super::ToolDefinition;
+use super::{ToolDefinition, catalog};
 use serde_json::json;
 
 pub fn definitions() -> Vec<ToolDefinition> {
@@ -66,6 +66,28 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "scope": {"type": "string", "enum": ["latest_execution", "latest_error"]}},
             "required": ["version", "tab_id", "scope"], "additionalProperties": false
         })),
+        ("list_schemas", "List the schemas of a connection from the schema catalog that Qrow keeps on this computer. It does not query the database. Each schema has its relation_count, or null when Qrow has not read its relations. fetched_at is a Unix time in seconds, and stale is true when the data is older than the refresh period of the connection. Read the next page from next_offset while it is not null.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": catalog::MAX_PAGE}},
+            "required": ["version", "connection_id"], "additionalProperties": false
+        })),
+        ("list_relations", "List the tables and views of one schema from the schema catalog of a connection. pattern filters the names: * matches any text and ? matches one character, without letter case. columns_loaded tells whether describe_relation can return the columns from the catalog. When Qrow has not read the relations and a tab of the connection is connected, Qrow reads them first. Read the next page from next_offset while it is not null.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "schema": {"type": "string"},
+                "pattern": {"type": "string"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": catalog::MAX_PAGE}},
+            "required": ["version", "connection_id", "schema"], "additionalProperties": false
+        })),
+        ("describe_relation", "Read the kind, comment, and columns with their types and comments of one table or view from the schema catalog of a connection. When Qrow has not read the columns and a tab of the connection is connected, Qrow reads them first. Otherwise the result is not_cached; then ask the user to refresh it, or run DESCRIBE with run_selected_tab_query.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "schema": {"type": "string"}, "relation": {"type": "string"}},
+            "required": ["version", "connection_id", "schema", "relation"], "additionalProperties": false
+        })),
     ]
     .into_iter()
     .map(|(name, description, input_schema)| ToolDefinition {
@@ -98,7 +120,7 @@ mod tests {
     fn tool_surface_has_unique_names_and_closed_input_schemas() {
         let tools = definitions();
         let names: BTreeSet<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 13);
         assert_eq!(names.len(), tools.len());
         assert!(
             tools

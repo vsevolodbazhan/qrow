@@ -11,6 +11,7 @@ use crate::assistant::{
         MAX_SQL_PAGE_BYTES, MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker,
         bound_rows_after, bound_text, context_statement_ranges, preview_rows, sql_page,
     },
+    catalog,
     service::Command as AssistantCommand,
 };
 use serde::Deserialize;
@@ -143,6 +144,93 @@ struct LogsInput {
     version: u32,
     tab_id: Uuid,
     scope: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchemasInput {
+    version: u32,
+    connection_id: Uuid,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationsInput {
+    version: u32,
+    connection_id: Uuid,
+    schema: String,
+    #[serde(default)]
+    pattern: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DescribeInput {
+    version: u32,
+    connection_id: Uuid,
+    schema: String,
+    relation: String,
+}
+
+/// What a catalog tool call reads.
+enum CatalogRequest {
+    Schemas(SchemasInput),
+    Relations(RelationsInput),
+    Relation(DescribeInput),
+}
+
+impl CatalogRequest {
+    fn parse(call: &ToolCall) -> Result<Self, ToolResult> {
+        let arguments = call.arguments.clone();
+        let (request, requested) = match call.name.as_str() {
+            "list_schemas" => {
+                let input: SchemasInput = parse(arguments)?;
+                (input.version, Self::Schemas(input))
+            }
+            "list_relations" => {
+                let input: RelationsInput = parse(arguments)?;
+                (input.version, Self::Relations(input))
+            }
+            _ => {
+                let input: DescribeInput = parse(arguments)?;
+                (input.version, Self::Relation(input))
+            }
+        };
+        version(request)?;
+        Ok(requested)
+    }
+
+    fn connection_id(&self) -> Uuid {
+        match self {
+            Self::Schemas(input) => input.connection_id,
+            Self::Relations(input) => input.connection_id,
+            Self::Relation(input) => input.connection_id,
+        }
+    }
+}
+
+/// The longest time that a catalog tool call waits for the cache or for a
+/// refresh. A refresh continues after it.
+const MAX_CATALOG_WAIT: Duration = Duration::from_secs(120);
+
+/// A catalog tool call that waits for the cache to load or for a refresh.
+pub(in crate::ui) struct PendingCatalogCall {
+    call: ToolCall,
+    deadline: Instant,
+}
+
+/// The next step of a catalog tool call.
+enum CatalogStep {
+    Done(ToolResult),
+    Wait,
 }
 
 fn failure(code: &str, message: impl Into<String>) -> ToolResult {
@@ -291,9 +379,21 @@ impl Qrow {
             );
             return;
         }
+        if let Some(result) = self.dispatch_assistant_tool(&call, window, cx) {
+            self.finish_assistant_tool(call, result, cx);
+        }
+        cx.notify();
+    }
+
+    /// Record a tool call in the conversation and answer it.
+    fn finish_assistant_tool(
+        &mut self,
+        call: ToolCall,
+        result: ToolResult,
+        cx: &mut Context<Self>,
+    ) {
         let name = call.name.clone();
-        let result = self.dispatch_assistant_tool(&call, window, cx);
-        if let Some(result) = result {
+        {
             let target = result
                 .content
                 .get("tab_id")
@@ -324,7 +424,6 @@ impl Qrow {
                 .push(TranscriptEntry::tool(tool, call.turn_id.clone()).with_detail(detail));
             self.answer_assistant_call(call, result.success, result.content, cx);
         }
-        cx.notify();
     }
 
     fn dispatch_assistant_tool(
@@ -344,6 +443,9 @@ impl Qrow {
             "read_results" => self.tool_results(call, cx),
             "fetch_more_results" => return self.tool_fetch(call, cx),
             "read_query_logs" => self.tool_logs(call),
+            "list_schemas" | "list_relations" | "describe_relation" => {
+                return self.tool_catalog(call, cx);
+            }
             _ => Err(failure(
                 "capability_missing",
                 "This assistant tool is not available.",
@@ -1095,6 +1197,152 @@ impl Qrow {
             Ok(())
         })();
         result.err()
+    }
+
+    fn tool_catalog(&mut self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
+        match self.catalog_step(call, true, cx) {
+            CatalogStep::Done(result) => Some(result),
+            CatalogStep::Wait => {
+                self.thread_run_mut(&call.thread_id)
+                    .catalog_calls
+                    .push(PendingCatalogCall {
+                        call: call.clone(),
+                        deadline: Instant::now() + MAX_CATALOG_WAIT,
+                    });
+                None
+            }
+        }
+    }
+
+    /// Answer a catalog tool call from the cache. A call for data that the
+    /// cache does not have waits while a refresh reads it. With
+    /// `may_refresh`, a call starts that refresh when a tab of the
+    /// connection is connected.
+    fn catalog_step(
+        &mut self,
+        call: &ToolCall,
+        may_refresh: bool,
+        cx: &mut Context<Self>,
+    ) -> CatalogStep {
+        let request = match CatalogRequest::parse(call) {
+            Ok(request) => request,
+            Err(error) => return CatalogStep::Done(error),
+        };
+        let id = request.connection_id();
+        let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
+            return CatalogStep::Done(failure(
+                "invalid_arguments",
+                "The connection was not found. Use a connection ID from the workspace context.",
+            ));
+        };
+        if !profile.catalog.browses() {
+            return CatalogStep::Done(failure(
+                "schema_browsing_off",
+                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or run SHOW and DESCRIBE with run_selected_tab_query.",
+            ));
+        }
+        let settings = crate::model::effective_catalog(profile, &self.shared_catalogs);
+        self.ensure_catalog(id);
+        // The worker loads the cache by itself, soon after it starts.
+        let Some(catalog) = self.catalog.catalog(id) else {
+            return CatalogStep::Wait;
+        };
+        let now = crate::catalog::now();
+        let result = match &request {
+            CatalogRequest::Schemas(input) => catalog::schemas(
+                catalog,
+                &settings,
+                now,
+                input.offset,
+                input.limit.unwrap_or(catalog::DEFAULT_PAGE),
+            ),
+            CatalogRequest::Relations(input) => catalog::relations(
+                catalog,
+                &settings,
+                now,
+                &input.schema,
+                input.pattern.as_deref(),
+                input.offset,
+                input.limit.unwrap_or(catalog::DEFAULT_PAGE),
+            ),
+            CatalogRequest::Relation(input) => {
+                catalog::relation(catalog, &settings, now, &input.schema, &input.relation)
+            }
+        };
+        let missing = match result {
+            Ok(mut value) => {
+                value["version"] = json!(TOOL_SCHEMA_VERSION);
+                value["connection_id"] = json!(id);
+                return CatalogStep::Done(success(value));
+            }
+            Err(missing) => missing,
+        };
+        if let Some(scope) = missing.scope() {
+            if self.catalog.reads(id, &scope) {
+                return CatalogStep::Wait;
+            }
+            // A refresh that ran and could not read the data left its error.
+            let error = match &scope {
+                crate::catalog::Scope::Schema(schema) => {
+                    catalog.schema(schema).and_then(|node| node.error.clone())
+                }
+                crate::catalog::Scope::Relation(schema, relation) => catalog
+                    .relation(schema, relation)
+                    .and_then(|node| node.error.clone()),
+                crate::catalog::Scope::Connection => catalog.error.clone(),
+            };
+            if let Some(error) = error.filter(|_| !may_refresh) {
+                return CatalogStep::Done(failure(
+                    "refresh_failed",
+                    format!("Qrow could not read it from the database: {error}"),
+                ));
+            }
+            if may_refresh && self.catalog_warm(id) {
+                self.refresh_catalog(id, scope, cx);
+                return CatalogStep::Wait;
+            }
+        }
+        let (code, message) = missing.error();
+        CatalogStep::Done(failure(code, message))
+    }
+
+    /// Answer the catalog tool calls whose cache or refresh is ready, or whose
+    /// wait ended. Calls of turns that ended go away. Returns whether calls
+    /// still wait.
+    pub(super) fn resume_catalog_calls(&mut self, cx: &mut Context<Self>) -> bool {
+        let threads: Vec<String> = self
+            .assistant_state
+            .runs
+            .iter()
+            .filter(|(_, run)| !run.catalog_calls.is_empty())
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        let mut waiting = false;
+        for thread in threads {
+            let run = self.thread_run_mut(&thread);
+            let active = run.active_turn.clone();
+            let calls = std::mem::take(&mut run.catalog_calls);
+            for pending in calls {
+                if active.as_deref() != Some(pending.call.turn_id.as_str()) {
+                    continue;
+                }
+                let result = match self.catalog_step(&pending.call, false, cx) {
+                    CatalogStep::Done(result) => result,
+                    CatalogStep::Wait if Instant::now() < pending.deadline => {
+                        waiting = true;
+                        self.thread_run_mut(&thread).catalog_calls.push(pending);
+                        continue;
+                    }
+                    CatalogStep::Wait => failure(
+                        "not_cached",
+                        "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with run_selected_tab_query.",
+                    ),
+                };
+                self.finish_assistant_tool(pending.call, result, cx);
+                cx.notify();
+            }
+        }
+        waiting
     }
 
     fn tool_logs(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {

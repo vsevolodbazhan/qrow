@@ -970,10 +970,13 @@ impl Qrow {
     }
     /// Applies what the workers, the assistant, the workspace saver, and a
     /// connection form save sent since the last tick. Returns whether a timed
-    /// step still waits: an autosave, a quit, or a connection form save.
+    /// step still waits: an autosave, a quit, a connection form save, or a
+    /// catalog tool call.
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
         changed |= self.drain_catalogs(cx);
+        // Catalog tool calls wait for the catalogs, and for their deadline.
+        let catalog_calls = self.resume_catalog_calls(cx);
         changed |= self.tick_assistant(window, cx);
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
@@ -983,6 +986,7 @@ impl Qrow {
             cx.notify();
         }
         self.dirty.is_some()
+            || catalog_calls
             || self.pending_quit.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
