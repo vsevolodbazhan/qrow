@@ -975,9 +975,10 @@ impl Qrow {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
         changed |= self.drain_catalogs(cx);
-        // Catalog tool calls wait for the catalogs, and for their deadline.
-        let catalog_calls = self.resume_catalog_calls(cx);
         changed |= self.tick_assistant(window, cx);
+        // Catalog tool calls, also the calls that the assistant just made,
+        // wait for the catalogs and for their deadline.
+        let catalog_calls = self.resume_catalog_calls(cx);
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
         changed |= self.finish_quit(window, cx);

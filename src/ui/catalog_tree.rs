@@ -104,6 +104,8 @@ struct CatalogConnection {
     status: Status,
     /// The members with a live session, as the worker last received them.
     live: HashSet<Uuid>,
+    /// How many times the worker reported that it has no refresh.
+    idle_reports: u64,
 }
 
 pub(super) struct CatalogTree {
@@ -183,6 +185,13 @@ impl CatalogTree {
         self.connection(profile)?.catalog.as_deref()
     }
 
+    /// How many times the catalog worker of `profile` reported that it has no
+    /// refresh. A refresh that Qrow asked for ended when this number grows.
+    pub(super) fn idle_reports(&self, profile: Uuid) -> u64 {
+        self.connection(profile)
+            .map_or(0, |connection| connection.idle_reports)
+    }
+
     /// Whether a refresh in progress or waiting, of any connection of the
     /// catalog of `profile`, reads `scope`.
     pub(super) fn reads(&self, profile: Uuid, scope: &Scope) -> bool {
@@ -208,6 +217,9 @@ impl CatalogTree {
             self.statuses.insert(*member, status.of_member(*member));
         }
         if let Some(connection) = self.connections.get_mut(&key) {
+            if status.is_idle() {
+                connection.idle_reports += 1;
+            }
             connection.status = status;
         }
     }

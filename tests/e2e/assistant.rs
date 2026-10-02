@@ -109,3 +109,41 @@ fn the_assistant_reads_columns_through_a_connected_tab(cx: &mut TestAppContext) 
     app.wait_idle(cx);
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn the_assistant_reads_columns_of_another_connected_connection(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let schema = format!("qrow_other_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) = Kyuubi::get().connections(&["Alpha", "Beta"], "SELECT 1");
+    // Other tests make schemas too. The filter keeps the catalog to this one.
+    for profile in &mut workspace.profiles {
+        profile.catalog.include = vec![schema.clone()];
+        profile.catalog.refresh = qrow::model::CatalogRefresh::Manual;
+    }
+    let (alpha, beta) = (workspace.profiles[0].clone(), workspace.profiles[1].clone());
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    // Beta gets a live session. Qrow has not loaded its catalog cache.
+    app.select_connection(cx, &beta);
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    app.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.bookings (id BIGINT, gate STRING) USING parquet"),
+    );
+
+    // The tool waits for the cache of Beta, then reads the catalog with it.
+    app.select_connection(cx, &alpha);
+    app.open_assistant(cx);
+    app.send(
+        cx,
+        &format!("Describe the live table {schema}.bookings on Beta"),
+    );
+    app.wait_until(cx, "the live columns", QUERY_TIMEOUT, |window, _| {
+        crate::support::assistant::transcript(window)
+            .iter()
+            .any(|entry| entry.contains("Live columns: id BIGINT,gate STRING"))
+    });
+    app.wait_idle(cx);
+    app.select_connection(cx, &beta);
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}

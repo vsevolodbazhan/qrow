@@ -225,12 +225,21 @@ const MAX_CATALOG_WAIT: Duration = Duration::from_secs(120);
 pub(in crate::ui) struct PendingCatalogCall {
     call: ToolCall,
     deadline: Instant,
+    /// The idle reports of the catalog worker when the call started a
+    /// refresh. The call does not start another one, and it waits until the
+    /// worker reports again.
+    refreshed: Option<u64>,
+    connection: Uuid,
 }
 
 /// The next step of a catalog tool call.
 enum CatalogStep {
     Done(ToolResult),
-    Wait,
+    /// Wait for the cache or a refresh. `refreshed` is true when this step
+    /// started the refresh.
+    Wait {
+        refreshed: bool,
+    },
 }
 
 fn failure(code: &str, message: impl Into<String>) -> ToolResult {
@@ -1202,12 +1211,21 @@ impl Qrow {
     fn tool_catalog(&mut self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
         match self.catalog_step(call, true, cx) {
             CatalogStep::Done(result) => Some(result),
-            CatalogStep::Wait => {
+            CatalogStep::Wait { refreshed } => {
+                let connection = call
+                    .arguments
+                    .get("connection_id")
+                    .and_then(Value::as_str)
+                    .and_then(|id| Uuid::parse_str(id).ok())
+                    .unwrap_or_default();
+                let refreshed = refreshed.then(|| self.catalog.idle_reports(connection));
                 self.thread_run_mut(&call.thread_id)
                     .catalog_calls
                     .push(PendingCatalogCall {
                         call: call.clone(),
                         deadline: Instant::now() + MAX_CATALOG_WAIT,
+                        refreshed,
+                        connection,
                     });
                 None
             }
@@ -1245,7 +1263,7 @@ impl Qrow {
         self.ensure_catalog(id);
         // The worker loads the cache by itself, soon after it starts.
         let Some(catalog) = self.catalog.catalog(id) else {
-            return CatalogStep::Wait;
+            return CatalogStep::Wait { refreshed: false };
         };
         let now = crate::catalog::now();
         let result = match &request {
@@ -1279,7 +1297,7 @@ impl Qrow {
         };
         if let Some(scope) = missing.scope() {
             if self.catalog.reads(id, &scope) {
-                return CatalogStep::Wait;
+                return CatalogStep::Wait { refreshed: false };
             }
             // A refresh that ran and could not read the data left its error.
             let error = match &scope {
@@ -1299,7 +1317,7 @@ impl Qrow {
             }
             if may_refresh && self.catalog_warm(id) {
                 self.refresh_catalog(id, scope, cx);
-                return CatalogStep::Wait;
+                return CatalogStep::Wait { refreshed: true };
             }
         }
         let (code, message) = missing.error();
@@ -1322,18 +1340,33 @@ impl Qrow {
             let run = self.thread_run_mut(&thread);
             let active = run.active_turn.clone();
             let calls = std::mem::take(&mut run.catalog_calls);
-            for pending in calls {
+            for mut pending in calls {
                 if active.as_deref() != Some(pending.call.turn_id.as_str()) {
                     continue;
                 }
-                let result = match self.catalog_step(&pending.call, false, cx) {
+                // The window can see the end of a refresh before it sees its
+                // start, so a call waits until the worker reports idle again.
+                let unfinished = pending
+                    .refreshed
+                    .is_some_and(|idle| self.catalog.idle_reports(pending.connection) == idle);
+                // A call that waited only for the cache can still start a
+                // refresh. A call whose refresh ended reports what it read.
+                let step = if unfinished && Instant::now() < pending.deadline {
+                    CatalogStep::Wait { refreshed: false }
+                } else {
+                    self.catalog_step(&pending.call, pending.refreshed.is_none(), cx)
+                };
+                let result = match step {
                     CatalogStep::Done(result) => result,
-                    CatalogStep::Wait if Instant::now() < pending.deadline => {
+                    CatalogStep::Wait { refreshed } if Instant::now() < pending.deadline => {
+                        if refreshed {
+                            pending.refreshed = Some(self.catalog.idle_reports(pending.connection));
+                        }
                         waiting = true;
                         self.thread_run_mut(&thread).catalog_calls.push(pending);
                         continue;
                     }
-                    CatalogStep::Wait => failure(
+                    CatalogStep::Wait { .. } => failure(
                         "not_cached",
                         "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with run_selected_tab_query.",
                     ),

@@ -637,7 +637,11 @@ for line in sys.stdin:
             read_sql(0)
         elif message.startswith("Describe the live table "):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
-            schema, relation = message.removeprefix("Describe the live table ").split(".")
+            target, _, connection_name = message.removeprefix("Describe the live table ").partition(" on ")
+            schema, relation = target.split(".")
+            connection = context["selected_tab"]["connection_id"]
+            if connection_name:
+                connection = next(c["id"] for c in context["connections"] if c["name"] == connection_name)
 
             def described(success, result):
                 if not success:
@@ -647,7 +651,7 @@ for line in sys.stdin:
                 finish_turn(thread_id, turn_id, f"Live columns: {columns}")
 
             call_tool(thread_id, turn_id, "describe_relation", {
-                "version": 1, "connection_id": context["selected_tab"]["connection_id"],
+                "version": 1, "connection_id": connection,
                 "schema": schema, "relation": relation,
             }, described)
         elif message.startswith("Read the catalog"):

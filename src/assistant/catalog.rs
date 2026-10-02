@@ -17,6 +17,26 @@ pub const MAX_PAGE: usize = 1_000;
 pub const MAX_REFERENCED_BYTES: usize = 16 * 1024;
 /// The space that the envelope of a tool result can use.
 const ENVELOPE_BYTES: usize = 1024;
+/// The longest comment or error that a view gives, in bytes.
+pub const MAX_TEXT_BYTES: usize = 2 * 1024;
+/// The longest column type that a view gives, in bytes. A nested type can be long.
+pub const MAX_TYPE_BYTES: usize = 8 * 1024;
+
+/// `text` cut to at most `limit` bytes, with `…` at the end when it is cut.
+fn cut(text: &str, limit: usize) -> String {
+    if text.len() <= limit {
+        return text.to_owned();
+    }
+    let mut end = limit - '…'.len_utf8();
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
+fn short(text: &Option<String>) -> Option<String> {
+    text.as_deref().map(|text| cut(text, MAX_TEXT_BYTES))
+}
 
 /// Why a view has no data. The tool decides to read it or to tell the model.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,7 +165,7 @@ pub fn schemas(
         json!({
             "fetched_at": catalog.fetched_at,
             "stale": stale(catalog.fetched_at, settings, now),
-            "error": catalog.error,
+            "error": short(&catalog.error),
             "schema_count": entries.len(),
             "offset": offset,
             "next_offset": next,
@@ -153,7 +173,7 @@ pub fn schemas(
                 "name": name,
                 "relation_count": schema.relations.as_ref().map(|relations| relations.len()),
                 "fetched_at": schema.fetched_at,
-                "error": schema.error,
+                "error": short(&schema.error),
             })).collect::<Vec<_>>(),
         })
     }))
@@ -186,14 +206,14 @@ pub fn relations(
             "pattern": pattern,
             "fetched_at": node.fetched_at,
             "stale": stale(node.fetched_at, settings, now),
-            "error": node.error,
+            "error": short(&node.error),
             "relation_count": entries.len(),
             "offset": offset,
             "next_offset": next,
             "relations": page.iter().map(|(relation, node)| json!({
                 "name": relation,
                 "kind": kind(node.kind),
-                "comment": node.comment,
+                "comment": short(&node.comment),
                 "columns_loaded": node.columns.is_some(),
             })).collect::<Vec<_>>(),
         })
@@ -247,16 +267,16 @@ pub fn relation(
             "schema": schema,
             "relation": name,
             "kind": kind(node.kind),
-            "comment": node.comment,
+            "comment": short(&node.comment),
             "fetched_at": node.fetched_at,
             "stale": stale(node.fetched_at, settings, now),
-            "error": node.error,
+            "error": short(&node.error),
             "column_count": columns.len(),
             "columns_truncated": count < columns.len(),
             "columns": columns[..count].iter().map(|column| json!({
                 "name": column.name,
-                "data_type": column.data_type,
-                "comment": column.comment,
+                "data_type": cut(&column.data_type, MAX_TYPE_BYTES),
+                "comment": short(&column.comment),
             })).collect::<Vec<_>>(),
         });
         if fits(&value) || count == 0 {
@@ -481,7 +501,7 @@ pub fn referenced_relations(
                 .iter()
                 .map(|column| ReferencedColumn {
                     name: column.name.clone(),
-                    data_type: column.data_type.clone(),
+                    data_type: cut(&column.data_type, MAX_TYPE_BYTES),
                 })
                 .collect(),
         };
@@ -674,6 +694,51 @@ mod tests {
         assert!(fits(&described));
         assert_eq!(described["columns_truncated"], true);
         assert_eq!(described["column_count"], 2_000);
+    }
+
+    #[test]
+    fn a_huge_comment_is_cut_so_the_rest_stays_readable() {
+        let mut catalog = catalog();
+        let huge = "é".repeat(MAX_TOOL_OUTPUT_BYTES);
+        catalog.apply_relations(
+            "hr",
+            None,
+            vec![
+                RelationEntry {
+                    name: "a".into(),
+                    kind: RelationKind::Table,
+                    comment: Some(huge.clone()),
+                },
+                RelationEntry {
+                    name: "b".into(),
+                    kind: RelationKind::Table,
+                    comment: None,
+                },
+            ],
+            NOW,
+        );
+        let page = relations(&catalog, &settings(), NOW, "hr", None, 0, 10).unwrap();
+        assert!(fits(&page));
+        assert_eq!(page["relations"].as_array().unwrap().len(), 2);
+        let comment = page["relations"][0]["comment"].as_str().unwrap();
+        assert!(comment.len() <= MAX_TEXT_BYTES && comment.ends_with('…'));
+        catalog.apply_columns(
+            "hr",
+            Some("a"),
+            BTreeMap::from([(
+                "a".into(),
+                vec![CatalogColumn {
+                    name: "nested".into(),
+                    data_type: format!("struct<{}>", "x".repeat(MAX_TOOL_OUTPUT_BYTES)),
+                    comment: Some(huge),
+                }],
+            )]),
+            NOW,
+        );
+        let described = relation(&catalog, &settings(), NOW, "hr", "a").unwrap();
+        assert!(fits(&described));
+        assert_eq!(described["columns_truncated"], false);
+        assert_eq!(cut("short", 10), "short");
     }
 
     #[test]
