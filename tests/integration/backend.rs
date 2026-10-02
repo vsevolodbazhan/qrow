@@ -15,6 +15,7 @@ use std::{
 
 #[path = "../support/evidence.rs"]
 mod evidence;
+mod oidc;
 
 const TIMEOUT: Duration = Duration::from_secs(150);
 const REGISTER: &str = "CREATE TEMPORARY FUNCTION qrow_block AS 'io.qrow.fixture.Blocking'";

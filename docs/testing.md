@@ -55,8 +55,8 @@ macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
 `perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
-The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
-Spark servers. `desktop` also takes over the desktop. These suites, the
+The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
+Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
 `perf-*` probes, and `package` run only when you select them by name.
 `package` does not replace `dist/Qrow.app`. See [Run the servers](#run-the-servers) and
 [Run the desktop suite](#run-the-desktop-suite).
@@ -232,6 +232,32 @@ The servers are Kyuubi 1.12.0, Spark 3.5.3 in standalone mode, LDAP with
 the synthetic user `qrow`, and ZooKeeper. Let Docker use approximately 8 GB of memory
 for them. They also run on an M1 Mac with 8 GB of memory. The first image download and build are much larger than Qrow. Java
 belongs only to the servers. Qrow itself does not use a JVM.
+
+The fixture also tests [sign-ins](connections.md#sign-in-with-openid-connect)
+and TLS:
+
+- A mock OpenID Connect provider serves HTTPS on a loopback port. It accepts
+  the public client `qrow-desktop`, loopback redirect URIs with any port, and
+  PKCE with `S256`. It signs tokens with RS256 and rotates refresh tokens.
+- A TLS proxy in front of the binary port of Kyuubi. The plain port stays
+  available for the other tests.
+- A custom Kyuubi authenticator. It accepts a valid access token for the
+  database usernames of its identity, and gives other passwords to LDAP.
+- A new certificate authority and server certificate for each start.
+
+| User | Database usernames |
+| --- | --- |
+| `alice` | `qrow` |
+| `bob` | `qrow` |
+| `mallory` | None |
+
+The tests get `QROW_E2E_TLS_PORT`, `QROW_E2E_OIDC_ISSUER`, and
+`QROW_E2E_TLS_CA` (the path of the CA certificate). Tests select the user and
+the token lifetime through the fixture parameters of the authorization URL.
+Tests that need no servers use a mock provider in the test process, with the
+synthetic certificates in
+[`tests/integration/testdata/tls/`](../tests/integration/testdata/tls/).
+The native runtime starts the provider and the proxy as Java processes too.
 
 The servers keep the Spark engine of a user for 10 minutes after its last
 session, so tests that follow each other do not wait for an engine start.
