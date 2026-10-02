@@ -150,7 +150,12 @@ impl Service {
 
     /// Applies the configurations of the workspace. The service owns the
     /// identity of a known sign-in, so a configuration does not replace it.
-    /// A change of the token requirements discards the cached tokens.
+    /// A change of the token requirements discards the results of running
+    /// work. Stored tokens for other requirements do not match any more.
+    ///
+    /// Lock order: `work`, then `config`. This method does not wait for
+    /// `work`, which a refresh holds during network requests, because the
+    /// interface thread calls it.
     pub fn configure(&self, sign_ins: &[SignIn]) {
         let mut records = lock(&self.records);
         records.retain(|id, record| {
@@ -167,7 +172,6 @@ impl Service {
                     let identity = config.identity.take();
                     if !config.token_requirements_eq(sign_in) {
                         record.generation.fetch_add(1, Ordering::SeqCst);
-                        *lock(&record.work) = Work::default();
                     }
                     *config = SignIn {
                         identity,
@@ -475,11 +479,13 @@ impl Service {
         refresh_token: &str,
         subject: &str,
     ) -> Result<flow::Tokens> {
+        // A configuration change can replace the issuer of the cache.
         let discovery = match &work.discovery {
-            Some(discovery) => discovery.clone(),
-            None => {
+            Some(discovery) if discovery.issuer == config.issuer => discovery.clone(),
+            _ => {
                 let discovery = flow::discover(&self.trust, &config.issuer)?;
                 work.discovery = Some(discovery.clone());
+                work.keys = None;
                 discovery
             }
         };

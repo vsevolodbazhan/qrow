@@ -179,6 +179,10 @@ fn dechunk(mut data: &[u8]) -> Result<Option<Vec<u8>>> {
             .and_then(|text| text.split(';').next())
             .and_then(|size| usize::from_str_radix(size.trim(), 16).ok())
             .context("Invalid chunk size")?;
+        anyhow::ensure!(
+            size <= MAX_RESPONSE && body.len() + size <= MAX_RESPONSE,
+            "The response exceeds 1 MiB"
+        );
         data = &data[line + 2..];
         if size == 0 {
             return Ok(Some(body));
@@ -234,6 +238,9 @@ mod tests {
             MAX_RESPONSE + 1
         );
         assert!(read_response(&mut head.as_bytes()).is_err());
+        // A huge chunk size is an error, not an overflow.
+        let huge = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\nab";
+        assert!(read_response(&mut &huge[..]).is_err());
     }
 
     #[test]
