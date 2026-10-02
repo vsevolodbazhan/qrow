@@ -36,9 +36,11 @@ impl RefreshMode {
     /// What the mode does, in one line below the dropdown.
     fn help(self) -> &'static str {
         match self {
-            Self::Disabled => "Qrow does not read or show schemas.",
-            Self::Manual => "Qrow reads schemas when you refresh them.",
-            Self::WhileConnected => "Qrow also refreshes schemas while a tab is connected.",
+            Self::Disabled => "Never introspect schemas.",
+            Self::Manual => "Introspect schemas on demand.",
+            Self::WhileConnected => {
+                "Introspect schemas on demand and periodically while a tab is connected."
+            }
         }
     }
 
