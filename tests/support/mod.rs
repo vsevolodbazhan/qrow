@@ -13,8 +13,8 @@ use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, Window, point, px,
-    size,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, WeakEntity,
+    Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -236,6 +236,10 @@ pub fn header(window: &Window, column: usize) -> Option<String> {
 
 pub struct TestApp {
     pub window: AnyWindowHandle,
+    /// The view of the window, for state that no control reaches, like the
+    /// in-memory Activity of a performance probe. The window owns the view,
+    /// so a closed window releases it and its workspace lock.
+    pub qrow: WeakEntity<Qrow>,
     pub credentials: Arc<MemoryCredentials>,
     workspace: PathBuf,
     _directory: TempDir,
@@ -304,12 +308,15 @@ impl TestApp {
             }
             None => Environment::demo(),
         };
+        let mut qrow = None;
         let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
             let view = cx.new(|cx| Qrow::new(environment, Instant::now(), window, cx));
+            qrow = Some(view.downgrade());
             ui::root(view, window, cx)
         });
         let app = Self {
             window: window.into(),
+            qrow: qrow.expect("The window has a Qrow view"),
             credentials,
             workspace: path,
             _directory: directory,

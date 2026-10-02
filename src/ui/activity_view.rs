@@ -655,12 +655,8 @@ impl Qrow {
 
     /// Add `entry` to the Activity of `connection`. An unseen error
     /// changes the status bar, which a closed Activity view does not redraw.
-    pub(super) fn record_activity(
-        &self,
-        connection: Uuid,
-        entry: ActivityEntry,
-        cx: &mut Context<Self>,
-    ) {
+    /// Performance probes fill Activity through this.
+    pub fn record_activity(&self, connection: Uuid, entry: ActivityEntry, cx: &mut Context<Self>) {
         let counts = entry.counts();
         self.activity
             .update(cx, |view, cx| view.record(connection, entry, cx));

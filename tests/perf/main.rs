@@ -268,3 +268,204 @@ fn catalog_tree(cx: &mut TestAppContext) {
     });
     report("ui.catalog.search_keystroke", search, "ms", 50.);
 }
+
+/// The `n`th entry of a busy connection: schema refresh requests, with a
+/// failed request and its stack trace in each 50 entries.
+fn activity_entry(n: usize) -> qrow::activity::ActivityEntry {
+    use qrow::{activity::ActivityEntry, logs::Severity};
+    if n % 50 == 49 {
+        let trace: String = (0..12)
+            .map(|line| {
+                format!(
+                    "\n\tat org.apache.hive.service.cli.Operation.run{line}(Operation.java:{line})"
+                )
+            })
+            .collect();
+        ActivityEntry::new(
+            Severity::Error,
+            format!(
+                "List columns of all relations in schema_{n:05} failed: Could not initialize the session{trace}"
+            ),
+        )
+    } else {
+        ActivityEntry::new(
+            Severity::Info,
+            format!("List relations in schema_{n:05}: 297 relations (client measurement: 1.22 s)"),
+        )
+    }
+}
+
+/// Qrow with one connection whose Activity is full: it holds the most
+/// entries that a log keeps.
+fn full_activity(cx: &mut TestAppContext) -> (TestApp, uuid::Uuid) {
+    let profile = offline_profile("Warehouse");
+    let id = profile.id;
+    let workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(id))],
+        profiles: vec![profile],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
+    app.qrow
+        .update(cx, |qrow, cx| {
+            for n in 0..qrow::activity::MAX_ENTRIES {
+                qrow.record_activity(id, activity_entry(n), cx);
+            }
+        })
+        .expect("The window is open");
+    app.settle(cx);
+    (app, id)
+}
+
+/// Opens Activity, or closes it, and draws the next frame.
+fn toggle_activity(app: &TestApp, cx: &mut TestAppContext) {
+    app.update(cx, |window, cx| {
+        window.press("cmd-shift-u", cx);
+        window.render_frame(cx);
+    });
+}
+
+// In test builds, `test_support` on a row keeps the selection state of each
+// row that a frame drew until Activity closes, and each frame then does more
+// work. The app does not do this. Probes that draw new rows in each sample
+// open Activity again before each sample or each few samples.
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn activity(cx: &mut TestAppContext) {
+    let (app, id) = full_activity(cx);
+    let qrow = app.qrow.upgrade().expect("The window is open");
+    let mut next = qrow::activity::MAX_ENTRIES;
+
+    // Open: the rows of the full log and the first frame.
+    let open: Vec<_> = (0..13)
+        .map(|_| {
+            let started = Instant::now();
+            toggle_activity(&app, cx);
+            let elapsed = started.elapsed();
+            toggle_activity(&app, cx);
+            elapsed
+        })
+        .skip(3)
+        .collect();
+    report("ui.activity.open_50k", median_ms(&open), "ms", 100.);
+
+    toggle_activity(&app, cx);
+    app.wait_for(cx, "activity");
+    let frame = app.update(cx, |window, cx| sample(5, 40, || window.render_frame(cx)));
+    report("ui.activity.frame", median_ms(&frame), "ms", 50.);
+
+    // Each new entry while the log follows its end: a schema refresh sends
+    // one for each request.
+    let append = app.update(cx, |window, cx| {
+        sample(5, 40, || {
+            qrow.update(cx, |qrow, cx| {
+                qrow.record_activity(id, activity_entry(next), cx)
+            });
+            next += 1;
+            window.render_frame(cx);
+        })
+    });
+    report("ui.activity.append", median_ms(&append), "ms", 50.);
+
+    // A full log removes its oldest entries in one step. The slowest of
+    // enough appends for one more step includes it.
+    let slowest = app.update(cx, |_, cx| {
+        let records = sample(0, qrow::activity::MAX_ENTRIES / 10 + 100, || {
+            qrow.update(cx, |qrow, cx| {
+                qrow.record_activity(id, activity_entry(next), cx)
+            });
+            next += 1;
+        });
+        records.into_iter().max().unwrap_or_default()
+    });
+    report("ui.activity.trim", slowest.as_secs_f64() * 1000., "ms", 50.);
+
+    // Scroll up from the end, five wheel steps after each opening.
+    let mut scroll = Vec::new();
+    for round in 0..9 {
+        toggle_activity(&app, cx);
+        toggle_activity(&app, cx);
+        let samples = app.update(cx, |window, cx| {
+            let position = elements(window)
+                .into_iter()
+                .find(|element| {
+                    element.visible()
+                        && element
+                            .path()
+                            .last()
+                            .is_some_and(|id| format!("{id:?}").contains("activity-entry"))
+                })
+                .expect("A visible Activity row")
+                .bounds()
+                .center();
+            sample(0, 5, || {
+                window.dispatch_event(
+                    ScrollWheelEvent {
+                        position,
+                        delta: ScrollDelta::Pixels(point(px(0.), px(120.))),
+                        ..Default::default()
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.render_frame(cx);
+            })
+        });
+        // The first round warms up.
+        if round > 0 {
+            scroll.extend(samples);
+        }
+    }
+    report("ui.activity.scroll", median_ms(&scroll), "ms", 50.);
+
+    // Errors only and All activity filter the full log again.
+    let filter: Vec<_> = (0..22)
+        .map(|round| {
+            toggle_activity(&app, cx);
+            toggle_activity(&app, cx);
+            let button = if round % 2 == 0 {
+                "activity-errors"
+            } else {
+                "activity-all"
+            };
+            if round % 2 == 1 {
+                app.update(cx, |window, cx| {
+                    window.click("activity-errors", cx);
+                    window.render_frame(cx);
+                });
+                toggle_activity(&app, cx);
+                toggle_activity(&app, cx);
+            }
+            app.update(cx, |window, cx| {
+                let started = Instant::now();
+                window.click(button, cx);
+                window.render_frame(cx);
+                started.elapsed()
+            })
+        })
+        .skip(2)
+        .collect();
+    report("ui.activity.filter", median_ms(&filter), "ms", 100.);
+
+    // While Activity is closed, a busy refresh must not slow the window.
+    toggle_activity(&app, cx);
+    app.wait_gone(cx, "activity");
+    let background = app.update(cx, |window, cx| {
+        sample(3, 20, || {
+            qrow.update(cx, |qrow, cx| {
+                for _ in 0..100 {
+                    qrow.record_activity(id, activity_entry(next), cx);
+                    next += 1;
+                }
+            });
+            window.render_frame(cx);
+        })
+    });
+    report(
+        "ui.activity.closed_100_entries",
+        median_ms(&background),
+        "ms",
+        50.,
+    );
+}
