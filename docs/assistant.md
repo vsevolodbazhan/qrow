@@ -12,7 +12,9 @@ ChatGPT to use your subscription. Qrow does not include Codex or store its
 credentials.
 
 Open **Qrow → Settings… → Assistant**. In **General**, turn on **Enabled** and
-read the data sharing notice. Qrow looks for `codex` on your `PATH` and in the
+read the data sharing notice. When the notice changes, for example when the
+assistant gets access to schema names, Qrow turns the assistant off until you
+read the new notice and turn it on again. Qrow looks for `codex` on your `PATH` and in the
 usual Homebrew folders. If Qrow cannot find it, enter the full path in
 **Codex → Executable**. The assistant is off by default. Qrow does not start
 Codex until you open the assistant pane.
@@ -79,7 +81,8 @@ tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
-Logs.
+Logs. It can also read the [schema catalog](#look-up-tables-and-columns) that
+Qrow keeps for each connection.
 Each message includes the SQL of the tab of the conversation. If this SQL is
 larger than 32 KB, Qrow sends only a 32 KB part around the selection or the
 cursor. Codex uses **Read query** to read the other parts, up to 32 KB at a
@@ -144,6 +147,46 @@ If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab
 with several queries. Older conversations do not have those options. They can
 run the latest query after they append it.
+
+### Look up tables and columns
+
+The assistant looks up schemas, tables, views, and columns in the [schema
+catalog](connections.md#browse-schemas) that Qrow keeps on your computer. It
+does not guess the names. It uses these tools:
+
+- **List schemas**: the schemas of a connection, with the number of tables
+  and views of each schema that Qrow has read.
+- **List tables**: the tables and views of one schema. A pattern can select
+  the names, for example `sales_*`.
+- **Describe table**: the kind, comment, and columns of one table or view,
+  with the type and comment of each column.
+
+Each result tells when Qrow read the data, and whether it is older than the
+**Refresh period** of the connection. The tools read the catalog of any
+connection that browses schemas, also a [shared
+catalog](connections.md#share-schemas). They do not read the catalog of a
+connection with **Schema refresh** set to **Disabled**.
+
+When the catalog does not have the data, and a tab of the connection has a
+live session, Qrow reads it before it answers: the schemas of a connection
+that Qrow never read, the tables of a schema, or the columns of a table. This
+opens a separate session, like a refresh in the sidebar. Qrow waits up to 2
+minutes for the data. The refresh continues after that. When no tab of the
+connection is connected, the tool tells the assistant that the data is not in
+the catalog. The assistant can then ask you to refresh it, or run `SHOW` or
+`DESCRIBE` in its tab. That query follows the query mode of the conversation.
+
+Each message also tells the assistant if Qrow has the catalog of the
+connection of the tab, when Qrow read it, and how many schemas and tables it
+has. It also includes the cached columns of the tables and views that the SQL
+of the tab names, up to 16 KB. To find them, Qrow compares the names in the
+SQL with the catalog. A table name without a schema uses the **Initial
+database** of the connection. An alias or a column with the name of a table
+can also match.
+
+Conversations that started before the assistant had these tools do not have
+them. Start a new conversation to use them. An older conversation can run
+`SHOW` and `DESCRIBE` statements.
 
 For a message during an active turn, Qrow adds the current workspace context
 to the text sent to Codex. Qrow omits that context from the conversation,
