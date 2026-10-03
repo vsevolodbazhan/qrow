@@ -1,9 +1,11 @@
 //! Each conversation belongs to one query tab, also while other tabs change.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, approval};
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, labelled, labels, offline_profile,
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot, connection_row, labelled,
+    labels, offline_profile,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::{
     AssistantTitleSource::{Codex, Temporary},
@@ -55,6 +57,89 @@ fn tabs_of(app: &TestApp, profile: Uuid) -> Vec<SavedTab> {
         .into_iter()
         .filter(|tab| tab.profile == Some(profile))
         .collect()
+}
+
+#[gpui_kit::test]
+fn a_query_error_shares_one_dot_with_assistant_work_replies_and_approval(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Synthetic");
+    let connection = profile.id;
+    let mut first = SavedTab::new(1, Some(connection));
+    first.title = "First query".into();
+    first.sql = "SELECT 1;".into();
+    let tab = first.id;
+    let workspace = codex.workspace(Workspace {
+        profiles: vec![profile],
+        tabs: vec![first, SavedTab::new(2, Some(connection))],
+        ..Workspace::default()
+    });
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info));
+        // The password is missing in the synthetic store. Hide the tab before
+        // its query fails so that its Logs do not read the error.
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
+    app.wait_label_containing(cx, ", unread error, assistant working");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger));
+        assert_connection_dot(window, connection, cx.theme().danger);
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
+    });
+
+    codex.mark("first-reply-release");
+    app.wait_label_containing(cx, ", unread error, assistant reply ready");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
+    });
+
+    app.click_labelled(cx, "First query, unread error, assistant reply ready");
+    app.wait_reply(cx, "I can help with this query");
+    // Showing the tab reads its query error too.
+    app.wait_gone(cx, format!("query-status-{tab}"));
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
+    app.send(cx, "Hold parallel Alpha");
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
+    app.wait_label_containing(cx, ", unread error, assistant working");
+    codex.mark("release-Alpha");
+    app.wait_label_containing(cx, ", unread error, assistant waiting for approval");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().warning));
+        assert_connection_dot(window, connection, cx.theme().warning);
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().warning))
+    });
+    app.click_labelled(
+        cx,
+        "First query, unread error, assistant waiting for approval",
+    );
+    app.wait_approval(cx, "Run in First query · Synthetic? SELECT 11");
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(cx, "Finished Alpha: approval_cancelled");
+    app.wait_idle(cx);
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
+    app.click(cx, format!("close-tab-{tab}"));
+    app.wait_until(cx, "the closed idle tab", REPLY_TIMEOUT, |_, _| {
+        app.saved().tabs.iter().all(|saved| saved.id != tab)
+    });
 }
 
 #[gpui_kit::test]

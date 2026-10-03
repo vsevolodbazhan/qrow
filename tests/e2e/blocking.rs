@@ -3,8 +3,11 @@
 use crate::support::fixture::{
     Kyuubi, QUERY_TIMEOUT, REGISTER_BLOCKING, blocking, evidence, token,
 };
-use crate::support::{TestApp, cell, connection_row, label, labelled, shows};
+use crate::support::{
+    TestApp, assert_connection_dot, assert_tab_dot, cell, connection_row, label, labelled, shows,
+};
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::Profile;
 use qrow::ui::{Quit, RunQuery};
@@ -198,6 +201,66 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
         // The session that reported the error runs the retry.
         app.wait_cell(cx, 0, 1, "0");
     }
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_connection_shows_one_dot_while_another_tab_runs_after_an_error(cx: &mut TestAppContext) {
+    let (app, profiles) = launch(cx, &["Alpha"]);
+    let profile = &profiles[0];
+    let failed = app.saved().tabs[0].id;
+    app.type_sql(cx, "SELECT missing_column AS value FROM range(1)");
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        window.click("toggle-activity", cx);
+    });
+    app.wait_label(cx, "Activity, 1 unseen error");
+    app.dispatch(cx, qrow::ui::NewTab);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_editor(cx, "");
+    app.wait_label(cx, "Query 1, unread error");
+    app.wait_until(cx, "the saved new tab", QUERY_TIMEOUT, |_, _| {
+        let workspace = app.saved();
+        workspace.tabs[workspace.active_tab].id != failed
+    });
+    let workspace = app.saved();
+    let running = workspace.tabs[workspace.active_tab].id;
+    app.run_complete(cx, REGISTER_BLOCKING);
+    let query = token("one-dot");
+    app.run_sql(cx, &blocking(&query, 15_000));
+    app.wait_evidence(cx, &query, "started", QUERY_TIMEOUT);
+    app.wait_label(cx, "Alpha, running, unread error");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().danger));
+        assert_tab_dot(window, running, Some(cx.theme().info));
+        assert_connection_dot(window, profile.id, cx.theme().danger);
+    });
+    app.click(cx, format!("close-tab-{running}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, running, Some(cx.theme().info))
+    });
+
+    // Reading the failed tab exposes the work on the same connection.
+    app.click_labelled(cx, "Query 1, unread error");
+    app.wait_label(cx, "Alpha, running");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
+        assert_connection_dot(window, profile.id, cx.theme().info);
+    });
+    app.click(cx, format!("connection-status-{}", profile.id));
+    app.wait_for(cx, "activity");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.click_labelled(cx, "Query 2, running");
+    app.wait_cell(cx, 0, 1, "0");
+    app.wait_label(cx, "Alpha");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
+        assert_tab_dot(window, running, Some(cx.theme().info.opacity(0.4)));
+        assert_connection_dot(window, profile.id, cx.theme().info.opacity(0.4));
+    });
 }
 
 #[gpui_kit::test]
