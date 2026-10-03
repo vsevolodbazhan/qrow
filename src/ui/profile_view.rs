@@ -155,7 +155,7 @@ impl Qrow {
                             ))
                             .child(field(
                                 "Response timeout",
-                                Some("Seconds that Qrow waits for one answer from Kyuubi. The first query of a session can wait while Kyuubi starts an engine. A change applies to new sessions."),
+                                Some("Seconds to wait for one answer from Kyuubi, from 10 to 3600. Applies to new sessions."),
                                 input(14, "Response timeout in seconds"),
                             )),
                     )
