@@ -100,6 +100,9 @@ fn the_assistant_reads_columns_through_a_connected_tab(cx: &mut TestAppContext) 
     // Qrow never read the catalog. The tab is connected, so the tool reads
     // it before it answers.
     app.open_assistant(cx);
+    app.send(cx, "List live schemas");
+    app.wait_reply(cx, &format!("Live schemas: {schema}"));
+    app.wait_idle(cx);
     app.send(cx, &format!("Describe the live table {schema}.bookings"));
     app.wait_until(cx, "the live columns", QUERY_TIMEOUT, |window, _| {
         crate::support::assistant::transcript(window)
