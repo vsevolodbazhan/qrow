@@ -1,7 +1,11 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, labelled};
+use crate::support::{TestApp, connection_row, labelled};
 use gpui_kit::TestAppContext;
-use qrow::model::{CatalogRefresh, CatalogSettings, SharedCatalog};
+use qrow::{
+    catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
+    model::{CatalogRefresh, CatalogSettings, SharedCatalog},
+    storage,
+};
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
@@ -197,4 +201,94 @@ fn a_refresh_of_one_connection_fills_the_shared_tree_of_another(cx: &mut TestApp
     });
 
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
+    cx: &mut TestAppContext,
+) {
+    let kyuubi = Kyuubi::get();
+    let schema = format!("qrow_seed_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    workspace.profiles[0].catalog.include = vec![schema.clone()];
+    let profile = workspace.profiles[0].clone();
+    let directory = tempfile::tempdir().unwrap();
+    let workspace_file = directory.path().join("workspace.json");
+    let private = storage::catalog_path(&workspace_file, profile.id);
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    // This recent cache contains data that the server no longer has. A
+    // premature automatic refresh would remove it before the transfer.
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(vec![schema.clone()], &profile.catalog, at);
+    catalog.apply_relations(
+        &schema,
+        None,
+        vec![RelationEntry {
+            name: "cached_orders".into(),
+            kind: RelationKind::Table,
+            comment: None,
+        }],
+        at,
+    );
+    catalog.apply_columns(
+        &schema,
+        Some("cached_orders"),
+        std::collections::BTreeMap::from([(
+            "cached_orders".into(),
+            vec![CatalogColumn {
+                name: "cached_id".into(),
+                data_type: "BIGINT".into(),
+                comment: None,
+            }],
+        )]),
+        at,
+    );
+    storage::save_catalog(&private, &catalog).unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, "SELECT 1");
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.scroll_to(cx, "connection-schema-refresh");
+    app.select(cx, "connection-schema-refresh", "While connected");
+    app.scroll_to(cx, "connection-schema-catalog");
+    app.click(cx, "connection-schema-catalog");
+    app.wait_for(cx, "connection-new-shared-catalog");
+    app.click(cx, "connection-new-shared-catalog");
+    app.wait_for(cx, "connection-shared-catalog-name");
+    app.scroll_to(cx, "connection-shared-catalog-name");
+    app.fill(cx, "connection-shared-catalog-name", "Seeded");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the transferred cache", QUERY_TIMEOUT, |_, _| {
+        let saved = app.saved();
+        let Some(shared) = saved.shared_catalogs.first() else {
+            return false;
+        };
+        storage::load_catalog(&storage::catalog_path(&workspace_file, shared.id)).is_some_and(
+            |cache| {
+                cache
+                    .relation(&schema, "cached_orders")
+                    .is_some_and(|relation| {
+                        relation.columns.as_ref().is_some_and(|columns| {
+                            columns.iter().any(|column| column.name == "cached_id")
+                        })
+                    })
+            },
+        ) && !private.exists()
+    });
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(cx, "the seeded schema", QUERY_TIMEOUT, |window, _| {
+        labelled(window, &schema).is_some()
+    });
+    app.click_labelled(cx, &schema);
+    app.click_labelled(cx, "cached_orders");
+    app.wait_until(cx, "the seeded columns", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "cached_id BIGINT").is_some()
+    });
 }

@@ -209,7 +209,7 @@ To share a catalog:
 1. Open the settings of a connection that browses schemas.
 2. Open the **Schema catalog** list, then select **New shared catalog…** below
    the list. The connection brings its copy of the schemas to the new
-   catalog.
+   catalog before an automatic refresh can start.
 3. Enter a **Shared catalog name**, then select **Save**.
 4. Open the settings of each other connection, select the shared catalog in
    **Schema catalog**, then select **Save**.

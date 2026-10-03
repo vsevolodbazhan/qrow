@@ -1562,3 +1562,31 @@ fn a_new_shared_catalog_starts_with_the_private_catalog_of_its_member() {
     h.wait(|h| h.status.is_idle());
     assert_eq!(h.catalog().fetched_at, Some(1_000));
 }
+
+#[test]
+fn a_seeded_shared_catalog_keeps_its_columns_when_an_automatic_read_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("workspace.json");
+    let (mut config, small, _) = shared(None);
+    config.settings.refresh = CatalogRefresh::WhileConnected;
+    let private = storage::catalog_path(&workspace, small.id);
+    cached_warehouse(&private, &small, 1_000);
+    let server = warehouse();
+    server
+        .broken_relation_lists
+        .lock()
+        .unwrap()
+        .push("sales".into());
+    let mut h = Harness::with_config(server, config, None, MINUTE);
+    h.worker.seed(qrow::catalog::Seed::File {
+        path: private.clone(),
+        owner: small.id,
+        identity: qrow::catalog::CatalogIdentity::of(&small),
+    });
+    h.worker.set_live(small.id, true);
+    h.wait(|h| h.status.runner == Some(small.id));
+    h.wait(|h| h.status.is_idle());
+    assert!(h.catalog().schema("sales").unwrap().error.is_some());
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert!(!private.exists());
+}

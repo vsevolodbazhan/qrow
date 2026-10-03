@@ -639,6 +639,11 @@ impl Qrow {
     /// Start the catalog worker of `profile` if it does not exist. The worker
     /// loads the cache; it opens a session only for a refresh.
     fn ensure_catalog(&mut self, profile: Uuid) {
+        self.ensure_catalog_with_seed(profile, None);
+    }
+
+    /// Transfer a private cache before live members can start a refresh.
+    fn ensure_catalog_with_seed(&mut self, profile: Uuid, seed: Option<Seed>) {
         let key = self.catalog.key(profile);
         if self.demo {
             self.catalog
@@ -653,12 +658,15 @@ impl Qrow {
         let Some(config) = self.catalog_config(key) else {
             return;
         };
-        if self
+        if let Some(worker) = self
             .catalog
             .connections
             .get(&key)
-            .is_some_and(|connection| connection.worker.is_some())
+            .and_then(|connection| connection.worker.as_ref())
         {
+            if let Some(seed) = seed {
+                worker.seed(seed);
+            }
             return;
         }
         let live: HashSet<Uuid> = config
@@ -676,6 +684,9 @@ impl Qrow {
             }),
             self.credentials.clone(),
         );
+        if let Some(seed) = seed {
+            worker.seed(seed);
+        }
         for member in &live {
             worker.set_live(*member, true);
         }
@@ -928,13 +939,15 @@ impl Qrow {
             }
         }
         if let Some((member, seed)) = seed {
-            self.ensure_catalog(member);
-            match (self.catalog.worker(member), seed) {
-                (Some(worker), seed) => worker.seed(seed),
-                (None, Seed::File { path, .. }) => {
-                    std::thread::spawn(move || storage::delete_catalog(&path));
-                }
-                (None, Seed::Catalog(_)) => {}
+            let path = match &seed {
+                Seed::File { path, .. } => Some(path.clone()),
+                Seed::Catalog(_) => None,
+            };
+            self.ensure_catalog_with_seed(member, Some(seed));
+            if self.catalog.worker(member).is_none()
+                && let Some(path) = path
+            {
+                std::thread::spawn(move || storage::delete_catalog(&path));
             }
         }
         // Statuses of connections that left a catalog no longer apply.
