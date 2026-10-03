@@ -446,6 +446,8 @@ impl TestApp {
     /// to the option; another select moves down its list with the keyboard.
     /// Each attempt confirms the next option, and the list opens at the
     /// confirmed option, so one step down per attempt reaches every option.
+    /// A list without a confirmed option needs one more step to reach its
+    /// first option, so an attempt that confirms nothing adds a step.
     pub fn select(&self, cx: &mut TestAppContext, id: &str, option: &str) {
         let chosen = |app: &Self, cx: &mut TestAppContext| {
             app.settle(cx);
@@ -463,16 +465,28 @@ impl TestApp {
         if chosen(self, cx) {
             return;
         }
+        let shown = |app: &Self, cx: &mut TestAppContext| {
+            app.update(cx, |window, _| value(window, id.to_owned()))
+        };
+        let mut downs = 1;
         for _ in 1..10 {
+            let before = shown(self, cx);
             self.update(cx, |window, cx| {
                 window.within(id.to_owned()).click("input", cx)
             });
             self.settle(cx);
-            self.press(cx, "down");
+            for _ in 0..downs {
+                self.press(cx, "down");
+            }
             self.press(cx, "enter");
             if chosen(self, cx) {
                 return;
             }
+            downs = if shown(self, cx) == before {
+                downs + 1
+            } else {
+                1
+            };
         }
         panic!("{id} has no option {option}");
     }
