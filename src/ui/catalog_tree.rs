@@ -35,6 +35,8 @@ const SEPARATOR: char = '\u{1f}';
 const ROW_HEIGHT: f32 = 30.;
 /// The gap between the columns of a tree row, in pixels at UI scale 1.
 const ROW_GAP: f32 = 4.;
+/// The trailing lane shared by catalog status icons and the header action.
+const STATUS_SLOT_WIDTH: f32 = 28.;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -1196,7 +1198,7 @@ impl Qrow {
 
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(28.);
+        let action_size = self.ui_px(STATUS_SLOT_WIDTH);
         let active = self.active_profile();
         let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
             self.profiles
@@ -1514,7 +1516,7 @@ fn render_entry(
             .py_0p5()
             .child(
                 connection_row(&id, *profile, row, selected, disclosure, context, cx)
-                    .pl(ui_px(4.))
+                    .pl(ui_px(8.))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, focus),
             )
@@ -1610,11 +1612,14 @@ fn render_entry(
         context.record_tip(&id, text.clone(), truncation);
     }
     let menu_id = id.clone();
+    let schema_detail = matches!(node, Node::Schema { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
         .pl(indent)
-        .pr_2()
+        .when(!schema_detail && !loading && error.is_none(), |el| {
+            el.pr_2()
+        })
         .gap(ui_px(ROW_GAP))
         .text_sm()
         .rounded(cx.theme().radius)
@@ -1641,6 +1646,8 @@ fn render_entry(
         )
         .child(
             div()
+                .id(label_key.clone())
+                .test_support()
                 .relative()
                 .flex_1()
                 .min_w_0()
@@ -1651,10 +1658,15 @@ fn render_entry(
         .when_some(detail, |el, detail| {
             el.child(
                 div()
+                    .id(detail_key.clone())
+                    .test_support()
                     .relative()
                     .flex_shrink_0()
                     .max_w(ui_px(120.))
                     .truncate()
+                    .when(schema_detail, |el| {
+                        el.min_w(ui_px(STATUS_SLOT_WIDTH)).flex().justify_center()
+                    })
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(detail)
@@ -1662,13 +1674,21 @@ fn render_entry(
             )
         })
         .when(loading, |el| {
-            el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+            el.child(
+                status_lane(child_id(&id, "busy"), ui_px(STATUS_SLOT_WIDTH))
+                    .test_support()
+                    .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
+            )
         })
         .when(error.is_some(), |el| {
             el.child(
-                Icon::new(AssetIconName::TriangleAlert)
-                    .xsmall()
-                    .text_color(cx.theme().danger),
+                status_lane(child_id(&id, "error-icon"), ui_px(STATUS_SLOT_WIDTH))
+                    .test_support()
+                    .child(
+                        Icon::new(AssetIconName::TriangleAlert)
+                            .xsmall()
+                            .text_color(cx.theme().danger),
+                    ),
             )
         })
         .when(tooltip.is_some() && !*menu_open, |el| {
@@ -1742,6 +1762,17 @@ fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option
     Some(text)
 }
 
+/// A fixed trailing lane for a tree status icon or count.
+fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
+    div()
+        .id(id)
+        .w(width)
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+}
+
 /// A slot for one status icon at the end of a connection row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
@@ -1750,14 +1781,9 @@ fn status_slot(
     width: Pixels,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement + ParentElement {
-    div()
-        .id(SharedString::from(id))
+    status_lane(id.into(), width)
         .on_click(on_click)
         .test_support()
-        .w(width)
-        .flex_shrink_0()
-        .flex()
-        .justify_center()
 }
 
 /// A click on a status icon of a connection row opens the Activity of the
@@ -1785,7 +1811,7 @@ fn connection_row(
 ) -> Stateful<Div> {
     let (menu_open, weak) = (context.menu_open, &context.weak);
     // As wide as the header's New Connection button.
-    let slot_width = px(context.scale * 28.);
+    let slot_width = px(context.scale * STATUS_SLOT_WIDTH);
     let has_status = row.busy || row.refreshing || row.unread_error || row.refresh_error;
     // The tooltip can change while it is open: a refresh error arrives or
     // goes away.
@@ -1830,6 +1856,8 @@ fn connection_row(
         .h_full()
         .flex_1()
         .min_w_0()
+        // The tree owns the icon and label lanes, including their padding.
+        .pl_0()
         // A status slot ends at the row end. Without one, the name keeps a
         // margin from the highlight edge.
         .pr_0()
@@ -1842,15 +1870,29 @@ fn connection_row(
                 .text_base()
                 .line_height(relative(1.25))
                 .items_center()
-                .gap_2()
+                .gap(px(context.scale * ROW_GAP))
                 .when(!has_status, |el| el.pr_3())
                 .child(
-                    gpui_kit::component::Icon::default()
-                        .path(crate::assets::SPARK_ICON)
-                        .size_4()
-                        .flex_shrink_0(),
+                    div()
+                        .w(px(context.scale * 16.))
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_center()
+                        .child(
+                            gpui_kit::component::Icon::default()
+                                .path(crate::assets::SPARK_ICON)
+                                .size_4(),
+                        ),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
+                .child(
+                    div()
+                        .id(child_id(entry, "label"))
+                        .test_support()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(row.name.clone()),
+                )
                 .when(row.busy || row.refreshing, |el| {
                     el.child(
                         status_slot(
@@ -1888,7 +1930,7 @@ fn connection_row(
         .id(SharedString::from(format!("connection-{id}")))
         .when(!menu_open, |el| el.tooltip(context.live_tooltip(entry)))
         .w_full()
-        .gap_0p5()
+        .gap(px(context.scale * ROW_GAP))
         .rounded(cx.theme().radius)
         .text_color(foreground)
         .map(|el| {
@@ -1941,16 +1983,16 @@ fn notice_row(
         .id(id.clone())
         .w_full()
         .h(px(scale * ROW_HEIGHT))
-        .pr_2()
+        // Text actions end at the same spine as the centers of status icons.
+        .pr(px(scale * STATUS_SLOT_WIDTH / 2.))
         .gap(px(scale * ROW_GAP))
         .text_sm()
         .text_color(match tone {
             Tone::Error => cx.theme().danger,
             Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
         })
-        // The columns of the other rows: the disclosure, the icon, and the
-        // label. The spinner takes the place of an icon.
-        .child(div().w(px(scale * 16.)).flex_shrink_0())
+        // A notice explains its parent rather than adding a tree level.
+        // Its spinner and label use the parent's icon and label lanes.
         .child(
             div()
                 .w(px(scale * 16.))
@@ -1963,6 +2005,8 @@ fn notice_row(
         )
         .child(
             div()
+                .id(child_id(id, "label"))
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .truncate()
@@ -1975,6 +2019,7 @@ fn notice_row(
                     .ghost()
                     .xsmall()
                     .h(px(scale * 22.))
+                    .pr_0()
                     .label("Refresh")
                     .accessibility_label("Refresh")
                     .on_click(move |_, _, cx| {
