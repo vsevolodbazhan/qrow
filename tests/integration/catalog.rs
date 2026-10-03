@@ -31,6 +31,8 @@ struct Server {
     /// Requests stay running until they are cancelled.
     block: AtomicBool,
     refuse: AtomicBool,
+    block_after_schema_list: AtomicBool,
+    request_started: Mutex<Option<std::sync::mpsc::Sender<MetadataRequest>>>,
 }
 
 impl Server {
@@ -102,6 +104,9 @@ impl Session for FakeSession {
     }
     fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
         self.server.requests.lock().unwrap().push(request.clone());
+        if let Some(sender) = self.server.request_started.lock().unwrap().as_ref() {
+            let _ = sender.send(request.clone());
+        }
         self.cancelled = Arc::new(AtomicBool::new(false));
         let tables = self.server.tables.lock().unwrap();
         let text = |value: &str| Some(value.to_owned());
@@ -203,7 +208,13 @@ impl Session for FakeSession {
     fn poll(&mut self) -> Result<QueryState> {
         Ok(if self.cancelled.load(Ordering::SeqCst) {
             QueryState::Cancelled
-        } else if self.server.block.load(Ordering::SeqCst) {
+        } else if self.server.block.load(Ordering::SeqCst)
+            && (!self.server.block_after_schema_list.load(Ordering::SeqCst)
+                || !matches!(
+                    self.server.requests.lock().unwrap().last(),
+                    Some(MetadataRequest::Schemas)
+                ))
+        {
             QueryState::Running
         } else {
             QueryState::Finished { has_results: true }
@@ -382,6 +393,43 @@ fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     // One session for the whole pass, closed when the queue is empty.
     assert_eq!(h.server.connects.load(Ordering::SeqCst), 1);
     assert_eq!(h.server.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn a_connection_refresh_skips_schemas_hidden_while_it_runs() {
+    let server = Server::with(&[
+        ("a", "first", "TABLE", &["id"]),
+        ("b", "hidden", "TABLE", &["id"]),
+    ]);
+    server.block.store(true, Ordering::SeqCst);
+    server.block_after_schema_list.store(true, Ordering::SeqCst);
+    let (sender, requests) = std::sync::mpsc::channel();
+    *server.request_started.lock().unwrap() = Some(sender);
+    let mut profile = profile();
+    let mut h = Harness::new(server.clone(), profile.clone(), None);
+    h.worker.refresh(Scope::Connection);
+    h.wait(|h| h.status.includes(&Scope::Connection));
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(10)).unwrap(),
+        MetadataRequest::Schemas
+    );
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(10)).unwrap(),
+        MetadataRequest::Relations {
+            schema: "a".into(),
+            relation: None,
+        }
+    );
+    profile.catalog.exclude = vec!["b".into()];
+    h.worker.update_profile(profile);
+    server.block.store(false, Ordering::SeqCst);
+    h.wait(|h| h.status.is_idle());
+    assert!(h.catalog().schema("b").is_none());
+    assert_eq!(h.columns("a", "first").unwrap(), ["id"]);
+    assert!(!server.requests().iter().any(|request| matches!(request,
+        MetadataRequest::Relations { schema, .. } | MetadataRequest::Columns { schema, .. }
+            if schema == "b"
+    )));
 }
 
 #[test]

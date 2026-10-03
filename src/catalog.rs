@@ -299,18 +299,9 @@ impl Catalog {
     }
 }
 
-/// Quote a Spark SQL identifier with backticks when it is not a plain name.
+/// Quote a Spark SQL identifier, including reserved keywords.
 pub fn quote_identifier(name: &str) -> String {
-    let plain = name
-        .chars()
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-    if plain {
-        name.to_owned()
-    } else {
-        format!("`{}`", name.replace('`', "``"))
-    }
+    format!("`{}`", name.replace('`', "``"))
 }
 
 /// The name of a relation for SQL, with its schema.
@@ -729,8 +720,12 @@ mod tests {
     }
 
     #[test]
-    fn names_are_quoted_only_when_they_need_it() {
-        assert_eq!(qualified_name("sales_eu", "Orders2"), "sales_eu.Orders2");
+    fn names_are_quoted_for_sql() {
+        assert_eq!(
+            qualified_name("sales_eu", "Orders2"),
+            "`sales_eu`.`Orders2`"
+        );
+        assert_eq!(qualified_name("select", "from"), "`select`.`from`");
         assert_eq!(qualified_name("2024", "a-b"), "`2024`.`a-b`");
         assert_eq!(quote_identifier("odd`name"), "`odd``name`");
         assert_eq!(quote_identifier(""), "``");

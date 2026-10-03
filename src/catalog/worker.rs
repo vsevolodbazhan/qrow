@@ -509,6 +509,10 @@ impl Runner {
         // request reads the columns of the whole connection at once.
         for schema in schemas {
             self.checkpoint()?;
+            if self.catalog.schema(&schema).is_none() {
+                self.status.total = self.status.total.saturating_sub(1);
+                continue;
+            }
             self.refresh_schema(&schema)?;
             self.status.done += 1;
             self.publish(false);

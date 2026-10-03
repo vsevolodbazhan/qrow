@@ -130,7 +130,7 @@ show the full tree again.
 Right-click a schema, a table, a view, or a column, then select:
 
 - **Copy Name** or **Copy Qualified Name** to copy the name. A table name
-  includes its schema, for example `sales.orders`.
+  includes its schema, for example `` `sales`.`orders` ``.
 - **Insert into Editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
@@ -141,7 +141,9 @@ To use the keyboard, select a row in the tree, then:
 - Press **⌘C** to copy its name.
 - Press **Shift-Enter** to insert its name into the SQL editor.
 
-Qrow adds backticks to a name that is not a plain identifier.
+Qrow puts backticks around each name that it inserts into SQL. This also
+lets you use names that are SQL keywords. A backtick in a name becomes two
+backticks.
 
 ### Show refreshes in Logs
 
@@ -179,7 +181,8 @@ not matter.
 For example, `sales_*, ops` in **Show schemas** and `*_tmp` in **Hide
 schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
 
-When you save new patterns, the tree hides schemas at once. A schema that you
+When you save new patterns, the tree hides schemas at once. A connection
+refresh skips hidden schemas that it has not started to read. A schema that you
 add to **Show schemas** shows after the next connection refresh. A connection
 with many schemas refreshes faster when you hide the schemas that you do not
 use.
