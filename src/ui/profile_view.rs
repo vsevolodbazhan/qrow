@@ -154,7 +154,7 @@ impl Qrow {
                             .child(field(
                                 "TLS",
                                 Some(if uses_sign_in && !form.tls {
-                                    "Without TLS, anyone on the network path can read the access token and use it until it expires. Use only a trusted network or VPN."
+                                    "Without TLS, others on the network can read and use the access token."
                                 } else {
                                     "Encrypts the connection. The server must accept TLS on this port."
                                 }),
@@ -172,7 +172,7 @@ impl Qrow {
                             ))
                             .child(field(
                                 "Authentication",
-                                Some("A sign-in can serve several connections. Each connection keeps its own username."),
+                                Some("Several connections can share one sign-in, each with its own username."),
                                 Select::new(&form.authentication)
                                     .id("connection-authentication")
                                     .w_full()
@@ -255,7 +255,7 @@ impl Qrow {
                             ))
                             .child(field(
                                 "Response timeout",
-                                Some("Seconds to wait for one answer from Kyuubi, from 10 to 3600. Applies to new sessions."),
+                                Some("Seconds to wait for a server response, from 10 to 3600."),
                                 input(14, "Response timeout in seconds"),
                             )),
                     )

@@ -9,13 +9,13 @@ const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
 const STATUS_BAR_ICONS: [&str; 4] = [
     "icons/bot.svg",
-    "icons/database.svg",
+    "icons/plug.svg",
     "icons/key-round.svg",
     "icons/activity.svg",
 ];
 
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
-// the icons after `Send`. The status bar uses `Activity`, `Database`, and
+// the icons after `Send`. The status bar uses `Activity`, `Plug`, and
 // `KeyRound`, and the Sign-ins sidebar uses `KeyRound`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
@@ -34,6 +34,7 @@ gpui_kit::assets::icon_assets!(
         Table2,
         Columns3,
         KeyRound,
+        Plug,
     ]
 );
 

@@ -528,9 +528,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         .w_full()
         .child(field(
             "When idle",
-            Some(
-                "Releasing the session keeps SQL and downloaded results. It drops temporary views, session settings, and unfetched rows.",
-            ),
+            Some("Releasing keeps SQL and results, but drops temporary views and unfetched rows."),
             Select::new(&form.idle_behavior)
                 .id("connection-idle-behavior")
                 .w_full()
@@ -553,9 +551,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
             ))
             .child(field(
                 "Keep-alive query",
-                Some(
-                    "Runs only while idle and keeps the engine active. Use a lightweight, read-only query.",
-                ),
+                Some("A light, read-only query that keeps the engine active while idle."),
                 input(9, "Keep-alive query"),
             ))
         })
@@ -606,7 +602,7 @@ pub(super) fn render_schemas(
                 Some(if shared {
                     "Connections that share this catalog must read the same metastore with the same permissions."
                 } else {
-                    "Only this connection uses the catalog. Connections that read the same metastore can share one."
+                    "Connections that read the same metastore can share one catalog."
                 }),
                 // The combobox has no accessibility of its own in GPUI Kit
                 // 0.6.6, so this element names it and gives its value.
@@ -655,7 +651,7 @@ pub(super) fn render_schemas(
             ))
             .child(field(
                 "Preferred connection",
-                Some("Automatic refreshes use this connection while one of its tabs is connected. Otherwise they use another connected connection."),
+                Some("Automatic refreshes use this connection first while it is connected."),
                 Select::new(&form.preferred_select)
                     .id("connection-preferred-catalog-connection")
                     .w_full()

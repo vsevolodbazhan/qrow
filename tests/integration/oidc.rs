@@ -554,7 +554,7 @@ fn configuration_does_not_wait_for_a_running_refresh() {
     };
     thread::sleep(Duration::from_millis(150));
     let mut changed = sign_in.clone();
-    changed.scopes.push("profile".into());
+    changed.scopes.push("groups".into());
     let started = std::time::Instant::now();
     setup.service.configure(std::slice::from_ref(&changed));
     assert!(
