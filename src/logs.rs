@@ -9,6 +9,33 @@ pub const MAX_EXECUTION_GROUPS: usize = 100;
 pub const MAX_NON_EXECUTION_GROUPS: usize = 50;
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
 
+pub(crate) fn timestamp_label(timestamp: SystemTime) -> String {
+    let seconds = timestamp
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let days = seconds.div_euclid(86_400);
+    let day_seconds = seconds.rem_euclid(86_400);
+    let hour = day_seconds / 3_600;
+    let minute = day_seconds % 3_600 / 60;
+    let second = day_seconds % 60;
+
+    // Convert days since 1970-01-01 to a Gregorian date without another crate.
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }).div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_part = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096)
+        .div_euclid(365);
+    let year = year_part + era * 400;
+    let day_of_year = day_of_era - (365 * year_part + year_part / 4 - year_part / 100);
+    let month_part = (5 * day_of_year + 2).div_euclid(153);
+    let day = day_of_year - (153 * month_part + 2).div_euclid(5) + 1;
+    let month = month_part + if month_part < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct ExecutionId(pub u64);
 
@@ -134,6 +161,14 @@ impl LogEntry {
             + self.connection.as_deref().map_or(0, str::len)
             + self.sql.as_deref().map_or(0, str::len)
     }
+
+    fn copy_text(&self) -> String {
+        if self.kind == LogKind::HistoryTrimmed {
+            self.text.clone()
+        } else {
+            format!("[{}] {}", timestamp_label(self.timestamp), self.text)
+        }
+    }
 }
 
 /// Metadata of one execution, or of one event without an execution. The entries stay in
@@ -243,13 +278,13 @@ impl LogHistory {
 
     pub fn copy_all(&self) -> String {
         self.entries()
-            .map(|entry| entry.text.as_str())
+            .map(LogEntry::copy_text)
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     pub fn copy_error(&self) -> Option<String> {
-        self.latest_error().map(|entry| entry.text.clone())
+        self.latest_error().map(LogEntry::copy_text)
     }
 
     fn over_limit(&self, groups: usize) -> bool {
@@ -396,6 +431,37 @@ mod tests {
     }
 
     #[test]
+    fn copy_actions_preserve_recorded_timestamps_and_error_details() {
+        let mut log = LogHistory::default();
+        assert_eq!(log.copy_all(), "");
+        assert_eq!(log.copy_error(), None);
+        for (seconds, kind, text) in [
+            (86_399, LogKind::Submitted, "SELECT 'café 🐦'\nFROM table"),
+            (86_400, LogKind::Error, "old error"),
+            (86_401, LogKind::Error, "latest error\n詳細 🐦"),
+            (86_402, LogKind::ExecutionCompleted, "complete"),
+        ] {
+            let mut entry = event(Some(1), kind, text);
+            entry.timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+            log.record(entry);
+        }
+
+        assert_eq!(
+            log.copy_all(),
+            concat!(
+                "[1970-01-01 23:59:59] SELECT 'café 🐦'\nFROM table\n",
+                "[1970-01-02 00:00:00] old error\n",
+                "[1970-01-02 00:00:01] latest error\n詳細 🐦\n",
+                "[1970-01-02 00:00:02] complete",
+            )
+        );
+        assert_eq!(
+            log.copy_error().as_deref(),
+            Some("[1970-01-02 00:00:01] latest error\n詳細 🐦")
+        );
+    }
+
+    #[test]
     fn execution_entries_stay_in_order_and_connection_entries_are_separate_groups() {
         let mut log = LogHistory::default();
         log.record(event(Some(1), LogKind::Submitted, "select 1"));
@@ -524,7 +590,10 @@ mod tests {
             log.record(event(Some(id), LogKind::Submitted, "start"));
         }
         assert!(log.has_error());
-        assert_eq!(log.copy_error().as_deref(), Some("latest error"));
+        assert_eq!(
+            log.copy_error().as_deref(),
+            Some("[1970-01-01 00:00:00] latest error")
+        );
         assert!(
             log.groups()
                 .iter()
@@ -582,7 +651,7 @@ mod tests {
         log.record(event(Some(7), LogKind::Error, "new"));
         assert_eq!(log.groups().len(), 1);
         assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(7)));
-        assert_eq!(log.copy_all(), "new");
+        assert_eq!(log.copy_all(), "[1970-01-01 00:00:00] new");
         assert!(
             log.entries()
                 .all(|entry| entry.kind != LogKind::HistoryTrimmed)

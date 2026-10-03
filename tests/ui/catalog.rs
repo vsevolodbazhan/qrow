@@ -1,9 +1,10 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, bounds_of, connection_row, elements, label, labelled, menu_item,
-    offline_profile, press_at, shows, value,
+    MemoryCredentials, TestApp, assert_connection_dot, bounds_of, connection_row, elements, label,
+    labelled, menu_item, offline_profile, press_at, shows, value,
 };
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
@@ -133,6 +134,198 @@ fn expand_connection(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) 
 fn wait_shows(app: &TestApp, cx: &mut TestAppContext, text: &str) {
     app.wait_until(cx, text, Duration::from_secs(10), |window, _| {
         labelled(window, text).is_some()
+    });
+}
+
+/// A state notice describes its parent; its text uses the parent's label lane.
+fn assert_notice_alignment(app: &TestApp, cx: &mut TestAppContext, parent: &str) {
+    app.update(cx, |window, _| {
+        let parent_label = bounds_of(window, &format!("{parent}\u{1f}label"));
+        let notice_label = bounds_of(window, &format!("{parent}\u{1f}notice\u{1f}label"));
+        assert!(
+            (parent_label.left() - notice_label.left()).abs() <= gpui_kit::px(0.5),
+            "Notice label {notice_label:?} must align with parent label {parent_label:?}"
+        );
+        assert!(notice_label.top() >= parent_label.bottom());
+    });
+}
+
+fn assert_status_alignment(app: &TestApp, cx: &mut TestAppContext, id: &str) {
+    app.update(cx, |window, _| {
+        let lane = bounds_of(window, "add-connection").center().x;
+        let status = bounds_of(window, id);
+        assert!(
+            (status.center().x - lane).abs() <= gpui_kit::px(0.5),
+            "Status {status:?} must share the header's centerline {lane:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut TestAppContext) {
+    for scale in [0.75, 1.5] {
+        // A listening socket holds each refresh in its loading state without
+        // server responses or access to a user's connection.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let profiles: Vec<_> = ["Connection", "Schema", "Table"]
+            .into_iter()
+            .map(|name| Profile {
+                host: "127.0.0.1".into(),
+                port,
+                ..offline_profile(name)
+            })
+            .collect();
+        let directory = tempfile::tempdir().unwrap();
+        cache(&directory, &profiles[1], &[("finance", None)]);
+        cache(
+            &directory,
+            &profiles[2],
+            &[("finance", Some(&[table("daily", RelationKind::Table)]))],
+        );
+        let credentials = MemoryCredentials::default();
+        for profile in &profiles {
+            credentials
+                .set_password(profile.id, "synthetic-password")
+                .unwrap();
+        }
+        let mut workspace = workspace(profiles.clone());
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        let parents = [
+            format!("c\u{1f}{}", profiles[0].id),
+            format!("s\u{1f}{}\u{1f}finance", profiles[1].id),
+            format!("r\u{1f}{}\u{1f}finance\u{1f}daily", profiles[2].id),
+        ];
+        for (depth, profile) in profiles.iter().enumerate() {
+            expand_connection(&app, cx, profile);
+            if depth > 0 {
+                // Expand this connection's schema, which has a stable node ID.
+                let schema_label = format!("s\u{1f}{}\u{1f}finance\u{1f}label", profile.id);
+                app.wait_for(cx, schema_label.clone());
+                app.click(cx, schema_label);
+            }
+            if depth == 2 {
+                wait_shows(&app, cx, "daily");
+                app.click_labelled(cx, "daily");
+            }
+            app.wait_for(cx, format!("{}\u{1f}notice\u{1f}label", parents[depth]));
+            assert_notice_alignment(&app, cx, &parents[depth]);
+            app.update(cx, |window, _| {
+                let lane = bounds_of(window, "add-connection").center().x;
+                let refresh = bounds_of(
+                    window,
+                    &format!("{}\u{1f}notice\u{1f}refresh", parents[depth]),
+                );
+                assert!(
+                    (refresh.right() - lane).abs() <= gpui_kit::px(0.5),
+                    "Refresh text must end at the status centerline"
+                );
+            });
+        }
+        assert_status_alignment(
+            &app,
+            cx,
+            &format!("s\u{1f}{}\u{1f}finance\u{1f}detail", profiles[2].id),
+        );
+        // Scope-specific refreshes retain the same status centerline.
+        for (depth, parent) in parents.iter().enumerate() {
+            let refresh = format!("{parent}\u{1f}notice\u{1f}refresh");
+            app.click(cx, refresh.clone());
+            app.wait_until(
+                cx,
+                "a loading notice",
+                Duration::from_secs(10),
+                |window, _| {
+                    window.try_find(refresh.clone()).is_none()
+                        && labelled(
+                            window,
+                            if depth == 0 {
+                                "Loading schemas…"
+                            } else {
+                                "Loading…"
+                            },
+                        )
+                        .is_some()
+                },
+            );
+            assert_notice_alignment(&app, cx, parent);
+            let status = if depth == 0 {
+                app.update(cx, |window, cx| {
+                    assert_connection_dot(window, profiles[0].id, cx.theme().info);
+                });
+                format!("connection-status-{}", profiles[0].id)
+            } else {
+                format!("{parent}\u{1f}busy")
+            };
+            assert_status_alignment(&app, cx, &status);
+        }
+        drop(listener);
+        // Failed refreshes keep the same centerline for their dot or icon.
+        for (depth, parent) in parents.iter().enumerate() {
+            let status = if depth == 0 {
+                let status = format!("connection-status-{}", profiles[0].id);
+                app.wait_until(
+                    cx,
+                    "the connection refresh error",
+                    Duration::from_secs(10),
+                    |window, _| {
+                        label(window, status.clone())
+                            .is_some_and(|text| text.contains("schema refresh error"))
+                    },
+                );
+                app.update(cx, |window, cx| {
+                    assert_connection_dot(window, profiles[0].id, cx.theme().danger);
+                });
+                status
+            } else {
+                format!("{parent}\u{1f}error-icon")
+            };
+            app.wait_for(cx, status.clone());
+            assert_status_alignment(&app, cx, &status);
+        }
+        app.update(cx, |window, _| window.remove_window());
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn large_schema_counts_remain_readable(cx: &mut TestAppContext) {
+    let profile = offline_profile("Large catalog");
+    let directory = tempfile::tempdir().unwrap();
+    let relations: Vec<_> = (0..10_000)
+        .map(|index| table(&format!("table_{index}"), RelationKind::Table))
+        .collect();
+    cache(&directory, &profile, &[("finance", Some(&relations))]);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    wait_shows(&app, cx, "finance");
+    app.update(cx, |window, cx| {
+        let text = gpui_kit::SharedString::from("10000");
+        let run = gpui_kit::TextRun {
+            len: text.len(),
+            font: gpui_kit::font(cx.theme().font_family.clone()),
+            color: cx.theme().muted_foreground,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let line = window
+            .text_system()
+            .shape_line(text, window.rem_size() * 0.75, &[run], None);
+        let count = bounds_of(
+            window,
+            &format!("s\u{1f}{}\u{1f}finance\u{1f}detail", profile.id),
+        );
+        assert!(
+            count.size.width + gpui_kit::px(0.5) >= line.width,
+            "The full count must fit without clipping"
+        );
     });
 }
 
@@ -427,7 +620,7 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn plain_notices_align_with_the_child_disclosure_at_each_zoom(cx: &mut TestAppContext) {
+fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContext) {
     for scale in [1., 1.25, 1.5] {
         let profile = offline_profile("Warehouse");
         let directory = tempfile::tempdir().unwrap();
@@ -437,22 +630,15 @@ fn plain_notices_align_with_the_child_disclosure_at_each_zoom(cx: &mut TestAppCo
         let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
         expand_connection(&app, cx, &profile);
         wait_shows(&app, cx, "avia");
-        let schema_left = app.update(cx, |window, _| {
-            bounds_of(
-                window,
-                &format!("s\u{1f}{}\u{1f}avia\u{1f}disclosure", profile.id),
-            )
-            .left()
+        let connection_left = app.update(cx, |window, _| {
+            bounds_of(window, &format!("c\u{1f}{}\u{1f}label", profile.id)).left()
         });
         app.click_labelled(cx, "avia");
         wait_shows(&app, cx, "bookings");
-        let relation_left = app.update(cx, |window, _| {
+        let schema_left = app.update(cx, |window, _| {
             bounds_of(
                 window,
-                &format!(
-                    "r\u{1f}{}\u{1f}avia\u{1f}bookings\u{1f}disclosure",
-                    profile.id
-                ),
+                &format!("s\u{1f}{}\u{1f}finance\u{1f}label", profile.id),
             )
             .left()
         });
@@ -465,7 +651,7 @@ fn plain_notices_align_with_the_child_disclosure_at_each_zoom(cx: &mut TestAppCo
             );
             assert_eq!(
                 notice.left(),
-                relation_left,
+                schema_left,
                 "Schema notice is too far right at scale {scale}"
             );
         });
@@ -478,7 +664,7 @@ fn plain_notices_align_with_the_child_disclosure_at_each_zoom(cx: &mut TestAppCo
             );
             assert_eq!(
                 notice.left(),
-                schema_left,
+                connection_left,
                 "Connection notice is too far right at scale {scale}"
             );
         });

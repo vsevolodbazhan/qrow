@@ -460,7 +460,7 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         .when(!keep, |el| {
             el.child(field(
                 "Idle timeout",
-                Some("Seconds of inactivity before Qrow releases the session."),
+                Some("Seconds of inactivity before the session is released."),
                 input(7, "Idle timeout in seconds"),
             ))
         })
@@ -523,7 +523,7 @@ pub(super) fn render_schemas(
             el.child(field(
                 "Schema catalog",
                 Some(if shared {
-                    "Its refresh and schema settings apply to each connection that uses it. These connections must read the same metastore with the same permissions. Qrow cannot check this."
+                    "Connections that share this catalog must read the same metastore with the same permissions."
                 } else {
                     "Only this connection uses the catalog. Connections that read the same metastore can share one."
                 }),
@@ -604,7 +604,7 @@ pub(super) fn render_schemas(
             .child(field(
                 "Refresh timeout",
                 Some(
-                    "Minutes before Qrow stops a schema refresh, from 1 to 1440. The schemas that it read stay in the tree.",
+                    "Minutes before a schema refresh stops, from 1 to 1440.",
                 ),
                 input(13, "Refresh timeout in minutes"),
             ))

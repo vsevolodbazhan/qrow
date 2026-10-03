@@ -3,7 +3,7 @@ use anyhow::Result;
 use qrow::{
     catalog::{
         Catalog, CatalogConfig, CatalogWorker, Event, MINUTE, RelationKind, Request, Scope, Status,
-        refresh_due,
+        Unfinished, refresh_due,
     },
     connector::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Session},
     logs::LogKind,
@@ -22,6 +22,12 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 type Tables = BTreeMap<String, BTreeMap<String, (&'static str, Vec<&'static str>)>>;
+
+struct PollGate {
+    schema: String,
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
 
 #[derive(Default)]
 struct Server {
@@ -52,6 +58,8 @@ struct Server {
     refuse: AtomicBool,
     block_after_schema_list: AtomicBool,
     request_started: Mutex<Option<std::sync::mpsc::Sender<MetadataRequest>>>,
+    /// Hold one status call while a test queues a live-member handoff.
+    poll_gate: Mutex<Option<PollGate>>,
     /// The user of each session, in order.
     users: Mutex<Vec<String>>,
 }
@@ -252,6 +260,21 @@ impl Session for FakeSession {
         )))
     }
     fn poll(&mut self) -> Result<QueryState> {
+        let gate = {
+            let mut gate = self.server.poll_gate.lock().unwrap();
+            if gate
+                .as_ref()
+                .is_some_and(|gate| self.schema.as_ref() == Some(&gate.schema))
+            {
+                gate.take()
+            } else {
+                None
+            }
+        };
+        if let Some(gate) = gate {
+            gate.entered.send(()).unwrap();
+            gate.release.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
         if self.schema.is_some() && *self.server.hang_schema.lock().unwrap() == self.schema {
             while !self.cancelled.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(10));
@@ -939,6 +962,37 @@ fn a_fresh_cache_waits_for_its_period_and_a_stale_one_refreshes_when_warm() {
 }
 
 #[test]
+fn a_warm_connection_resumes_a_cached_unfinished_refresh_before_its_period() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let at = qrow::catalog::now();
+    cached_warehouse(&path, &profile, at);
+    let mut catalog = storage::load_catalog(&path).unwrap();
+    catalog.unfinished = Some(Unfinished {
+        started: at,
+        done: ["empty".into(), "sales".into()].into(),
+    });
+    storage::save_catalog(&path, &catalog).unwrap();
+
+    let server = warehouse();
+    server.set(&[
+        ("empty", "", "", &[]),
+        ("sales", "orders", "TABLE", &["changed"]),
+        ("sales_tmp", "scratch", "TABLE", &["new_column"]),
+        ("salesx", "other", "TABLE", &["new_column"]),
+    ]);
+    let mut h = Harness::new(server.clone(), profile, Some(path));
+    assert_eq!(connects(&server), 0);
+    h.worker.set_live(h.id, true);
+    h.wait(|h| h.catalog().unfinished.is_none() && h.status.is_idle());
+    assert_eq!(relation_lists(&server), ["sales_tmp", "salesx"]);
+    assert_eq!(h.columns("salesx", "other").unwrap(), ["new_column"]);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert_eq!(connects(&server), 1);
+}
+
+#[test]
 fn a_connection_refresh_reads_the_oldest_schemas_first() {
     let directory = tempfile::tempdir().unwrap();
     let profile = profile();
@@ -1192,6 +1246,17 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
             .starts_with("Schema refresh stopped because no tab of the connection is connected"),
         "{texts:?}"
     );
+
+    // Reconnecting resumes the unfinished catalog without waiting an hour.
+    *server.block_schema.lock().unwrap() = None;
+    let before = relation_lists(&server).len();
+    h.worker.set_live(h.id, true);
+    h.wait(|h| h.catalog().unfinished.is_none() && h.status.is_idle());
+    let mut resumed = relation_lists(&server)[before..].to_vec();
+    resumed.sort();
+    assert_eq!(resumed, ["sales", "sales_tmp", "salesx"]);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert_eq!(connects(&server), 2);
 }
 
 #[test]
@@ -1441,6 +1506,79 @@ fn automatic_refreshes_use_the_preferred_member_while_it_is_live() {
     let after = connects(&server);
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(connects(&server), after, "no member is live");
+}
+
+#[test]
+fn an_unfinished_shared_refresh_waits_until_all_members_disconnect_and_reconnect() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("sales".into());
+    let (mut config, small, large) = shared(None);
+    config.settings.refresh_minutes = 720;
+    config.settings.timeout_minutes = 2;
+    let mut h = Harness::with_config(server.clone(), config, None, Duration::from_millis(200));
+    h.worker.set_live(small.id, true);
+    h.wait(|h| h.status.active == Some(Scope::Connection));
+    h.wait(|h| h.status.is_idle());
+    assert!(h.catalog().unfinished.is_some());
+    wait_for_cancel(&server);
+
+    // Duplicate live notifications and another live member do not retry a
+    // timed-out refresh while the catalog remains warm.
+    h.worker.set_live(small.id, true);
+    h.worker.set_live(large.id, true);
+    h.worker.set_live(small.id, false);
+    h.worker.set_live(small.id, true);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(connects(&server), 1);
+
+    // The first member to reconnect after every member disconnects resumes.
+    *server.block_schema.lock().unwrap() = None;
+    h.worker.set_live(small.id, false);
+    h.worker.set_live(large.id, false);
+    h.worker.set_live(large.id, true);
+    h.wait(|h| h.catalog().unfinished.is_none() && h.status.is_idle());
+    assert_eq!(connects(&server), 2);
+    assert_eq!(users(&server), ["user-small", "user-large"]);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+}
+
+#[test]
+fn a_shared_member_reconnects_while_the_previous_refresh_is_stopping() {
+    for same_member in [false, true] {
+        let server = warehouse();
+        *server.block_schema.lock().unwrap() = Some("sales".into());
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        *server.poll_gate.lock().unwrap() = Some(PollGate {
+            schema: "sales".into(),
+            entered,
+            release: released,
+        });
+        let (config, small, large) = shared(None);
+        let mut h = Harness::with_config(server.clone(), config, None, MINUTE);
+        h.worker.set_live(small.id, true);
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Both commands arrive while the old member is still refreshing.
+        h.worker.set_live(small.id, false);
+        h.worker
+            .set_live(if same_member { small.id } else { large.id }, true);
+        *server.block_schema.lock().unwrap() = None;
+        release.send(()).unwrap();
+        h.wait(|h| {
+            h.catalog().fetched_at.is_some()
+                && h.catalog().unfinished.is_none()
+                && h.status.is_idle()
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        // The same runner can finish its refresh. It must not refresh twice.
+        let expected = if same_member {
+            vec!["user-small"]
+        } else {
+            vec!["user-small", "user-large"]
+        };
+        assert_eq!(users(&server), expected);
+        assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    }
 }
 
 #[test]
