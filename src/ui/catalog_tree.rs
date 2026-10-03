@@ -33,6 +33,8 @@ pub(super) const MAX_SEARCH_MATCHES: usize = 500;
 const SEPARATOR: char = '\u{1f}';
 /// The height of every tree row. The virtual list needs one height for all rows.
 const ROW_HEIGHT: f32 = 30.;
+/// The gap between the columns of a tree row, in pixels at UI scale 1.
+const ROW_GAP: f32 = 4.;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -1488,7 +1490,9 @@ fn render_entry(
                 .text_color(cx.theme().muted_foreground),
             )
         });
-    let indent = ui_px(8. + 14. * entry.depth() as f32);
+    // Each level indents by the disclosure and the gap after it, so the
+    // disclosure of a row is under the icon of its parent.
+    let indent = ui_px(8. + (16. + ROW_GAP) * entry.depth() as f32);
     let Some(node) = nodes.get(&id) else {
         return div().h(ui_px(ROW_HEIGHT)).into_any_element();
     };
@@ -1611,7 +1615,7 @@ fn render_entry(
         .size_full()
         .pl(indent)
         .pr_2()
-        .gap_1()
+        .gap(ui_px(ROW_GAP))
         .text_sm()
         .rounded(cx.theme().radius)
         .when(selected, |el| el.bg(cx.theme().list_active))
@@ -1938,7 +1942,7 @@ fn notice_row(
         .w_full()
         .h(px(scale * ROW_HEIGHT))
         .pr_2()
-        .gap_1()
+        .gap(px(scale * ROW_GAP))
         .text_sm()
         .text_color(match tone {
             Tone::Error => cx.theme().danger,
