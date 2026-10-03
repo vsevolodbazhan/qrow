@@ -136,6 +136,25 @@ fn wait_shows(app: &TestApp, cx: &mut TestAppContext, text: &str) {
     });
 }
 
+fn scroll_tree(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
+    app.update(cx, |window, cx| {
+        let position = window.find("connections-list").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(pixels),
+                )),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
+}
+
 #[gpui_kit::test]
 fn the_tree_shows_a_cached_catalog_without_a_session(cx: &mut TestAppContext) {
     let profile = offline_profile("Warehouse");
@@ -225,15 +244,18 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
     cache(
         &directory,
         &second,
-        &[(
-            "archive",
-            Some(&[table("orders_2020", RelationKind::Table)]),
-        )],
+        &[
+            (
+                "archive",
+                Some(&[table("orders_2020", RelationKind::Table)]),
+            ),
+            ("wide", Some(&[table("t_second", RelationKind::Table)])),
+        ],
     );
     let app = TestApp::launch_in(
         cx,
         directory,
-        workspace(vec![first, second]),
+        workspace(vec![first.clone(), second.clone()]),
         MemoryCredentials::default(),
     );
 
@@ -245,13 +267,34 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         assert!(!shows(window, "Refine your search"));
     });
 
-    app.fill_labelled(cx, "Search Tables", "t");
+    for search in ["t", "wide.t"] {
+        app.fill_labelled(cx, "Search Tables", search);
+        app.wait_until(
+            cx,
+            "the match limit",
+            Duration::from_secs(10),
+            |window, _| shows(window, "Refine your search"),
+        );
+    }
+    scroll_tree(&app, cx, -20_000.);
+    wait_shows(&app, cx, "Search limit reached");
+    app.toggle_connection(cx, second.id);
     app.wait_until(
         cx,
-        "the match limit",
+        "the limited connection to collapse",
         Duration::from_secs(10),
-        |window, _| shows(window, "Refine your search"),
+        |window, _| labelled(window, "Search limit reached").is_none(),
     );
+    app.toggle_connection(cx, second.id);
+    scroll_tree(&app, cx, -20_000.);
+    wait_shows(&app, cx, "Search limit reached");
+    scroll_tree(&app, cx, 20_000.);
+    app.toggle_connection(cx, first.id);
+    wait_shows(&app, cx, "t_second");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "Search limit reached").is_none());
+        assert!(!shows(window, "Refine your search"));
+    });
 
     app.fill_labelled(cx, "Search Tables", "");
     app.wait_until(
@@ -260,6 +303,126 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         Duration::from_secs(10),
         |window, _| labelled(window, "orders").is_none() && labelled(window, "sales").is_none(),
     );
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContext) {
+    let first = offline_profile("First");
+    let second = offline_profile("Second");
+    let directory = tempfile::tempdir().unwrap();
+    cache(
+        &directory,
+        &first,
+        &[
+            (
+                "integrations",
+                Some(&[
+                    table("bookings", RelationKind::Table),
+                    table("daily", RelationKind::View),
+                ]),
+            ),
+            (
+                "finance",
+                Some(&[table("bookings_other", RelationKind::Table)]),
+            ),
+        ],
+    );
+    cache(
+        &directory,
+        &second,
+        &[(
+            "integrations",
+            Some(&[table("bookings_archive", RelationKind::Table)]),
+        )],
+    );
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![first, second]),
+        MemoryCredentials::default(),
+    );
+
+    for search in [
+        "integrations.bookings",
+        "  INTEGRATIONS.BOOKINGS  ",
+        "`integrations`.`bookings`",
+        "tions.book",
+    ] {
+        app.fill_labelled(cx, "Search Tables", search);
+        wait_shows(&app, cx, "bookings");
+        app.update(cx, |window, _| {
+            assert!(labelled(window, "finance").is_none());
+            assert!(labelled(window, "bookings_other").is_none());
+            assert!(labelled(window, "daily").is_none());
+        });
+        if search != "`integrations`.`bookings`" {
+            wait_shows(&app, cx, "bookings_archive");
+        } else {
+            app.update(cx, |window, _| {
+                assert!(labelled(window, "bookings_archive").is_none());
+            });
+        }
+    }
+
+    app.fill_labelled(cx, "Search Tables", "integrations.daily");
+    wait_shows(&app, cx, "daily");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "bookings").is_none())
+    });
+
+    app.fill_labelled(cx, "Search Tables", "bookings");
+    wait_shows(&app, cx, "bookings_other");
+    wait_shows(&app, cx, "bookings_archive");
+
+    app.fill_labelled(cx, "Search Tables", "missing.bookings");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "integrations").is_none());
+        assert!(labelled(window, "bookings").is_none());
+    });
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+
+    app.fill_labelled(cx, "Search Tables", "missing.bookings");
+    app.toggle_connection(cx, profile.id);
+    wait_shows(&app, cx, "No matches");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "avia").is_none());
+        assert!(labelled(window, "bookings").is_none());
+    });
+
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the connection to collapse",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "No matches").is_none(),
+    );
+    app.toggle_connection(cx, profile.id);
+    wait_shows(&app, cx, "No matches");
+
+    app.fill_labelled(cx, "Search Tables", "avia.bookings");
+    wait_shows(&app, cx, "bookings");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "No matches").is_none())
+    });
+    app.fill_labelled(cx, "Search Tables", "");
+    wait_shows(&app, cx, "avia");
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "No matches").is_none())
+    });
     assert_eq!(app.credentials.reads(), 0);
 }
 
