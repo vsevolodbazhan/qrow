@@ -79,8 +79,8 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     (
         "sign-in-database-hosts",
         "Database hosts",
-        "The Kyuubi hosts that can receive the access tokens. Separate hosts with spaces or commas.",
-        "kyuubi.example.com",
+        "The database servers that can receive the access tokens. Separate hosts with spaces or commas.",
+        "db.example.com",
     ),
     (
         "sign-in-callback-port",
