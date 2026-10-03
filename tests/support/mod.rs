@@ -481,7 +481,8 @@ impl TestApp {
     }
 
     /// Scrolls the container of `target` with the wheel until `target` is
-    /// visible, like a user who scrolls a form to a field below its fold. The
+    /// visible, like a user who scrolls a form to a field below its fold or
+    /// back to a field above it. The
     /// wheel turns over a visible element of the same container. A snapshot
     /// is visible when any part of it shows, so a target in the lower half of
     /// the window gets one more step, which shows all of it.
@@ -504,21 +505,29 @@ impl TestApp {
                     .rposition(|id| format!("{id:?}").contains("Scrollable"))
                     .expect("The target is not in a scroll container");
                 let container = &element.path()[..=depth];
-                // The smallest visible element is a control inside the scroll
-                // area, not a wrapper around it. Snapshots have no order, so
-                // the choice must not depend on it.
+                // The visible element nearest the middle of the window is in
+                // the scroll area. One at its edge can be under a footer, and
+                // a large wrapper can have its center outside the window.
+                // Snapshots have no order, so the choice must not depend on
+                // it.
+                let middle = f32::from(window.viewport_size().height) / 2.;
                 elements(window)
                     .into_iter()
                     .filter(|other| other.visible() && other.path().starts_with(container))
                     .min_by(|a, b| {
-                        let area = |e: &ElementSnapshot| {
-                            f32::from(e.bounds().size.width) * f32::from(e.bounds().size.height)
+                        let key = |e: &ElementSnapshot| {
+                            (
+                                (f32::from(e.bounds().center().y) - middle).abs(),
+                                f32::from(e.bounds().size.width)
+                                    * f32::from(e.bounds().size.height),
+                            )
                         };
-                        area(a).total_cmp(&area(b))
+                        let (a, b) = (key(a), key(b));
+                        a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
                     })
-                    .map(|other| other.bounds().center())
+                    .map(|other| (other.bounds().center(), low))
             });
-            let Some(position) = position else {
+            let Some((position, down)) = position else {
                 let found =
                     self.update(cx, |window, _| window.try_find(target.to_owned()).is_some());
                 assert!(found, "No element {target}");
@@ -529,7 +538,12 @@ impl TestApp {
                 window.dispatch_event(
                     gpui_kit::ScrollWheelEvent {
                         position,
-                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-120.))),
+                        // A target above the middle of the window is above
+                        // the visible part of the container.
+                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                            px(0.),
+                            px(if down { -120. } else { 120. }),
+                        )),
                         ..Default::default()
                     }
                     .to_platform_input(),
