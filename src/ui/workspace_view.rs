@@ -52,29 +52,6 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .prefix(
-                h_flex().h(tab_height).px_2().flex_shrink_0().child(
-                    Button::new("sidebar-toggle")
-                        .ghost()
-                        .small()
-                        .w(self.ui_px(28.))
-                        .h(self.ui_px(28.))
-                        .flex_shrink_0()
-                        .icon(IconName::PanelLeft)
-                        .accessibility_label("Toggle Sidebar")
-                        .map(|mut button| {
-                            button.interactivity().tooltip(
-                                StatusTooltip::new("Toggle Sidebar", "")
-                                    .for_action(&ToggleSidebar, None),
-                            );
-                            button
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar = !this.sidebar;
-                            cx.notify();
-                        })),
-                ),
-            )
             .children(visible.iter().map(|index| {
                 let index = *index;
                 let tab = &self.tabs[index];
@@ -191,78 +168,25 @@ impl Qrow {
                 }
             }))
             .suffix(
-                h_flex()
-                    .h(tab_height)
-                    .px_2()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("new-tab")
-                            .ghost()
-                            .small()
-                            .w(self.ui_px(28.))
-                            .h(self.ui_px(28.))
-                            .icon(IconName::Plus)
-                            .disabled(self.active_profile().is_none())
-                            .accessibility_label("New Tab")
-                            .map(|mut button| {
-                                button.interactivity().tooltip(
-                                    StatusTooltip::new("New Tab", "").for_action(&NewTab, None),
-                                );
-                                button
-                            })
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.new_tab(&NewTab, window, cx)
-                                }),
-                            ),
-                    )
-                    .when(self.settings.assistant.enabled, |bar| {
-                        // The toggle shows the most urgent state of all
-                        // conversations.
-                        let status = self.assistant_status();
-                        let waiting_for_approval = status == ThreadStatus::Approval;
-                        let failed = status == ThreadStatus::Failed;
-                        let unread = failed || status == ThreadStatus::Ready;
-                        let working = status == ThreadStatus::Working;
-                        let accessibility_label = if failed {
-                            "Toggle Assistant, reply failed"
-                        } else if unread {
-                            "Toggle Assistant, reply ready"
-                        } else if waiting_for_approval {
-                            "Toggle Assistant, waiting for approval"
-                        } else if working {
-                            "Toggle Assistant, working"
-                        } else {
-                            "Toggle Assistant"
-                        };
-                        let toggle =
-                            Button::new("toggle-assistant")
-                                .ghost()
-                                .small()
-                                .w(self.ui_px(28.))
-                                .h(self.ui_px(28.))
-                                .accessibility_label(accessibility_label)
-                                .icon(Icon::new(AssetIconName::Bot).small())
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_assistant(window, cx)
-                                }));
-                        bar.child(
-                            div()
-                                .id("assistant-tooltip-trigger")
-                                .tooltip(StatusTooltip::live(
-                                    cx.entity().downgrade(),
-                                    Some(&ToggleAssistant),
-                                    |qrow, _| {
-                                        Some(StatusTooltip::new(
-                                            "Assistant",
-                                            qrow.assistant_status().tooltip_status(),
-                                        ))
-                                    },
-                                ))
-                                .child(DotStatus::on_button(status.dot_status(), toggle, cx)),
-                        )
-                    }),
+                h_flex().h(tab_height).px_2().gap_1().flex_shrink_0().child(
+                    Button::new("new-tab")
+                        .ghost()
+                        .small()
+                        .w(self.ui_px(28.))
+                        .h(self.ui_px(28.))
+                        .icon(IconName::Plus)
+                        .disabled(self.active_profile().is_none())
+                        .accessibility_label("New Tab")
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("New Tab", "").for_action(&NewTab, None),
+                            );
+                            button
+                        })
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
+                        ),
+                ),
             )
     }
 
@@ -432,6 +356,131 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// The Assistant button of the status bar. Its dot shows the most urgent
+    /// state of all conversations.
+    fn assistant_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = self.assistant_status();
+        let accessibility_label = match status {
+            ThreadStatus::Failed => "Toggle Assistant, reply failed",
+            ThreadStatus::Ready => "Toggle Assistant, reply ready",
+            ThreadStatus::Approval => "Toggle Assistant, waiting for approval",
+            ThreadStatus::Working => "Toggle Assistant, working",
+            _ => "Toggle Assistant",
+        };
+        let toggle = Button::new("toggle-assistant")
+            .ghost()
+            .small()
+            .selected(self.assistant_state.open)
+            .accessibility_label(accessibility_label)
+            .icon(Icon::new(AssetIconName::Bot).small())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_assistant(window, cx)));
+        div()
+            .id("assistant-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                Some(&ToggleAssistant),
+                |qrow, _| {
+                    Some(StatusTooltip::new(
+                        "Assistant",
+                        qrow.assistant_status().tooltip_status(),
+                    ))
+                },
+            ))
+            .child(DotStatus::on_button(status.dot_status(), toggle, cx))
+    }
+
+    /// The dot, the accessibility label, and the tooltip of the Sign-ins
+    /// button. The dot shows sign-ins that need attention, then browser
+    /// sign-ins that run.
+    fn sign_ins_status(&self) -> (Option<DotStatus>, String, StatusTooltip) {
+        let attention = self.sign_ins_needing_attention();
+        let working = self.sign_ins_working();
+        let mut label = String::from("Sign-ins");
+        let mut statuses = Vec::new();
+        if working {
+            label.push_str(", sign-in in progress");
+            statuses.push("Sign-in Running".to_owned());
+        }
+        match attention {
+            0 => {}
+            1 => {
+                label.push_str(", 1 sign-in needs attention");
+                statuses.insert(0, "1 Needs Attention".to_owned());
+            }
+            count => {
+                label.push_str(&format!(", {count} sign-ins need attention"));
+                statuses.insert(0, format!("{count} Need Attention"));
+            }
+        }
+        let status = if attention > 0 {
+            Some(DotStatus::Attention)
+        } else if working {
+            Some(DotStatus::Working)
+        } else {
+            None
+        };
+        (
+            status,
+            label,
+            StatusTooltip::new("Sign-ins", statuses.join("\n")),
+        )
+    }
+
+    /// The buttons of the status bar that choose the panel of the sidebar.
+    /// The button of the visible panel hides the sidebar.
+    fn sidebar_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let shown = |panel| self.sidebar && self.sidebar_panel == panel;
+        let (status, label, _) = self.sign_ins_status();
+        let connections =
+            Button::new("show-connections")
+                .ghost()
+                .small()
+                .selected(shown(SidebarPanel::Connections))
+                .icon(Icon::new(AssetIconName::Database).small())
+                .accessibility_label("Connections")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.show_sidebar_panel(SidebarPanel::Connections, cx)
+                }));
+        let sign_ins = Button::new("show-sign-ins")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::SignIns))
+            .icon(Icon::new(AssetIconName::KeyRound).small())
+            .accessibility_label(label)
+            .on_click(
+                cx.listener(|this, _, _, cx| this.show_sidebar_panel(SidebarPanel::SignIns, cx)),
+            );
+        h_flex()
+            .flex_shrink_0()
+            .gap_1()
+            .child(
+                div()
+                    .id("connections-tooltip-trigger")
+                    .tooltip(
+                        StatusTooltip::new("Connections", "").for_action(&ShowConnections, None),
+                    )
+                    .child(connections),
+            )
+            .child(
+                div()
+                    .id("sign-ins-tooltip-trigger")
+                    .tooltip(StatusTooltip::live(
+                        cx.entity().downgrade(),
+                        Some(&ShowSignIns),
+                        |qrow, _| Some(qrow.sign_ins_status().2),
+                    ))
+                    .child(DotStatus::on_button(status, sign_ins, cx)),
+            )
+    }
+
+    /// Shows `panel` in the sidebar, or hides the sidebar when it shows
+    /// `panel` already.
+    pub(super) fn show_sidebar_panel(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) {
+        self.sidebar = !(self.sidebar && self.sidebar_panel == panel);
+        self.sidebar_panel = panel;
+        cx.notify();
+    }
+
     /// Activity keeps its icon, with a dot for unread errors or current work.
     fn activity_status(&self, cx: &App) -> (Option<DotStatus>, String, StatusTooltip) {
         let view = self.activity.read(cx);
@@ -517,46 +566,53 @@ impl Qrow {
             .py(self.ui_px(4.))
             .child(
                 h_flex()
-                    .id("query-status")
-                    .test_support()
-                    .role(Role::Status)
                     .flex_1()
                     .min_w_0()
-                    .gap_3()
-                    .overflow_hidden()
-                    .aria_label(status_label)
+                    .gap_2()
+                    .child(self.sidebar_buttons(cx))
                     .child(
-                        div()
-                            .id("query-status-title")
+                        h_flex()
+                            .id("query-status")
                             .test_support()
+                            .role(Role::Status)
+                            .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .aria_label(tab.status.clone())
-                            .text_color(cx.theme().foreground)
-                            .child(tab.status.clone()),
-                    )
-                    .when_some(tab.status_detail.clone(), |row, detail| {
-                        row.child(
-                            div()
-                                .id("query-status-detail")
-                                .test_support()
-                                .min_w_0()
-                                .truncate()
-                                .aria_label(detail.clone())
-                                .child(detail),
-                        )
-                    })
-                    .when_some(tab.elapsed, |row, elapsed| {
-                        let elapsed = format!("{:.2} s", elapsed.as_secs_f64());
-                        row.child(
-                            div()
-                                .id("query-elapsed")
-                                .test_support()
-                                .flex_shrink_0()
-                                .aria_label(format!("Elapsed: {elapsed}"))
-                                .child(elapsed),
-                        )
-                    }),
+                            .gap_3()
+                            .overflow_hidden()
+                            .aria_label(status_label)
+                            .child(
+                                div()
+                                    .id("query-status-title")
+                                    .test_support()
+                                    .min_w_0()
+                                    .truncate()
+                                    .aria_label(tab.status.clone())
+                                    .text_color(cx.theme().foreground)
+                                    .child(tab.status.clone()),
+                            )
+                            .when_some(tab.status_detail.clone(), |row, detail| {
+                                row.child(
+                                    div()
+                                        .id("query-status-detail")
+                                        .test_support()
+                                        .min_w_0()
+                                        .truncate()
+                                        .aria_label(detail.clone())
+                                        .child(detail),
+                                )
+                            })
+                            .when_some(tab.elapsed, |row, elapsed| {
+                                let elapsed = format!("{:.2} s", elapsed.as_secs_f64());
+                                row.child(
+                                    div()
+                                        .id("query-elapsed")
+                                        .test_support()
+                                        .flex_shrink_0()
+                                        .aria_label(format!("Elapsed: {elapsed}"))
+                                        .child(elapsed),
+                                )
+                            }),
+                    ),
             )
             .child(
                 div()
@@ -586,6 +642,9 @@ impl Qrow {
                             .aria_label(workspace_status)
                             .child(workspace_status),
                     )
+                    .when(self.settings.assistant.enabled, |el| {
+                        el.child(self.assistant_button(cx))
+                    })
                     .child(self.activity_button(cx)),
             )
     }
@@ -778,6 +837,12 @@ impl Qrow {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ShowConnections, _, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowSignIns, _, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
@@ -791,7 +856,6 @@ impl Qrow {
             }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
-            .on_action(cx.listener(Self::open_sign_ins))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
@@ -928,12 +992,16 @@ impl Render for Qrow {
             .size_full()
             .items_stretch()
             .when(self.sidebar, |el| {
-                el.child(
-                    div()
-                        .w(self.sidebar_width)
-                        .flex_shrink_0()
-                        .child(self.connections(window, cx)),
-                )
+                el.child(div().w(self.sidebar_width).flex_shrink_0().map(|el| {
+                    match self.sidebar_panel {
+                        SidebarPanel::Connections => {
+                            el.child(self.connections(window, cx).into_any_element())
+                        }
+                        SidebarPanel::SignIns => {
+                            el.child(self.sign_ins_sidebar(cx).into_any_element())
+                        }
+                    }
+                }))
                 .child(self.splitter(true, cx))
             })
             .child(

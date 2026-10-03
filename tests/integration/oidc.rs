@@ -528,7 +528,7 @@ fn a_connection_without_a_sign_in_fails_before_connecting() {
     };
     let error = setup.service.secret(&profile).unwrap_err();
     assert_eq!(failure(&error), Failure::SignInRequired);
-    assert!(error.to_string().contains("Settings > Sign-ins"));
+    assert!(error.to_string().contains("in the Sign-ins sidebar"));
     let missing = Profile {
         authentication: Authentication::Oidc {
             sign_in: Uuid::new_v4(),

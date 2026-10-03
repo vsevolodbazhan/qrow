@@ -1,16 +1,21 @@
-//! Settings > Sign-ins: reusable OpenID Connect sign-ins, their browser
-//! sign-in, sign-out, and the sessions that use them.
+//! Sign-ins: reusable OpenID Connect sign-ins in the Sign-ins sidebar and the
+//! Sign-in Settings dialog, their browser sign-in and sign-out, and the
+//! sessions that use them.
 use super::environment::Browser;
-use super::settings_view::setting_id;
 use super::*;
 use crate::{
     model::{Authentication, Identity, SignIn},
     oidc::{self, Failure, Status},
 };
+use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
+    Icon,
+    alert::Alert,
+    button::ButtonCustomVariant,
+    combobox::ComboboxEvent,
+    form::{Field, Form},
     h_flex,
-    label::Label,
-    setting::{RenderOptions, SettingGroup, SettingItem, SettingPage},
+    spinner::Spinner,
     v_flex,
 };
 use std::{
@@ -26,58 +31,79 @@ enum Outcome {
     Retried(Uuid, Result<(), String>),
 }
 
-/// The inline form that adds or edits a sign-in.
+/// The form of the Sign-in Settings dialog, which adds or edits a sign-in.
 pub(super) struct SignInEditor {
     /// `None` adds a new sign-in.
     id: Option<Uuid>,
+    /// Connection Settings opened the dialog. A new sign-in becomes the
+    /// choice of its Sign-in list.
+    for_connection: bool,
     /// Name, issuer, client ID, scopes, resource, database hosts, callback port.
     fields: Vec<Entity<InputState>>,
     error: Option<String>,
-    /// Enter in a field saves the form.
-    _subscriptions: Vec<Subscription>,
 }
 
-const EDITOR_FIELDS: [(&str, &str, &str); 7] = [
-    ("Name", "Shown in Connection Settings.", "Company"),
+/// The fields of the Sign-in Settings dialog: element ID, label,
+/// description, and placeholder.
+const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     (
+        "sign-in-name",
+        "Name",
+        "Shown in the Sign-ins sidebar and in Connection Settings.",
+        "Company",
+    ),
+    (
+        "sign-in-issuer",
         "Issuer",
         "The issuer URL of the provider, for example the URL of a Keycloak realm.",
         "https://id.example.com/realms/data",
     ),
     (
+        "sign-in-client-id",
         "Client ID",
         "The public client that the provider registered for Qrow. Qrow uses no client secret.",
         "qrow-desktop",
     ),
     (
+        "sign-in-scopes",
         "Scopes",
         "Separate scopes with spaces. Qrow always requests openid. Add offline_access if the provider requires it for refresh tokens.",
         "profile email",
     ),
     (
+        "sign-in-resource",
         "Resource",
         "Optional. An RFC 8707 resource indicator for the access tokens.",
         "",
     ),
     (
+        "sign-in-database-hosts",
         "Database hosts",
         "The Kyuubi hosts that can receive the access tokens. Separate hosts with spaces or commas.",
         "kyuubi.example.com",
     ),
     (
+        "sign-in-callback-port",
         "Callback port",
         "Optional. The loopback port of the browser callback. Leave empty to use an available port.",
         "",
     ),
 ];
 
+/// The fields that a signed-in account keeps: issuer, client ID, scopes,
+/// and resource.
+const TOKEN_FIELDS: std::ops::RangeInclusive<usize> = 1..=4;
+
 pub(super) struct SignInState {
     /// Browser sign-ins that run, with their cancellation flags.
     pending: HashMap<Uuid, Arc<AtomicBool>>,
     signing_out: HashSet<Uuid>,
     retrying: HashSet<Uuid>,
-    /// The last failure of an action, shown beside the sign-in.
+    /// The last failure of an action, shown with the sign-in.
     errors: HashMap<Uuid, String>,
+    /// The statuses that the window shows. A refresh on a worker thread can
+    /// change a status.
+    statuses: Vec<(Uuid, Status)>,
     outcomes: (mpsc::Sender<Outcome>, mpsc::Receiver<Outcome>),
     /// Authorization URLs to open on the main thread.
     urls: (mpsc::Sender<String>, mpsc::Receiver<String>),
@@ -92,6 +118,7 @@ impl SignInState {
             signing_out: HashSet::new(),
             retrying: HashSet::new(),
             errors: HashMap::new(),
+            statuses: Vec::new(),
             outcomes: mpsc::channel(),
             urls: mpsc::channel(),
             browser,
@@ -105,6 +132,20 @@ impl SignInState {
             cancel.store(true, Ordering::SeqCst);
         }
     }
+}
+
+/// What the Sign-ins sidebar and the Sign-in Settings dialog show about the
+/// account of a sign-in.
+struct Account {
+    /// The second line of the sidebar row.
+    summary: String,
+    /// The full status, for the dialog.
+    detail: String,
+    actions: Vec<SignInAction>,
+    /// A browser sign-in or a sign-out runs.
+    working: bool,
+    /// The sign-in needs the user before its connections can work.
+    attention: bool,
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -297,8 +338,8 @@ impl Qrow {
         cx.notify();
     }
 
-    /// Applies the results of background sign-in work. Returns whether
-    /// something changed.
+    /// Applies the results of background sign-in work, and notes a change of
+    /// status from a refresh. Returns whether something changed.
     pub(super) fn tick_sign_ins(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let urls: Vec<String> = self.sign_in_ui.urls.1.try_iter().collect();
@@ -375,15 +416,495 @@ impl Qrow {
                 }
             }
         }
+        let statuses: Vec<(Uuid, Status)> = self
+            .sign_ins
+            .iter()
+            .map(|sign_in| (sign_in.id, self.oidc.status(sign_in.id)))
+            .collect();
+        if statuses != self.sign_in_ui.statuses {
+            self.sign_in_ui.statuses = statuses;
+            changed = true;
+        }
         changed
     }
 
-    pub(super) fn open_sign_in_editor(
+    /// The account of a sign-in, with the actions that apply to it.
+    fn account(&self, id: Uuid) -> Account {
+        use SignInAction::*;
+        let failed = self.sign_in_ui.errors.contains_key(&id);
+        if self.demo {
+            return Account {
+                summary: "Not available in the demo".into(),
+                detail: "The demo does not sign in.".into(),
+                actions: vec![],
+                working: false,
+                attention: false,
+            };
+        }
+        if self.sign_in_ui.pending.contains_key(&id) {
+            return Account {
+                summary: "Waiting for the browser…".into(),
+                detail: "Waiting for the browser. Finish the sign-in there.".into(),
+                actions: vec![Cancel],
+                working: true,
+                attention: false,
+            };
+        }
+        if self.sign_in_ui.signing_out.contains(&id) {
+            return Account {
+                summary: "Signing out…".into(),
+                detail: "Signing out…".into(),
+                actions: vec![],
+                working: true,
+                attention: false,
+            };
+        }
+        match self.oidc.status(id) {
+            Status::SignedOut => Account {
+                summary: "Not signed in".into(),
+                detail: "Not signed in.".into(),
+                actions: vec![SignIn],
+                working: false,
+                attention: failed || !self.connections_using(id).is_empty(),
+            },
+            Status::SignedIn(identity) => Account {
+                summary: identity.display().to_owned(),
+                detail: format!("Signed in as {}.", identity.display()),
+                actions: vec![SignOut],
+                working: false,
+                attention: failed,
+            },
+            Status::SignInRequired(identity, _) => Account {
+                summary: "Expired · Sign in again".into(),
+                detail: format!(
+                    "The sign-in of {} has expired. Sign in again.",
+                    identity.display()
+                ),
+                actions: vec![SignIn, SignOut],
+                working: false,
+                attention: true,
+            },
+            Status::NetworkFailure(identity, message) => Account {
+                summary: "Cannot reach the provider".into(),
+                detail: format!(
+                    "Signed in as {}. Qrow could not reach the provider: {message}",
+                    identity.display()
+                ),
+                actions: vec![Retry, SignOut],
+                working: false,
+                attention: true,
+            },
+        }
+    }
+
+    /// The number of sign-ins that need the user, for the status bar.
+    pub(super) fn sign_ins_needing_attention(&self) -> usize {
+        self.sign_ins
+            .iter()
+            .filter(|sign_in| self.account(sign_in.id).attention)
+            .count()
+    }
+
+    /// Whether a browser sign-in or a sign-out runs.
+    pub(super) fn sign_ins_working(&self) -> bool {
+        !self.sign_in_ui.pending.is_empty() || !self.sign_in_ui.signing_out.is_empty()
+    }
+
+    /// Runs `action` on the sign-in `id`.
+    fn run_sign_in_action(&mut self, id: Uuid, action: SignInAction, cx: &mut Context<Self>) {
+        match action {
+            SignInAction::SignIn => self.start_sign_in(id, cx),
+            SignInAction::Cancel => self.cancel_sign_in(id, cx),
+            SignInAction::SignOut => self.sign_out(id, cx),
+            SignInAction::Retry => self.retry_sign_in(id, cx),
+        }
+    }
+
+    /// Whether `action` must wait. Signing out or in as another account
+    /// releases sessions, so it waits until their work ends.
+    fn sign_in_action_blocked(&self, id: Uuid, action: SignInAction) -> bool {
+        match action {
+            SignInAction::SignIn | SignInAction::SignOut => self.sign_in_busy(id),
+            SignInAction::Retry => self.sign_in_ui.retrying.contains(&id),
+            SignInAction::Cancel => false,
+        }
+    }
+
+    /// The Sign-ins sidebar: its header and one row for each sign-in.
+    pub(super) fn sign_ins_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let action_size = self.ui_px(28.);
+        v_flex()
+            .size_full()
+            .bg(cx.theme().sidebar)
+            .child(
+                h_flex()
+                    .h(self.ui_px(workspace_view::TAB_BAR_HEIGHT))
+                    .flex_shrink_0()
+                    .items_center()
+                    .pl_3()
+                    .pr_2()
+                    .gap_1()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_base()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Sign-ins"),
+                    )
+                    .child(
+                        Button::new("add-sign-in")
+                            .ghost()
+                            .small()
+                            .w(action_size)
+                            .h(action_size)
+                            .flex_shrink_0()
+                            .icon(IconName::Plus)
+                            .disabled(self.demo)
+                            .accessibility_label("New Sign-in")
+                            .tooltip("New Sign-in…")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_sign_in_editor(None, false, window, cx)
+                            })),
+                    ),
+            )
+            .when(self.sign_ins.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .id("sign-ins-empty")
+                        .p_3()
+                        .gap_2()
+                        .text_sm()
+                        .child(div().font_weight(FontWeight::MEDIUM).child("No sign-ins"))
+                        .child(
+                            div().text_color(cx.theme().muted_foreground).child(
+                                "A sign-in lets connections use your account at an OpenID Connect provider. Several connections can use one sign-in.",
+                            ),
+                        )
+                        .child(
+                            div().pt_1().child(
+                                Button::new("add-first-sign-in")
+                                    .small()
+                                    .label("Add Sign-in…")
+                                    .disabled(self.demo)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_sign_in_editor(None, false, window, cx)
+                                    })),
+                            ),
+                        ),
+                )
+            })
+            .when(!self.sign_ins.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .id("sign-ins-list")
+                        .test_support()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .p_2()
+                        .gap_0p5()
+                        .children(
+                            self.sign_ins
+                                .iter()
+                                .map(|sign_in| self.sign_in_row(sign_in, cx)),
+                        ),
+                )
+            })
+    }
+
+    /// The row of a sign-in: its name and account. Click opens Sign-in
+    /// Settings; right-click opens the menu of the sign-in.
+    fn sign_in_row(&self, sign_in: &SignIn, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let id = sign_in.id;
+        let account = self.account(id);
+        let error = self.sign_in_ui.errors.get(&id).cloned();
+        let slot_width = self.ui_px(28.);
+        let mut tooltip = format!(
+            "{}\nDatabase hosts: {}",
+            sign_in.issuer,
+            sign_in.allowed_hosts.join(", ")
+        );
+        if let Some(error) = &error {
+            tooltip.push('\n');
+            tooltip.push_str(error);
+        }
+        let summary = if error.is_some() {
+            "The last action failed".to_owned()
+        } else {
+            account.summary.clone()
+        };
+        let accessibility_label = format!("{}, {summary}", sign_in.name);
+        let menu_open = self.menu.is_some();
+        // The first action of the account is the next step, like Sign In
+        // for an expired sign-in.
+        let primary = account
+            .actions
+            .first()
+            .copied()
+            .filter(|action| matches!(action, SignInAction::SignIn | SignInAction::Cancel));
+        let button = Button::new(SharedString::from(format!("sign-in-{id}")))
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .color(transparent_black())
+                    .hover(transparent_black())
+                    .active(transparent_black())
+                    .foreground(cx.theme().sidebar_foreground)
+                    .shadow(false),
+            )
+            .small()
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .px_2()
+            .accessibility_label(accessibility_label)
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_2()
+                    .child(
+                        Icon::new(AssetIconName::KeyRound)
+                            .size_4()
+                            .flex_shrink_0()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_start()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .truncate()
+                                    .text_base()
+                                    .line_height(relative(1.25))
+                                    .child(sign_in.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("sign-in-{id}-account")))
+                                    .test_support()
+                                    .role(Role::Label)
+                                    .aria_label(summary.clone())
+                                    .w_full()
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(if error.is_some() {
+                                        cx.theme().danger
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(summary),
+                            ),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_sign_in_editor(Some(id), false, window, cx)
+            }));
+        let slot = div()
+            .flex_shrink_0()
+            .min_w(slot_width)
+            .flex()
+            .items_center()
+            .justify_center()
+            .pr_1();
+        let trailing = match primary {
+            Some(action) => slot.child(
+                Button::new(SharedString::from(format!(
+                    "sign-in-{id}-{}",
+                    action.slug()
+                )))
+                .xsmall()
+                .label(action.button_label())
+                .disabled(self.sign_in_action_blocked(id, action))
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)),
+                ),
+            ),
+            None if account.working => {
+                slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+            }
+            None if account.attention => slot.child(
+                Icon::new(AssetIconName::TriangleAlert)
+                    .small()
+                    .text_color(cx.theme().warning),
+            ),
+            None => slot,
+        };
+        h_flex()
+            .id(SharedString::from(format!("sign-in-row-{id}")))
+            .when(!menu_open, |el| {
+                el.tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+                })
+            })
+            .w_full()
+            .h(self.ui_px(44.))
+            .rounded(cx.theme().radius)
+            .hover(|el| el.bg(cx.theme().tokens.list_hover))
+            .child(button)
+            .child(trailing)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |_, event: &MouseDownEvent, window, cx| {
+                    let position = event.position;
+                    cx.defer_in(window, move |this, window, cx| {
+                        this.open_sign_in_menu(id, position, window, cx)
+                    });
+                }),
+            )
+    }
+
+    /// The menu of a sign-in row: the account actions, Edit, and Delete.
+    fn open_sign_in_menu(
         &mut self,
-        id: Option<Uuid>,
+        id: Uuid,
+        position: Point<Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.sign_ins.iter().any(|sign_in| sign_in.id == id) {
+            return;
+        }
+        let account = self.account(id);
+        let in_use = !self.connections_using(id).is_empty();
+        let actions: Vec<_> = account
+            .actions
+            .iter()
+            .map(|&action| {
+                (
+                    action.menu_label(),
+                    self.sign_in_action_blocked(id, action),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.run_sign_in_action(id, action, cx)
+                    }),
+                )
+            })
+            .collect();
+        let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.open_sign_in_editor(Some(id), false, window, cx)
+        });
+        let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.confirm_delete_sign_in(id, window, cx)
+        });
+        let working = account.working;
+        self.open_context_menu(
+            position,
+            move |menu, _, _| {
+                let mut menu = menu.item(menu_section("Sign-in"));
+                for (label, blocked, listener) in actions {
+                    menu = menu.item(
+                        PopupMenuItem::new(label)
+                            .on_click(listener)
+                            .disabled(blocked),
+                    );
+                }
+                menu.item(PopupMenuItem::new("Edit").on_click(edit).disabled(working))
+                    .item(
+                        PopupMenuItem::new("Delete")
+                            .on_click(delete)
+                            .disabled(working || in_use),
+                    )
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// Asks before Delete removes a sign-in and its tokens.
+    fn confirm_delete_sign_in(&mut self, id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.connections_using(id).is_empty() || self.account(id).working {
+            return;
+        }
+        let Some(sign_in) = self.sign_ins.iter().find(|sign_in| sign_in.id == id) else {
+            return;
+        };
+        let display_name = truncate_display_name(&sign_in.name);
+        let weak = cx.weak_entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert
+                .width(px(360.))
+                .title(format!("Delete sign-in \"{display_name}\"?"))
+                .description(
+                    "This signs out, deletes the sign-in, and removes its tokens from Keychain. This cannot be undone.",
+                )
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("cancel-delete-sign-in")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| {
+                                    window.close_dialog(cx);
+                                }),
+                        )
+                        .child(
+                            Button::new("confirm-delete-sign-in")
+                                .label("Delete sign-in")
+                                .with_variant(ButtonVariant::Danger)
+                                .on_click(move |_, window, cx| {
+                                    let _ =
+                                        confirm.update(cx, |this, cx| this.remove_sign_in(id, cx));
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+
+    /// Renders Connection Settings again when its Sign-in list changes.
+    pub(super) fn subscribe_sign_in_list(
+        list: &connection_form::RowCombobox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(
+            list,
+            window,
+            |_, _, _: &ComboboxEvent<SearchableVec<connection_form::Row>>, _, cx| cx.notify(),
+        )
+    }
+
+    /// Gives Connection Settings a new, closed Sign-in list with the current
+    /// sign-ins and `selected` chosen.
+    fn replace_sign_in_list(
+        &mut self,
+        selected: Option<Uuid>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let choices = connection_form::sign_in_choices(&self.sign_ins);
+        let list = connection_form::sign_in_combobox(&choices, selected, window, cx);
+        let subscription = Self::subscribe_sign_in_list(&list, window, cx);
+        if let Some(form) = &mut self.form {
+            form.sign_in_choices = choices;
+            form.sign_in = list;
+            form._sign_in_subscription = subscription;
+        }
+    }
+
+    /// Opens Sign-in Settings for the sign-in `id`, or for a new sign-in.
+    /// `for_connection` opens it on top of Connection Settings.
+    pub(super) fn open_sign_in_editor(
+        &mut self,
+        id: Option<Uuid>,
+        for_connection: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let blocked = if for_connection {
+            self.form.is_none() || self.sign_in_ui.editor.is_some()
+        } else {
+            self.dialog_open() || window.has_active_dialog(cx)
+        };
+        if blocked || self.demo || id.is_some_and(|id| self.account(id).working) {
+            return;
+        }
         let base = id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
             .cloned()
@@ -404,7 +925,7 @@ impl Qrow {
         let fields: Vec<_> = values
             .into_iter()
             .zip(EDITOR_FIELDS)
-            .map(|(value, (_, _, placeholder))| {
+            .map(|(value, (_, _, _, placeholder))| {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .placeholder(placeholder)
@@ -412,32 +933,63 @@ impl Qrow {
                 })
             })
             .collect();
-        fields[0].update(cx, |field, cx| field.focus(window, cx));
-        let subscriptions = fields
-            .iter()
-            .map(|field| {
-                cx.subscribe_in(field, window, |this, _, event: &InputEvent, _, cx| {
-                    if matches!(event, InputEvent::PressEnter { .. }) {
-                        this.save_sign_in_editor(cx);
-                    }
-                })
-            })
-            .collect();
+        let first = fields[0].clone();
+        // The New Sign-in… button is in the open Sign-in list. A new list is
+        // closed, so it does not take the keys of the dialog.
+        if let Some(form) = self.form.as_ref().filter(|_| for_connection) {
+            let chosen = connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
+            self.replace_sign_in_list(chosen, window, cx);
+        }
         self.sign_in_ui.editor = Some(SignInEditor {
-            id,
+            id: id.filter(|id| self.sign_ins.iter().any(|sign_in| sign_in.id == *id)),
+            for_connection,
             fields,
             error: None,
-            _subscriptions: subscriptions,
         });
+        self.open_sign_in_dialog(window, cx);
+        first.update(cx, |field, cx| field.focus(window, cx));
         cx.notify();
     }
 
-    fn close_sign_in_editor(&mut self, cx: &mut Context<Self>) {
+    fn open_sign_in_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let weak = cx.weak_entity();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let close = weak.clone();
+            let save = weak.clone();
+            let content = weak.update(cx, |this, cx| this.sign_in_content(cx)).ok();
+            let footer = weak.update(cx, |this, cx| this.sign_in_footer(cx)).ok();
+            let rem = window.rem_size();
+            let viewport = window.viewport_size();
+            let height = (rem * 44.).min(viewport.height - rem * 4.);
+            dialog
+                .title("Sign-in Settings")
+                .w(profile_view::dialog_width(window))
+                .h(height)
+                .margin_top((viewport.height - height) / 2.)
+                .overlay_closable(false)
+                // Enter saves. A successful save closes the dialog.
+                .on_ok(move |_, window, cx| {
+                    let _ = save.update(cx, |this, cx| this.save_sign_in_editor(window, cx));
+                    false
+                })
+                .children(content)
+                .when_some(footer, |dialog, footer| dialog.footer(footer))
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |this, cx| {
+                        this.sign_in_ui.editor = None;
+                        cx.notify();
+                    });
+                })
+        });
+    }
+
+    fn close_sign_in_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sign_in_ui.editor = None;
+        window.close_dialog(cx);
         cx.notify();
     }
 
-    fn save_sign_in_editor(&mut self, cx: &mut Context<Self>) {
+    fn save_sign_in_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = &self.sign_in_ui.editor else {
             return;
         };
@@ -446,6 +998,7 @@ impl Qrow {
             .iter()
             .map(|field| field.read(cx).value().to_string())
             .collect();
+        let for_connection = editor.for_connection;
         let base = editor
             .id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
@@ -465,287 +1018,206 @@ impl Qrow {
             );
             Ok(sign_in)
         });
-        match result {
-            Ok(sign_in) => {
-                match self
-                    .sign_ins
-                    .iter_mut()
-                    .find(|other| other.id == sign_in.id)
-                {
-                    Some(existing) => *existing = sign_in,
-                    None => self.sign_ins.push(sign_in),
-                }
-                self.sign_in_ui.editor = None;
-                self.sync_sign_ins(cx);
-            }
+        let sign_in = match result {
+            Ok(sign_in) => sign_in,
             Err(error) => {
                 if let Some(editor) = &mut self.sign_in_ui.editor {
                     editor.error = Some(error.to_string());
                 }
                 cx.notify();
+                return;
             }
-        }
-    }
-
-    /// The text and the recovery actions of a sign-in.
-    fn sign_in_status(&self, id: Uuid) -> (String, Vec<SignInAction>) {
-        use SignInAction::*;
-        if self.demo {
-            return ("The demo does not sign in.".into(), vec![]);
-        }
-        if self.sign_in_ui.pending.contains_key(&id) {
-            return (
-                "Waiting for the browser. Finish the sign-in there.".into(),
-                vec![Cancel],
-            );
-        }
-        if self.sign_in_ui.signing_out.contains(&id) {
-            return ("Signing out…".into(), vec![]);
-        }
-        match self.oidc.status(id) {
-            Status::SignedOut => ("Not signed in".into(), vec![SignIn]),
-            Status::SignedIn(identity) => (
-                format!("Signed in as {}", identity.display()),
-                vec![SignOut],
-            ),
-            Status::SignInRequired(identity, _) => (
-                format!(
-                    "The sign-in of {} has expired. Sign in again.",
-                    identity.display()
-                ),
-                vec![SignIn, SignOut],
-            ),
-            Status::NetworkFailure(identity, message) => (
-                format!(
-                    "Signed in as {}. Qrow could not reach the provider: {message}",
-                    identity.display()
-                ),
-                vec![Retry, SignOut],
-            ),
-        }
-    }
-
-    pub(super) fn sign_ins_page(&self, cx: &mut Context<Self>) -> SettingPage {
-        let owner = cx.weak_entity();
-        let page = SettingPage::new("Sign-ins").resettable(false);
-        if let Some(editor) = &self.sign_in_ui.editor {
-            return page.group(self.sign_in_editor_group(editor, owner));
-        }
-        let mut page = page;
-        for sign_in in &self.sign_ins {
-            page = page.group(self.sign_in_group(sign_in, owner.clone()));
-        }
-        let empty = self.sign_ins.is_empty();
-        page.group(
-            SettingGroup::new().item(row(
-                "sign-ins-add".into(),
-                if empty { "No sign-ins" } else { "Add another sign-in" }.into(),
-                if empty {
-                    "A sign-in lets connections use OpenID Connect. Several connections can use one sign-in, and each keeps its own database username."
-                } else {
-                    "Use a separate sign-in for each provider account."
-                }
-                .into(),
-                None,
-                move |_, _| {
-                    let owner = owner.clone();
-                    Button::new("add-sign-in")
-                        .label("Add sign-in…")
-                        .on_click(move |_, window, cx| {
-                            let _ = owner.update(cx, |this, cx| {
-                                this.open_sign_in_editor(None, window, cx)
-                            });
-                        })
-                        .into_any_element()
-                },
-            )),
-        )
-    }
-
-    fn sign_in_group(&self, sign_in: &SignIn, owner: WeakEntity<Qrow>) -> SettingGroup {
+        };
         let id = sign_in.id;
-        let (status, actions) = self.sign_in_status(id);
-        let busy = self.sign_in_busy(id);
-        let retrying = self.sign_in_ui.retrying.contains(&id);
-        let error = self.sign_in_ui.errors.get(&id).cloned();
-        let users = self.connections_using(id);
-        let working =
-            self.sign_in_ui.pending.contains_key(&id) || self.sign_in_ui.signing_out.contains(&id);
-        let account_owner = owner.clone();
-        let account = row(
-            format!("sign-in-{id}-account").into(),
-            "Account".into(),
-            status.into(),
-            error.map(SharedString::from),
-            move |_, _| {
-                let buttons = actions.iter().map(|action| {
-                    let owner = account_owner.clone();
-                    let action = *action;
-                    // Signing out or in as another account releases sessions,
-                    // so it waits until their work ends.
-                    let blocked =
-                        busy && matches!(action, SignInAction::SignOut | SignInAction::SignIn);
-                    Button::new(SharedString::from(format!(
-                        "sign-in-{id}-{}",
-                        action.slug()
-                    )))
-                    .label(action.label())
-                    .disabled(blocked || (retrying && action == SignInAction::Retry))
-                    .when(blocked, |button| {
-                        button.tooltip("Wait for queries that use this sign-in to finish.")
-                    })
-                    .on_click(move |_, _, cx| {
-                        let _ = owner.update(cx, |this, cx| match action {
-                            SignInAction::SignIn => this.start_sign_in(id, cx),
-                            SignInAction::Cancel => this.cancel_sign_in(id, cx),
-                            SignInAction::SignOut => this.sign_out(id, cx),
-                            SignInAction::Retry => this.retry_sign_in(id, cx),
-                        });
-                    })
-                });
-                h_flex()
-                    .gap_2()
-                    .justify_end()
-                    .children(buttons)
-                    .into_any_element()
-            },
-        );
-        let edit = owner.clone();
-        let provider = row(
-            format!("sign-in-{id}-provider").into(),
-            "Provider".into(),
-            format!(
-                "{} · client {} · database hosts {}",
-                sign_in.issuer,
-                sign_in.client_id,
-                sign_in.allowed_hosts.join(", ")
-            )
-            .into(),
-            None,
-            move |_, _| {
-                let edit = edit.clone();
-                Button::new(SharedString::from(format!("sign-in-{id}-edit")))
-                    .label("Edit…")
-                    .disabled(working)
-                    .on_click(move |_, window, cx| {
-                        let _ = edit.update(cx, |this, cx| {
-                            this.open_sign_in_editor(Some(id), window, cx)
-                        });
-                    })
-                    .into_any_element()
-            },
-        );
-        let in_use = !users.is_empty();
-        let connections = row(
-            format!("sign-in-{id}-connections").into(),
-            "Connections".into(),
-            if in_use {
-                format!(
-                    "Used by {}. To remove the sign-in, choose another authentication for these connections first.",
-                    users.join(", ")
-                )
-            } else {
-                "No connection uses this sign-in.".to_owned()
-            }
-            .into(),
-            None,
-            move |_, _| {
-                let remove = owner.clone();
-                Button::new(SharedString::from(format!("sign-in-{id}-remove")))
-                    .label("Remove")
-                    .with_variant(ButtonVariant::Danger)
-                    .disabled(working || in_use)
-                    .on_click(move |_, _, cx| {
-                        let _ = remove.update(cx, |this, cx| this.remove_sign_in(id, cx));
-                    })
-                    .into_any_element()
-            },
-        );
-        SettingGroup::new()
-            .title(sign_in.name.clone())
-            .item(account)
-            .item(provider)
-            .item(connections)
+        match self
+            .sign_ins
+            .iter_mut()
+            .find(|other| other.id == sign_in.id)
+        {
+            Some(existing) => *existing = sign_in,
+            None => self.sign_ins.push(sign_in),
+        }
+        self.sync_sign_ins(cx);
+        // A sign-in that Connection Settings added becomes its choice.
+        if for_connection && self.form.is_some() {
+            self.replace_sign_in_list(Some(id), window, cx);
+        }
+        self.close_sign_in_editor(window, cx);
     }
 
-    fn sign_in_editor_group(&self, editor: &SignInEditor, owner: WeakEntity<Qrow>) -> SettingGroup {
-        let editing = editor
+    /// The Account field of Sign-in Settings: the status, the last error, and
+    /// the account actions.
+    fn account_field(&self, id: Uuid, signed_in: bool, cx: &mut Context<Self>) -> Field {
+        let account = self.account(id);
+        let error = self.sign_in_ui.errors.get(&id).cloned();
+        let buttons = account.actions.iter().map(|&action| {
+            let blocked = self.sign_in_action_blocked(id, action);
+            Button::new(SharedString::from(format!(
+                "sign-in-account-{}",
+                action.slug()
+            )))
+            .small()
+            .label(action.button_label())
+            .disabled(blocked)
+            .when(
+                blocked && matches!(action, SignInAction::SignIn | SignInAction::SignOut),
+                |button| button.tooltip("Wait for queries that use this sign-in to finish."),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)))
+        });
+        let field = Field::new().label("Account").child(
+            v_flex()
+                .w_full()
+                .gap_2()
+                .child(
+                    div()
+                        .id("sign-in-account-status")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(account.detail.clone())
+                        .child(account.detail),
+                )
+                .when_some(error, |el, error| {
+                    el.child(
+                        div()
+                            .id("sign-in-account-error")
+                            .test_support()
+                            .role(Role::Alert)
+                            .aria_label(error.clone())
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(error),
+                    )
+                })
+                .when(!account.actions.is_empty(), |el| {
+                    el.child(h_flex().gap_2().children(buttons))
+                }),
+        );
+        if signed_in {
+            field.description("Sign out to change the issuer, client ID, scopes, or resource.")
+        } else {
+            field
+        }
+    }
+
+    fn sign_in_content(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(editor) = &self.sign_in_ui.editor else {
+            return div().into_any_element();
+        };
+        let existing = editor
             .id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id));
-        let signed_in = editing.is_some_and(|sign_in| sign_in.identity.is_some());
-        let title = match editing {
-            Some(sign_in) => format!("Edit \u{201c}{}\u{201d}", sign_in.name),
-            None => "New sign-in".to_owned(),
-        };
-        let mut group = SettingGroup::new().title(title);
-        if signed_in {
-            group =
-                group.description("Sign out to change the issuer, client ID, scopes, or resource.");
-        }
-        for (index, (label, description, _)) in EDITOR_FIELDS.into_iter().enumerate() {
-            let input = editor.fields[index].clone();
-            let locked = signed_in && (1..=4).contains(&index);
-            let row_id = format!("{}-row", setting_id(&format!("sign-in {label}")));
-            group = group.item(stacked_row(
-                row_id.into(),
-                label.into(),
-                description.into(),
-                move |_, _| {
-                    Input::new(&input)
-                        .id(setting_id(&format!("sign-in {label}")))
-                        .w_full()
-                        .disabled(locked)
-                        .aria_label(label)
-                        .into_any_element()
-                },
-            ));
-        }
-        let cancel = owner.clone();
-        let error = editor.error.clone();
-        group.item(SettingItem::render(
-            move |_: &RenderOptions, _: &mut Window, cx: &mut App| {
-                let cancel = cancel.clone();
-                let save = owner.clone();
-                let error = error.clone();
-                v_flex()
+        let signed_in = existing.is_some_and(|sign_in| sign_in.identity.is_some());
+        let account = existing.map(|sign_in| self.account_field(sign_in.id, signed_in, cx));
+        let users = existing
+            .map(|sign_in| self.connections_using(sign_in.id))
+            .unwrap_or_default();
+        let fields = EDITOR_FIELDS.into_iter().enumerate().map(|(index, field)| {
+            let (id, label, description, _) = field;
+            Field::new().label(label).description(description).child(
+                Input::new(&editor.fields[index])
+                    .id(id)
                     .w_full()
-                    .gap_2()
-                    .when_some(error, |el, error| {
-                        el.child(
-                            div()
-                                .id("sign-in-form-error")
-                                .test_support()
-                                .role(Role::Alert)
-                                .aria_label(error.clone())
-                                .text_sm()
-                                .text_color(cx.theme().danger)
-                                .child(error),
-                        )
-                    })
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .justify_end()
-                            .child(
-                                Button::new("cancel-sign-in-editor")
-                                    .label("Cancel")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = cancel
-                                            .update(cx, |this, cx| this.close_sign_in_editor(cx));
-                                    }),
+                    .disabled(signed_in && TOKEN_FIELDS.contains(&index))
+                    .aria_label(label),
+            )
+        });
+        let connections = if users.is_empty() {
+            "No connection uses this sign-in.".to_owned()
+        } else {
+            format!(
+                "Used by {}. To delete the sign-in, choose another authentication for these connections first.",
+                users.join(", ")
+            )
+        };
+        v_flex()
+            .key_context("SignInSettings")
+            .on_action(
+                cx.listener(|this, _: &SaveSignIn, window, cx| {
+                    this.save_sign_in_editor(window, cx)
+                }),
+            )
+            .w_full()
+            .child(
+                div()
+                    .text_base()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("OpenID Connect"),
+            )
+            .child(
+                v_flex().pt_3().w_full().gap_2().child(
+                    Form::vertical()
+                        .w_full()
+                        .when_some(account, |form, account| form.child(account))
+                        .children(fields)
+                        .when(existing.is_some(), |form| {
+                            form.child(
+                                Field::new().label("Connections").child(
+                                    div()
+                                        .id("sign-in-connections")
+                                        .test_support()
+                                        .role(Role::Label)
+                                        .aria_label(connections.clone())
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(connections),
+                                ),
                             )
-                            .child(
-                                Button::new("save-sign-in-editor")
-                                    .primary()
-                                    .label("Save")
-                                    .on_click(move |_, _, cx| {
-                                        let _ = save
-                                            .update(cx, |this, cx| this.save_sign_in_editor(cx));
-                                    }),
-                            ),
+                        }),
+                ),
+            )
+            .into_any_element()
+    }
+
+    fn sign_in_footer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let error = self
+            .sign_in_ui
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.error.clone());
+        v_flex()
+            .w_full()
+            .gap_2()
+            .key_context("SignInSettings")
+            .on_action(
+                cx.listener(|this, _: &SaveSignIn, window, cx| {
+                    this.save_sign_in_editor(window, cx)
+                }),
+            )
+            .when_some(error, |el, error| {
+                el.child(
+                    div()
+                        .id("sign-in-form-error")
+                        .test_support()
+                        .role(Role::Alert)
+                        .aria_label(error.clone())
+                        .child(Alert::error("sign-in-form-error-alert", error)),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap_2()
+                    .pt_3()
+                    .child(div().flex_1())
+                    .child(
+                        Button::new("cancel-sign-in-editor")
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.close_sign_in_editor(window, cx)
+                            })),
                     )
-            },
-        ))
+                    .child(
+                        Button::new("save-sign-in-editor")
+                            .primary()
+                            .label("Save")
+                            .tooltip("Save sign-in · ⌘Enter")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.save_sign_in_editor(window, cx)
+                            })),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -774,11 +1246,22 @@ enum SignInAction {
 }
 
 impl SignInAction {
-    fn label(self) -> &'static str {
+    /// The label of a button.
+    fn button_label(self) -> &'static str {
         match self {
-            Self::SignIn => "Sign in…",
+            Self::SignIn => "Sign In…",
             Self::Cancel => "Cancel",
-            Self::SignOut => "Sign out",
+            Self::SignOut => "Sign Out",
+            Self::Retry => "Retry",
+        }
+    }
+
+    /// The label of a menu item, which names its object.
+    fn menu_label(self) -> &'static str {
+        match self {
+            Self::SignIn => "Sign In…",
+            Self::Cancel => "Cancel Sign-in",
+            Self::SignOut => "Sign Out",
             Self::Retry => "Retry",
         }
     }
@@ -791,92 +1274,6 @@ impl SignInAction {
             Self::Retry => "retry",
         }
     }
-}
-
-/// A row with a title, a description, an optional error, and controls at
-/// the trailing edge. The description wraps instead of pushing the controls
-/// out of the page.
-///
-/// The description has the element ID `{id}-description`, and the error
-/// `{id}-error`, so that assistive technology and tests can read them.
-fn row(
-    id: SharedString,
-    title: SharedString,
-    description: SharedString,
-    error: Option<SharedString>,
-    control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-) -> SettingItem {
-    build_row(id, title, description, error, false, control)
-}
-
-/// A [`row`] with the control below the label at the full width, for text
-/// fields with long values such as URLs.
-fn stacked_row(
-    id: SharedString,
-    title: SharedString,
-    description: SharedString,
-    control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-) -> SettingItem {
-    build_row(id, title, description, None, true, control)
-}
-
-fn build_row(
-    id: SharedString,
-    title: SharedString,
-    description: SharedString,
-    error: Option<SharedString>,
-    stacked: bool,
-    control: impl Fn(&mut Window, &mut App) -> AnyElement + 'static,
-) -> SettingItem {
-    let keywords = [title.clone(), description.clone()];
-    SettingItem::render(
-        move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
-            let label = v_flex()
-                .gap_1()
-                .child(Label::new(title.clone()).text_sm())
-                .child(
-                    div()
-                        .id(SharedString::from(format!("{id}-description")))
-                        .test_support()
-                        .aria_label(description.clone())
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(description.clone()),
-                )
-                .when_some(error.clone(), |el, error| {
-                    el.child(
-                        div()
-                            .id(SharedString::from(format!("{id}-error")))
-                            .test_support()
-                            .role(Role::Alert)
-                            .aria_label(error.clone())
-                            .text_sm()
-                            .text_color(cx.theme().danger)
-                            .child(error),
-                    )
-                });
-            let control = div().child(control(window, cx));
-            let layout = if stacked {
-                Axis::Vertical
-            } else {
-                options.layout()
-            };
-            match layout {
-                Axis::Horizontal => h_flex()
-                    .w_full()
-                    .justify_between()
-                    .gap_3()
-                    .child(label.flex_1().min_w_0())
-                    .child(control.flex_shrink_0()),
-                Axis::Vertical => v_flex()
-                    .w_full()
-                    .gap_3()
-                    .child(label.w_full())
-                    .child(control.w_full()),
-            }
-        },
-    )
-    .keywords(keywords)
 }
 
 #[cfg(test)]

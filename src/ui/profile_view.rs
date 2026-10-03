@@ -1,6 +1,7 @@
 use super::*;
 use gpui_kit::component::{
     alert::Alert,
+    combobox::Combobox,
     form::{Field, Form},
     h_flex,
     input::Textarea,
@@ -11,7 +12,7 @@ use gpui_kit::component::{
 
 const DIALOG_REMS: f32 = 40.;
 
-fn dialog_width(window: &Window) -> Pixels {
+pub(super) fn dialog_width(window: &Window) -> Pixels {
     let rem = window.rem_size();
     (rem * DIALOG_REMS).min(window.viewport_size().width - rem * 4.)
 }
@@ -85,22 +86,29 @@ impl Qrow {
         }
         let saving = form.saving.is_some();
         let uses_sign_in = connection_form::uses_sign_in(&form.authentication, cx);
-        let sign_in_description = form
-            .sign_in
-            .read(cx)
-            .selected_index(cx)
-            .and_then(|index| form.sign_in_ids.get(index.row))
-            .map(|id| match self.oidc.identity(*id) {
+        let chosen_sign_in =
+            connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
+        let sign_in_label = chosen_sign_in
+            .and_then(|id| {
+                form.sign_in_choices
+                    .iter()
+                    .find(|(choice, _)| *choice == id)
+            })
+            .map(|(_, name)| name.clone())
+            .unwrap_or_default();
+        let sign_in_description = chosen_sign_in
+            .map(|id| match self.oidc.identity(id) {
                 Some(identity) => format!("Signed in as {}.", identity.display()),
-                None => "Not signed in. Sign in from Settings > Sign-ins.".to_owned(),
+                None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
             })
             .unwrap_or_else(|| {
-                if self.sign_ins.is_empty() {
-                    "Add a sign-in in Settings > Sign-ins first.".to_owned()
+                if form.sign_in_choices.is_empty() {
+                    "Add a sign-in with New Sign-in… in the list.".to_owned()
                 } else {
                     "Choose the sign-in that this connection uses.".to_owned()
                 }
             });
+        let qrow = cx.weak_entity();
         let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
                 .id(connection_form::FIELD_IDS[index])
@@ -177,12 +185,38 @@ impl Qrow {
                                     Field::new()
                                         .label("Sign-in")
                                         .child(
-                                            Select::new(&form.sign_in)
+                                            // The combobox has no accessibility of
+                                            // its own in GPUI Kit 0.6.6, so this
+                                            // element names it and gives its value.
+                                            div()
                                                 .id("connection-sign-in")
+                                                .test_support()
+                                                .role(Role::ComboBox)
+                                                .aria_label("Sign-in")
+                                                .aria_value(sign_in_label)
                                                 .w_full()
-                                                .disabled(saving)
-                                                .placeholder("Choose a sign-in")
-                                                .accessibility_label("Sign-in")
+                                                .child(
+                                                    Combobox::new(&form.sign_in)
+                                                        .w_full()
+                                                        .disabled(saving)
+                                                        .placeholder("Choose a sign-in")
+                                                        .search_placeholder("Search sign-ins…")
+                                                        .footer(move |_, _| {
+                                                            let qrow = qrow.clone();
+                                                            Button::new("connection-new-sign-in")
+                                                                .ghost()
+                                                                .small()
+                                                                .w_full()
+                                                                .justify_start()
+                                                                .icon(IconName::Plus)
+                                                                .label("New Sign-in…")
+                                                                .on_click(move |_, window, cx| {
+                                                                    let _ = qrow.update(cx, |this, cx| {
+                                                                        this.open_sign_in_editor(None, true, window, cx)
+                                                                    });
+                                                                })
+                                                        }),
+                                                )
                                                 .into_any_element(),
                                         )
                                         .description(sign_in_description),

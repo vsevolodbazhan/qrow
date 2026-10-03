@@ -39,7 +39,12 @@ the system interface font, and SQL Keyword Case. It does not change the
 Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
 reports the substitution.
 
-Press **⌘B** to hide or show the Connections sidebar. Drag the sidebar divider
+The sidebar at the left of the window shows
+[Connections](connections.md) or [Sign-ins](connections.md#sign-in-with-openid-connect).
+The two buttons at the left end of the status bar choose the sidebar. Click the
+button of the visible sidebar to hide it. Press **⌘1** for Connections, **⌘2**
+for Sign-ins, and **⌘B** to hide or show the sidebar. The **View** menu has the
+same commands. Qrow opens with the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the

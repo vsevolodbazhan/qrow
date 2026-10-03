@@ -10,17 +10,12 @@ use gpui_kit::component::{
     input::{NumberInputEvent, StepAction},
     label::Label,
     select::{SearchableVec, Select, SelectEvent, SelectState},
-    setting::{
-        RenderOptions, SelectIndex, SettingGroup, SettingItem, SettingPage,
-        Settings as SettingsPanel,
-    },
+    setting::{RenderOptions, SettingGroup, SettingItem, SettingPage, Settings as SettingsPanel},
     switch::Switch,
     v_flex,
 };
 use std::cell::{Cell, RefCell};
 
-/// The position of the Sign-ins page in the page list.
-pub(super) const SIGN_INS_PAGE: usize = 2;
 const DIALOG_REMS: f32 = 56.;
 const DIALOG_HEIGHT_REMS: f32 = 44.;
 const SIDEBAR_REMS: f32 = 11.;
@@ -666,29 +661,18 @@ impl Qrow {
             .border_1()
             .border_color(cx.theme().border)
             .child(
-                // Each initial page has its own panel state, which keeps
-                // the page that it opened on.
-                SettingsPanel::new(if self.settings_page == SIGN_INS_PAGE {
-                    "settings-sign-ins"
-                } else {
-                    "settings"
-                })
-                .default_selected_index(SelectIndex {
-                    page_ix: self.settings_page,
-                    group_ix: None,
-                })
-                // Kit tints the sidebar. The dialog is one surface, so the
-                // divider alone separates the section list from the page.
-                .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
-                .sidebar_width(rem * SIDEBAR_REMS)
-                .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
-                .page(appearance_page(form))
-                .page(assistant_page(
-                    form,
-                    cx.weak_entity(),
-                    self.settings.assistant.enabled,
-                ))
-                .page(self.sign_ins_page(cx)),
+                SettingsPanel::new("settings")
+                    // Kit tints the sidebar. The dialog is one surface, so the
+                    // divider alone separates the section list from the page.
+                    .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
+                    .sidebar_width(rem * SIDEBAR_REMS)
+                    .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+                    .page(appearance_page(form))
+                    .page(assistant_page(
+                        form,
+                        cx.weak_entity(),
+                        self.settings.assistant.enabled,
+                    )),
             )
             .into_any_element()
     }

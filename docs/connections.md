@@ -2,7 +2,8 @@
 
 A connection profile stores the settings for a Kyuubi endpoint. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
-its tabs. Qrow restores the last tab selected for that connection.
+its tabs. To show the Connections sidebar, click the database button at the
+left end of the status bar, press **⌘1**, or select **View → Connections**. Qrow restores the last tab selected for that connection.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -66,15 +67,22 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
+The **Sign-ins** sidebar shows each sign-in with its account. To open it,
+click the key button at the left end of the status bar, press **⌘2**, or
+select **View → Sign-ins**. Click the button again to hide the sidebar. The
+button shows a count when sign-ins need attention: a connection uses a sign-in
+that is not signed in, a sign-in has expired, Qrow cannot reach the provider,
+or the last sign-in action failed.
+
 ### Add a sign-in
 
-1. Select **Qrow → Sign-ins…**. You can also open **Settings…** and select
-   **Sign-ins**.
-2. Click **Add sign-in…**.
-3. Enter a name, the issuer URL, and the client ID.
-4. Enter the scopes that the server requires. Qrow always requests `openid`.
-5. Enter the database hosts that can receive the access tokens.
-6. Click **Save**, or press **Enter** in a field.
+1. Open the **Sign-ins** sidebar and click **+**. In Connection Settings, you
+   can also click **New Sign-in…** at the bottom of the **Sign-in** list. The
+   connection then uses the new sign-in.
+2. Enter a name, the issuer URL, and the client ID.
+3. Enter the scopes that the server requires. Qrow always requests `openid`.
+4. Enter the database hosts that can receive the access tokens.
+5. Click **Save**, or press **Enter** or **⌘Enter**.
 
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
@@ -86,12 +94,17 @@ provider requires an RFC 8707 resource indicator.
 
 ### Sign in and use a sign-in
 
-Click **Sign in…** beside the sign-in. Qrow opens the default browser. Finish
-the sign-in there. Qrow waits up to five minutes. Click **Cancel** to stop.
-Qrow then shows the email or name of the account.
+Click **Sign In…** on the row of the sign-in. Qrow opens the default browser.
+Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
+stop. The row then shows the email or name of the account.
+
+Click a row to open **Sign-in Settings**. The **Account** field shows the
+status and the actions for the account. Right-click a row for **Sign In…**,
+**Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit** and
+**Delete**.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
-**Authentication**, and select the sign-in. The host of the connection must be
+**Authentication**, and select the sign-in in the **Sign-in** list. The host of the connection must be
 one of the database hosts of the sign-in. Qrow does not send a token to
 another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
@@ -99,11 +112,12 @@ use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
 | State | Recovery |
 | --- | --- |
-| **Not signed in** | Click **Sign in…**. |
-| **Waiting for the browser** | Finish the sign-in in the browser, or click **Cancel**. |
-| **Signed in as** an account | No action. |
-| The sign-in has expired | Click **Sign in…**. |
-| Qrow could not reach the provider | Click **Retry**. Qrow keeps the account. |
+| **Not signed in** | Click **Sign In…**. |
+| **Waiting for the browser…** | Finish the sign-in in the browser, or click **Cancel**. |
+| The account email or name | No action. |
+| **Expired · Sign in again** | Click **Sign In…**. |
+| **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
+| **The last action failed** | Open Sign-in Settings to read the error, then try again. |
 
 A query that needs a sign-in fails with **Error: Sign-in required**, and Logs
 names the sign-in. Qrow does not open the browser by itself, and it does not
@@ -112,8 +126,8 @@ error names the database username. SASL PLAIN does not tell why the server
 rejected a token, so Qrow cannot show if the token expired or if the account
 is not available to the identity.
 
-Edit a sign-in with **Edit…**. While you are signed in, you cannot change the
-issuer, client ID, scopes, or resource. Sign out first.
+To edit a sign-in, click its row. While you are signed in, you cannot change
+the issuer, client ID, scopes, or resource. Sign out first.
 
 ### Tokens and sessions
 
@@ -137,9 +151,10 @@ sign-in. Their SQL and downloaded results remain available. A sign-in as
 another account also releases these sessions. If Qrow cannot delete the
 tokens, it shows the error and the sign-in stays signed in.
 
-**Remove** is available only when no connection uses the sign-in. The
-**Connections** row names the connections that use it. Removal also deletes
-the tokens of the sign-in.
+**Delete** is available only when no connection uses the sign-in. The
+**Connections** field of Sign-in Settings names the connections that use it.
+Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
+sign-in.
 
 ### Server requirements
 

@@ -350,13 +350,13 @@ impl Service {
         };
         anyhow::ensure!(
             config.allows_host(host),
-            "The sign-in \"{}\" does not allow sending tokens to {host}. Add the host to the sign-in in Settings > Sign-ins",
+            "The sign-in \"{}\" does not allow sending tokens to {host}. Add the host to the database hosts of the sign-in in the Sign-ins sidebar",
             config.name
         );
         match current {
             None => {
                 return Err(required(format!(
-                    "Sign in to \"{}\" in Settings > Sign-ins, then run the query again",
+                    "Sign in to \"{}\" in the Sign-ins sidebar, then run the query again",
                     config.name
                 )));
             }
@@ -390,7 +390,7 @@ impl Service {
         }
         let expired_message = || {
             format!(
-                "The sign-in \"{}\" has expired. Sign in again in Settings > Sign-ins",
+                "The sign-in \"{}\" has expired. Sign in again in the Sign-ins sidebar",
                 config.name
             )
         };

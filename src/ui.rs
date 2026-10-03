@@ -67,14 +67,16 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        ShowConnections,
+        ShowSignIns,
         ToggleAssistant,
         ToggleActivity,
         OpenAbout,
         OpenSettings,
-        OpenSignIns,
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
+        SaveSignIn,
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
@@ -109,6 +111,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-1", ShowConnections, None),
+        KeyBinding::new("cmd-2", ShowSignIns, None),
         KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(
@@ -121,6 +125,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
+        KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
         KeyBinding::new(
             "cmd-c",
@@ -151,7 +156,6 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::action("About Qrow", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
-                MenuItem::action("Sign-ins…", OpenSignIns),
                 MenuItem::separator(),
                 MenuItem::action("Quit Qrow", Quit),
             ],
@@ -184,16 +188,19 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         Menu {
             disabled: false,
             name: "Query".into(),
-            items: vec![
-                MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            ],
+            items: vec![MenuItem::action("Run Query", RunQuery)],
         },
     ];
-    let mut view = vec![MenuItem::action("Activity", ToggleActivity)];
+    let mut view = vec![
+        MenuItem::action("Connections", ShowConnections),
+        MenuItem::action("Sign-ins", ShowSignIns),
+        MenuItem::action("Toggle Sidebar", ToggleSidebar),
+        MenuItem::separator(),
+    ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle Assistant", ToggleAssistant));
     }
+    view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
         disabled: false,
         name: "View".into(),
@@ -201,6 +208,13 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     });
     cx.set_menus(menus);
 }
+/// The panel of the left sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarPanel {
+    Connections,
+    SignIns,
+}
+
 struct Tab {
     saved: SavedTab,
     revision: u64,
@@ -334,11 +348,12 @@ struct ProfileEditor {
     preferred_select: connection_form::RowSelect,
     preferred_choices: Vec<(Option<Uuid>, String)>,
     authentication: connection_form::AuthenticationSelect,
-    /// The sign-ins in the order of the sign-in picker.
-    sign_in_ids: Vec<Uuid>,
-    sign_in: connection_form::AuthenticationSelect,
+    /// The Sign-in list and its choices, in the order of the sign-ins.
+    sign_in: connection_form::RowCombobox,
+    sign_in_choices: Vec<(Uuid, String)>,
     tls: bool,
-    _authentication_subscriptions: [Subscription; 2],
+    _authentication_subscription: Subscription,
+    _sign_in_subscription: Subscription,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -461,7 +476,6 @@ pub struct Qrow {
     fonts: Vec<String>,
     settings_open: bool,
     /// The page that Settings shows when it opens.
-    settings_page: usize,
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
@@ -486,6 +500,8 @@ pub struct Qrow {
     sign_in_ui: sign_in_view::SignInState,
     connector: Arc<HiveConnector>,
     sidebar: bool,
+    /// The panel that the sidebar shows, also while it is hidden.
+    sidebar_panel: SidebarPanel,
     sidebar_width: Pixels,
     editor_height: Pixels,
     resize: Option<(bool, Point<Pixels>, Pixels)>,
@@ -658,7 +674,6 @@ impl Qrow {
             assistant_pane,
             fonts,
             settings_open: false,
-            settings_page: 0,
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
@@ -680,6 +695,7 @@ impl Qrow {
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
             connector: Arc::new(HiveConnector::new(environment.trust())),
             sidebar: true,
+            sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
             editor_height: px(285. * scale),
             resize: None,
@@ -1105,8 +1121,6 @@ impl Qrow {
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
         changed |= self.tick_sign_ins(cx);
-        // A refresh on a worker thread can change the status of a sign-in.
-        changed |= self.settings_open;
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1520,6 +1534,7 @@ impl Qrow {
             || self.about_open
             || self.tab_form.is_some()
             || self.assistant_state.rename_form.is_some()
+            || self.sign_in_ui.editor.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1823,14 +1838,7 @@ impl Qrow {
         cx.notify();
     }
     fn open_settings(&mut self, _: &OpenSettings, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings_page(0, window, cx);
-    }
-    fn open_sign_ins(&mut self, _: &OpenSignIns, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_settings_page(settings_view::SIGN_INS_PAGE, window, cx);
-    }
-    fn open_settings_page(&mut self, page: usize, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dialog_open() {
-            self.settings_page = page;
             self.settings_open = true;
             self.init_settings_form(window, cx);
             self.open_settings_dialog(window, cx);
@@ -2449,30 +2457,25 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_ids: Vec<Uuid> = self.sign_ins.iter().map(|sign_in| sign_in.id).collect();
+        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
         let authentication = connection_form::authentication_select(
             profile.authentication.sign_in().is_some(),
             window,
             cx,
         );
-        let sign_in = connection_form::sign_in_select(
-            &self.sign_ins,
+        let sign_in = connection_form::sign_in_combobox(
+            &sign_in_choices,
             profile.authentication.sign_in(),
             window,
             cx,
         );
-        let authentication_subscriptions = [
+        let authentication_subscription =
             cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
                 if connection_form::uses_sign_in_from_event(event).is_some() {
                     cx.notify();
                 }
-            }),
-            cx.subscribe_in(
-                &sign_in,
-                window,
-                |_, _, _: &SelectEvent<SearchableVec<String>>, _, cx| cx.notify(),
-            ),
-        ];
+            });
+        let sign_in_subscription = Self::subscribe_sign_in_list(&sign_in, window, cx);
         self.form = Some(ProfileEditor {
             parameters,
             idle_behavior,
@@ -2487,10 +2490,11 @@ impl Qrow {
             preferred_select,
             preferred_choices,
             authentication,
-            sign_in_ids,
             sign_in,
+            sign_in_choices,
             tls: profile.tls,
-            _authentication_subscriptions: authentication_subscriptions,
+            _authentication_subscription: authentication_subscription,
+            _sign_in_subscription: sign_in_subscription,
             profile,
             fields,
             is_new,
@@ -2704,16 +2708,13 @@ impl Qrow {
             )?;
             profile.tls = form.tls;
             profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
-                let sign_in = form
-                    .sign_in
-                    .read(cx)
-                    .selected_index(cx)
-                    .and_then(|index| form.sign_in_ids.get(index.row))
-                    .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == *id))
-                    .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
+                let sign_in =
+                    connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                        .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                        .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
                 anyhow::ensure!(
                     sign_in.allows_host(&profile.host),
-                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the sign-in in Settings > Sign-ins.",
+                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
                     sign_in.name,
                     profile.host
                 );
