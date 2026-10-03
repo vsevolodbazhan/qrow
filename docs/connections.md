@@ -317,8 +317,8 @@ use.
   not report this.
 - Qrow does not save which rows are expanded.
 - Qrow cannot stop a refresh while it opens its session or sends a request to
-  the server. Each of these steps can take up to 2 minutes when the server
-  does not answer. Thus, a refresh can take longer than its timeout.
+  the server. A wait for a server answer uses the connection's **Response
+  timeout**. Thus, a refresh can take longer than its **Refresh timeout**.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   has more columns, its refresh fails. Hide schemas or refresh single tables.
 - The keyboard cannot reach **New shared catalog…** below the **Schema
