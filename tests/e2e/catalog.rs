@@ -1,5 +1,5 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, connection_row, labelled};
+use crate::support::{TestApp, bounds_of, connection_row, labelled};
 use gpui_kit::TestAppContext;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
@@ -27,6 +27,13 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.toggle_connection(cx, profile.id);
     app.wait_until(cx, "the schema", QUERY_TIMEOUT, |window, _| {
         labelled(window, &schema).is_some()
+    });
+    let schema_left = app.update(cx, |window, _| {
+        bounds_of(
+            window,
+            &format!("s\u{1f}{}\u{1f}{schema}\u{1f}disclosure", profile.id),
+        )
+        .left()
     });
     app.click_labelled(cx, &schema);
     app.wait_until(cx, "the catalog to load", QUERY_TIMEOUT, |window, _| {
@@ -60,6 +67,13 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
     app.toggle_connection(cx, profile.id);
     app.wait_until(cx, "the empty search notice", QUERY_TIMEOUT, |window, _| {
         labelled(window, "No matches").is_some() && labelled(window, "bookings").is_none()
+    });
+    app.update(cx, |window, _| {
+        let notice = bounds_of(
+            window,
+            &format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id),
+        );
+        assert_eq!(notice.left(), schema_left);
     });
     app.toggle_connection(cx, profile.id);
     app.wait_until(

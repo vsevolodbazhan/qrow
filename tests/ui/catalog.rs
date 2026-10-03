@@ -427,6 +427,66 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn plain_notices_align_with_the_child_disclosure_at_each_zoom(cx: &mut TestAppContext) {
+    for scale in [1., 1.25, 1.5] {
+        let profile = offline_profile("Warehouse");
+        let directory = tempfile::tempdir().unwrap();
+        avia(&directory, &profile);
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+        expand_connection(&app, cx, &profile);
+        wait_shows(&app, cx, "avia");
+        let schema_left = app.update(cx, |window, _| {
+            bounds_of(
+                window,
+                &format!("s\u{1f}{}\u{1f}avia\u{1f}disclosure", profile.id),
+            )
+            .left()
+        });
+        app.click_labelled(cx, "avia");
+        wait_shows(&app, cx, "bookings");
+        let relation_left = app.update(cx, |window, _| {
+            bounds_of(
+                window,
+                &format!(
+                    "r\u{1f}{}\u{1f}avia\u{1f}bookings\u{1f}disclosure",
+                    profile.id
+                ),
+            )
+            .left()
+        });
+        app.click_labelled(cx, "finance");
+        wait_shows(&app, cx, "Not loaded");
+        app.update(cx, |window, _| {
+            let notice = bounds_of(
+                window,
+                &format!("s\u{1f}{}\u{1f}finance\u{1f}notice\u{1f}label", profile.id),
+            );
+            assert_eq!(
+                notice.left(),
+                relation_left,
+                "Schema notice is too far right at scale {scale}"
+            );
+        });
+        app.fill_labelled(cx, "Search Tables", "missing.bookings");
+        wait_shows(&app, cx, "No matches");
+        app.update(cx, |window, _| {
+            let notice = bounds_of(
+                window,
+                &format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id),
+            );
+            assert_eq!(
+                notice.left(),
+                schema_left,
+                "Connection notice is too far right at scale {scale}"
+            );
+        });
+        assert_eq!(app.credentials.reads(), 0);
+    }
+}
+
+#[gpui_kit::test]
 fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     let profile = offline_profile("Warehouse");
     let directory = tempfile::tempdir().unwrap();

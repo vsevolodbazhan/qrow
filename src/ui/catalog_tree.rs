@@ -1492,6 +1492,8 @@ fn render_entry(
     let right_clicked = state.is_right_clicked() && *menu_open;
     let id = entry.item().id.clone();
     let disclosure = div()
+        .id(child_id(&id, "disclosure"))
+        .test_support()
         .w(ui_px(16.))
         .flex_shrink_0()
         .flex()
@@ -1796,7 +1798,7 @@ fn connection_row(
     id: Uuid,
     row: &ConnectionRow,
     selected: bool,
-    disclosure: Div,
+    disclosure: impl IntoElement,
     context: &RowContext,
     cx: &App,
 ) -> Stateful<Div> {
@@ -1965,21 +1967,20 @@ fn notice_row(
             Tone::Error => cx.theme().danger,
             Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
         })
-        // The columns of the other rows: the disclosure, the icon, and the
-        // label. The spinner takes the place of an icon.
-        .child(div().w(px(scale * 16.)).flex_shrink_0())
+        .when(tone == Tone::Loading, |el| {
+            el.child(
+                div()
+                    .w(px(scale * 16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_center()
+                    .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
+            )
+        })
         .child(
             div()
-                .w(px(scale * 16.))
-                .flex_shrink_0()
-                .flex()
-                .justify_center()
-                .when(tone == Tone::Loading, |el| {
-                    el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-                }),
-        )
-        .child(
-            div()
+                .id(child_id(id, "label"))
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .truncate()
