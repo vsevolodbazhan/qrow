@@ -26,6 +26,7 @@ struct Server {
     requests: Mutex<Vec<MetadataRequest>>,
     /// Column requests for these schemas fail like a schema with a broken view.
     broken_schemas: Mutex<Vec<String>>,
+    broken_relation_lists: Mutex<Vec<String>>,
     /// Column requests for these relations fail.
     broken_relations: Mutex<Vec<String>>,
     /// Requests stay running until they are cancelled.
@@ -152,6 +153,15 @@ impl Session for FakeSession {
                     .collect();
             }
             MetadataRequest::Relations { schema, relation } => {
+                if self
+                    .server
+                    .broken_relation_lists
+                    .lock()
+                    .unwrap()
+                    .contains(schema)
+                {
+                    return Err(QueryError("Table list is unavailable".into()).into());
+                }
                 self.columns = names(&[
                     "TABLE_CAT",
                     "TABLE_SCHEM",
@@ -998,6 +1008,93 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
     let before = relation_lists(&server).len();
     h.refresh(Scope::Connection);
     assert_eq!(relation_lists(&server).len() - before, 4);
+}
+
+#[test]
+fn a_continued_refresh_retries_a_schema_with_failed_reads() {
+    for relation_list_fails in [false, true] {
+        let server = warehouse();
+        if relation_list_fails {
+            server
+                .broken_relation_lists
+                .lock()
+                .unwrap()
+                .push("sales".into());
+        } else {
+            server.broken_schemas.lock().unwrap().push("sales".into());
+            server.broken_relations.lock().unwrap().push("daily".into());
+        }
+        *server.block_schema.lock().unwrap() = Some("salesx".into());
+        let mut profile = profile();
+        profile.catalog.timeout_minutes = 2;
+        let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
+        h.refresh(Scope::Connection);
+        assert!(
+            !h.catalog()
+                .unfinished
+                .as_ref()
+                .unwrap()
+                .done
+                .contains("sales")
+        );
+        wait_for_cancel(&server);
+        server.broken_relation_lists.lock().unwrap().clear();
+        server.broken_schemas.lock().unwrap().clear();
+        server.broken_relations.lock().unwrap().clear();
+        *server.block_schema.lock().unwrap() = None;
+        let before = relation_lists(&server).len();
+        h.refresh(Scope::Connection);
+        let expected = if relation_list_fails {
+            ["sales", "salesx"]
+        } else {
+            ["salesx", "sales"]
+        };
+        assert_eq!(relation_lists(&server)[before..], expected);
+        assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
+        assert!(
+            h.catalog()
+                .relation("sales", "daily")
+                .unwrap()
+                .error
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn a_continued_refresh_rereads_a_schema_hidden_and_shown_again() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("salesx".into());
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    let mut h = Harness::timed(
+        server.clone(),
+        profile.clone(),
+        None,
+        Duration::from_millis(250),
+    );
+    h.refresh(Scope::Connection);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    wait_for_cancel(&server);
+    profile.catalog.exclude = vec!["sales".into()];
+    h.worker.update_profile(profile.clone());
+    h.wait(|h| h.catalog().schema("sales").is_none());
+    assert!(
+        !h.catalog()
+            .unfinished
+            .as_ref()
+            .unwrap()
+            .done
+            .contains("sales")
+    );
+    profile.catalog.exclude.clear();
+    h.worker.update_profile(profile);
+    *server.block_schema.lock().unwrap() = None;
+    let before = relation_lists(&server).len();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server)[before..], ["sales", "salesx"]);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert!(h.catalog().unfinished.is_none());
 }
 
 #[test]

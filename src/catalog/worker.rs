@@ -716,12 +716,15 @@ impl Runner {
                 self.status.total = self.status.total.saturating_sub(1);
                 continue;
             }
+            let failures = self.failures;
             self.refresh_schema(&schema)?;
-            self.update(|catalog| {
-                if let Some(unfinished) = &mut catalog.unfinished {
-                    unfinished.done.insert(schema);
-                }
-            });
+            if self.failures == failures && self.catalog.schema(&schema).is_some() {
+                self.update(|catalog| {
+                    if let Some(unfinished) = &mut catalog.unfinished {
+                        unfinished.done.insert(schema);
+                    }
+                });
+            }
             self.status.done += 1;
             self.publish(false);
         }

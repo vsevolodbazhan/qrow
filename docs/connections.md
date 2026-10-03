@@ -129,7 +129,9 @@ minutes** shows like other [refresh errors](#refresh-errors).
 When a connection refresh stops before its end, for example at its timeout,
 when you stop it, or when the session fails, the next connection refresh in
 the **Refresh period** continues it. It does not read again the schemas that
-the stopped refresh read, and its progress starts at their number. After the
+the stopped refresh read without an error, and its progress starts at their
+number. A schema with a failed read is read again. A schema that you hide
+and show again is read again because its cached data was removed. After the
 refresh period, the next connection refresh reads all schemas again. With
 **Manual** refresh, the period is the last saved **Refresh period**, 60
 minutes by default.

@@ -183,6 +183,11 @@ impl Catalog {
     /// Remove the schemas that `settings` hide.
     pub fn retain(&mut self, settings: &CatalogSettings) {
         self.schemas.retain(|name, _| settings.shows(name));
+        if let Some(unfinished) = &mut self.unfinished {
+            unfinished
+                .done
+                .retain(|name| self.schemas.contains_key(name));
+        }
     }
 
     /// Replace the schema list. Schemas that remain keep their relations.
@@ -196,6 +201,11 @@ impl Catalog {
                 (name, schema)
             })
             .collect();
+        if let Some(unfinished) = &mut self.unfinished {
+            unfinished
+                .done
+                .retain(|name| self.schemas.contains_key(name));
+        }
         self.fetched_at = Some(at);
         self.error = None;
     }
