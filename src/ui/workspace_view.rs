@@ -512,6 +512,9 @@ impl Qrow {
         // items, so labels of different widths would move it off center.
         StatusBar::new()
             .flex_shrink_0()
+            // The default padding is a quarter rem, 3.5 pixels, which rounds
+            // to an uneven space above and below the Activity button.
+            .py(self.ui_px(4.))
             .child(
                 div()
                     .id("query-status")
