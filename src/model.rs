@@ -4,10 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 5;
+pub const WORKSPACE_VERSION: u32 = 6;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
+pub const MAX_SIGN_IN_NAME: usize = 60;
 pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
 /// Version 2 adds schema, table, and column names and comments.
@@ -318,6 +319,31 @@ pub struct Profile {
     /// of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shared_catalog: Option<Uuid>,
+    /// Encrypts the transport with TLS. Profiles before version 6 use plain TCP.
+    #[serde(default)]
+    pub tls: bool,
+    #[serde(default)]
+    pub authentication: Authentication,
+}
+
+/// How a connection proves the identity of its database user.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum Authentication {
+    /// The password of the database user, from macOS Keychain.
+    #[default]
+    Password,
+    /// An access token of a reusable sign-in, in the SASL password field.
+    Oidc { sign_in: Uuid },
+}
+
+impl Authentication {
+    pub fn sign_in(self) -> Option<Uuid> {
+        match self {
+            Self::Password => None,
+            Self::Oidc { sign_in } => Some(sign_in),
+        }
+    }
 }
 
 /// One schema catalog for the connections that read the same metastore,
@@ -585,6 +611,8 @@ impl Default for Profile {
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
             shared_catalog: None,
+            tls: false,
+            authentication: Authentication::Password,
         }
     }
 }
@@ -602,6 +630,8 @@ impl Profile {
             && self.username == other.username
             && self.database == other.database
             && self.parameters == other.parameters
+            && self.tls == other.tls
+            && self.authentication == other.authentication
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -623,6 +653,155 @@ impl Profile {
         );
         self.lifecycle.validate()?;
         self.catalog.validate()
+    }
+}
+
+/// A reusable OpenID Connect sign-in. Several connections can use it. Each
+/// connection keeps its own database username. Tokens are in macOS Keychain,
+/// not in the workspace.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SignIn {
+    pub id: Uuid,
+    pub name: String,
+    /// The issuer identifier of the provider, for example a Keycloak realm URL.
+    pub issuer: String,
+    /// The public client registered for Qrow. Qrow uses no client secret.
+    pub client_id: String,
+    /// Scopes in addition to `openid`.
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// An optional RFC 8707 resource indicator for the access tokens.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The database hosts that can receive the access tokens.
+    #[serde(default)]
+    pub allowed_hosts: Vec<String>,
+    /// The loopback port of the callback. Zero selects an available port.
+    #[serde(default)]
+    pub callback_port: u16,
+    /// The signed-in account. `None` until the first sign-in.
+    #[serde(default)]
+    pub identity: Option<Identity>,
+}
+
+/// An account at a provider. The issuer and the subject identify it. The
+/// name and email are for display only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Identity {
+    pub issuer: String,
+    pub subject: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+}
+
+impl Identity {
+    /// The name, the email, or the subject, in that order.
+    pub fn display(&self) -> &str {
+        self.email
+            .as_deref()
+            .or(self.name.as_deref())
+            .unwrap_or(&self.subject)
+    }
+}
+
+impl Default for SignIn {
+    fn default() -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: String::new(),
+            issuer: String::new(),
+            client_id: String::new(),
+            scopes: vec!["profile".into(), "email".into()],
+            resource: None,
+            allowed_hosts: vec![],
+            callback_port: 0,
+            identity: None,
+        }
+    }
+}
+
+impl SignIn {
+    /// Return whether two configurations need the same tokens. A change to
+    /// any of these fields makes the stored tokens unusable.
+    pub fn token_requirements_eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.issuer == other.issuer
+            && self.client_id == other.client_id
+            && self.scopes == other.scopes
+            && self.resource == other.resource
+    }
+
+    /// Return whether `host` can receive the access tokens of this sign-in.
+    pub fn allows_host(&self, host: &str) -> bool {
+        let host = host.trim().trim_end_matches('.');
+        self.allowed_hosts
+            .iter()
+            .any(|allowed| allowed.trim_end_matches('.').eq_ignore_ascii_case(host))
+    }
+
+    /// The scopes of an authorization request, `openid` first.
+    pub fn requested_scopes(&self) -> Vec<&str> {
+        let mut scopes = vec!["openid"];
+        for scope in &self.scopes {
+            if !scopes.contains(&scope.as_str()) {
+                scopes.push(scope);
+            }
+        }
+        scopes
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.name.trim().is_empty(), "Give this sign-in a name.");
+        anyhow::ensure!(
+            self.name.chars().count() <= MAX_SIGN_IN_NAME,
+            "Sign-in name must be {MAX_SIGN_IN_NAME} characters or fewer."
+        );
+        let issuer = url::Url::parse(&self.issuer)
+            .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
+        anyhow::ensure!(
+            issuer.scheme() == "https"
+                && issuer.host_str().is_some()
+                && issuer.query().is_none()
+                && issuer.fragment().is_none()
+                && issuer.username().is_empty()
+                && issuer.password().is_none(),
+            "Enter the issuer as an HTTPS URL without a query or fragment."
+        );
+        anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
+        anyhow::ensure!(
+            self.client_id.chars().all(|c| (' '..='~').contains(&c)),
+            "The client ID can contain only printable ASCII characters."
+        );
+        for scope in &self.scopes {
+            anyhow::ensure!(
+                !scope.is_empty()
+                    && scope
+                        .chars()
+                        .all(|c| c == '!' || ('#'..='[').contains(&c) || (']'..='~').contains(&c)),
+                "Scope \"{scope}\" contains a character that a scope cannot contain."
+            );
+        }
+        if let Some(resource) = &self.resource {
+            let parsed = url::Url::parse(resource)
+                .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+            anyhow::ensure!(
+                parsed.fragment().is_none(),
+                "The resource cannot contain a fragment."
+            );
+        }
+        anyhow::ensure!(
+            !self.allowed_hosts.is_empty(),
+            "Enter at least one database host that can receive the tokens."
+        );
+        for host in &self.allowed_hosts {
+            anyhow::ensure!(
+                host.parse::<std::net::IpAddr>().is_ok() || url::Host::parse(host).is_ok(),
+                "\"{host}\" is not a host name or IP address."
+            );
+        }
+        Ok(())
     }
 }
 
@@ -806,6 +985,8 @@ pub struct Workspace {
     pub assistant: AssistantWorkspace,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shared_catalogs: Vec<SharedCatalog>,
+    #[serde(default)]
+    pub sign_ins: Vec<SignIn>,
 }
 
 /// Remove the shared catalogs without members, and the references to
@@ -954,6 +1135,7 @@ impl Default for Workspace {
             active_tabs: BTreeMap::new(),
             assistant: AssistantWorkspace::default(),
             shared_catalogs: Vec::new(),
+            sign_ins: vec![],
         }
     }
 }
@@ -1128,6 +1310,140 @@ mod tests {
         let restored: ConnectionLifecycle =
             serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
         assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn old_profiles_restore_with_password_authentication_and_plain_tcp() {
+        let original = Profile::default();
+        let mut json = serde_json::to_value(&original).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("tls");
+        object.remove("authentication");
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.authentication, Authentication::Password);
+        assert!(!restored.tls);
+        let workspace: Workspace = serde_json::from_value(serde_json::json!({
+            "version": 5, "profiles": [], "tabs": [], "active_tab": 0,
+        }))
+        .unwrap();
+        assert!(workspace.sign_ins.is_empty());
+    }
+
+    #[test]
+    fn authentication_is_saved_with_the_sign_in_reference_only() {
+        let sign_in = Uuid::new_v4();
+        let profile = Profile {
+            tls: true,
+            authentication: Authentication::Oidc { sign_in },
+            ..Profile::default()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            json["authentication"],
+            serde_json::json!({"method": "oidc", "sign_in": sign_in})
+        );
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, profile);
+    }
+
+    #[test]
+    fn sign_in_authentication_works_with_and_without_tls() {
+        let mut profile = Profile {
+            host: "kyuubi.example.test".into(),
+            username: "analytics".into(),
+            authentication: Authentication::Oidc {
+                sign_in: Uuid::new_v4(),
+            },
+            ..Profile::default()
+        };
+        assert!(profile.validate().is_ok());
+        profile.tls = true;
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn authentication_and_tls_are_part_of_the_session_identity() {
+        let original = Profile::default();
+        let mut updated = original.clone();
+        updated.tls = true;
+        assert!(!original.connection_identity_eq(&updated));
+        let mut updated = original.clone();
+        updated.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(!original.connection_identity_eq(&updated));
+    }
+
+    fn sign_in() -> SignIn {
+        SignIn {
+            name: "Company".into(),
+            issuer: "https://id.example.test/realms/data".into(),
+            client_id: "qrow-desktop".into(),
+            scopes: vec!["kyuubi".into(), "offline_access".into()],
+            allowed_hosts: vec![
+                "kyuubi.example.test".into(),
+                "10.0.0.1".into(),
+                "::1".into(),
+            ],
+            ..SignIn::default()
+        }
+    }
+
+    #[test]
+    fn sign_in_validation_requires_https_a_client_and_hosts() {
+        assert!(sign_in().validate().is_ok());
+        let invalid: [fn(&mut SignIn); 9] = [
+            |s| s.name = " ".into(),
+            |s| s.issuer = "http://id.example.test".into(),
+            |s| s.issuer = "https://id.example.test/?realm=x".into(),
+            |s| s.issuer = "not a url".into(),
+            |s| s.client_id = "".into(),
+            |s| s.scopes = vec!["two words".into()],
+            |s| s.resource = Some("relative".into()),
+            |s| s.allowed_hosts = vec![],
+            |s| s.allowed_hosts = vec!["host/path".into()],
+        ];
+        for change in invalid {
+            let mut value = sign_in();
+            change(&mut value);
+            assert!(value.validate().is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn sign_in_hosts_scopes_and_requirements() {
+        let value = sign_in();
+        assert!(value.allows_host("KYUUBI.example.test"));
+        assert!(value.allows_host("kyuubi.example.test."));
+        assert!(!value.allows_host("kyuubi.example.test.evil.test"));
+        assert!(!value.allows_host("other.example.test"));
+        assert_eq!(
+            value.requested_scopes(),
+            vec!["openid", "kyuubi", "offline_access"]
+        );
+        let mut renamed = value.clone();
+        renamed.name = "Renamed".into();
+        renamed.allowed_hosts.push("another.example.test".into());
+        assert!(value.token_requirements_eq(&renamed));
+        let mut changed = value.clone();
+        changed.scopes.push("profile".into());
+        assert!(!value.token_requirements_eq(&changed));
+    }
+
+    #[test]
+    fn identity_display_prefers_email_then_name_then_subject() {
+        let mut identity = Identity {
+            issuer: "https://id.example.test".into(),
+            subject: "s-1".into(),
+            name: Some("Ada".into()),
+            email: Some("ada@example.test".into()),
+        };
+        assert_eq!(identity.display(), "ada@example.test");
+        identity.email = None;
+        assert_eq!(identity.display(), "Ada");
+        identity.name = None;
+        assert_eq!(identity.display(), "s-1");
     }
 
     #[test]

@@ -4,6 +4,10 @@ mod backend;
 mod catalog;
 mod hive_protocol;
 mod keychain;
+mod oidc;
+#[path = "../support/oidc.rs"]
+mod oidc_provider;
 mod sql_properties;
 mod storage;
+mod tls;
 mod workers;

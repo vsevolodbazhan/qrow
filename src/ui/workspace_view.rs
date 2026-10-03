@@ -2,13 +2,14 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable as _, TitleBar, h_flex,
+    Icon, Selectable as _, TitleBar,
+    badge::Badge,
+    h_flex,
     input::Editor,
     shimmer::ShimmerText,
     spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
-    tag::Tag,
     v_flex,
 };
 
@@ -58,6 +59,19 @@ fn capitalize_status_details(status: &str) -> String {
     label
 }
 
+/// A status bar button with a dot of `color` at its corner, or the button
+/// alone without a color. The button keeps the size of an icon button.
+fn with_dot(button: Button, color: Option<Hsla>) -> AnyElement {
+    match color {
+        Some(color) => Badge::new()
+            .dot()
+            .color(color)
+            .child(button)
+            .into_any_element(),
+        None => button.into_any_element(),
+    }
+}
+
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
         "Demo · Nothing is saved"
@@ -86,23 +100,6 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .prefix(
-                h_flex().h(tab_height).px_2().flex_shrink_0().child(
-                    Button::new("sidebar-toggle")
-                        .ghost()
-                        .small()
-                        .w(self.ui_px(28.))
-                        .h(self.ui_px(28.))
-                        .flex_shrink_0()
-                        .icon(IconName::PanelLeft)
-                        .accessibility_label("Toggle Sidebar")
-                        .tooltip("Toggle Sidebar · ⌘B")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar = !this.sidebar;
-                            cx.notify();
-                        })),
-                ),
-            )
             .children(visible.iter().map(|index| {
                 let index = *index;
                 let tab = &self.tabs[index];
@@ -232,99 +229,20 @@ impl Qrow {
                 }
             }))
             .suffix(
-                h_flex()
-                    .h(tab_height)
-                    .px_2()
-                    .gap_1()
-                    .flex_shrink_0()
-                    .child(
-                        Button::new("new-tab")
-                            .ghost()
-                            .small()
-                            .w(self.ui_px(28.))
-                            .h(self.ui_px(28.))
-                            .icon(IconName::Plus)
-                            .disabled(self.active_profile().is_none())
-                            .accessibility_label("New Tab")
-                            .tooltip("New Tab · ⌘T")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.new_tab(&NewTab, window, cx)
-                                }),
-                            ),
-                    )
-                    .when(self.settings.assistant.enabled, |bar| {
-                        // The toggle shows the most urgent state of all
-                        // conversations.
-                        let status = self.assistant_status();
-                        let waiting_for_approval = status == ThreadStatus::Approval;
-                        let failed = status == ThreadStatus::Failed;
-                        let unread = failed || status == ThreadStatus::Ready;
-                        let working = status == ThreadStatus::Working;
-                        let (accessibility_label, tooltip) = if failed {
-                            (
-                                "Toggle Assistant, reply failed",
-                                "Assistant reply failed · ⌘J",
-                            )
-                        } else if unread {
-                            (
-                                "Toggle Assistant, reply ready",
-                                "Assistant reply ready · ⌘J",
-                            )
-                        } else if waiting_for_approval {
-                            (
-                                "Toggle Assistant, waiting for approval",
-                                "Assistant waiting for approval · ⌘J",
-                            )
-                        } else if working {
-                            ("Toggle Assistant, working", "Assistant is working · ⌘J")
-                        } else {
-                            ("Toggle Assistant", "Toggle Assistant · ⌘J")
-                        };
-                        let toggle =
-                            Button::new("toggle-assistant")
-                                .ghost()
-                                .small()
-                                .w(self.ui_px(28.))
-                                .h(self.ui_px(28.))
-                                .accessibility_label(accessibility_label)
-                                .tooltip(tooltip)
-                                .when(working, |button| {
-                                    button.icon(Spinner::new().small().color(cx.theme().primary))
-                                })
-                                .when(!working && failed, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
-                                    )
-                                })
-                                .when(!working && !failed && unread, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::Bot)
-                                            .small()
-                                            .text_color(cx.theme().success),
-                                    )
-                                })
-                                .when(
-                                    !working && !failed && !unread && waiting_for_approval,
-                                    |button| {
-                                        button.icon(
-                                            Icon::new(AssetIconName::Bot)
-                                                .small()
-                                                .text_color(cx.theme().warning),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    !working && !failed && !unread && !waiting_for_approval,
-                                    |button| button.icon(AssetIconName::PanelRight),
-                                )
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.toggle_assistant(window, cx)
-                                }));
-                        bar.child(toggle)
-                    }),
+                h_flex().h(tab_height).px_2().gap_1().flex_shrink_0().child(
+                    Button::new("new-tab")
+                        .ghost()
+                        .small()
+                        .w(self.ui_px(28.))
+                        .h(self.ui_px(28.))
+                        .icon(IconName::Plus)
+                        .disabled(self.active_profile().is_none())
+                        .accessibility_label("New Tab")
+                        .tooltip("New Tab · ⌘T")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
+                        ),
+                ),
             )
     }
 
@@ -458,8 +376,135 @@ impl Qrow {
             .into_any_element()
     }
 
+    /// The Assistant button of the status bar. It shows the most urgent
+    /// state of all conversations.
+    fn assistant_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = self.assistant_status();
+        let waiting_for_approval = status == ThreadStatus::Approval;
+        let failed = status == ThreadStatus::Failed;
+        let unread = failed || status == ThreadStatus::Ready;
+        let working = status == ThreadStatus::Working;
+        let (accessibility_label, tooltip) = if failed {
+            (
+                "Toggle Assistant, reply failed",
+                "Assistant reply failed · ⌘J",
+            )
+        } else if unread {
+            (
+                "Toggle Assistant, reply ready",
+                "Assistant reply ready · ⌘J",
+            )
+        } else if waiting_for_approval {
+            (
+                "Toggle Assistant, waiting for approval",
+                "Assistant waiting for approval · ⌘J",
+            )
+        } else if working {
+            ("Toggle Assistant, working", "Assistant is working · ⌘J")
+        } else {
+            ("Toggle Assistant", "Assistant · ⌘J")
+        };
+        Button::new("toggle-assistant")
+            .ghost()
+            .small()
+            .selected(self.assistant_state.open)
+            .accessibility_label(accessibility_label)
+            .tooltip(tooltip)
+            .map(|button| {
+                if working {
+                    button.icon(Spinner::new().small().color(cx.theme().primary))
+                } else if failed {
+                    button.icon(
+                        Icon::new(AssetIconName::TriangleAlert)
+                            .small()
+                            .text_color(cx.theme().danger),
+                    )
+                } else if unread {
+                    button.icon(
+                        Icon::new(AssetIconName::Bot)
+                            .small()
+                            .text_color(cx.theme().success),
+                    )
+                } else if waiting_for_approval {
+                    button.icon(
+                        Icon::new(AssetIconName::Bot)
+                            .small()
+                            .text_color(cx.theme().warning),
+                    )
+                } else {
+                    button.icon(Icon::new(AssetIconName::Bot).small())
+                }
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_assistant(window, cx)))
+    }
+
+    /// The buttons of the status bar that choose the panel of the sidebar.
+    /// The button of the visible panel hides the sidebar.
+    fn sidebar_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let shown = |panel| self.sidebar && self.sidebar_panel == panel;
+        let attention = self.sign_ins_needing_attention();
+        let working = self.sign_ins_working();
+        let mut sign_ins_label = String::from("Sign-ins");
+        if working {
+            sign_ins_label.push_str(", sign-in in progress");
+        }
+        match attention {
+            0 => {}
+            1 => sign_ins_label.push_str(", 1 sign-in needs attention"),
+            count => sign_ins_label.push_str(&format!(", {count} sign-ins need attention")),
+        }
+        let sign_ins = Button::new("show-sign-ins")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::SignIns))
+            .map(|button| {
+                if working {
+                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
+                } else {
+                    button.icon(Icon::new(AssetIconName::KeyRound).small())
+                }
+            })
+            .accessibility_label(sign_ins_label)
+            .tooltip(match attention {
+                0 => "Sign-ins · ⌘2".to_owned(),
+                1 => "Sign-ins · 1 needs attention · ⌘2".to_owned(),
+                count => format!("Sign-ins · {count} need attention · ⌘2"),
+            })
+            .on_click(
+                cx.listener(|this, _, _, cx| this.show_sidebar_panel(SidebarPanel::SignIns, cx)),
+            );
+        h_flex()
+            .flex_shrink_0()
+            .gap_1()
+            .child(
+                Button::new("show-connections")
+                    .ghost()
+                    .small()
+                    .selected(shown(SidebarPanel::Connections))
+                    .icon(Icon::new(AssetIconName::Database).small())
+                    .accessibility_label("Connections")
+                    .tooltip("Connections · ⌘1")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_sidebar_panel(SidebarPanel::Connections, cx)
+                    })),
+            )
+            .child(with_dot(
+                sign_ins,
+                (attention > 0).then_some(cx.theme().warning),
+            ))
+    }
+
+    /// Shows `panel` in the sidebar, or hides the sidebar when it shows
+    /// `panel` already.
+    pub(super) fn show_sidebar_panel(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) {
+        self.sidebar = !(self.sidebar && self.sidebar_panel == panel);
+        self.sidebar_panel = panel;
+        cx.notify();
+    }
+
     /// The Activity button of the status bar. It shows a spinner while a
-    /// schema refresh runs and the count of unseen errors.
+    /// schema refresh runs, and a dot while errors are unseen. Its label
+    /// gives their count.
     fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.activity.read(cx);
         let open = view.is_open();
@@ -477,7 +522,7 @@ impl Qrow {
             1 => label.push_str(", 1 unseen error"),
             count => label.push_str(&format!(", {count} unseen errors")),
         }
-        Button::new("toggle-activity")
+        let button = Button::new("toggle-activity")
             .ghost()
             .small()
             .selected(open)
@@ -488,16 +533,14 @@ impl Qrow {
                     button.icon(Icon::new(AssetIconName::Activity).small())
                 }
             })
-            .when(unseen > 0, |button| {
-                button.child(Tag::danger().xsmall().rounded_full().child(if unseen > 99 {
-                    "99+".to_owned()
-                } else {
-                    unseen.to_string()
-                }))
-            })
             .accessibility_label(label)
-            .tooltip("Activity · ⇧⌘U")
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
+            .tooltip(match unseen {
+                0 => "Activity · ⇧⌘U".to_owned(),
+                1 => "Activity · 1 unseen error · ⇧⌘U".to_owned(),
+                count => format!("Activity · {count} unseen errors · ⇧⌘U"),
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
+        with_dot(button, (unseen > 0).then_some(cx.theme().danger))
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -516,15 +559,21 @@ impl Qrow {
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
             .child(
-                div()
-                    .id("query-status")
-                    .test_support()
-                    .role(Role::Status)
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .aria_label(status_label.clone())
-                    .child(status_label),
+                    .gap_2()
+                    .child(self.sidebar_buttons(cx))
+                    .child(
+                        div()
+                            .id("query-status")
+                            .test_support()
+                            .role(Role::Status)
+                            .min_w_0()
+                            .truncate()
+                            .aria_label(status_label.clone())
+                            .child(status_label),
+                    ),
             )
             .child(
                 div()
@@ -554,6 +603,9 @@ impl Qrow {
                             .aria_label(workspace_status)
                             .child(workspace_status),
                     )
+                    .when(self.settings.assistant.enabled, |el| {
+                        el.child(self.assistant_button(cx))
+                    })
                     .child(self.activity_button(cx)),
             )
     }
@@ -746,6 +798,12 @@ impl Qrow {
                 this.sidebar = !this.sidebar;
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ShowConnections, _, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowSignIns, _, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
@@ -895,12 +953,16 @@ impl Render for Qrow {
             .size_full()
             .items_stretch()
             .when(self.sidebar, |el| {
-                el.child(
-                    div()
-                        .w(self.sidebar_width)
-                        .flex_shrink_0()
-                        .child(self.connections(window, cx)),
-                )
+                el.child(div().w(self.sidebar_width).flex_shrink_0().map(|el| {
+                    match self.sidebar_panel {
+                        SidebarPanel::Connections => {
+                            el.child(self.connections(window, cx).into_any_element())
+                        }
+                        SidebarPanel::SignIns => {
+                            el.child(self.sign_ins_sidebar(cx).into_any_element())
+                        }
+                    }
+                }))
                 .child(self.splitter(true, cx))
             })
             .child(

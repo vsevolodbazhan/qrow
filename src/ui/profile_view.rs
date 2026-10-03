@@ -1,15 +1,18 @@
 use super::*;
 use gpui_kit::component::{
     alert::Alert,
+    combobox::Combobox,
     form::{Field, Form},
     h_flex,
     input::Textarea,
+    select::Select,
+    switch::Switch,
     v_flex,
 };
 
 const DIALOG_REMS: f32 = 40.;
 
-fn dialog_width(window: &Window) -> Pixels {
+pub(super) fn dialog_width(window: &Window) -> Pixels {
     let rem = window.rem_size();
     (rem * DIALOG_REMS).min(window.viewport_size().width - rem * 4.)
 }
@@ -82,6 +85,30 @@ impl Qrow {
             });
         }
         let saving = form.saving.is_some();
+        let uses_sign_in = connection_form::uses_sign_in(&form.authentication, cx);
+        let chosen_sign_in =
+            connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
+        let sign_in_label = chosen_sign_in
+            .and_then(|id| {
+                form.sign_in_choices
+                    .iter()
+                    .find(|(choice, _)| *choice == id)
+            })
+            .map(|(_, name)| name.clone())
+            .unwrap_or_default();
+        let sign_in_description = chosen_sign_in
+            .map(|id| match self.oidc.identity(id) {
+                Some(identity) => format!("Signed in as {}.", identity.display()),
+                None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
+            })
+            .unwrap_or_else(|| {
+                if form.sign_in_choices.is_empty() {
+                    "Add a sign-in with New Sign-in… in the list.".to_owned()
+                } else {
+                    "Choose the sign-in that this connection uses.".to_owned()
+                }
+            });
+        let qrow = cx.weak_entity();
         let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
                 .id(connection_form::FIELD_IDS[index])
@@ -125,15 +152,92 @@ impl Qrow {
                                 input(2, "Port"),
                             ))
                             .child(field(
-                                "Username",
-                                Some("Used for LDAP authentication."),
-                                input(3, "Username"),
+                                "TLS",
+                                Some(if uses_sign_in && !form.tls {
+                                    "Without TLS, anyone on the network path can read the access token and use it until it expires. Use only a trusted network or VPN."
+                                } else {
+                                    "Encrypts the connection. The server must accept TLS on this port."
+                                }),
+                                Switch::new("connection-tls")
+                                    .checked(form.tls)
+                                    .disabled(saving)
+                                    .accessibility_label("TLS")
+                                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                        if let Some(form) = &mut this.form {
+                                            form.tls = *checked;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .into_any_element(),
                             ))
                             .child(field(
-                                "Password",
-                                Some("Used for LDAP authentication."),
-                                input(4, "Password"),
+                                "Authentication",
+                                Some("A sign-in can serve several connections. Each connection keeps its own username."),
+                                Select::new(&form.authentication)
+                                    .id("connection-authentication")
+                                    .w_full()
+                                    .disabled(saving)
+                                    .accessibility_label("Authentication")
+                                    .into_any_element(),
                             ))
+                            .when(uses_sign_in, |el| {
+                                el.child(
+                                    Field::new()
+                                        .label("Sign-in")
+                                        .child(
+                                            // The combobox has no accessibility of
+                                            // its own in GPUI Kit 0.6.6, so this
+                                            // element names it and gives its value.
+                                            div()
+                                                .id("connection-sign-in")
+                                                .test_support()
+                                                .role(Role::ComboBox)
+                                                .aria_label("Sign-in")
+                                                .aria_value(sign_in_label)
+                                                .w_full()
+                                                .child(
+                                                    Combobox::new(&form.sign_in)
+                                                        .w_full()
+                                                        .disabled(saving)
+                                                        .placeholder("Choose a sign-in")
+                                                        .search_placeholder("Search sign-ins…")
+                                                        .footer(move |_, _| {
+                                                            let qrow = qrow.clone();
+                                                            Button::new("connection-new-sign-in")
+                                                                .ghost()
+                                                                .small()
+                                                                .w_full()
+                                                                .justify_start()
+                                                                .icon(IconName::Plus)
+                                                                .label("New Sign-in…")
+                                                                .on_click(move |_, window, cx| {
+                                                                    let _ = qrow.update(cx, |this, cx| {
+                                                                        this.open_sign_in_editor(None, true, window, cx)
+                                                                    });
+                                                                })
+                                                        }),
+                                                )
+                                                .into_any_element(),
+                                        )
+                                        .description(sign_in_description),
+                                )
+                            })
+                            .child(field(
+                                "Username",
+                                Some(if uses_sign_in {
+                                    "The database account. Kyuubi checks that the signed-in identity can use it."
+                                } else {
+                                    "The database account for LDAP authentication."
+                                }),
+                                input(3, "Username"),
+                            ))
+                            .when(!uses_sign_in, |el| {
+                                el.child(field(
+                                    "Password",
+                                    Some("Used for LDAP authentication."),
+                                    input(4, "Password"),
+                                ))
+                            })
                             .child(field(
                                 "Initial database",
                                 Some("Selected when the session opens."),

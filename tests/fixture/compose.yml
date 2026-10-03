@@ -5,10 +5,17 @@ x-spark: &spark
   volumes:
     # Tests read the executor evidence from this host directory.
     - ${QROW_E2E_EVIDENCE:?Use ./qtest fixture up or ./qtest run}:/evidence
+    # The certificates, the CA that tests trust, and the JWKS of the OIDC provider.
+    - ${QROW_E2E_SECURITY:?Use ./qtest fixture up or ./qtest run}:/security
   environment:
     SPARK_NO_DAEMONIZE: '1'
   mem_limit: 3g
   cpus: 2
+
+x-fixture-server: &fixture-server
+  <<: *spark
+  mem_limit: 256m
+  cpus: 1
 
 services:
   ldap:
@@ -26,6 +33,30 @@ services:
       timeout: 2s
       retries: 30
     mem_limit: 256m
+  # New certificates for each start, so a cached image never serves an expired one.
+  certificates:
+    <<: *fixture-server
+    command: [java, -Xmx64m, -cp, /opt/spark/jars/qrow-fixture.jar, io.qrow.fixture.Certificates, /security]
+  oidc:
+    <<: *fixture-server
+    # The issuer is https://127.0.0.1:<port> on the host and in the container.
+    command: [java, -Xmx96m, -cp, /opt/spark/jars/qrow-fixture.jar, io.qrow.fixture.Oidc,
+              '${QROW_E2E_OIDC_PORT:?Use ./qtest fixture up or ./qtest run}', /security/server.p12,
+              qrow-fixture-tls, /security/jwks.json, 0.0.0.0]
+    ports:
+      - '127.0.0.1:${QROW_E2E_OIDC_PORT}:${QROW_E2E_OIDC_PORT}'
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
+  kyuubi-tls:
+    <<: *fixture-server
+    command: [java, -Xmx64m, -cp, /opt/spark/jars/qrow-fixture.jar, io.qrow.fixture.TlsProxy,
+              '10010', kyuubi, '10009', /security/server.p12, qrow-fixture-tls, 0.0.0.0]
+    ports:
+      - '127.0.0.1:${QROW_E2E_TLS_BIND_PORT:?Use ./qtest fixture up or ./qtest run}:10010'
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
   zookeeper:
     image: zookeeper:3.9.3@sha256:9980cafbff742c15b339811ae829faa61c69154606ec504223560da9d31acd43
     mem_limit: 512m
@@ -40,11 +71,18 @@ services:
       - spark-master
   kyuubi:
     <<: *spark
+    environment:
+      SPARK_NO_DAEMONIZE: '1'
+      KYUUBI_JAVA_OPTS: >-
+        -Dqrow.oidc.jwks=/security/jwks.json
+        -Dqrow.oidc.issuer=https://127.0.0.1:${QROW_E2E_OIDC_PORT}
     ports:
       - '127.0.0.1:${QROW_E2E_BIND_PORT:?Use ./qtest fixture up or ./qtest run}:10009'
     depends_on:
       ldap:
         condition: service_healthy
+      oidc:
+        condition: service_started
       zookeeper:
         condition: service_started
       spark-worker:

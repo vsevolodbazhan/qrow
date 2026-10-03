@@ -438,9 +438,12 @@ impl RenderOnce for TabBar {
         let mut rendered_tabs = Vec::with_capacity(self.children.len());
         let max_width = self.max_width;
 
+        // Qrow: without a prefix, the first tab starts at the edge of the bar
+        // and drops its left border, like a tab bar that says so explicitly.
+        let has_prefix = self.prefix.is_some();
         for (ix, child) in self.children.into_iter().enumerate() {
             item_metas.push((child.label.clone(), child.icon.clone(), child.disabled));
-            let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
+            let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(has_prefix);
             let mut tab = child
                 .ix(ix)
                 .tab_bar_prefix(tab_bar_prefix)

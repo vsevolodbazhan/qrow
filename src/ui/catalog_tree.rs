@@ -724,7 +724,8 @@ impl Qrow {
             Arc::new(move || {
                 let _ = wake.try_send(());
             }),
-            self.credentials.clone(),
+            self.connector.clone(),
+            self.credential_provider(),
         );
         if let Some(seed) = seed {
             worker.seed(seed);

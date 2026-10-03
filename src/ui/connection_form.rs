@@ -109,6 +109,7 @@ pub(super) fn parse_lifecycle(
 }
 
 use super::{ProfileEditor, Qrow};
+use crate::model::SignIn;
 use gpui_kit::component::{
     IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -141,6 +142,8 @@ pub(super) const FIELD_IDS: [&str; 15] = [
     "connection-refresh-timeout",
     "connection-response-timeout",
 ];
+const PASSWORD: &str = "Password";
+const SIGN_IN: &str = "Sign-in (OpenID Connect)";
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
 const PRIVATE_CATALOG: &str = "This connection";
@@ -352,6 +355,84 @@ pub(super) fn chosen<T: Clone>(select: &RowSelect, choices: &[(T, String)], cx: 
         .copied()
         .unwrap_or_default();
     choices.get(row).unwrap_or(&choices[0]).0.clone()
+}
+
+/// The Authentication or Sign-in dropdown of a connection.
+pub(super) type AuthenticationSelect = ChoiceSelect;
+
+pub(super) fn authentication_select(
+    uses_sign_in: bool,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> AuthenticationSelect {
+    cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(vec![PASSWORD.into(), SIGN_IN.into()]),
+            Some(IndexPath::default().row(usize::from(uses_sign_in))),
+            window,
+            cx,
+        )
+    })
+}
+
+pub(super) fn uses_sign_in_from_event(event: &SelectEvent<SearchableVec<String>>) -> Option<bool> {
+    let SelectEvent::Confirm(Some(choice)) = event else {
+        return None;
+    };
+    match choice.as_str() {
+        PASSWORD => Some(false),
+        SIGN_IN => Some(true),
+        _ => None,
+    }
+}
+
+pub(super) fn uses_sign_in(select: &AuthenticationSelect, cx: &App) -> bool {
+    select
+        .read(cx)
+        .selected_value()
+        .is_some_and(|choice| choice == SIGN_IN)
+}
+
+/// The choices of the Sign-in list: each sign-in by name. Names are unique.
+pub(super) fn sign_in_choices(sign_ins: &[SignIn]) -> Vec<(Uuid, String)> {
+    sign_ins
+        .iter()
+        .map(|sign_in| (sign_in.id, sign_in.name.clone()))
+        .collect()
+}
+
+/// The rows of the Sign-in list that show `selected`, if it is a choice.
+fn sign_in_rows(choices: &[(Uuid, String)], selected: Option<Uuid>) -> Vec<usize> {
+    selected
+        .and_then(|id| choices.iter().position(|(choice, _)| *choice == id))
+        .into_iter()
+        .collect()
+}
+
+/// The Sign-in list, with `selected` chosen. A list without a choice shows
+/// its placeholder.
+pub(super) fn sign_in_combobox(
+    choices: &[(Uuid, String)],
+    selected: Option<Uuid>,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> RowCombobox {
+    let selection = sign_in_rows(choices, selected)
+        .into_iter()
+        .map(|row| IndexPath::default().row(row))
+        .collect();
+    let rows = rows(choices);
+    cx.new(|cx| ComboboxState::new(rows, selection, window, cx).searchable(true))
+}
+
+/// The sign-in that the Sign-in list shows, if any.
+pub(super) fn chosen_sign_in(
+    combobox: &RowCombobox,
+    choices: &[(Uuid, String)],
+    cx: &App,
+) -> Option<Uuid> {
+    let row = combobox.read(cx).selected_value()?;
+    choices.get(row).map(|(id, _)| *id)
 }
 
 pub(super) fn idle_behavior_select(
@@ -695,6 +776,19 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn authentication_choices_map_to_methods() {
+        assert_eq!(
+            uses_sign_in_from_event(&SelectEvent::Confirm(Some(PASSWORD.into()))),
+            Some(false)
+        );
+        assert_eq!(
+            uses_sign_in_from_event(&SelectEvent::Confirm(Some(SIGN_IN.into()))),
+            Some(true)
+        );
+        assert_eq!(uses_sign_in_from_event(&SelectEvent::Confirm(None)), None);
     }
 
     #[test]

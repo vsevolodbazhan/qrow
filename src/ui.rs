@@ -11,24 +11,26 @@ mod profile_view;
 mod results;
 mod setting_row;
 mod settings_view;
+mod sign_in_view;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
-pub use environment::Environment;
+pub use environment::{Browser, Environment};
 pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
+    connector::hive::HiveConnector,
     logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
-        AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
+        AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
         MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
         Settings, SharedCatalog, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
         conversation_tab_title, copied_tab_title, unique_tab_title,
     },
-    sql,
+    oidc, sql,
     storage::{self, Saver},
     worker::{Event, Worker},
 };
@@ -39,7 +41,7 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
-    select::SelectEvent,
+    select::{SearchableVec, SelectEvent},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -61,6 +63,8 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        ShowConnections,
+        ShowSignIns,
         ToggleAssistant,
         ToggleActivity,
         OpenAbout,
@@ -68,6 +72,7 @@ actions!(
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
+        SaveSignIn,
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
@@ -102,6 +107,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-1", ShowConnections, None),
+        KeyBinding::new("cmd-2", ShowSignIns, None),
         KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(
@@ -114,6 +121,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
+        KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
         KeyBinding::new(
             "cmd-c",
@@ -176,16 +184,19 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         Menu {
             disabled: false,
             name: "Query".into(),
-            items: vec![
-                MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            ],
+            items: vec![MenuItem::action("Run Query", RunQuery)],
         },
     ];
-    let mut view = vec![MenuItem::action("Activity", ToggleActivity)];
+    let mut view = vec![
+        MenuItem::action("Connections", ShowConnections),
+        MenuItem::action("Sign-ins", ShowSignIns),
+        MenuItem::action("Toggle Sidebar", ToggleSidebar),
+        MenuItem::separator(),
+    ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle Assistant", ToggleAssistant));
     }
+    view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
         disabled: false,
         name: "View".into(),
@@ -193,6 +204,13 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     });
     cx.set_menus(menus);
 }
+/// The panel of the left sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarPanel {
+    Connections,
+    SignIns,
+}
+
 struct Tab {
     saved: SavedTab,
     revision: u64,
@@ -246,6 +264,13 @@ struct ProfileEditor {
     shared_name: Entity<InputState>,
     preferred_select: connection_form::RowSelect,
     preferred_choices: Vec<(Option<Uuid>, String)>,
+    authentication: connection_form::AuthenticationSelect,
+    /// The Sign-in list and its choices, in the order of the sign-ins.
+    sign_in: connection_form::RowCombobox,
+    sign_in_choices: Vec<(Uuid, String)>,
+    tls: bool,
+    _authentication_subscription: Subscription,
+    _sign_in_subscription: Subscription,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -367,6 +392,7 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The page that Settings shows when it opens.
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
@@ -385,7 +411,14 @@ pub struct Qrow {
     message: Option<String>,
     demo: bool,
     credentials: Arc<dyn storage::Credentials>,
+    /// Reusable sign-ins. The service owns their tokens and identities.
+    sign_ins: Vec<crate::model::SignIn>,
+    oidc: Arc<oidc::Service>,
+    sign_in_ui: sign_in_view::SignInState,
+    connector: Arc<HiveConnector>,
     sidebar: bool,
+    /// The panel that the sidebar shows, also while it is hidden.
+    sidebar_panel: SidebarPanel,
     sidebar_width: Pixels,
     editor_height: Pixels,
     resize: Option<(bool, Point<Pixels>, Pixels)>,
@@ -520,6 +553,12 @@ impl Qrow {
                 }
             },
         );
+        let oidc = oidc::Service::new(environment.tokens(), environment.trust());
+        oidc.configure(&workspace.sign_ins);
+        let status_wake = wake.clone();
+        oidc.set_on_change(Arc::new(move || {
+            let _ = status_wake.try_send(());
+        }));
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.theme == SYSTEM_THEME {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
@@ -568,7 +607,12 @@ impl Qrow {
             message,
             demo,
             credentials: environment.credentials(),
+            sign_ins: workspace.sign_ins,
+            oidc,
+            sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
+            connector: Arc::new(HiveConnector::new(environment.trust())),
             sidebar: true,
+            sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
             editor_height: px(285. * scale),
             resize: None,
@@ -720,6 +764,7 @@ impl Qrow {
                 .collect(),
             active_tab: self.active,
             active_tabs: self.active_tabs.clone(),
+            sign_ins: self.sign_ins.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -727,6 +772,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        self.sign_in_ui.cancel_all();
         if self.demo {
             self.assistant_state.shutdown_demo(
                 self.assistant
@@ -990,6 +1036,7 @@ impl Qrow {
         changed |= self.drain_catalogs(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
+        changed |= self.tick_sign_ins(cx);
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1140,16 +1187,23 @@ impl Qrow {
             Event::Error {
                 message: _,
                 disconnected,
+                sign_in_required,
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.more = false;
                 tab.pending_page = None;
+                // A session that never opened failed to connect; it was not lost.
+                let was_connected = tab.connected;
                 if disconnected {
                     tab.connected = false;
                 }
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = if disconnected {
+                tab.status = if sign_in_required {
+                    "Error · Sign-in required"
+                } else if disconnected && !was_connected {
+                    "Error · Connection failed"
+                } else if disconnected {
                     "Error · Connection lost"
                 } else {
                     "Error · Query failed"
@@ -1386,6 +1440,7 @@ impl Qrow {
             || self.about_open
             || self.tab_form.is_some()
             || self.assistant_state.rename_form.is_some()
+            || self.sign_in_ui.editor.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1565,13 +1620,17 @@ impl Qrow {
         }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
-            tab.worker = Some(Worker::new(
+            let credentials = self.credential_provider();
+            let tab = &mut self.tabs[index];
+            tab.worker = Some(Worker::with_connector(
                 Arc::new(move || {
                     let _ = wake.try_send(());
                 }),
-                self.credentials.clone(),
+                self.connector.clone(),
+                credentials,
             ));
         }
+        let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
             t.delegate_mut().empty_message = Some("Waiting for query results…");
@@ -2304,6 +2363,25 @@ impl Qrow {
                     cx.notify();
                 }
             });
+        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
+        let authentication = connection_form::authentication_select(
+            profile.authentication.sign_in().is_some(),
+            window,
+            cx,
+        );
+        let sign_in = connection_form::sign_in_combobox(
+            &sign_in_choices,
+            profile.authentication.sign_in(),
+            window,
+            cx,
+        );
+        let authentication_subscription =
+            cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
+                if connection_form::uses_sign_in_from_event(event).is_some() {
+                    cx.notify();
+                }
+            });
+        let sign_in_subscription = Self::subscribe_sign_in_list(&sign_in, window, cx);
         self.form = Some(ProfileEditor {
             parameters,
             idle_behavior,
@@ -2317,6 +2395,12 @@ impl Qrow {
             shared_name,
             preferred_select,
             preferred_choices,
+            authentication,
+            sign_in,
+            sign_in_choices,
+            tls: profile.tls,
+            _authentication_subscription: authentication_subscription,
+            _sign_in_subscription: sign_in_subscription,
             profile,
             fields,
             is_new,
@@ -2528,6 +2612,24 @@ impl Qrow {
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
+            profile.tls = form.tls;
+            profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
+                let sign_in =
+                    connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                        .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                        .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
+                anyhow::ensure!(
+                    sign_in.allows_host(&profile.host),
+                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
+                    sign_in.name,
+                    profile.host
+                );
+                Authentication::Oidc {
+                    sign_in: sign_in.id,
+                }
+            } else {
+                Authentication::Password
+            };
             profile.validate()?;
             anyhow::ensure!(
                 !connection_form::profile_name_is_taken(&self.profiles, &profile),
@@ -2540,9 +2642,19 @@ impl Qrow {
             cx.notify();
             return;
         }
-        let password = Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string());
-        if form.is_new && password.is_empty() && !self.demo {
-            form.error = Some("Enter the LDAP password for this connection.".into());
+        let password = if profile.authentication == Authentication::Password {
+            Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string())
+        } else {
+            Zeroizing::new(String::new())
+        };
+        // A profile that used a sign-in may have no stored password.
+        let needs_password = form.is_new || form.profile.authentication != Authentication::Password;
+        if profile.authentication == Authentication::Password
+            && needs_password
+            && password.is_empty()
+            && !self.demo
+        {
+            form.error = Some("Enter the password for this connection.".into());
             cx.notify();
             return;
         }
@@ -2878,6 +2990,7 @@ fn demo_workspace() -> Workspace {
         active_tab: 0,
         active_tabs: BTreeMap::new(),
         shared_catalogs,
+        sign_ins: vec![],
     }
 }
 
