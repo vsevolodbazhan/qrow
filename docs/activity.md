@@ -50,8 +50,9 @@ copies that error. **Clear** deletes the log of the connection.
 
 ## Unseen errors
 
-The status bar shows the number of unseen errors of all connections in red.
-These are failed schema refreshes, which no tab shows. A refresh with several
+A red dot on the **Activity** button means that a connection has unseen
+errors. Point to the button to read their number. These are
+failed schema refreshes, which no tab shows. A refresh with several
 failed requests counts once. When the Activity of a connection shows, its
 errors become seen.
 

@@ -47,9 +47,10 @@ signed-in identity can use the database username of the connection.
 The **Sign-ins** sidebar shows each sign-in with its account. To open it,
 click the key button at the left end of the status bar, press **⌘2**, or
 select **View → Sign-ins**. Click the button again to hide the sidebar. The
-button shows a count when sign-ins need attention: a connection uses a sign-in
+button shows a yellow dot when sign-ins need attention: a connection uses a sign-in
 that is not signed in, a sign-in has expired, Qrow cannot reach the provider,
-or the last sign-in action failed.
+or the last sign-in action failed. Point to the button to read how many
+sign-ins need attention.
 
 ### Add a sign-in
 

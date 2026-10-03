@@ -2,13 +2,14 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable as _, TitleBar, h_flex,
+    Icon, Selectable as _, TitleBar,
+    badge::Badge,
+    h_flex,
     input::Editor,
     shimmer::ShimmerText,
     spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
-    tag::Tag,
     v_flex,
 };
 
@@ -56,6 +57,19 @@ fn capitalize_status_details(status: &str) -> String {
     }
 
     label
+}
+
+/// A status bar button with a dot of `color` at its corner, or the button
+/// alone without a color. The button keeps the size of an icon button.
+fn with_dot(button: Button, color: Option<Hsla>) -> AnyElement {
+    match color {
+        Some(color) => Badge::new()
+            .dot()
+            .color(color)
+            .child(button)
+            .into_any_element(),
+        None => button.into_any_element(),
+    }
 }
 
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
@@ -439,6 +453,26 @@ impl Qrow {
             1 => sign_ins_label.push_str(", 1 sign-in needs attention"),
             count => sign_ins_label.push_str(&format!(", {count} sign-ins need attention")),
         }
+        let sign_ins = Button::new("show-sign-ins")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::SignIns))
+            .map(|button| {
+                if working {
+                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
+                } else {
+                    button.icon(Icon::new(AssetIconName::KeyRound).small())
+                }
+            })
+            .accessibility_label(sign_ins_label)
+            .tooltip(match attention {
+                0 => "Sign-ins · ⌘2".to_owned(),
+                1 => "Sign-ins · 1 needs attention · ⌘2".to_owned(),
+                count => format!("Sign-ins · {count} need attention · ⌘2"),
+            })
+            .on_click(
+                cx.listener(|this, _, _, cx| this.show_sidebar_panel(SidebarPanel::SignIns, cx)),
+            );
         h_flex()
             .flex_shrink_0()
             .gap_1()
@@ -454,36 +488,10 @@ impl Qrow {
                         this.show_sidebar_panel(SidebarPanel::Connections, cx)
                     })),
             )
-            .child(
-                Button::new("show-sign-ins")
-                    .ghost()
-                    .small()
-                    .selected(shown(SidebarPanel::SignIns))
-                    .map(|button| {
-                        if working {
-                            button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
-                        } else {
-                            button.icon(Icon::new(AssetIconName::KeyRound).small())
-                        }
-                    })
-                    .when(attention > 0, |button| {
-                        button.child(
-                            Tag::warning()
-                                .xsmall()
-                                .rounded_full()
-                                .child(attention.to_string()),
-                        )
-                    })
-                    .accessibility_label(sign_ins_label)
-                    .tooltip(if attention > 0 {
-                        "Sign-ins · Sign in to keep connections working · ⌘2"
-                    } else {
-                        "Sign-ins · ⌘2"
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_sidebar_panel(SidebarPanel::SignIns, cx)
-                    })),
-            )
+            .child(with_dot(
+                sign_ins,
+                (attention > 0).then_some(cx.theme().warning),
+            ))
     }
 
     /// Shows `panel` in the sidebar, or hides the sidebar when it shows
@@ -495,7 +503,8 @@ impl Qrow {
     }
 
     /// The Activity button of the status bar. It shows a spinner while a
-    /// schema refresh runs and the count of unseen errors.
+    /// schema refresh runs, and a dot while errors are unseen. Its label
+    /// gives their count.
     fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.activity.read(cx);
         let open = view.is_open();
@@ -513,7 +522,7 @@ impl Qrow {
             1 => label.push_str(", 1 unseen error"),
             count => label.push_str(&format!(", {count} unseen errors")),
         }
-        Button::new("toggle-activity")
+        let button = Button::new("toggle-activity")
             .ghost()
             .small()
             .selected(open)
@@ -524,16 +533,14 @@ impl Qrow {
                     button.icon(Icon::new(AssetIconName::Activity).small())
                 }
             })
-            .when(unseen > 0, |button| {
-                button.child(Tag::danger().xsmall().rounded_full().child(if unseen > 99 {
-                    "99+".to_owned()
-                } else {
-                    unseen.to_string()
-                }))
-            })
             .accessibility_label(label)
-            .tooltip("Activity · ⇧⌘U")
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
+            .tooltip(match unseen {
+                0 => "Activity · ⇧⌘U".to_owned(),
+                1 => "Activity · 1 unseen error · ⇧⌘U".to_owned(),
+                count => format!("Activity · {count} unseen errors · ⇧⌘U"),
+            })
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
+        with_dot(button, (unseen > 0).then_some(cx.theme().danger))
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
