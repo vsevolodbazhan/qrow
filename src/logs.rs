@@ -339,33 +339,40 @@ pub enum Panel {
 pub struct PanelState {
     pub selected: Panel,
     pub unread_error: bool,
+    unread_success: bool,
 }
 
 impl PanelState {
+    pub fn has_unread_success(&self) -> bool {
+        self.unread_success
+    }
+
     pub fn execution_started(&mut self) {
         self.unread_error = false;
+        self.unread_success = false;
     }
 
     pub fn user_select(&mut self, panel: Panel) {
         self.selected = panel;
-        if panel == Panel::Output {
-            self.unread_error = false;
-        }
+        self.content_visible();
     }
 
-    pub fn failure(&mut self, _active: bool) {
-        self.unread_error = true;
+    pub fn failure(&mut self, active: bool) {
+        self.unread_error = !active;
+        self.unread_success = false;
         self.selected = Panel::Output;
     }
 
-    pub fn success(&mut self) {
+    pub fn success(&mut self, active: bool) {
         self.selected = Panel::Results;
         self.unread_error = false;
+        self.unread_success = !active;
     }
 
-    pub fn output_visible(&mut self) {
-        if self.selected == Panel::Output {
-            self.unread_error = false;
+    pub fn content_visible(&mut self) {
+        match self.selected {
+            Panel::Output => self.unread_error = false,
+            Panel::Results => self.unread_success = false,
         }
     }
 }
@@ -587,22 +594,22 @@ mod tests {
         let mut panel = PanelState::default();
         panel.user_select(Panel::Output);
         assert_eq!(panel.selected, Panel::Output);
-        panel.success();
+        panel.success(true);
         assert_eq!(panel.selected, Panel::Results);
 
         panel.failure(true);
-        panel.success();
+        panel.success(true);
         assert_eq!(panel.selected, Panel::Results);
         assert!(!panel.unread_error);
 
         panel.failure(true);
         panel.user_select(Panel::Output);
-        panel.success();
+        panel.success(true);
         assert_eq!(panel.selected, Panel::Results);
 
         panel.user_select(Panel::Output);
         assert_eq!(panel.selected, Panel::Output);
-        panel.success();
+        panel.success(true);
         assert_eq!(panel.selected, Panel::Results);
     }
 
@@ -612,14 +619,14 @@ mod tests {
             let mut panel = PanelState::default();
             panel.failure(active);
             assert_eq!(panel.selected, Panel::Output);
-            assert!(panel.unread_error);
-            panel.output_visible();
+            assert_eq!(panel.unread_error, !active);
+            panel.content_visible();
             assert!(!panel.unread_error);
-            panel.success();
+            panel.success(true);
             assert_eq!(panel.selected, Panel::Results);
 
             panel.failure(active);
-            panel.success();
+            panel.success(true);
             assert_eq!(panel.selected, Panel::Results);
             assert!(!panel.unread_error);
         }
@@ -628,7 +635,7 @@ mod tests {
     #[test]
     fn execution_start_clears_error_without_changing_panel_selection() {
         let mut panel = PanelState::default();
-        panel.failure(true);
+        panel.failure(false);
         assert_eq!(panel.selected, Panel::Output);
         assert!(panel.unread_error);
 
@@ -637,8 +644,9 @@ mod tests {
         assert!(!panel.unread_error);
 
         panel.user_select(Panel::Results);
-        panel.failure(true);
+        panel.failure(false);
         panel.user_select(Panel::Results);
+        assert!(panel.unread_error, "Results acknowledged the error");
         panel.execution_started();
         assert_eq!(panel.selected, Panel::Results);
         assert!(!panel.unread_error);
@@ -648,7 +656,7 @@ mod tests {
     fn execution_start_does_not_clear_another_tabs_error() {
         let mut retrying_tab = PanelState::default();
         let mut background_tab = PanelState::default();
-        retrying_tab.failure(true);
+        retrying_tab.failure(false);
         background_tab.failure(false);
 
         retrying_tab.execution_started();
@@ -656,5 +664,30 @@ mod tests {
         assert!(!retrying_tab.unread_error);
         assert!(background_tab.unread_error);
         assert_eq!(background_tab.selected, Panel::Output);
+    }
+
+    #[test]
+    fn successful_background_results_stay_unread_until_results_show() {
+        let mut panel = PanelState::default();
+        panel.success(false);
+        assert!(panel.unread_success);
+        assert_eq!(panel.selected, Panel::Results);
+
+        panel.user_select(Panel::Output);
+        assert!(panel.unread_success);
+        panel.content_visible();
+        assert!(panel.unread_success);
+        panel.user_select(Panel::Results);
+        assert!(!panel.unread_success);
+
+        panel.success(true);
+        assert!(!panel.unread_success);
+        panel.success(false);
+        panel.execution_started();
+        assert!(!panel.unread_success);
+        panel.success(false);
+        panel.failure(false);
+        assert!(!panel.unread_success);
+        assert!(panel.unread_error);
     }
 }

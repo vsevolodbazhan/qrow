@@ -31,11 +31,12 @@ fn connection_failure_reaches_the_connection_list(cx: &mut TestAppContext) {
     tab.sql = "SELECT 1".into();
     let row = gpui_kit::ElementId::Name(format!("profile-{}", profile.id).into());
     let profile_id = profile.id;
+    let second = SavedTab::new(2, Some(profile.id));
     let app = TestApp::launch_with(
         cx,
         Workspace {
             profiles: vec![profile],
-            tabs: vec![tab],
+            tabs: vec![tab, second],
             ..Workspace::default()
         },
         credentials,
@@ -44,16 +45,20 @@ fn connection_failure_reaches_the_connection_list(cx: &mut TestAppContext) {
         assert_eq!(window.find(row.clone()).label(), Some("Unreachable"));
     });
 
-    app.update(cx, |window, cx| window.click("run", cx));
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
     app.wait_until(
         cx,
         "the connection error",
         Duration::from_secs(20),
         |window, _| window.find(row.clone()).label() == Some("Unreachable, unread error"),
     );
-    // The warning shares the centerline of the New Connection button.
+    // The dot shares the centerline of the New Connection button.
     app.update(cx, |window, _| {
-        let warning = bounds_of(window, &format!("connection-error-{}", profile_id));
+        let warning = bounds_of(window, &format!("connection-status-{}", profile_id));
         let add = bounds_of(window, "add-connection");
         let (warning, add) = (warning.center().x, add.center().x);
         assert!((warning - add).abs() < px(0.5), "{warning:?} != {add:?}");
@@ -97,7 +102,11 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
         credentials,
     );
     app.click_labelled(cx, "Query 1");
-    app.click(cx, "run");
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
     app.wait_until(
         cx,
         "the failed query",
@@ -105,7 +114,7 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
         |window, _| labelled(window, "Query 1, unread error").is_some(),
     );
 
-    // A failed query marks its tab. It does not count in the status bar.
+    // A failed query marks its tab and Activity until its Logs show.
     let activity = app.activity(cx, profile.id);
     assert!(
         activity.contains("Query 1: Submitted a query"),
@@ -116,7 +125,7 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "toggle-activity").as_deref(),
-            Some("Activity")
+            Some("Activity, 1 unseen error")
         );
     });
 
@@ -140,4 +149,32 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     app.update(cx, |window, _| {
         assert!(labelled(window, "Show Tab").is_none());
     });
+}
+
+#[gpui_kit::test]
+fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
+    let profile = crate::support::offline_profile("Synthetic");
+    let mut first = SavedTab::new(1, Some(profile.id));
+    first.sql = "SELECT 1; SELECT 2;".into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![first],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+    );
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.dispatch(cx, qrow::ui::RunQuery);
+    app.wait_label(cx, "Activity, 1 unseen error");
+    app.dispatch(cx, qrow::ui::NewTab);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_label(cx, "Query 1, unread error");
+    app.click_labelled(cx, "Query 1, unread error");
+    app.wait_label(cx, "Activity");
+    assert_eq!(app.credentials.reads(), 0);
+    assert!(app.logs(cx).contains("statement"));
 }

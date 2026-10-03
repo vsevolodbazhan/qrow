@@ -242,6 +242,11 @@ impl ActivityView {
         cx.notify();
     }
 
+    /// A tab selected behind Activity receives focus when Activity closes.
+    pub(super) fn return_focus_to(&mut self, focus: FocusHandle) {
+        self.previous_focus = Some(focus);
+    }
+
     fn show(&mut self, connection: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Some(connection);
         self.activity.mark_seen(connection);
@@ -627,6 +632,13 @@ impl Qrow {
     ) {
         let connection = connection
             .or_else(|| self.activity.read(cx).activity().newest_unseen())
+            .or_else(|| {
+                self.tabs
+                    .iter()
+                    .rev()
+                    .find(|tab| tab.panel.unread_error)
+                    .and_then(|tab| tab.worker_profile.or(tab.saved.profile))
+            })
             .or_else(|| self.tabs.get(self.active).and_then(|tab| tab.saved.profile))
             .or_else(|| self.profiles.first().map(|profile| profile.id));
         let connections = self
@@ -679,7 +691,15 @@ impl Qrow {
                 self.activity.update(cx, |view, cx| view.close(window, cx));
                 self.activate(index, window, cx);
             }
-            ActivityViewEvent::Closed => cx.notify(),
+            ActivityViewEvent::Closed => {
+                self.tabs[self.active].panel.content_visible();
+                if self.assistant_transcript_visible(window, cx)
+                    && let Some(thread) = self.displayed_thread()
+                {
+                    self.thread_run_mut(&thread).unread = None;
+                }
+                cx.notify();
+            }
         }
     }
 }

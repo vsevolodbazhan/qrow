@@ -5,10 +5,8 @@ use gpui_kit::component::{
     Icon, Selectable as _, TitleBar, h_flex,
     input::Editor,
     shimmer::ShimmerText,
-    spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
-    tag::Tag,
     v_flex,
 };
 
@@ -148,11 +146,16 @@ impl Qrow {
                         )
                     })
                     .aria_label(format!(
-                        "{}{}{}{}{}",
+                        "{}{}{}{}{}{}",
                         tab.saved.title,
                         if tab.busy { ", running" } else { "" },
                         if tab.panel.unread_error {
                             ", unread error"
+                        } else {
+                            ""
+                        },
+                        if tab.panel.has_unread_success() {
+                            ", unread query result"
                         } else {
                             ""
                         },
@@ -163,46 +166,33 @@ impl Qrow {
                             ""
                         },
                     ))
-                    // The status area before the close button shows one
-                    // spinner. It uses the accent color while the tab's
-                    // conversation works, also when the assistant runs the
-                    // query of the tab.
                     .suffix(
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when(tab.busy || assistant == Some(ThreadStatus::Working), |el| {
-                                el.child(Spinner::new().xsmall().color(
-                                    if assistant == Some(ThreadStatus::Working) {
-                                        cx.theme().primary
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    },
-                                ))
-                            })
                             .when_some(
-                                assistant
-                                    .filter(|status| *status != ThreadStatus::Working)
-                                    .map(|status| {
-                                        self.assistant_status_icon(status, cx).unwrap_or_else(
-                                            || {
-                                                Icon::new(AssetIconName::Bot)
-                                                    .small()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .into_any_element()
-                                            },
-                                        )
-                                    })
-                                    .filter(|_| !tab.busy || assistant != Some(ThreadStatus::Idle)),
-                                |el, icon| el.child(icon),
-                            )
-                            .when(
-                                tab.panel.unread_error && assistant != Some(ThreadStatus::Failed),
-                                |el| {
+                                tab.dot_status()
+                                    .max(assistant.and_then(ThreadStatus::dot_status)),
+                                |el, status| {
+                                    let label = format!(
+                                        "{}{}{}",
+                                        tab.saved.title,
+                                        tab.status_suffix(),
+                                        assistant.map_or("", ThreadStatus::accessible_suffix)
+                                    );
                                     el.child(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
+                                        div()
+                                            .id(SharedString::from(format!("query-status-{id}")))
+                                            .test_support()
+                                            .role(Role::Status)
+                                            .aria_label(label.clone())
+                                            .tooltip(move |window, cx| {
+                                                gpui_kit::component::tooltip::Tooltip::new(
+                                                    label.clone(),
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .child(status.dot(cx)),
                                     )
                                 },
                             )
@@ -289,37 +279,11 @@ impl Qrow {
                                 .h(self.ui_px(28.))
                                 .accessibility_label(accessibility_label)
                                 .tooltip(tooltip)
-                                .when(working, |button| {
-                                    button.icon(Spinner::new().small().color(cx.theme().primary))
-                                })
-                                .when(!working && failed, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
-                                    )
-                                })
-                                .when(!working && !failed && unread, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::Bot)
-                                            .small()
-                                            .text_color(cx.theme().success),
-                                    )
-                                })
-                                .when(
-                                    !working && !failed && !unread && waiting_for_approval,
-                                    |button| {
-                                        button.icon(
-                                            Icon::new(AssetIconName::Bot)
-                                                .small()
-                                                .text_color(cx.theme().warning),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    !working && !failed && !unread && !waiting_for_approval,
-                                    |button| button.icon(AssetIconName::PanelRight),
-                                )
+                                .child(DotStatus::on_icon(
+                                    status.dot_status(),
+                                    Icon::new(AssetIconName::Bot).small(),
+                                    cx,
+                                ))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
@@ -458,8 +422,7 @@ impl Qrow {
             .into_any_element()
     }
 
-    /// The Activity button of the status bar. It shows a spinner while a
-    /// schema refresh runs and the count of unseen errors.
+    /// Activity keeps its icon, with a dot for unread errors or current work.
     fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = self.activity.read(cx);
         let open = view.is_open();
@@ -468,9 +431,26 @@ impl Qrow {
             .profiles
             .iter()
             .any(|profile| self.catalog.is_refreshing(profile.id));
+        let working = self.tabs.iter().any(|tab| tab.busy);
+        let unseen = unseen
+            + self
+                .tabs
+                .iter()
+                .filter(|tab| tab.panel.unread_error)
+                .count();
+        let status = if unseen > 0 {
+            Some(DotStatus::Error)
+        } else if refreshing || working {
+            Some(DotStatus::Working)
+        } else {
+            None
+        };
         let mut label = String::from("Activity");
         if refreshing {
             label.push_str(", schema refresh running");
+        }
+        if working {
+            label.push_str(", query or session work running");
         }
         match unseen {
             0 => {}
@@ -481,22 +461,13 @@ impl Qrow {
             .ghost()
             .small()
             .selected(open)
-            .map(|button| {
-                if refreshing {
-                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
-                } else {
-                    button.icon(Icon::new(AssetIconName::Activity).small())
-                }
-            })
-            .when(unseen > 0, |button| {
-                button.child(Tag::danger().xsmall().rounded_full().child(if unseen > 99 {
-                    "99+".to_owned()
-                } else {
-                    unseen.to_string()
-                }))
-            })
-            .accessibility_label(label)
-            .tooltip("Activity · ⇧⌘U")
+            .child(DotStatus::on_icon(
+                status,
+                Icon::new(AssetIconName::Activity).small(),
+                cx,
+            ))
+            .accessibility_label(label.clone())
+            .tooltip(format!("{label} · ⇧⌘U"))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
     }
 

@@ -123,13 +123,23 @@ pub(in crate::ui) struct ThreadRun {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::ui) enum ThreadStatus {
     Idle,
-    Working,
     Ready,
+    Working,
     Failed,
     Approval,
 }
 
 impl ThreadStatus {
+    pub(in crate::ui) fn dot_status(self) -> Option<DotStatus> {
+        match self {
+            Self::Idle => None,
+            Self::Working => Some(DotStatus::Working),
+            Self::Ready => Some(DotStatus::Ready),
+            Self::Failed => Some(DotStatus::Error),
+            Self::Approval => Some(DotStatus::Attention),
+        }
+    }
+
     pub(super) fn of(run: &ThreadRun) -> Self {
         if run
             .pending_query
@@ -635,7 +645,7 @@ mod tests {
         .into_iter()
         .fold(ThreadStatus::Idle, Ord::max);
         assert_eq!(urgent, ThreadStatus::Approval);
-        assert!(ThreadStatus::Failed > ThreadStatus::Ready);
-        assert!(ThreadStatus::Ready > ThreadStatus::Working);
+        assert!(ThreadStatus::Failed > ThreadStatus::Working);
+        assert!(ThreadStatus::Working > ThreadStatus::Ready);
     }
 }

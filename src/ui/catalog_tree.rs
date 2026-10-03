@@ -609,6 +609,10 @@ struct ConnectionRow {
     unread_error: bool,
     /// The error of the last connection refresh.
     refresh_error: bool,
+    unread_success: bool,
+    connected: bool,
+    status: Option<DotStatus>,
+    assistant_states: Vec<assistant_view::ThreadStatus>,
     active: bool,
 }
 
@@ -1221,11 +1225,88 @@ impl Qrow {
                 .map(|profile| {
                     let id = profile.id;
                     let refresh_error = self.catalog.connection_error(id);
+                    let unseen = self.activity.read(cx).activity().unseen_errors_of(id);
+                    let query_status = self
+                        .tabs
+                        .iter()
+                        .filter(|tab| tab.saved.profile == Some(id))
+                        .filter_map(|tab| {
+                            tab.dot_status().max(
+                                self.settings
+                                    .assistant
+                                    .enabled
+                                    .then(|| self.tab_assistant_status(tab.saved.id))
+                                    .flatten()
+                                    .and_then(assistant_view::ThreadStatus::dot_status),
+                            )
+                        })
+                        .max();
+                    let status = query_status.max(if unseen > 0 {
+                        Some(DotStatus::Error)
+                    } else if self.catalog.is_refreshing(id) {
+                        Some(DotStatus::Working)
+                    } else {
+                        None
+                    });
+                    let connected = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.worker_profile == Some(id) && tab.connected);
+                    let unread_success = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.saved.profile == Some(id) && tab.panel.has_unread_success());
+                    let mut tooltip = workspace_view::connection_tooltip(profile, refresh_error);
+                    if connected {
+                        tooltip.push_str("\nConnected");
+                    }
+                    let assistant_states: Vec<_> = self
+                        .tabs
+                        .iter()
+                        .filter(|tab| tab.saved.profile == Some(id))
+                        .filter_map(|tab| {
+                            self.settings
+                                .assistant
+                                .enabled
+                                .then(|| self.tab_assistant_status(tab.saved.id))
+                                .flatten()
+                        })
+                        .collect();
+                    let working = self.profile_busy(id)
+                        || self.catalog.is_refreshing(id)
+                        || assistant_states.contains(&assistant_view::ThreadStatus::Working);
+                    if connected && !working {
+                        tooltip.push_str(", idle");
+                    }
+                    if working {
+                        tooltip.push_str("\nWork running");
+                    }
+                    if unread_success
+                        || assistant_states.contains(&assistant_view::ThreadStatus::Ready)
+                    {
+                        tooltip.push_str("\nUnread result or reply");
+                    }
+                    if unseen > 0
+                        || self
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error)
+                        || assistant_states.contains(&assistant_view::ThreadStatus::Failed)
+                    {
+                        tooltip.push_str("\nUnread error");
+                    }
+                    if assistant_states.contains(&assistant_view::ThreadStatus::Approval) {
+                        tooltip.push_str("\nWaiting for approval");
+                    }
                     (
                         id,
                         ConnectionRow {
                             name: profile.name.clone(),
-                            tooltip: workspace_view::connection_tooltip(profile, refresh_error),
+                            tooltip,
+                            connected,
+                            unread_success,
+                            status,
+                            assistant_states,
                             refresh_error: refresh_error.is_some(),
                             busy: self.profile_busy(id),
                             refreshing: self.catalog.is_refreshing(id),
@@ -1761,25 +1842,26 @@ fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option
     Some(text)
 }
 
-/// A slot for one status icon at the end of a connection row. The header and
+/// A button for one status dot at the end of a connection row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
 fn status_slot(
     id: String,
     width: Pixels,
+    label: String,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement + ParentElement {
-    div()
-        .id(SharedString::from(id))
-        .on_click(on_click)
-        .test_support()
+) -> Button {
+    Button::new(SharedString::from(id))
+        .ghost()
+        .small()
+        .h_full()
         .w(width)
         .flex_shrink_0()
-        .flex()
-        .justify_center()
+        .accessibility_label(label)
+        .on_click(on_click)
 }
 
-/// A click on a status icon of a connection row opens the Activity of the
+/// A click on a status dot of a connection row opens the Activity of the
 /// connection, which has the details.
 fn show_activity(
     id: Uuid,
@@ -1805,12 +1887,12 @@ fn connection_row(
     let (menu_open, weak) = (context.menu_open, &context.weak);
     // As wide as the header's New Connection button.
     let slot_width = px(context.scale * 28.);
-    let has_status = row.busy || row.refreshing || row.unread_error || row.refresh_error;
+    let has_status = row.status.is_some();
     // The tooltip can change while it is open: a refresh error arrives or
     // goes away.
     context.record_tip(entry, row.tooltip.clone(), None);
     let accessibility_label = format!(
-        "{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         row.name,
         if row.busy { ", running" } else { "" },
         if row.refreshing {
@@ -1820,6 +1902,11 @@ fn connection_row(
         },
         if row.unread_error {
             ", unread error"
+        } else {
+            ""
+        },
+        if row.unread_success {
+            ", unread query result"
         } else {
             ""
         },
@@ -1852,7 +1939,7 @@ fn connection_row(
         // A status slot ends at the row end. Without one, the name keeps a
         // margin from the highlight edge.
         .pr_0()
-        .accessibility_label(accessibility_label)
+        .accessibility_label(accessibility_label.clone())
         .child(
             h_flex()
                 .h_full()
@@ -1869,33 +1956,7 @@ fn connection_row(
                         .size_4()
                         .flex_shrink_0(),
                 )
-                .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
-                .when(row.busy || row.refreshing, |el| {
-                    el.child(
-                        status_slot(
-                            format!("connection-busy-{id}"),
-                            slot_width,
-                            show_activity(id, weak),
-                        )
-                        .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
-                    )
-                })
-                // One warning icon covers an unread query error and a
-                // schema refresh error. The tooltip and the label tell which.
-                .when(row.unread_error || row.refresh_error, |el| {
-                    el.child(
-                        status_slot(
-                            format!("connection-error-{id}"),
-                            slot_width,
-                            show_activity(id, weak),
-                        )
-                        .child(
-                            Icon::new(AssetIconName::TriangleAlert)
-                                .small()
-                                .text_color(cx.theme().danger),
-                        ),
-                    )
-                }),
+                .child(div().flex_1().min_w_0().truncate().child(row.name.clone())),
         )
         .on_click({
             let weak = weak.clone();
@@ -1926,6 +1987,37 @@ fn connection_row(
                 .flex_1()
                 .min_w_0()
                 .child(button)
+                .when_some(row.status, |el, status| {
+                    let label = format!(
+                        "{}{}{}",
+                        accessibility_label,
+                        if row.connected {
+                            if row.busy {
+                                ", connected"
+                            } else {
+                                ", connected, idle"
+                            }
+                        } else {
+                            ""
+                        },
+                        row.assistant_states
+                            .iter()
+                            .copied()
+                            .collect::<std::collections::BTreeSet<_>>()
+                            .into_iter()
+                            .map(assistant_view::ThreadStatus::accessible_suffix)
+                            .collect::<String>()
+                    );
+                    el.child(
+                        status_slot(
+                            format!("connection-status-{id}"),
+                            slot_width,
+                            label,
+                            show_activity(id, weak),
+                        )
+                        .child(status.dot(cx)),
+                    )
+                })
                 // The button selects the connection and focuses the editor.
                 // The tree must not also expand the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),

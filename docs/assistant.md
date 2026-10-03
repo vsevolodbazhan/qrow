@@ -315,19 +315,24 @@ move the tab while its conversation works or waits for approval.
 ## Conversation state
 
 Qrow shows the state of each conversation in the thread list and on its tab.
-A tab shows its state before its close button. A tab with a conversation shows
-the assistant icon there. While the conversation works, the tab shows an
-accent-colored spinner, also while the assistant runs the query of the tab. A
-query that you start shows a gray spinner. The **Toggle Assistant** button
-shows the most urgent state of all conversations.
+A tab shows one status dot before its close button. The dot combines the
+query state and the conversation state. The **Toggle Assistant** button keeps
+its assistant icon. Its dot shows the most urgent state of all conversations.
+The thread list shows a dot for each conversation.
 
-- A spinner means that Codex works on a turn.
-- A warning-colored assistant icon means that a query waits for your approval.
-- A green assistant icon means that a reply is ready.
-- A red alert icon means that a turn ended with an error.
+- A blue dot means that Codex works on a turn.
+- A yellow dot means that a query waits for your approval.
+- A green dot means that an unread reply is ready.
+- A red dot means that a turn ended with an unread error.
+- An idle conversation has no dot.
 
-The toggle uses this order of priority: approval, error, reply, work. A ready
-reply or an error stays until you show its conversation with the pane open.
+The dots use this order of priority: approval, error, work, unread reply.
+A ready reply or an error stays until its transcript shows. The thread list
+and Activity do not read replies. Approval stays until you approve or cancel
+the request. Tooltips and accessible names give the state in words.
+
+A tab can also show dim blue for an idle database session. See
+[query tab state](queries.md#query-tab-state).
 
 ## Pane and connection state
 

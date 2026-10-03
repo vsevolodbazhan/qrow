@@ -167,16 +167,16 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
 
     // Selecting the other conversation selects its tab and connection.
     app.show_threads(cx);
-    app.update(cx, |window, cx| {
-        let row = crate::support::labelled_starting(window, "")
-            .into_iter()
-            .find(|e| {
-                e.label()
-                    .is_some_and(|l| l.contains("Alpha, assistant waiting for approval"))
-            })
-            .unwrap();
-        crate::support::click_element(window, &row, cx);
-    });
+    let alpha_tab = tab_of(&app, alpha).unwrap().id;
+    let alpha_thread = app
+        .saved()
+        .assistant
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.tab_id == Some(alpha_tab))
+        .unwrap()
+        .thread_id;
+    app.click(cx, format!("assistant-thread-{alpha_thread}"));
     app.show_conversation(cx);
     app.wait_editor(cx, "SELECT 11");
     app.wait_approval(cx, "Run in Query 1 · Alpha? SELECT 11");
@@ -189,16 +189,16 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.wait_reply(cx, "Finished Alpha: approval_cancelled");
     app.wait_label(cx, "Toggle Assistant, reply ready");
     app.show_threads(cx);
-    app.update(cx, |window, cx| {
-        let row = crate::support::labelled_starting(window, "")
-            .into_iter()
-            .find(|e| {
-                e.label()
-                    .is_some_and(|l| l.contains("Beta, assistant reply ready"))
-            })
-            .unwrap();
-        crate::support::click_element(window, &row, cx);
-    });
+    let beta_tab = tab_of(&app, beta).unwrap().id;
+    let beta_thread = app
+        .saved()
+        .assistant
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.tab_id == Some(beta_tab))
+        .unwrap()
+        .thread_id;
+    app.click(cx, format!("assistant-thread-{beta_thread}"));
     app.show_conversation(cx);
     app.wait_reply(cx, "Finished Beta: approval_cancelled");
     app.wait_label(cx, "Toggle Assistant");

@@ -11,6 +11,7 @@ mod profile_view;
 mod results;
 mod setting_row;
 mod settings_view;
+mod status_dot;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
@@ -45,6 +46,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use results::Results;
+use status_dot::DotStatus;
 use std::{
     collections::BTreeMap,
     sync::{Arc, mpsc},
@@ -218,6 +220,41 @@ struct Tab {
     next_execution_id: u64,
 }
 impl Tab {
+    fn dot_status(&self) -> Option<DotStatus> {
+        if self.panel.unread_error {
+            Some(DotStatus::Error)
+        } else if self.busy {
+            Some(DotStatus::Working)
+        } else if self.panel.has_unread_success() {
+            Some(DotStatus::Ready)
+        } else if self.connected {
+            Some(DotStatus::Connected)
+        } else {
+            None
+        }
+    }
+
+    fn status_suffix(&self) -> String {
+        let mut label = String::new();
+        if self.connected {
+            label.push_str(if self.busy {
+                ", connected"
+            } else {
+                ", connected, idle"
+            });
+        }
+        if self.busy {
+            label.push_str(", running");
+        }
+        if self.panel.unread_error {
+            label.push_str(", unread error");
+        }
+        if self.panel.has_unread_success() {
+            label.push_str(", unread query result");
+        }
+        label
+    }
+
     fn can_disconnect(&self) -> bool {
         !self.busy
             && self.connected
@@ -1011,6 +1048,7 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
+        let workspace_visible = !self.activity.read(cx).is_open();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let logs: Vec<_> = tab
                 .worker
@@ -1032,7 +1070,7 @@ impl Qrow {
                 let error = event.severity == Severity::Error;
                 Self::record_log(tab, event);
                 if error {
-                    Self::record_failure(tab, index == self.active);
+                    Self::record_failure(tab, workspace_visible && index == self.active);
                 }
             }
             let events: Vec<_> = tab
@@ -1042,7 +1080,13 @@ impl Qrow {
                 .unwrap_or_default();
             changed |= !events.is_empty();
             for event in events {
-                Self::apply_worker_event(tab, event, index == self.active, &self.profiles, cx);
+                Self::apply_worker_event(
+                    tab,
+                    event,
+                    workspace_visible && index == self.active,
+                    &self.profiles,
+                    cx,
+                );
             }
         }
         for (connection, entry) in activity {
@@ -1126,7 +1170,7 @@ impl Qrow {
                 }
                 .into();
                 if !was_cancelling {
-                    tab.panel.success();
+                    tab.panel.success(active);
                 }
             }
             Event::Cancelled => {
@@ -1350,10 +1394,16 @@ impl Qrow {
         {
             self.tab_scroll.scroll_to_item(position);
         }
-        self.tabs[index].panel.output_visible();
-        self.tabs[index]
-            .input
-            .update(cx, |s, cx| s.focus(window, cx));
+        if !self.activity.read(cx).is_open() {
+            self.tabs[index].panel.content_visible();
+            self.tabs[index]
+                .input
+                .update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            let focus = self.tabs[index].input.read(cx).focus_handle(cx);
+            self.activity
+                .update(cx, |view, _| view.return_focus_to(focus));
+        }
         self.show_tab_conversation(window, cx);
         self.changed(cx);
     }
@@ -1515,7 +1565,7 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active;
+        let active = index == self.active && !self.activity.read(cx).is_open();
         let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
             let selected = s
@@ -2821,7 +2871,7 @@ impl Qrow {
         });
         tab.status = "Complete · Demo data".into();
         tab.elapsed = Some(Duration::from_millis(842));
-        tab.panel.success();
+        tab.panel.success(true);
     }
 }
 /// The title of a section of a context menu. GPUI Kit draws its menu labels

@@ -729,7 +729,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
 
     // The status bar opens the connection with the newest unseen error.
     // Showing its Activity marks its errors as seen.
-    app.click(cx, "toggle-activity");
+    app.click(cx, format!("connection-status-{}", profile.id));
     app.wait_for(cx, "activity");
     let activity = app.copy_activity(cx);
     assert!(
@@ -788,8 +788,16 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
                 == Some("Unreachable, schema refresh error")
         },
     );
-    // A click on the warning opens the Activity of the connection.
-    app.click(cx, format!("connection-error-{}", profile.id));
+    // The unread dot clears, while the last refresh error stays in the row.
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .try_find(format!("connection-status-{}", profile.id))
+                .is_none()
+        )
+    });
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Show Activity");
     app.wait_for(cx, "activity");
     assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
@@ -1137,7 +1145,10 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    assert_eq!(tooltip(&app, cx).as_deref(), Some("127.0.0.1 · synthetic"));
+    assert_eq!(
+        tooltip(&app, cx).as_deref(),
+        Some("127.0.0.1 · synthetic\nWork running")
+    );
 
     // The pointer stays on the row. The open tooltip adds the error.
     app.wait_until(
@@ -1146,7 +1157,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         Duration::from_secs(20),
         |window, _| {
             label(window, "catalog-tooltip")
-                .is_some_and(|text| text.starts_with("127.0.0.1 · synthetic\n"))
+                .is_some_and(|text| text.contains("Activity shows the full error."))
         },
     );
     app.update(cx, |window, _| {

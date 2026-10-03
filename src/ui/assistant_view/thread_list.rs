@@ -93,8 +93,9 @@ impl AssistantPane {
                                 .icon(IconName::ArrowLeft)
                                 .accessibility_label("Back to Conversation")
                                 .tooltip("Back to Conversation")
-                                .on_click(cx.listener(|pane, _, _, cx| {
+                                .on_click(cx.listener(|pane, _, window, cx| {
                                     pane.thread_list_override = Some(false);
+                                    pane.read_visible_reply(window, cx);
                                     cx.notify();
                                 })),
                         )
@@ -190,9 +191,9 @@ impl AssistantPane {
                                                     ),
                                             )
                                             .when_some(
-                                                qrow.assistant_status_icon(status, cx),
-                                                |row, icon| {
-                                                    row.child(div().flex_none().child(icon))
+                                                qrow.assistant_status_dot(status, cx),
+                                                |row, dot| {
+                                                    row.child(div().flex_none().child(dot))
                                                 },
                                             ),
                                     )
