@@ -1851,16 +1851,19 @@ fn connection_row(
                         .flex_shrink_0(),
                 )
                 .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
-                .when(row.busy || row.refreshing, |el| {
-                    el.child(
-                        status_slot(
-                            format!("connection-busy-{id}"),
-                            slot_width,
-                            show_activity(id, weak),
+                .when(
+                    (row.busy || row.refreshing) && !row.unread_error && !row.refresh_error,
+                    |el| {
+                        el.child(
+                            status_slot(
+                                format!("connection-busy-{id}"),
+                                slot_width,
+                                show_activity(id, weak),
+                            )
+                            .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
                         )
-                        .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
-                    )
-                })
+                    },
+                )
                 // One warning icon covers an unread query error and a
                 // schema refresh error. The tooltip and the label tell which.
                 .when(row.unread_error || row.refresh_error, |el| {

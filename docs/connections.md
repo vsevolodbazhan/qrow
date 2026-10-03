@@ -164,7 +164,11 @@ had before the refresh. The error shows on the row of the refreshed part:
   shows the error with **Refresh**.
 
 [Activity](activity.md) shows the full error. Click the warning icon to open
-it. The connection row uses the same warning icon for an unread query error. Only a refresh error
+it. Each connection row shows at most one status icon. A warning replaces the
+spinner while the connection has an unread query error or a schema refresh
+error. After you acknowledge or clear the error, the spinner shows if work
+continues. Click either icon to open Activity.
+The connection row uses the same warning icon for an unread query error. Only a refresh error
 adds text to the tooltip of the row. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 

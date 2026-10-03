@@ -128,6 +128,24 @@ pub fn value(window: &Window, id: impl Into<ElementId>) -> Option<String> {
         .and_then(|element| element.value().map(str::to_owned))
 }
 
+/// A tab has one status indicator, beside its persistent close control.
+pub fn assert_tab_status(window: &Window, tab: Uuid, expected: &str) {
+    let visible: Vec<_> = ["assistant", "query", "error"]
+        .into_iter()
+        .filter(|kind| {
+            window
+                .try_find(format!("query-tab-{kind}-status-{tab}"))
+                .is_some()
+        })
+        .collect();
+    assert_eq!(
+        visible,
+        [expected],
+        "The tab has multiple or missing status icons"
+    );
+    assert!(window.try_find(format!("close-tab-{tab}")).is_some());
+}
+
 /// The index of the item labelled `item` in the open menu `scope`
 /// ("popup-menu" or "submenu").
 pub fn menu_item(window: &mut Window, scope: &str, item: &str) -> Option<usize> {

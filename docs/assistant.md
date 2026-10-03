@@ -315,8 +315,10 @@ move the tab while its conversation works or waits for approval.
 ## Conversation state
 
 Qrow shows the state of each conversation in the thread list and on its tab.
-A tab shows its state before its close button. A tab with a conversation shows
-the assistant icon there. While the conversation works, the tab shows an
+A tab shows one status icon before its close button. The close button always
+shows, but it is disabled while the tab or its conversation works or waits
+for approval. An idle tab with a conversation shows the assistant icon.
+While the conversation works, the tab shows an
 accent-colored spinner, also while the assistant runs the query of the tab. A
 query that you start shows a gray spinner. The **Toggle Assistant** button
 shows the most urgent state of all conversations.
@@ -324,7 +326,12 @@ shows the most urgent state of all conversations.
 - A spinner means that Codex works on a turn.
 - A warning-colored assistant icon means that a query waits for your approval.
 - A green assistant icon means that a reply is ready.
-- A red alert icon means that a turn ended with an error.
+- A red alert icon means that a query failed or a turn ended with an error.
+
+When states overlap, the tab uses this order: approval, an unread query or
+assistant error, work, a ready reply, an idle conversation. An unread error
+replaces the spinner. The tab's accessible name keeps
+all its states.
 
 The toggle uses this order of priority: approval, error, reply, work. A ready
 reply or an error stays until you show its conversation with the pane open.

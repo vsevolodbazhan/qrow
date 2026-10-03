@@ -1,7 +1,8 @@
 //! Each conversation belongs to one query tab, also while other tabs change.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, approval};
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, labelled, labels, offline_profile,
+    MemoryCredentials, TestApp, assert_tab_status, connection_row, labelled, labels,
+    offline_profile,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
@@ -55,6 +56,70 @@ fn tabs_of(app: &TestApp, profile: Uuid) -> Vec<SavedTab> {
         .into_iter()
         .filter(|tab| tab.profile == Some(profile))
         .collect()
+}
+
+#[gpui_kit::test]
+fn a_query_tab_shows_one_status_when_an_assistant_and_a_query_error_overlap(
+    cx: &mut TestAppContext,
+) {
+    let Connections {
+        app, codex, alpha, ..
+    } = connections(cx, "SELECT 1;");
+    let tab = tab_of(&app, alpha).unwrap().id;
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.update(cx, |window, _| assert_tab_status(window, tab, "query"));
+    app.click(cx, "toggle-assistant");
+    codex.mark("first-reply-release");
+    app.wait_label_containing(cx, ", assistant reply ready");
+    app.update(cx, |window, _| assert_tab_status(window, tab, "assistant"));
+
+    // A missing synthetic password fails the query without accessing Keychain.
+    app.click(cx, "run");
+    app.wait_status(cx, "Error");
+    app.wait_label_containing(cx, ", unread error, assistant reply ready");
+    app.update(cx, |window, _| {
+        assert_tab_status(window, tab, "error");
+    });
+    app.open_assistant(cx);
+    app.wait_label_containing(cx, ", unread error");
+    app.update(cx, |window, _| assert_tab_status(window, tab, "error"));
+
+    app.send(cx, "Hold parallel Alpha");
+    app.wait_label_containing(cx, ", unread error, assistant working");
+    app.update(cx, |window, _| {
+        assert_tab_status(window, tab, "error");
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, _| assert_tab_status(window, tab, "error"));
+    codex.mark("release-Alpha");
+    app.wait_label_containing(cx, ", unread error, assistant waiting for approval");
+    app.update(cx, |window, _| {
+        assert_tab_status(window, tab, "assistant");
+        assert_eq!(
+            window
+                .find(format!("query-tab-assistant-status-{tab}"))
+                .label(),
+            Some("Assistant waiting for approval")
+        );
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, _| assert_tab_status(window, tab, "assistant"));
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(cx, "Finished Alpha: approval_cancelled");
+    app.update(cx, |window, _| assert_tab_status(window, tab, "error"));
+    app.click(cx, "output-panel-tab");
+    app.wait_gone(cx, format!("query-tab-error-status-{tab}"));
+    app.update(cx, |window, _| assert_tab_status(window, tab, "assistant"));
+    app.click(cx, format!("close-tab-{tab}"));
+    app.wait_until(cx, "the closed idle tab", REPLY_TIMEOUT, |_, _| {
+        app.saved().tabs.iter().all(|saved| saved.id != tab)
+    });
 }
 
 #[gpui_kit::test]

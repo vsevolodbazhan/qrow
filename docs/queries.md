@@ -55,6 +55,11 @@ after completion. Background queries update their own panel without changing
 the active query tab. A failed background query shows an unread error indicator
 on its tab.
 
+Each tab shows at most one status icon beside its close button. An unread
+error replaces an idle assistant icon or a spinner. An assistant query that
+waits for approval has priority over the error. See
+[Conversation state](assistant.md#conversation-state) for the full order.
+
 Qrow puts Logs entries into history groups. One group holds all entries of
 one query execution. An entry without an execution has its own group. Examples
 are a failed keep-alive, a disconnect, and rejected SQL.

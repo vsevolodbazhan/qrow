@@ -71,6 +71,80 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
+    /// One indicator represents the most urgent tab state. Approval needs an
+    /// action, errors need attention, and activity replaces passive markers.
+    fn query_tab_status_icon(
+        &self,
+        tab: &Tab,
+        assistant: Option<ThreadStatus>,
+        cx: &App,
+    ) -> Option<AnyElement> {
+        let (kind, label, icon) = if assistant == Some(ThreadStatus::Approval) {
+            (
+                "assistant",
+                "Assistant waiting for approval",
+                self.assistant_status_icon(ThreadStatus::Approval, cx)?,
+            )
+        } else if tab.panel.unread_error || assistant == Some(ThreadStatus::Failed) {
+            (
+                "error",
+                "Unread error",
+                Icon::new(AssetIconName::TriangleAlert)
+                    .small()
+                    .text_color(cx.theme().danger)
+                    .into_any_element(),
+            )
+        } else if tab.busy || assistant == Some(ThreadStatus::Working) {
+            let assistant_working = assistant == Some(ThreadStatus::Working);
+            (
+                "query",
+                if assistant_working {
+                    "Assistant working"
+                } else {
+                    "Query running"
+                },
+                Spinner::new()
+                    .xsmall()
+                    .color(if assistant_working {
+                        cx.theme().primary
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .into_any_element(),
+            )
+        } else {
+            let assistant = assistant?;
+            (
+                "assistant",
+                if assistant == ThreadStatus::Ready {
+                    "Assistant reply ready"
+                } else {
+                    "Assistant conversation"
+                },
+                self.assistant_status_icon(assistant, cx)
+                    .unwrap_or_else(|| {
+                        Icon::new(AssetIconName::Bot)
+                            .small()
+                            .text_color(cx.theme().muted_foreground)
+                            .into_any_element()
+                    }),
+            )
+        };
+        Some(
+            div()
+                .id(SharedString::from(format!(
+                    "query-tab-{kind}-status-{}",
+                    tab.saved.id
+                )))
+                .test_support()
+                .aria_label(label)
+                .flex()
+                .items_center()
+                .child(icon)
+                .into_any_element(),
+        )
+    }
+
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
@@ -163,48 +237,13 @@ impl Qrow {
                             ""
                         },
                     ))
-                    // The status area before the close button shows one
-                    // spinner. It uses the accent color while the tab's
-                    // conversation works, also when the assistant runs the
-                    // query of the tab.
                     .suffix(
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when(tab.busy || assistant == Some(ThreadStatus::Working), |el| {
-                                el.child(Spinner::new().xsmall().color(
-                                    if assistant == Some(ThreadStatus::Working) {
-                                        cx.theme().primary
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    },
-                                ))
-                            })
                             .when_some(
-                                assistant
-                                    .filter(|status| *status != ThreadStatus::Working)
-                                    .map(|status| {
-                                        self.assistant_status_icon(status, cx).unwrap_or_else(
-                                            || {
-                                                Icon::new(AssetIconName::Bot)
-                                                    .small()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .into_any_element()
-                                            },
-                                        )
-                                    })
-                                    .filter(|_| !tab.busy || assistant != Some(ThreadStatus::Idle)),
+                                self.query_tab_status_icon(tab, assistant, cx),
                                 |el, icon| el.child(icon),
-                            )
-                            .when(
-                                tab.panel.unread_error && assistant != Some(ThreadStatus::Failed),
-                                |el| {
-                                    el.child(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
-                                    )
-                                },
                             )
                             .child(
                                 Button::new(SharedString::from(format!(
