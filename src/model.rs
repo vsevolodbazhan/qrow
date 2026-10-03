@@ -326,8 +326,7 @@ pub struct Profile {
 pub struct SharedCatalog {
     pub id: Uuid,
     pub name: String,
-    /// The settings that decide what a refresh reads. `log_refreshes` stays
-    /// with each member, so this value is not used.
+    /// The settings that decide what a refresh reads.
     pub settings: CatalogSettings,
     /// The member that automatic refreshes use while it has a live session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -369,17 +368,14 @@ impl SharedCatalog {
 }
 
 /// The catalog settings that apply to `profile`. A member of a shared
-/// catalog uses the shared settings, with its own Logs option. A connection
-/// with schema browsing off stays off.
+/// catalog uses the shared settings. A connection with schema browsing off
+/// stays off.
 pub fn effective_catalog(profile: &Profile, shared: &[SharedCatalog]) -> CatalogSettings {
     match profile
         .shared_catalog
         .and_then(|id| shared.iter().find(|catalog| catalog.id == id))
     {
-        Some(catalog) if profile.catalog.browses() => CatalogSettings {
-            log_refreshes: profile.catalog.log_refreshes,
-            ..catalog.settings.clone()
-        },
+        Some(catalog) if profile.catalog.browses() => catalog.settings.clone(),
         _ => profile.catalog.clone(),
     }
 }
@@ -427,8 +423,6 @@ pub struct CatalogSettings {
     pub include: Vec<String>,
     /// Glob patterns of the schemas to hide, also when an include matches.
     pub exclude: Vec<String>,
-    /// Record the requests of each schema refresh in Logs.
-    pub log_refreshes: bool,
     #[serde(default = "CatalogRefresh::saved_before_choice")]
     pub refresh: CatalogRefresh,
     /// The period of [`CatalogRefresh::WhileConnected`]. The other choices
@@ -443,7 +437,6 @@ impl Default for CatalogSettings {
         Self {
             include: Vec::new(),
             exclude: Vec::new(),
-            log_refreshes: false,
             refresh: CatalogRefresh::default(),
             refresh_minutes: 60,
             timeout_minutes: 30,
@@ -533,7 +526,13 @@ pub struct ConnectionLifecycle {
     /// Zero disables keep-alive and enables idle disconnection.
     pub keep_alive_seconds: u64,
     pub keep_alive_sql: String,
+    /// The longest wait for one answer from Kyuubi. The first statement of
+    /// a session can wait while Kyuubi starts an engine.
+    pub response_timeout_seconds: u64,
 }
+
+/// The valid response timeouts, in seconds (10 seconds to 1 hour).
+pub const RESPONSE_TIMEOUT_SECONDS: std::ops::RangeInclusive<u64> = 10..=3_600;
 
 impl Default for ConnectionLifecycle {
     fn default() -> Self {
@@ -541,11 +540,16 @@ impl Default for ConnectionLifecycle {
             idle_seconds: 900,
             keep_alive_seconds: 0,
             keep_alive_sql: "SELECT 1".into(),
+            response_timeout_seconds: 300,
         }
     }
 }
 
 impl ConnectionLifecycle {
+    pub fn response_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.response_timeout_seconds)
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             (1..=604_800).contains(&self.idle_seconds),
@@ -554,6 +558,12 @@ impl ConnectionLifecycle {
         anyhow::ensure!(
             self.keep_alive_seconds <= 604_800,
             "Keep-alive interval must be between 0 and 604800 seconds."
+        );
+        anyhow::ensure!(
+            RESPONSE_TIMEOUT_SECONDS.contains(&self.response_timeout_seconds),
+            "Response timeout must be between {} and {} seconds.",
+            RESPONSE_TIMEOUT_SECONDS.start(),
+            RESPONSE_TIMEOUT_SECONDS.end()
         );
         if self.keep_alive_seconds > 0 {
             crate::sql::validate_single(&self.keep_alive_sql)?;
@@ -1014,9 +1024,12 @@ mod tests {
         assert!(!defaults.browses());
         assert_eq!(defaults.timeout_minutes, 30);
         // Settings saved with the schema tree but without a refresh choice
-        // keep the tree with refreshes on request.
+        // keep the tree with refreshes on request. Qrow ignores the removed
+        // Logs option of older files, and the next save drops it.
         let restored: CatalogSettings =
             serde_json::from_str(r#"{"include":["a"],"exclude":[],"log_refreshes":true}"#).unwrap();
+        let saved = serde_json::to_string(&restored).unwrap();
+        assert!(!saved.contains("log_refreshes"), "{saved}");
         assert_eq!(restored.refresh, CatalogRefresh::Manual);
         assert!(restored.browses());
         assert_eq!(restored.timeout_minutes, 30);
@@ -1078,6 +1091,21 @@ mod tests {
         assert_eq!(restored.id, original.id);
         assert_eq!(restored.lifecycle, ConnectionLifecycle::default());
         assert_eq!(restored.lifecycle.keep_alive_seconds, 0);
+    }
+
+    #[test]
+    fn a_lifecycle_without_a_response_timeout_waits_five_minutes() {
+        // Lifecycles saved before the setting existed get the default.
+        let restored: ConnectionLifecycle = serde_json::from_str(
+            r#"{"idle_seconds":900,"keep_alive_seconds":0,"keep_alive_sql":"SELECT 1"}"#,
+        )
+        .unwrap();
+        assert_eq!(restored.response_timeout_seconds, 300);
+        let mut policy = ConnectionLifecycle::default();
+        for (seconds, valid) in [(9, false), (10, true), (3_600, true), (3_601, false)] {
+            policy.response_timeout_seconds = seconds;
+            assert_eq!(policy.validate().is_ok(), valid, "{seconds}");
+        }
     }
 
     #[test]
@@ -1530,18 +1558,16 @@ mod tests {
     }
 
     #[test]
-    fn a_member_uses_the_shared_settings_with_its_own_logs_option() {
+    fn a_member_uses_the_shared_settings() {
         let catalog = shared(CatalogSettings {
             refresh: CatalogRefresh::WhileConnected,
             include: vec!["sales_*".into()],
-            log_refreshes: false,
             ..CatalogSettings::default()
         });
         let mut profile = Profile {
             catalog: CatalogSettings {
                 refresh: CatalogRefresh::Manual,
                 include: vec!["hr".into()],
-                log_refreshes: true,
                 ..CatalogSettings::default()
             },
             shared_catalog: Some(catalog.id),
@@ -1550,7 +1576,6 @@ mod tests {
         let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));
         assert_eq!(effective.include, ["sales_*"]);
         assert_eq!(effective.refresh, CatalogRefresh::WhileConnected);
-        assert!(effective.log_refreshes);
         // A member with browsing off stays off.
         profile.catalog.refresh = CatalogRefresh::Disabled;
         let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));

@@ -1,4 +1,5 @@
 mod about_view;
+mod activity_view;
 mod assistant_tools;
 mod assistant_view;
 mod button_pair;
@@ -19,9 +20,7 @@ pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
-    activity::{
-        ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
-    },
+    logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
@@ -63,6 +62,7 @@ actions!(
         CloseTab,
         ToggleSidebar,
         ToggleAssistant,
+        ToggleActivity,
         OpenAbout,
         OpenSettings,
         IncreaseUiScale,
@@ -103,6 +103,12 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
         KeyBinding::new("cmd-j", ToggleAssistant, None),
+        KeyBinding::new("cmd-shift-u", ToggleActivity, None),
+        KeyBinding::new(
+            "escape",
+            activity_view::CloseActivity,
+            Some(activity_view::CONTEXT),
+        ),
         KeyBinding::new("cmd-=", IncreaseUiScale, None),
         KeyBinding::new("cmd-+", IncreaseUiScale, None),
         KeyBinding::new("cmd--", DecreaseUiScale, None),
@@ -176,13 +182,15 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
             ],
         },
     ];
+    let mut view = vec![MenuItem::action("Activity", ToggleActivity)];
     if assistant_enabled {
-        menus.push(Menu {
-            disabled: false,
-            name: "View".into(),
-            items: vec![MenuItem::action("Toggle Assistant", ToggleAssistant)],
-        });
+        view.push(MenuItem::action("Toggle Assistant", ToggleAssistant));
     }
+    menus.push(Menu {
+        disabled: false,
+        name: "View".into(),
+        items: view,
+    });
     cx.set_menus(menus);
 }
 struct Tab {
@@ -203,7 +211,7 @@ struct Tab {
     status: String,
     started: Option<Instant>,
     elapsed: Option<Duration>,
-    output: ActivityLog,
+    output: LogHistory,
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
@@ -226,8 +234,6 @@ struct ProfileEditor {
     /// Manual or automatic schema refresh.
     schema_refresh: connection_form::ChoiceSelect,
     _schema_refresh_subscription: Subscription,
-    /// Whether schema refreshes write their requests to Logs.
-    refresh_logs: connection_form::ChoiceSelect,
     /// The catalog that the connection uses. A change loads the settings of
     /// the chosen catalog into the Schemas fields.
     catalog_select: connection_form::RowCombobox,
@@ -395,6 +401,10 @@ pub struct Qrow {
     wake: async_channel::Sender<()>,
     catalog: catalog_tree::CatalogTree,
     _catalog_subscriptions: [Subscription; 2],
+    /// The background work of each connection. It covers the main area of
+    /// the window while it is open.
+    activity: Entity<activity_view::ActivityView>,
+    _activity_events: Subscription,
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
@@ -531,6 +541,10 @@ impl Qrow {
                 }
             }),
         ];
+        let activity = cx.new(|cx| activity_view::ActivityView::new(window, cx));
+        let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
+            this.activity_event(event, window, cx)
+        });
         let mut this = Self {
             settings: workspace.settings,
             assistant: workspace.assistant,
@@ -570,6 +584,8 @@ impl Qrow {
             wake,
             catalog,
             _catalog_subscriptions: catalog_subscriptions,
+            activity,
+            _activity_events: activity_events,
         };
         for tab in workspace.tabs {
             let tab = this.make_tab(tab, window, cx);
@@ -675,7 +691,7 @@ impl Qrow {
             status: "Not connected".into(),
             started: None,
             elapsed: None,
-            output: ActivityLog::default(),
+            output: LogHistory::default(),
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
@@ -918,9 +934,11 @@ impl Qrow {
     fn changed(&mut self, cx: &mut Context<Self>) {
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
+        // The UI scale and the Logs font settings change here.
+        self.sync_activity_typography(cx);
         cx.notify();
     }
-    fn record_activity(tab: &mut Tab, event: ActivityEvent) {
+    fn record_log(tab: &mut Tab, event: LogEvent) {
         let at_bottom =
             tab.output_scroll.offset().y <= -tab.output_scroll.max_offset().y + px(8. * 1.);
         tab.output.record(event);
@@ -928,15 +946,10 @@ impl Qrow {
             tab.output_scroll.scroll_to_bottom();
         }
     }
-    fn record_local_activity(
-        tab: &mut Tab,
-        severity: Severity,
-        kind: ActivityKind,
-        text: impl Into<String>,
-    ) {
-        Self::record_activity(
+    fn record_local_log(tab: &mut Tab, severity: Severity, kind: LogKind, text: impl Into<String>) {
+        Self::record_log(
             tab,
-            ActivityEvent::new(tab.current_execution, severity, kind, text),
+            LogEvent::new(tab.current_execution, severity, kind, text),
         );
     }
     fn record_failure(tab: &mut Tab, active: bool) {
@@ -975,6 +988,8 @@ impl Qrow {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
         changed |= self.drain_catalogs(cx);
+        self.activity
+            .update(cx, |activity, cx| activity.sync_labels(window, cx));
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -991,19 +1006,31 @@ impl Qrow {
             || self.pending_quit.is_some()
             || self.form.as_ref().is_some_and(|f| f.saving.is_some())
     }
-    /// Applies the activity and the events that the tab workers sent.
+    /// Applies the Logs entries and the events that the tab workers sent.
+    /// Each entry also goes to the Activity of the connection of the tab.
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
+        let mut activity = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
-            let activities: Vec<_> = tab
+            let logs: Vec<_> = tab
                 .worker
                 .as_ref()
-                .map(|worker| worker.activities.try_iter().collect())
+                .map(|worker| worker.logs.try_iter().collect())
                 .unwrap_or_default();
-            changed |= !activities.is_empty();
-            for activity in activities {
-                let error = activity.severity == Severity::Error;
-                Self::record_activity(tab, activity);
+            changed |= !logs.is_empty();
+            let connection = tab.worker_profile.or(tab.saved.profile);
+            for event in logs {
+                if let Some(connection) = connection
+                    && let Some(entry) =
+                        crate::activity::from_tab(&event, tab.saved.id, &tab.saved.title)
+                {
+                    activity.push((connection, entry));
+                }
+                let Some(event) = crate::activity::tab_event(event) else {
+                    continue;
+                };
+                let error = event.severity == Severity::Error;
+                Self::record_log(tab, event);
                 if error {
                     Self::record_failure(tab, index == self.active);
                 }
@@ -1017,6 +1044,9 @@ impl Qrow {
             for event in events {
                 Self::apply_worker_event(tab, event, index == self.active, &self.profiles, cx);
             }
+        }
+        for (connection, entry) in activity {
+            self.record_activity(connection, entry, cx);
         }
         changed
     }
@@ -1128,7 +1158,7 @@ impl Qrow {
                 Self::record_failure(tab, active);
             }
             Event::CancelError(message) => {
-                Self::record_local_activity(tab, Severity::Error, ActivityKind::Error, message);
+                Self::record_local_log(tab, Severity::Error, LogKind::Error, message);
                 Self::record_failure(tab, active);
                 tab.cancelling = false;
             }
@@ -1410,6 +1440,8 @@ impl Qrow {
         self.tabs.remove(index);
         self.sync_catalog_warmth();
         self.assistant_tab_removed(tab_id, profile);
+        self.activity
+            .update(cx, |activity, cx| activity.tab_closed(tab_id, cx));
         if let Some(profile) = profile
             && !self
                 .tabs
@@ -1458,7 +1490,7 @@ impl Qrow {
         if let Some(index) = self.active_tab_for_profile(id) {
             // A connection selection changes the visible tab group. It does
             // not change the owning connection of either tab, so it is not a
-            // query activity event.
+            // query Logs event.
             self.activate(index, window, cx);
         }
     }
@@ -1495,9 +1527,9 @@ impl Qrow {
         });
         if let Err(e) = sql::validate_single(&query) {
             let message = e.to_string();
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1511,9 +1543,9 @@ impl Qrow {
             .cloned()
         else {
             let message = "Choose a connection before running SQL.";
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1522,9 +1554,9 @@ impl Qrow {
         };
         if let Err(error) = profile.validate() {
             let message = error.to_string();
-            Self::record_activity(
+            Self::record_log(
                 tab,
-                ActivityEvent::new(None, Severity::Error, ActivityKind::Error, message.clone()),
+                LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
             tab.status = format!("Rejected · {message}");
@@ -1563,15 +1595,19 @@ impl Qrow {
             .unwrap()
             .run_with_id(profile.clone(), query.clone(), execution_id);
         tab.current_execution = Some(execution_id);
-        let submission = ActivityEvent::new(
+        let submission = LogEvent::new(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::Submitted,
+            LogKind::Submitted,
             format!("Submitted query:\n{query}"),
         )
         .with_connection(profile.name)
         .with_sql(query);
-        Self::record_activity(tab, submission);
+        let entry = crate::activity::from_tab(&submission, tab.saved.id, &tab.saved.title);
+        Self::record_log(tab, submission);
+        if let Some(entry) = entry {
+            self.record_activity(profile.id, entry, cx);
+        }
         cx.notify();
         true
     }
@@ -1612,10 +1648,10 @@ impl Qrow {
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
         let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
-            Self::record_local_activity(
+            Self::record_local_log(
                 t,
                 Severity::Info,
-                ActivityKind::CancelRequested,
+                LogKind::CancelRequested,
                 "Cancellation requested by user",
             );
             t.worker.as_ref().unwrap().cancel();
@@ -1630,18 +1666,21 @@ impl Qrow {
             return;
         }
         if tab.worker.is_some() {
-            Self::record_activity(
-                tab,
-                ActivityEvent::new(
-                    None,
-                    Severity::Info,
-                    ActivityKind::Disconnected,
-                    "Disconnect requested",
-                ),
+            let event = LogEvent::new(
+                None,
+                Severity::Info,
+                LogKind::Disconnected,
+                "Disconnect requested",
             );
+            let entry = crate::activity::from_tab(&event, tab.saved.id, &tab.saved.title);
+            let connection = tab.worker_profile;
+            Self::record_log(tab, event);
             tab.worker.as_ref().unwrap().disconnect();
             tab.busy = true;
             tab.status = "Disconnecting…".into();
+            if let (Some(connection), Some(entry)) = (connection, entry) {
+                self.record_activity(connection, entry, cx);
+            }
         }
         cx.notify();
     }
@@ -1942,6 +1981,9 @@ impl Qrow {
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
+        let show_activity = cx.listener(move |this, _: &ClickEvent, window, cx| {
+            this.open_activity(Some(id), window, cx)
+        });
         let browses = self
             .profiles
             .iter()
@@ -1964,6 +2006,7 @@ impl Qrow {
                 menu.item(menu_section("Connection"))
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                    .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
@@ -2171,7 +2214,6 @@ impl Qrow {
                 } else {
                     CatalogRefresh::Disabled
                 },
-                log_refreshes: profile.catalog.log_refreshes,
                 ..shared.settings.clone()
             },
             None => profile.catalog.clone(),
@@ -2195,6 +2237,7 @@ impl Qrow {
             settings.exclude.join(", "),
             settings.refresh_minutes.to_string(),
             settings.timeout_minutes.to_string(),
+            profile.lifecycle.response_timeout_seconds.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2215,13 +2258,14 @@ impl Qrow {
             })
             .collect::<Vec<_>>();
         let parameters = cx.new(|cx| {
+            // The field is as tall as its text, so a short object has no
+            // empty lines below its closing brace.
             TextareaState::new(window, cx)
+                .auto_grow(1, 8)
                 .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
         });
         let keep_connected = profile.lifecycle.keep_alive_seconds > 0;
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
-        let refresh_logs =
-            connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
         let schema_refresh = connection_form::schema_refresh_select(
             connection_form::RefreshMode::of(settings.refresh),
             window,
@@ -2266,7 +2310,6 @@ impl Qrow {
             _idle_behavior_subscription: idle_behavior_subscription,
             schema_refresh,
             _schema_refresh_subscription: schema_refresh_subscription,
-            refresh_logs,
             catalog_select,
             catalog_choices,
             catalog_choice: catalog,
@@ -2425,7 +2468,6 @@ impl Qrow {
                 );
                 let preferred =
                     connection_form::chosen(&form.preferred_select, &form.preferred_choices, cx);
-                profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
                 // A member keeps its own settings for a later private catalog.
                 // A shared catalog keeps the values of the fields that the
                 // mode hides, like the period of a manual refresh.
@@ -2441,9 +2483,6 @@ impl Qrow {
                         ),
                     connection_form::CatalogChoice::New => profile.catalog.clone(),
                 };
-                if choice != connection_form::CatalogChoice::Private {
-                    settings.log_refreshes = false;
-                }
                 settings.include = connection_form::parse_patterns(&values[10]);
                 settings.exclude = connection_form::parse_patterns(&values[11]);
                 connection_form::parse_refresh_policy(
@@ -2480,6 +2519,10 @@ impl Qrow {
                     }
                 }
             }
+            profile.lifecycle.response_timeout_seconds =
+                values[14].trim().parse().map_err(|_| {
+                    anyhow::anyhow!("Response timeout must be a whole number of seconds.")
+                })?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
@@ -2612,7 +2655,11 @@ impl Qrow {
         self.tabs.retain(|tab| tab.saved.profile != Some(id));
         for tab in removed {
             self.assistant_tab_removed(tab, None);
+            self.activity
+                .update(cx, |activity, cx| activity.tab_closed(tab, cx));
         }
+        self.activity
+            .update(cx, |activity, cx| activity.remove(id, cx));
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
         crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
@@ -2672,45 +2719,50 @@ impl Qrow {
         let execution_id = Self::allocate_execution_id(tab);
         let sql = tab.input.read(cx).value().to_string();
         tab.current_execution = Some(execution_id);
-        Self::record_activity(
-            tab,
-            ActivityEvent::new(
+        let events = [
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Connected,
+                LogKind::Connected,
                 "Connected to rivendell-s (demo)",
             )
             .with_connection("rivendell-s"),
-        );
-        Self::record_activity(
-            tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Submitted,
+                LogKind::Submitted,
                 format!("Submitted query:\n{sql}"),
             )
             .with_connection("rivendell-s")
             .with_sql(sql),
-        );
-        Self::record_activity(
-            tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::ExecutionCompleted,
+                LogKind::ExecutionCompleted,
                 "Execution completed on the server, result set: true (demo)",
             ),
-        );
-        Self::record_activity(
-            tab,
-            ActivityEvent::new(
+            LogEvent::new(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::FetchCompleted,
+                LogKind::FetchCompleted,
                 "Fetched preview page 1: rows 1–2250, 2250 rows, 2250 retained, more rows: false (demo)",
             ),
-        );
+        ];
+        let mut activity = Vec::new();
+        for event in events {
+            activity.extend(crate::activity::from_tab(
+                &event,
+                tab.saved.id,
+                &tab.saved.title,
+            ));
+            Self::record_log(tab, event);
+        }
+        if let Some(connection) = tab.saved.profile {
+            for entry in activity {
+                self.record_activity(connection, entry, cx);
+            }
+        }
+        let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             let data = t.delegate_mut();
             data.clear();

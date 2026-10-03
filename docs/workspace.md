@@ -88,6 +88,9 @@ workspace.
 Workspace version 5 adds shared schema catalogs. Earlier workspaces load
 without shared catalogs. An earlier version of Qrow cannot open a version 5
 workspace.
+Qrow ignores the removed **Schema refresh logs** option of a connection, because
+[Activity](activity.md) always records refreshes. The next save removes the
+option from the file.
 
 ## Quit and save
 

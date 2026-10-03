@@ -101,7 +101,6 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
     // Other tests make schemas too. The filter keeps the tree to this one.
     workspace.profiles[1].catalog.include = vec![schema.clone()];
-    workspace.profiles[1].catalog.log_refreshes = true;
     workspace.profiles[1].catalog.refresh = CatalogRefresh::WhileConnected;
     let reader = workspace.profiles[1].clone();
     let app = TestApp::launch_with(cx, workspace, credentials);
@@ -116,20 +115,22 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     // without an expansion or a Refresh.
     app.select_connection(cx, &reader);
     app.run_complete(cx, "SELECT 1");
-    let mut logs = String::new();
+    let mut activity = String::new();
     let deadline = std::time::Instant::now() + QUERY_TIMEOUT;
     while std::time::Instant::now() < deadline {
-        logs = app.logs(cx);
-        if logs.contains("Schema refresh completed") {
+        activity = app.activity(cx, reader.id);
+        if activity.contains("Schema refresh completed") {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
     assert!(
-        logs.contains("Started an automatic schema refresh of the connection"),
-        "{logs}"
+        activity.contains("Started an automatic schema refresh of the connection"),
+        "{activity}"
     );
-    assert!(logs.contains("Schema refresh completed"), "{logs}");
+    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    // Refreshes stay out of the tab Logs.
+    assert!(!app.logs(cx).contains("schema refresh"));
 
     // The tree shows the cached schema, table, and columns.
     app.toggle_connection(cx, reader.id);
@@ -142,8 +143,12 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
         labelled(window, "gate STRING").is_some()
     });
     // Expansion did not read the catalog again.
-    let logs = app.logs(cx);
-    assert_eq!(logs.matches("schema refresh of").count(), 1, "{logs}");
+    let activity = app.activity(cx, reader.id);
+    assert_eq!(
+        activity.matches("schema refresh of").count(),
+        1,
+        "{activity}"
+    );
 
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }

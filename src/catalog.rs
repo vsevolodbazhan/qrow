@@ -961,7 +961,6 @@ mod tests {
         };
         let browsing = CatalogSettings {
             refresh: CatalogRefresh::Manual,
-            log_refreshes: true,
             ..CatalogSettings::default()
         };
         let member = |name: &str, catalog: CatalogSettings| Profile {
@@ -991,7 +990,6 @@ mod tests {
         let members: Vec<_> = config.members.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(members, ["small", "large"]);
         assert_eq!(config.members[0].catalog.include, ["sales"]);
-        assert!(config.members[0].catalog.log_refreshes);
         assert!(config.member(off.id).is_none());
 
         let config = CatalogConfig::of(private.id, &profiles, catalogs).unwrap();

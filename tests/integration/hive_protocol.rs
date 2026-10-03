@@ -608,3 +608,34 @@ fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
     session.close().unwrap();
     server.join().unwrap();
 }
+
+#[test]
+fn a_silent_server_fails_after_the_response_timeout() {
+    // The server accepts the connection and never answers.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (done, finished) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let _ = finished.recv();
+        drop(socket);
+    });
+    let started = std::time::Instant::now();
+    let error = match qrow::connector::sasl::connect(
+        "127.0.0.1",
+        port,
+        "synthetic-user",
+        "synthetic-password",
+        Duration::from_secs(1),
+    ) {
+        Ok(_) => panic!("A silent server must not authenticate"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert!(
+        error.contains("Kyuubi did not answer within 1 seconds"),
+        "{error}"
+    );
+    done.send(()).unwrap();
+    server.join().unwrap();
+}

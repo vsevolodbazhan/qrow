@@ -12,8 +12,9 @@ use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    Action, AnyWindowHandle, App, AppContext, Bounds, ElementId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, Window, point, px, size,
+    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, WeakEntity,
+    Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -235,6 +236,10 @@ pub fn header(window: &Window, column: usize) -> Option<String> {
 
 pub struct TestApp {
     pub window: AnyWindowHandle,
+    /// The view of the window, for state that no control reaches, like the
+    /// in-memory Activity of a performance probe. The window owns the view,
+    /// so a closed window releases it and its workspace lock.
+    pub qrow: WeakEntity<Qrow>,
     pub credentials: Arc<MemoryCredentials>,
     workspace: PathBuf,
     _directory: TempDir,
@@ -303,12 +308,15 @@ impl TestApp {
             }
             None => Environment::demo(),
         };
+        let mut qrow = None;
         let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
             let view = cx.new(|cx| Qrow::new(environment, Instant::now(), window, cx));
+            qrow = Some(view.downgrade());
             ui::root(view, window, cx)
         });
         let app = Self {
             window: window.into(),
+            qrow: qrow.expect("The window has a Qrow view"),
             credentials,
             workspace: path,
             _directory: directory,
@@ -473,15 +481,23 @@ impl TestApp {
     }
 
     /// Scrolls the container of `target` with the wheel until `target` is
-    /// visible, like a user who scrolls a form to a field below its fold. The
-    /// wheel turns over a visible element of the same container.
+    /// visible, like a user who scrolls a form to a field below its fold or
+    /// back to a field above it. The
+    /// wheel turns over a visible element of the same container. A snapshot
+    /// is visible when any part of it shows, so a target in the lower half of
+    /// the window gets one more step, which shows all of it.
     pub fn scroll_to(&self, cx: &mut TestAppContext, target: &str) {
         let mut positions = Vec::new();
+        let mut extra_step = true;
         for _ in 0..30 {
             let position = self.update(cx, |window, _| {
                 let element = window.try_find(target.to_owned())?;
-                if element.visible() {
+                let low = element.bounds().center().y > window.viewport_size().height / 2.;
+                if element.visible() && !(low && extra_step) {
                     return None;
+                }
+                if element.visible() {
+                    extra_step = false;
                 }
                 let depth = element
                     .path()
@@ -489,21 +505,29 @@ impl TestApp {
                     .rposition(|id| format!("{id:?}").contains("Scrollable"))
                     .expect("The target is not in a scroll container");
                 let container = &element.path()[..=depth];
-                // The smallest visible element is a control inside the scroll
-                // area, not a wrapper around it. Snapshots have no order, so
-                // the choice must not depend on it.
+                // The visible element nearest the middle of the window is in
+                // the scroll area. One at its edge can be under a footer, and
+                // a large wrapper can have its center outside the window.
+                // Snapshots have no order, so the choice must not depend on
+                // it.
+                let middle = f32::from(window.viewport_size().height) / 2.;
                 elements(window)
                     .into_iter()
                     .filter(|other| other.visible() && other.path().starts_with(container))
                     .min_by(|a, b| {
-                        let area = |e: &ElementSnapshot| {
-                            f32::from(e.bounds().size.width) * f32::from(e.bounds().size.height)
+                        let key = |e: &ElementSnapshot| {
+                            (
+                                (f32::from(e.bounds().center().y) - middle).abs(),
+                                f32::from(e.bounds().size.width)
+                                    * f32::from(e.bounds().size.height),
+                            )
                         };
-                        area(a).total_cmp(&area(b))
+                        let (a, b) = (key(a), key(b));
+                        a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
                     })
-                    .map(|other| other.bounds().center())
+                    .map(|other| (other.bounds().center(), low))
             });
-            let Some(position) = position else {
+            let Some((position, down)) = position else {
                 let found =
                     self.update(cx, |window, _| window.try_find(target.to_owned()).is_some());
                 assert!(found, "No element {target}");
@@ -514,7 +538,12 @@ impl TestApp {
                 window.dispatch_event(
                     gpui_kit::ScrollWheelEvent {
                         position,
-                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(px(0.), px(-120.))),
+                        // A target above the middle of the window is above
+                        // the visible part of the container.
+                        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                            px(0.),
+                            px(if down { -120. } else { 120. }),
+                        )),
                         ..Default::default()
                     }
                     .to_platform_input(),
@@ -669,6 +698,29 @@ impl TestApp {
     }
 
     /// The workspace as Qrow last saved it.
+    /// The text of the Activity of `profile`, as Copy All copies it with
+    /// the filter that shows. Activity opens from the connection menu and
+    /// closes again.
+    pub fn activity(&self, cx: &mut TestAppContext, profile: Uuid) -> String {
+        self.context_menu(cx, connection_row(profile));
+        self.choose(cx, "popup-menu", "Show Activity");
+        self.wait_for(cx, "activity");
+        let text = self.copy_activity(cx);
+        self.press(cx, "escape");
+        self.wait_gone(cx, "activity");
+        text
+    }
+
+    /// The text that Copy All copies from the open Activity.
+    pub fn copy_activity(&self, cx: &mut TestAppContext) -> String {
+        cx.write_to_clipboard(ClipboardItem::new_string(String::new()));
+        self.click(cx, "activity-copy-all");
+        self.settle(cx);
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    }
+
     pub fn saved(&self) -> Workspace {
         storage::load(&self.workspace).unwrap()
     }

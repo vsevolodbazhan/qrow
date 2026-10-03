@@ -3,7 +3,7 @@ use gpui_kit::base::SelectableText;
 use gpui_kit::component::{Selectable, h_flex, v_flex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn timestamp_label(timestamp: SystemTime) -> String {
+pub(super) fn timestamp_label(timestamp: SystemTime) -> String {
     let seconds = timestamp
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -57,8 +57,9 @@ impl Qrow {
 
     pub(super) fn output_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let tab = &self.tabs[self.active];
+        let connection = tab.worker_profile.or(tab.saved.profile);
         let content = if tab.output.is_empty() {
-            panel_empty_state("No activity yet", cx).into_any_element()
+            panel_empty_state("No logs yet", cx).into_any_element()
         } else {
             v_flex()
                 .w_full()
@@ -69,14 +70,18 @@ impl Qrow {
                         .map_or((entry.text.as_str(), None), |(first, rest)| {
                             (first, Some(rest))
                         });
-                    let header = if entry.kind == ActivityKind::HistoryTrimmed {
+                    let header = if entry.kind == LogKind::HistoryTrimmed {
                         first_line.to_owned()
                     } else {
                         format!("[{}] {first_line}", timestamp_label(entry.timestamp))
                     };
-                    v_flex()
-                        .id(("output-entry", entry.id()))
-                        .w_full()
+                    // A failed keep-alive closed the session. Activity shows
+                    // what else happened on the connection.
+                    let show_activity =
+                        connection.filter(|_| entry.kind == LogKind::KeepAliveFailed);
+                    let text = v_flex()
+                        .flex_1()
+                        .min_w_0()
                         .font_family(self.settings.logs_font_family.clone())
                         .text_size(self.ui_px(self.settings.logs_font_size))
                         .line_height(relative(self.settings.logs_line_height))
@@ -91,6 +96,24 @@ impl Qrow {
                             el.child(
                                 SelectableText::new("body", text.to_owned())
                                     .document_order(index as u64 * 2 + 1),
+                            )
+                        });
+                    h_flex()
+                        .id(("output-entry", entry.id()))
+                        .w_full()
+                        .items_start()
+                        .gap_2()
+                        .child(text)
+                        .when_some(show_activity, |el, connection| {
+                            el.child(
+                                Button::new(("output-show-activity", entry.id()))
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Show Activity")
+                                    .accessibility_label("Show Activity")
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_activity(Some(connection), window, cx)
+                                    })),
                             )
                         })
                 }))

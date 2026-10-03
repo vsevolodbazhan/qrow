@@ -163,8 +163,8 @@ had before the refresh. The error shows on the row of the refreshed part:
   to read the first line of the error. The first row under the expanded row
   shows the error with **Refresh**.
 
-The Logs of each tab of the connection show the full error. The connection
-row uses the same warning icon for an unread query error. Only a refresh error
+[Activity](activity.md) shows the full error. Click the warning icon to open
+it. The connection row uses the same warning icon for an unread query error. Only a refresh error
 adds text to the tooltip of the row. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
@@ -224,7 +224,6 @@ For a connection that uses a shared catalog:
   and **Refresh timeout** belong to the shared catalog. A change in the
   settings of one connection applies to all connections of the catalog. When
   you select a catalog in **Schema catalog**, the fields show its settings.
-- **Schema refresh logs** stays with each connection.
 - **Schema refresh** set to **Disabled** turns schema browsing off only for
   this connection. The connection stays in the shared catalog.
 - **Preferred connection** selects the connection that automatic refreshes
@@ -273,31 +272,19 @@ Qrow puts backticks around each name that it inserts into SQL. This also
 lets you use names that are SQL keywords. A backtick in a name becomes two
 backticks.
 
-### Show refreshes in Logs
+### See refresh details
 
-To see the requests of each refresh, open the connection settings and set
-**Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
-records each refresh of the connection in the Logs of each tab of the
-connection. For a shared catalog, the entries go to the tabs of the connection
-that ran the refresh:
+[Activity](activity.md) records each refresh of the connection: its start,
+the session that it opens, each request with its duration and count, and its
+result. For example, `List columns of all relations in sales: 769 columns` is
+one request for the columns of all tables and views in the schema `sales`. If
+some schemas or tables could not be read, the result tells how many. For a
+shared catalog, the entries go to the Activity of the connection that ran the
+refresh.
 
-- The start of the refresh. An automatic refresh starts with **Started an
-  automatic schema refresh**.
-- The session that the refresh opens.
-- Each request, with its duration and the number of schemas, relations, or
-  columns that it returned. For example, `List columns of all relations in
-  sales: 769 columns` is one request for the columns of all tables and views
-  in the schema `sales`.
-- The result of the refresh: completed, cancelled, stopped, or failed. If some
-  schemas or tables could not be read, the result tells how many.
-
-When the option is **Disabled**, Logs show only the errors of a refresh: each
-failed request and the result of a failed refresh, with the full error.
-
-The entries of one refresh share one place in the Logs history. A large
-refresh does not remove the history of queries. A refresh error does not mark
-the connection with an unread error, because the tree shows the error. The
-default is **Disabled**.
+Refreshes do not go to the Logs of the tabs. A refresh error does not mark the
+connection with an unread error, because the tree shows the error. A failed
+refresh counts as an unseen error in the status bar.
 
 ### Show or hide schemas
 
@@ -330,8 +317,8 @@ use.
   not report this.
 - Qrow does not save which rows are expanded.
 - Qrow cannot stop a refresh while it opens its session or sends a request to
-  the server. Each of these steps can take up to 2 minutes when the server
-  does not answer. Thus, a refresh can take longer than its timeout.
+  the server. A wait for a server answer uses the connection's **Response
+  timeout**. Thus, a refresh can take longer than its **Refresh timeout**.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   has more columns, its refresh fails. Hide schemas or refresh single tables.
 - The keyboard cannot reach **New shared catalog…** below the **Schema
@@ -363,6 +350,8 @@ Use a lightweight, read-only statement for keep-alive query. Qrow checks that th
 text contains one statement, but does not enforce read-only behavior. Keep-alives
 use the existing session and preserve its result cursor. A failed keep-alive
 disconnects the session and stops background queries until the next explicit Run.
+[Activity](activity.md) shows each keep-alive. The Logs of a tab show only a
+failed keep-alive, with its SQL.
 
 To release the active tab's session, select its connection and click **Disconnect**.
 This action is disabled while a query or keep-alive runs. It is also disabled
@@ -414,7 +403,16 @@ edit the connection to save a password again.
 
 Each attempt to connect to one address of the host has a 10-second timeout.
 If the host has more than one address, Qrow tries the next address after a
-failure. Each network write has a 15-second timeout. For the read timeout, see
+failure. Each network write has a 15-second timeout.
+
+**Response timeout** sets how long Qrow waits for one answer from Kyuubi. The
+default is 300 seconds, and the range is 10 to 3600 seconds. The first query
+of a session can wait while Kyuubi starts an engine. Kyuubi limits that wait
+with `kyuubi.session.engine.initialize.timeout`. Set **Response timeout**
+higher than that limit, or a slow engine start fails with `Kyuubi did not
+answer within 300 seconds`. A change applies to the sessions that open after
+you save. The timeout does not limit the duration of a query, because Qrow
+asks for the status of a running query again and again. See
 [Cancel work](queries.md#cancel-work).
 
 Qrow discards a failed connection and reports the error. This includes recognized

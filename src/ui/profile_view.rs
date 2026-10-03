@@ -142,16 +142,17 @@ impl Qrow {
                             .child(field(
                                 "Session parameters",
                                 Some("JSON object with string values."),
-                                // A one-entry pretty-printed object uses four lines.
-                                // Keep the control to that height so it does not show
-                                // an empty fifth line below the closing brace.
                                 Textarea::new(&form.parameters)
                                     .w_full()
-                                    .h(rems(6.))
                                     .disabled(saving)
                                     .font_family("Menlo")
                                     .aria_label("Session parameters")
                                     .into_any_element(),
+                            ))
+                            .child(field(
+                                "Response timeout",
+                                Some("Seconds to wait for one answer from Kyuubi, from 10 to 3600. Applies to new sessions."),
+                                input(14, "Response timeout in seconds"),
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))

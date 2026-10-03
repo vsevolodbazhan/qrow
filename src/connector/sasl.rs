@@ -13,9 +13,8 @@ use zeroize::Zeroizing;
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
 /// The limit for one TCP connection attempt to one resolved address.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-/// The limit for one socket read. The connector polls the status of a running
-/// query, so this does not limit the query duration.
-const READ_TIMEOUT: Duration = Duration::from_secs(120);
+/// The read timeout of a reader without one, like a test fixture.
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(300);
 /// The limit for one socket write.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
 pub type Client = TCLIServiceSyncClient<
@@ -23,7 +22,16 @@ pub type Client = TCLIServiceSyncClient<
     TBinaryOutputProtocol<FrameWriter<TcpStream>>,
 >;
 
-pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<Client> {
+/// Connect and authenticate. `read_timeout` limits each socket read. The
+/// connector polls the status of a running query, so it does not limit the
+/// query duration.
+pub fn connect(
+    host: &str,
+    port: u16,
+    username: &str,
+    password: &str,
+    read_timeout: Duration,
+) -> Result<Client> {
     let addresses = (host, port)
         .to_socket_addrs()
         .context("Could not resolve the Kyuubi host")?;
@@ -45,10 +53,10 @@ pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<
         )
     })?;
     stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_read_timeout(Some(read_timeout))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    negotiate(&mut stream, username, password)?;
-    let reader = FrameReader::new(stream.try_clone()?);
+    negotiate(&mut stream, username, password, read_timeout)?;
+    let reader = FrameReader::new(stream.try_clone()?).with_timeout(read_timeout);
     let writer = FrameWriter::new(stream);
     Ok(TCLIServiceSyncClient::new(
         ResponseProtocol::new(reader, MAX_FRAME)?,
@@ -56,7 +64,14 @@ pub fn connect(host: &str, port: u16, username: &str, password: &str) -> Result<
     ))
 }
 
-pub fn negotiate<S: Read + Write>(stream: &mut S, username: &str, password: &str) -> Result<()> {
+/// Authenticate with SASL PLAIN. `read_timeout` is the read timeout of
+/// `stream`, for the error when it elapses.
+pub fn negotiate<S: Read + Write>(
+    stream: &mut S,
+    username: &str,
+    password: &str,
+    read_timeout: Duration,
+) -> Result<()> {
     ensure!(
         !username.contains('\0') && !password.contains('\0'),
         "Credentials cannot contain null characters"
@@ -71,11 +86,14 @@ pub fn negotiate<S: Read + Write>(stream: &mut S, username: &str, password: &str
     let mut header = [0; 5];
     stream
         .read_exact(&mut header)
+        .map_err(|error| read_error(error, read_timeout))
         .context("Kyuubi did not complete SASL authentication")?;
     let length = u32::from_be_bytes(header[1..].try_into()?) as usize;
     ensure!(length <= 65536, "SASL response exceeds 64 KiB");
     let mut payload = vec![0; length];
-    stream.read_exact(&mut payload)?;
+    stream
+        .read_exact(&mut payload)
+        .map_err(|error| read_error(error, read_timeout))?;
     // Do not include the remote response in errors: authentication messages may contain secrets.
     ensure!(
         header[0] == 5,
@@ -86,16 +104,47 @@ pub fn negotiate<S: Read + Write>(stream: &mut S, username: &str, password: &str
 }
 
 fn send_handshake(stream: &mut impl Write, status: u8, payload: &[u8]) -> io::Result<()> {
-    stream.write_all(&[status])?;
-    stream.write_all(&(payload.len() as u32).to_be_bytes())?;
-    stream.write_all(payload)?;
-    stream.flush()
+    (|| {
+        stream.write_all(&[status])?;
+        stream.write_all(&(payload.len() as u32).to_be_bytes())?;
+        stream.write_all(payload)?;
+        stream.flush()
+    })()
+    .map_err(write_error)
+}
+
+/// A socket timeout reports `WouldBlock` on macOS, which reads "Resource
+/// temporarily unavailable (os error 35)". Name the limit instead.
+fn timed_out(error: io::Error, message: impl FnOnce() -> String) -> io::Error {
+    match error.kind() {
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => {
+            io::Error::new(io::ErrorKind::TimedOut, message())
+        }
+        _ => error,
+    }
+}
+
+fn read_error(error: io::Error, timeout: Duration) -> io::Error {
+    timed_out(error, || {
+        format!("Kyuubi did not answer within {} seconds", timeout.as_secs())
+    })
+}
+
+fn write_error(error: io::Error) -> io::Error {
+    timed_out(error, || {
+        format!(
+            "Kyuubi did not accept the request within {} seconds",
+            WRITE_TIMEOUT.as_secs()
+        )
+    })
 }
 
 pub struct FrameReader<R> {
     inner: BufReader<R>,
     frame_remaining: usize,
     response_remaining: usize,
+    /// The read timeout of the socket, for the error when it elapses.
+    timeout: Duration,
 }
 impl<R: Read> FrameReader<R> {
     pub fn new(inner: R) -> Self {
@@ -103,7 +152,15 @@ impl<R: Read> FrameReader<R> {
             inner: BufReader::new(inner),
             frame_remaining: 0,
             response_remaining: usize::MAX,
+            timeout: DEFAULT_READ_TIMEOUT,
         }
+    }
+
+    /// Set the read timeout of the socket, which the error names when it
+    /// elapses.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
     }
 
     pub(super) fn begin_response(&mut self, limit: usize) {
@@ -127,7 +184,10 @@ impl<R: Read> Read for FrameReader<R> {
         }
         if self.frame_remaining == 0 {
             let mut header = [0; 4];
-            self.inner.read_exact(&mut header)?;
+            let timeout = self.timeout;
+            self.inner
+                .read_exact(&mut header)
+                .map_err(|error| read_error(error, timeout))?;
             let length = u32::from_be_bytes(header) as usize;
             if length == 0 || length > MAX_FRAME {
                 return Err(io::Error::new(
@@ -142,7 +202,11 @@ impl<R: Read> Read for FrameReader<R> {
             .len()
             .min(self.frame_remaining)
             .min(self.response_remaining);
-        let read = self.inner.read(&mut buffer[..count])?;
+        let timeout = self.timeout;
+        let read = self
+            .inner
+            .read(&mut buffer[..count])
+            .map_err(|error| read_error(error, timeout))?;
         self.frame_remaining -= read;
         self.response_remaining -= read;
         Ok(read)
@@ -175,11 +239,12 @@ impl<W: Write> Write for FrameWriter<W> {
     fn flush(&mut self) -> io::Result<()> {
         if !self.frame.is_empty() {
             self.inner
-                .write_all(&(self.frame.len() as u32).to_be_bytes())?;
-            self.inner.write_all(&self.frame)?;
+                .write_all(&(self.frame.len() as u32).to_be_bytes())
+                .map_err(write_error)?;
+            self.inner.write_all(&self.frame).map_err(write_error)?;
             self.frame.clear();
         }
-        self.inner.flush()
+        self.inner.flush().map_err(write_error)
     }
 }
 
@@ -200,5 +265,30 @@ mod tests {
         assert_eq!(&value, b"helloworld");
         let mut bad = FrameReader::new(Cursor::new(u32::MAX.to_be_bytes()));
         assert!(bad.read(&mut value).is_err());
+    }
+
+    /// A reader whose socket timeout elapsed. macOS reports it as
+    /// `WouldBlock` (os error 35).
+    struct Stalled;
+    impl Read for Stalled {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
+        }
+    }
+
+    #[test]
+    fn a_socket_timeout_names_the_limit() {
+        let error = FrameReader::new(Stalled)
+            .with_timeout(Duration::from_secs(45))
+            .read(&mut [0; 4])
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(error.to_string(), "Kyuubi did not answer within 45 seconds");
+        // Other errors keep their text.
+        let refused = read_error(
+            io::Error::from(io::ErrorKind::ConnectionReset),
+            DEFAULT_READ_TIMEOUT,
+        );
+        assert_eq!(refused.kind(), io::ErrorKind::ConnectionReset);
     }
 }

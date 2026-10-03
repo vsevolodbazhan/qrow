@@ -26,7 +26,7 @@ also clears the badge, even if you selected Logs after the failure. See
 
 ## Logs
 
-Select **Logs** beside **Results** to inspect Qrow activity. The history shows
+Select **Logs** beside **Results** to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
@@ -36,9 +36,11 @@ Errors use the error color. Durations are client measurements.
 Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
 Settings to change the Logs text. The default line-height multiplier is 1.2.
 
-The Logs panel also shows each keep-alive query, its outcome, and its duration.
-Successful keep-alive queries do not change the selected panel or query results.
-Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
+Logs show only the work that changes something for the tab. A failed
+keep-alive shows with its SQL and the error, because it closed the session.
+Select **Show Activity** on that line to see the other work of the connection.
+Successful keep-alives and schema refreshes show only in
+[Activity](activity.md). Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
 batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
@@ -55,18 +57,17 @@ on its tab.
 
 Qrow puts Logs entries into history groups. One group holds all entries of
 one query execution. An entry without an execution has its own group. Examples
-are a keep-alive query, its outcome, a disconnect, and rejected SQL. Each
-keep-alive query uses two groups: one for the query and one for its outcome.
+are a failed keep-alive, a disconnect, and rejected SQL.
 
 Qrow limits the history of each query tab to 100 execution groups, 50 other
 groups, and 8 MiB of text. When one type of group is more than its limit, Qrow
-removes the oldest complete groups of that type. Thus keep-alive queries do not
-remove query history. When the text is more than 8 MiB, Qrow removes the oldest
+removes the oldest complete groups of that type. Thus disconnects and rejected
+SQL do not remove query history. When the text is more than 8 MiB, Qrow removes the oldest
 complete groups of any type. Qrow keeps the latest execution and the group
 of the latest error. A single latest execution can be more than 8 MiB. Qrow
-adds an `Older activity was removed` line at the start of Logs history when it
+adds an `Older log entries were removed` line at the start of Logs history when it
 removes old groups. The line marks the boundary before the retained entries.
-It has no timestamp because it does not describe a timed activity. The line
+It has no timestamp because it does not describe a timed event. The line
 appears in the entry count and **Copy All** output.
 
 ## Manage tabs
@@ -96,8 +97,11 @@ the user's SQL after setup returns. It does not immediately interrupt every
 setup step. During result fetching, cancellation releases the cursor and keeps
 rows that Qrow has already downloaded.
 
-Individual network reads have a 120-second timeout. This is not a limit on the
-total query duration. A failed cancellation request is reported as an error.
+Each network read waits up to the
+[response timeout](connections.md#authentication-and-connection-failures) of
+the connection, 300 seconds by default. This is not a limit on the total query
+duration. A read that times out fails with `Kyuubi did not answer within 300
+seconds`, with the timeout of the connection. A failed cancellation request is reported as an error.
 
 On application exit, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) if a query is active, then requests

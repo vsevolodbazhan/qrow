@@ -81,7 +81,7 @@ tool call cards.
 
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
-Logs. It can also read the [schema catalog](#look-up-tables-and-columns) that
+Logs of query tabs. It cannot read [Activity](activity.md). It can also read the [schema catalog](#look-up-tables-and-columns) that
 Qrow keeps for each connection.
 Each message includes the SQL of the tab of the conversation. If this SQL is
 larger than 32 KB, Qrow sends only a 32 KB part around the selection or the
@@ -173,7 +173,8 @@ When the catalog does not have the data, and a tab of the connection has a
 live session, Qrow reads it before it answers: the schemas of a connection
 that Qrow never read, the tables of a schema, or the columns of a table. This
 opens a separate session, like a refresh in the sidebar. Qrow returns the
-requested data as soon as it is available. A failed refresh returns its error.
+requested data as soon as it is available. If a refresh fails before the data
+is available, the tool returns the refresh error.
 Qrow waits up to 2 minutes for the data. The refresh continues after that. When
 no tab of the connection is connected, the tool tells the assistant that the
 data is not in the catalog. The assistant can then ask you to refresh it, or

@@ -1,11 +1,11 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, bounds_of, connection_row, label, labelled, menu_item,
+    MemoryCredentials, TestApp, bounds_of, connection_row, elements, label, labelled, menu_item,
     offline_profile, press_at, shows, value,
 };
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
     model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, SharedCatalog, Workspace},
@@ -102,6 +102,28 @@ fn choose_catalog(app: &TestApp, cx: &mut TestAppContext, option: &str) {
     }
     app.wait_gone(cx, "connection-new-shared-catalog");
     app.wait_for(cx, "connection-name");
+}
+
+/// Scrolls the connection form to its end with the wheel over the refresh
+/// period field.
+fn scroll_form_to_end(app: &TestApp, cx: &mut TestAppContext) {
+    app.scroll_to(cx, "connection-refresh-period");
+    app.update(cx, |window, cx| {
+        let position = window.find("connection-refresh-period").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-400.),
+                )),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    app.settle(cx);
 }
 
 fn expand_connection(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) {
@@ -451,7 +473,7 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut TestAppContext) {
+fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) {
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -466,67 +488,72 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
     credentials
         .set_password(profile.id, "synthetic-password")
         .unwrap();
-    let mut two_tabs = workspace(vec![profile.clone()]);
-    two_tabs.tabs.push(SavedTab::new(2, Some(profile.id)));
-    let app = TestApp::launch_with(cx, two_tabs, credentials);
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
 
-    // Off by default: only the errors of a refresh go to Logs, in full.
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Refresh");
-    app.wait_until(cx, "the first attempt", Duration::from_secs(20), |_, _| {
+    app.wait_until(cx, "the attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
-    let mut logs = String::new();
-    for _ in 0..100 {
-        app.settle(cx);
-        logs = app.logs(cx);
-        if logs.contains("Schema refresh failed") {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    assert!(logs.contains("Schema refresh failed"), "{logs}");
-    assert!(!logs.contains("Started a schema refresh"), "{logs}");
-    // Each tab of the connection gets the entries.
-    app.click_labelled(cx, "Query 2");
-    app.settle(cx);
-    assert!(app.logs(cx).contains("Schema refresh failed"));
-    app.click_labelled(cx, "Query 1");
-    app.settle(cx);
-
-    app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit");
-    app.scroll_to(cx, "connection-refresh-logs");
-    app.select(cx, "connection-refresh-logs", "Enabled");
-    app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
-    app.wait_until(cx, "the saved option", Duration::from_secs(10), |_, _| {
-        app.saved().profiles[0].catalog.log_refreshes
-    });
-
-    app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh");
-    app.wait_until(cx, "the second attempt", Duration::from_secs(20), |_, _| {
-        app.credentials.reads() == 2
-    });
+    // The status bar counts the refresh error, which no tab shows.
     app.wait_until(
         cx,
-        "the refresh in Logs",
+        "the unseen error",
         Duration::from_secs(10),
-        |_, _| true,
+        |window, _| label(window, "toggle-activity").as_deref() == Some("Activity, 1 unseen error"),
     );
-    for _ in 0..100 {
-        logs = app.logs(cx);
-        if logs.matches("Schema refresh failed").count() == 2 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    assert!(!app.logs(cx).contains("schema refresh"));
+
+    // The status bar opens the connection with the newest unseen error.
+    // Showing its Activity marks its errors as seen.
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    let activity = app.copy_activity(cx);
     assert!(
-        logs.contains("Started a schema refresh of the connection"),
-        "{logs}"
+        activity.contains("Started a schema refresh of the connection"),
+        "{activity}"
     );
-    assert!(logs.contains("Schema refresh failed"), "{logs}");
+    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    app.wait_until(
+        cx,
+        "the seen error",
+        Duration::from_secs(10),
+        |window, _| label(window, "toggle-activity").as_deref() == Some("Activity"),
+    );
+    // The rows follow the UI scale while Activity is open.
+    let row_height = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| {
+            elements(window)
+                .iter()
+                .filter(|element| {
+                    element
+                        .path()
+                        .last()
+                        .is_some_and(|id| format!("{id:?}").contains("activity-entry"))
+                })
+                .map(|element| f32::from(element.bounds().size.height))
+                // A row without buttons has only text.
+                .fold(f32::MAX, f32::min)
+        })
+    };
+    let before = row_height(&app, cx);
+    app.press(cx, "cmd-=");
+    app.settle(cx);
+    let after = row_height(&app, cx);
+    assert!(after > before, "{before} -> {after}");
+    app.press(cx, "cmd--");
+    app.click(cx, "activity-errors");
+    let errors = app.copy_activity(cx);
+    assert!(!errors.contains("Started a schema refresh"), "{errors}");
+    assert!(errors.contains("Schema refresh failed"), "{errors}");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    // ⇧⌘U opens and closes Activity too.
+    app.press(cx, "cmd-shift-u");
+    app.wait_for(cx, "activity");
+    app.press(cx, "cmd-shift-u");
+    app.wait_gone(cx, "activity");
+
     // A refresh error does not mark the connection as having an unread
     // error. The collapsed connection row shows the refresh error.
     app.wait_until(
@@ -538,6 +565,10 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
                 == Some("Unreachable, schema refresh error")
         },
     );
+    // A click on the warning opens the Activity of the connection.
+    app.click(cx, format!("connection-error-{}", profile.id));
+    app.wait_for(cx, "activity");
+    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
 
 #[gpui_kit::test]
@@ -710,12 +741,13 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh period must be between 5 and 10080 minutes.");
     app.fill(cx, "connection-refresh-period", "15");
-    // The error above the footer covers the bottom of the form, so show
-    // the field below the timeout too.
-    app.scroll_to(cx, "connection-refresh-logs");
+    // The error above the footer makes the form shorter, so the timeout
+    // field needs a scroll to the end of the form.
+    scroll_form_to_end(&app, cx);
     app.fill(cx, "connection-refresh-timeout", "0");
     app.click(cx, "save-profile");
     wait_error(cx, "Refresh timeout must be between 1 and 1440 minutes.");
+    scroll_form_to_end(&app, cx);
     app.fill(cx, "connection-refresh-timeout", "45");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "connection-name");
@@ -734,7 +766,6 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         "connection-show-schemas",
         "connection-hide-schemas",
         "connection-refresh-timeout",
-        "connection-refresh-logs",
     ] {
         app.wait_gone(cx, hidden);
     }

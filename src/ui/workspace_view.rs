@@ -2,12 +2,13 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, TitleBar, h_flex,
+    Icon, Selectable as _, TitleBar, h_flex,
     input::Editor,
     shimmer::ShimmerText,
     spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
+    tag::Tag,
     v_flex,
 };
 
@@ -457,7 +458,49 @@ impl Qrow {
             .into_any_element()
     }
 
-    fn status_bar(&self) -> impl IntoElement {
+    /// The Activity button of the status bar. It shows a spinner while a
+    /// schema refresh runs and the count of unseen errors.
+    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = self.activity.read(cx);
+        let open = view.is_open();
+        let unseen = view.activity().unseen_errors();
+        let refreshing = self
+            .profiles
+            .iter()
+            .any(|profile| self.catalog.is_refreshing(profile.id));
+        let mut label = String::from("Activity");
+        if refreshing {
+            label.push_str(", schema refresh running");
+        }
+        match unseen {
+            0 => {}
+            1 => label.push_str(", 1 unseen error"),
+            count => label.push_str(&format!(", {count} unseen errors")),
+        }
+        Button::new("toggle-activity")
+            .ghost()
+            .small()
+            .selected(open)
+            .map(|button| {
+                if refreshing {
+                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
+                } else {
+                    button.icon(Icon::new(AssetIconName::Activity).small())
+                }
+            })
+            .when(unseen > 0, |button| {
+                button.child(Tag::danger().xsmall().rounded_full().child(if unseen > 99 {
+                    "99+".to_owned()
+                } else {
+                    unseen.to_string()
+                }))
+            })
+            .accessibility_label(label)
+            .tooltip("Activity · ⇧⌘U")
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
+    }
+
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
         let status_label = query_status_label(&tab.status, tab.elapsed);
@@ -469,6 +512,9 @@ impl Qrow {
         // items, so labels of different widths would move it off center.
         StatusBar::new()
             .flex_shrink_0()
+            // The default padding is a quarter rem, 3.5 pixels, which rounds
+            // to an uneven space above and below the Activity button.
+            .py(self.ui_px(4.))
             .child(
                 div()
                     .id("query-status")
@@ -493,16 +539,22 @@ impl Qrow {
                     .child(connection_name.to_owned()),
             )
             .child(
-                div()
-                    .id("workspace-status")
-                    .test_support()
-                    .role(Role::Status)
+                h_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_right()
-                    .aria_label(workspace_status)
-                    .child(workspace_status),
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("workspace-status")
+                            .test_support()
+                            .role(Role::Status)
+                            .min_w_0()
+                            .truncate()
+                            .aria_label(workspace_status)
+                            .child(workspace_status),
+                    )
+                    .child(self.activity_button(cx)),
             )
     }
 
@@ -674,6 +726,7 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let assistant_width = self.assistant_width(window.viewport_size().width);
+        let activity_open = self.activity.read(cx).is_open();
         v_flex()
             .relative()
             .size_full()
@@ -696,6 +749,11 @@ impl Qrow {
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleActivity, window, cx| {
+                    this.toggle_activity(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SendAssistantMessage, window, cx| {
                 this.send_assistant(window, cx)
             }))
@@ -763,29 +821,41 @@ impl Qrow {
                         .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
                 ),
             )
-            .child(
-                h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .child(changed_view(cx.entity().into(), window)),
-                    )
-                    .when(
-                        self.settings.assistant.enabled && self.assistant_state.open,
-                        |el| {
-                            el.child(self.assistant_splitter(cx)).child(
-                                div().w(assistant_width).flex_shrink_0().min_h_0().child(
-                                    changed_view(self.assistant_pane.clone().into(), window),
-                                ),
-                            )
-                        },
-                    ),
-            )
+            // Activity covers the workspace and the assistant pane while it
+            // is open.
+            .when(activity_open, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(changed_view(self.activity.clone().into(), window)),
+                )
+            })
+            .when(!activity_open, |el| {
+                el.child(
+                    h_flex()
+                        .items_stretch()
+                        .flex_1()
+                        .min_h_0()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .child(changed_view(cx.entity().into(), window)),
+                        )
+                        .when(
+                            self.settings.assistant.enabled && self.assistant_state.open,
+                            |el| {
+                                el.child(self.assistant_splitter(cx)).child(
+                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
+                                        changed_view(self.assistant_pane.clone().into(), window),
+                                    ),
+                                )
+                            },
+                        ),
+                )
+            })
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -809,7 +879,7 @@ impl Qrow {
                         .child(message),
                 )
             })
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
     }
 }
 impl Render for Qrow {
@@ -942,7 +1012,7 @@ mod tests {
         );
         assert_eq!(
             connection_tooltip(&tooltip_profile, Some("Refresh stopped after 30 minutes")),
-            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nThe Logs of each tab of the connection show the full error."
+            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nActivity shows the full error."
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(

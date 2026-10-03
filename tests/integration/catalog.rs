@@ -6,6 +6,7 @@ use qrow::{
         refresh_due,
     },
     connector::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Session},
+    logs::LogKind,
     model::{Batch, CatalogRefresh, CatalogSettings, Column, Profile, Row},
     storage,
 };
@@ -705,23 +706,11 @@ fn the_cache_restores_without_a_session_and_profile_changes_update_it() {
 }
 
 #[test]
-fn logs_entries_share_one_batch_and_follow_the_profile_option() {
+fn every_refresh_sends_its_entries() {
     let server = warehouse();
     let mut h = Harness::new(server, profile(), None);
-    h.refresh(Scope::Schema("sales".into()));
-    assert_eq!(h.worker.activities.try_iter().count(), 0);
-
-    let mut logged = profile();
-    logged.id = h.catalog().owner;
-    logged.catalog.log_refreshes = true;
-    h.worker.configure(CatalogConfig::private(logged));
     h.refresh(Scope::Connection);
-    let entries: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
+    let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     let texts: Vec<_> = entries.iter().map(|entry| entry.text.as_str()).collect();
     assert!(
         texts[0].starts_with("Started a schema refresh of the connection"),
@@ -749,25 +738,11 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
             .unwrap()
             .starts_with("Schema refresh completed")
     );
-    let batch = entries[0].batch;
-    assert!(batch.is_some());
-    assert!(entries.iter().all(|entry| entry.batch == batch));
+    assert_eq!(entries.last().unwrap().kind, LogKind::SchemaRefreshFinished);
     assert!(
         entries
             .iter()
             .all(|entry| entry.connection.as_deref() == Some("Catalog"))
-    );
-
-    h.refresh(Scope::Relation("sales".into(), "orders".into()));
-    let next: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
-    assert!(
-        next.iter()
-            .all(|entry| entry.batch.is_some() && entry.batch != batch)
     );
 
     // A broken view fails its relation. The refresh reports it at its end.
@@ -780,12 +755,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         .unwrap()
         .push("daily".into());
     h.refresh(Scope::Schema("sales".into()));
-    let entries: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, event)| event)
-        .collect();
+    let entries: Vec<_> = h.worker.logs.try_iter().map(|(_, event)| event).collect();
     let last = entries.last().unwrap();
     assert!(
         last.text
@@ -793,7 +763,7 @@ fn logs_entries_share_one_batch_and_follow_the_profile_option() {
         "{}",
         last.text
     );
-    assert_eq!(last.severity, qrow::activity::Severity::Error);
+    assert_eq!(last.severity, qrow::logs::Severity::Error);
     assert!(
         entries
             .iter()
@@ -808,13 +778,12 @@ fn logs_entries_count_only_the_requested_names() {
         ("my_db", "orders", "TABLE", &["id"]),
         ("myxdb", "other", "TABLE", &["a", "b"]),
     ]);
-    let mut logged = profile();
-    logged.catalog.log_refreshes = true;
+    let logged = profile();
     let mut h = Harness::new(server, logged, None);
     h.refresh(Scope::Connection);
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|entry| entry.text)
@@ -1013,7 +982,6 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
     *server.block_schema.lock().unwrap() = Some("salesx".into());
     let mut profile = profile();
     profile.catalog.timeout_minutes = 2;
-    profile.catalog.log_refreshes = true;
     // One "minute" is 250 ms: the timeout is 500 ms, and the refresh period
     // of 60 minutes is 15 s.
     let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
@@ -1034,17 +1002,12 @@ fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
     // The next connection refresh reads only the schema that it did not read.
     *server.block_schema.lock().unwrap() = None;
     let before = relation_lists(&server).len();
-    let _ = h.worker.activities.try_iter().count();
+    let _ = h.worker.logs.try_iter().count();
     h.refresh(Scope::Connection);
     assert_eq!(relation_lists(&server)[before..], ["salesx"]);
     assert_eq!(h.columns("salesx", "other").unwrap(), ["y"]);
     assert!(h.catalog().unfinished.is_none());
-    let texts: Vec<_> = h
-        .worker
-        .activities
-        .try_iter()
-        .map(|(_, e)| e.text)
-        .collect();
+    let texts: Vec<_> = h.worker.logs.try_iter().map(|(_, e)| e.text).collect();
     assert!(
         texts
             .iter()
@@ -1152,7 +1115,6 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     *server.block_schema.lock().unwrap() = Some("salesx".into());
     let mut profile = profile();
     profile.catalog.timeout_minutes = 2;
-    profile.catalog.log_refreshes = true;
     // One "minute" is 250 ms, so the timeout is 500 ms.
     let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
     let started = Instant::now();
@@ -1173,7 +1135,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|e| e.text)
@@ -1200,8 +1162,7 @@ fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
 fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     let server = warehouse();
     *server.block_schema.lock().unwrap() = Some("sales".into());
-    let mut profile = profile();
-    profile.catalog.log_refreshes = true;
+    let profile = profile();
     let mut h = Harness::new(server.clone(), profile, None);
     h.worker.set_live(h.id, true);
     h.wait(|h| h.status.active == Some(Scope::Connection));
@@ -1215,7 +1176,7 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
     let texts: Vec<_> = h
         .worker
-        .activities
+        .logs
         .try_iter()
         .map(|(_, event)| event)
         .map(|e| e.text)
@@ -1510,9 +1471,7 @@ fn a_member_that_leaves_stops_its_refreshes() {
 #[test]
 fn logs_entries_name_the_member_that_ran_the_refresh() {
     let server = warehouse();
-    let (mut config, small, large) = shared(None);
-    config.members[0].catalog.log_refreshes = true;
-    config.members[1].catalog.log_refreshes = false;
+    let (config, small, large) = shared(None);
     let mut h = Harness::with_config(server, config, None, MINUTE);
     h.worker.refresh(small.id, Scope::Schema("sales".into()));
     h.wait(|h| h.status.runner == Some(small.id));
@@ -1520,10 +1479,16 @@ fn logs_entries_name_the_member_that_ran_the_refresh() {
     h.worker.refresh(large.id, Scope::Schema("salesx".into()));
     h.wait(|h| h.status.runner == Some(large.id));
     h.wait(|h| h.status.is_idle());
-    let entries: Vec<_> = h.worker.activities.try_iter().collect();
-    assert!(!entries.is_empty());
+    let entries: Vec<_> = h.worker.logs.try_iter().collect();
+    assert!(entries.iter().any(|(member, _)| *member == small.id));
+    assert!(entries.iter().any(|(member, _)| *member == large.id));
     assert!(entries.iter().all(|(member, event)| {
-        *member == small.id && event.connection.as_deref() == Some("small")
+        let name = if *member == small.id {
+            "small"
+        } else {
+            "large"
+        };
+        event.connection.as_deref() == Some(name)
     }));
 }
 

@@ -33,6 +33,8 @@ pub(super) const MAX_SEARCH_MATCHES: usize = 500;
 const SEPARATOR: char = '\u{1f}';
 /// The height of every tree row. The virtual list needs one height for all rows.
 const ROW_HEIGHT: f32 = 30.;
+/// The gap between the columns of a tree row, in pixels at UI scale 1.
+const ROW_GAP: f32 = 4.;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -799,13 +801,13 @@ impl Qrow {
     /// Applies what the catalog workers sent since the last tick.
     pub(super) fn drain_catalogs(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        let mut activities = Vec::new();
+        let mut logs = Vec::new();
         let mut statuses = Vec::new();
         for (key, connection) in &mut self.catalog.connections {
             let Some(worker) = &connection.worker else {
                 continue;
             };
-            activities.extend(worker.activities.try_iter());
+            logs.extend(worker.logs.try_iter());
             for event in worker.events.try_iter() {
                 changed = true;
                 match event {
@@ -817,18 +819,10 @@ impl Qrow {
         for (key, status) in statuses {
             self.catalog.set_status(key, status);
         }
-        // A refresh belongs to the connection that ran it. Its Logs entries
-        // go to each tab of that connection. They do not mark an unread
-        // error, because the tree shows refresh errors.
-        for (profile, event) in activities {
-            for tab in self
-                .tabs
-                .iter_mut()
-                .filter(|tab| tab.saved.profile == Some(profile))
-            {
-                Self::record_activity(tab, event.clone());
-                changed = true;
-            }
+        // A refresh belongs to the connection that ran it, so its entries
+        // go to the Activity of that connection.
+        for (profile, event) in logs {
+            self.record_activity(profile, crate::activity::from_refresh(event), cx);
         }
         if changed {
             self.rebuild_catalog_tree(cx);
@@ -1496,7 +1490,9 @@ fn render_entry(
                 .text_color(cx.theme().muted_foreground),
             )
         });
-    let indent = ui_px(8. + 14. * entry.depth() as f32);
+    // Each level indents by the disclosure and the gap after it, so the
+    // disclosure of a row is under the icon of its parent.
+    let indent = ui_px(8. + (16. + ROW_GAP) * entry.depth() as f32);
     let Some(node) = nodes.get(&id) else {
         return div().h(ui_px(ROW_HEIGHT)).into_any_element();
     };
@@ -1619,7 +1615,7 @@ fn render_entry(
         .size_full()
         .pl(indent)
         .pr_2()
-        .gap_1()
+        .gap(ui_px(ROW_GAP))
         .text_sm()
         .rounded(cx.theme().radius)
         .when(selected, |el| el.bg(cx.theme().list_active))
@@ -1728,7 +1724,7 @@ pub(super) fn error_summary(error: &str) -> String {
     if summary.len() < line.len() {
         summary.push('…');
     }
-    summary.push_str("\nThe Logs of each tab of the connection show the full error.");
+    summary.push_str("\nActivity shows the full error.");
     summary
 }
 
@@ -1749,14 +1745,32 @@ fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option
 /// A slot for one status icon at the end of a connection row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
-fn status_slot(id: String, width: Pixels) -> impl IntoElement + ParentElement {
+fn status_slot(
+    id: String,
+    width: Pixels,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement + ParentElement {
     div()
         .id(SharedString::from(id))
+        .on_click(on_click)
         .test_support()
         .w(width)
         .flex_shrink_0()
         .flex()
         .justify_center()
+}
+
+/// A click on a status icon of a connection row opens the Activity of the
+/// connection, which has the details.
+fn show_activity(
+    id: Uuid,
+    weak: &WeakEntity<Qrow>,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static {
+    let weak = weak.clone();
+    move |_, window, cx| {
+        cx.stop_propagation();
+        let _ = weak.update(cx, |this, cx| this.open_activity(Some(id), window, cx));
+    }
 }
 
 /// The row of a connection: the disclosure and the connection button.
@@ -1839,15 +1853,24 @@ fn connection_row(
                 .child(div().flex_1().min_w_0().truncate().child(row.name.clone()))
                 .when(row.busy || row.refreshing, |el| {
                     el.child(
-                        status_slot(format!("connection-busy-{id}"), slot_width)
-                            .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
+                        status_slot(
+                            format!("connection-busy-{id}"),
+                            slot_width,
+                            show_activity(id, weak),
+                        )
+                        .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
                     )
                 })
                 // One warning icon covers an unread query error and a
                 // schema refresh error. The tooltip and the label tell which.
                 .when(row.unread_error || row.refresh_error, |el| {
                     el.child(
-                        status_slot(format!("connection-error-{id}"), slot_width).child(
+                        status_slot(
+                            format!("connection-error-{id}"),
+                            slot_width,
+                            show_activity(id, weak),
+                        )
+                        .child(
                             Icon::new(AssetIconName::TriangleAlert)
                                 .small()
                                 .text_color(cx.theme().danger),
@@ -1919,7 +1942,7 @@ fn notice_row(
         .w_full()
         .h(px(scale * ROW_HEIGHT))
         .pr_2()
-        .gap_1()
+        .gap(px(scale * ROW_GAP))
         .text_sm()
         .text_color(match tone {
             Tone::Error => cx.theme().danger,
@@ -2013,12 +2036,12 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
-    fn an_error_summary_keeps_the_first_line_and_points_to_logs() {
+    fn an_error_summary_keeps_the_first_line_and_points_to_activity() {
         let trace =
             "\n  Could not open the session: host unreachable\n\tat org.apache.Foo(Foo.java:1)";
         assert_eq!(
             error_summary(trace),
-            "Could not open the session: host unreachable\nThe Logs of each tab of the connection show the full error."
+            "Could not open the session: host unreachable\nActivity shows the full error."
         );
         let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
         let summary = error_summary(&long);

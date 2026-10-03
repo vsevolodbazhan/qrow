@@ -124,7 +124,7 @@ use gpui_kit::{
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 14] = [
+pub(super) const FIELD_IDS: [&str; 15] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -139,14 +139,13 @@ pub(super) const FIELD_IDS: [&str; 14] = [
     "connection-hide-schemas",
     "connection-refresh-period",
     "connection-refresh-timeout",
+    "connection-response-timeout",
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
-const DISABLED: &str = "Disabled";
 const PRIVATE_CATALOG: &str = "This connection";
 const NEW_SHARED_CATALOG: &str = "New shared catalog";
 const ANY_MEMBER: &str = "Any connected connection";
-const ENABLED: &str = "Enabled";
 
 /// A dropdown of a few fixed choices.
 pub(super) type ChoiceSelect = Entity<SelectState<SearchableVec<String>>>;
@@ -403,29 +402,6 @@ pub(super) fn refresh_mode(select: &ChoiceSelect, cx: &App) -> RefreshMode {
         .map_or(RefreshMode::Disabled, |(mode, _)| *mode)
 }
 
-/// A choice between Disabled and Enabled.
-pub(super) fn enabled_select(
-    enabled: bool,
-    window: &mut Window,
-    cx: &mut Context<Qrow>,
-) -> ChoiceSelect {
-    cx.new(|cx| {
-        SelectState::new(
-            SearchableVec::new(vec![DISABLED.into(), ENABLED.into()]),
-            Some(IndexPath::default().row(usize::from(enabled))),
-            window,
-            cx,
-        )
-    })
-}
-
-pub(super) fn is_enabled(select: &ChoiceSelect, cx: &App) -> bool {
-    select
-        .read(cx)
-        .selected_value()
-        .is_some_and(|choice| choice == ENABLED)
-}
-
 pub(super) fn keep_connected_from_event(
     event: &SelectEvent<SearchableVec<String>>,
 ) -> Option<bool> {
@@ -631,16 +607,6 @@ pub(super) fn render_schemas(
                     "Minutes before Qrow stops a schema refresh, from 1 to 1440. The schemas that it read stay in the tree.",
                 ),
                 input(13, "Refresh timeout in minutes"),
-            ))
-            .child(field(
-                "Schema refresh logs",
-                Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
-                Select::new(&form.refresh_logs)
-                    .id("connection-refresh-logs")
-                    .w_full()
-                    .disabled(saving)
-                    .accessibility_label("Schema refresh logs")
-                    .into_any_element(),
             ))
         })
 }

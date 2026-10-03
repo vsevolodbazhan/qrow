@@ -96,9 +96,12 @@ impl Styled for SearchableListItemElement {
 impl RenderOnce for SearchableListItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         // Qrow patch: 1px above and below each row keeps the highlights of
-        // two rows apart, as the 2px gap does between popup menu items.
-        div().id(self.id).w_full().py(px(1.)).child(
+        // two rows apart, as the 2px gap does between popup menu items. The
+        // row keeps the ID: GPUI stores the hover state of an element under
+        // its ID, and without it a hover does not draw the highlight.
+        div().w_full().py(px(1.)).child(
             h_flex()
+                .id(self.id)
                 .relative()
                 .gap_x_1()
                 .py_1()
