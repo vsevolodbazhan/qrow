@@ -98,7 +98,8 @@ setup step. During result fetching, cancellation releases the cursor and keeps
 rows that Qrow has already downloaded.
 
 Individual network reads have a 120-second timeout. This is not a limit on the
-total query duration. A failed cancellation request is reported as an error.
+total query duration. A read that times out fails with `Kyuubi did not answer
+within 120 seconds`. A failed cancellation request is reported as an error.
 
 On application exit, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) if a query is active, then requests
