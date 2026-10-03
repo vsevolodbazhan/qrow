@@ -173,6 +173,54 @@ pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
         .bounds()
 }
 
+/// One painted dot in a region, in the expected theme color.
+fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+    let bounds = bounds.scale(window.scale_factor());
+    let dot_size = px(6.).scale(window.scale_factor());
+    let dots: Vec<_> = window
+        .painted_quads()
+        .into_iter()
+        .filter(|quad| {
+            quad.bounds.size.width == dot_size
+                && quad.bounds.size.height == dot_size
+                && bounds.contains(&quad.bounds.center())
+                && quad.content_mask.bounds.contains(&quad.bounds.center())
+        })
+        .collect();
+    assert_eq!(dots.len(), usize::from(expected.is_some()), "{dots:?}");
+    if let Some(color) = expected {
+        assert_eq!(dots[0].background, gpui_kit::Background::from(color));
+    }
+}
+
+/// A tab paints one status dot and keeps its Close control visible.
+pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+    let close = window.find(format!("close-tab-{tab}"));
+    assert!(close.visible(), "The Close control is hidden");
+    let tab = elements(window)
+        .into_iter()
+        .find(|element| {
+            element.role() == Some(gpui_kit::Role::Tab)
+                && element.bounds().contains(&close.bounds().center())
+        })
+        .expect("The Close control is inside a tab");
+    assert_dot_in(window, tab.bounds(), expected);
+}
+
+/// A connection row paints one dot in the expected theme color.
+pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit::Hsla) {
+    let dot = window.find(format!("connection-status-{profile}"));
+    assert!(dot.visible(), "The connection dot is hidden");
+    let row = elements(window)
+        .into_iter()
+        .find(|element| {
+            element.role() == Some(gpui_kit::Role::TreeItem)
+                && element.bounds().contains(&dot.bounds().center())
+        })
+        .expect("The connection dot is inside a tree row");
+    assert_dot_in(window, row.bounds(), Some(expected));
+}
+
 /// Clicks the center of an observed element, as `TestWindowExt::click` does
 /// for an ID. Use it for elements that GPUI Kit owns and does not name, like
 /// the search field of Settings. Prefer IDs for Qrow's own controls.
