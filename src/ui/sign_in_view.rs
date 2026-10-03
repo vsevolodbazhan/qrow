@@ -43,8 +43,8 @@ pub(super) struct SignInEditor {
     error: Option<String>,
 }
 
-/// The fields of the Sign-in Settings dialog: element ID, label,
-/// description, and placeholder.
+/// The fields of the Sign-in Settings dialog: element ID, label in title
+/// case, description, and placeholder.
 const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     (
         "sign-in-name",
@@ -78,15 +78,15 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     ),
     (
         "sign-in-database-hosts",
-        "Database hosts",
+        "Database Hosts",
         "The database servers that can receive the access tokens. Separate hosts with spaces or commas.",
         "db.example.com",
     ),
     (
-        "sign-in-callback-port",
-        "Callback port",
-        "Optional. The loopback port of the browser callback. Leave empty to use an available port.",
-        "",
+        "sign-in-callback-ports",
+        "Callback Ports",
+        "Optional. The loopback ports of the browser callback, in the order to try them. Qrow uses the first free port. Separate ports with spaces or commas. Leave empty to use an available port.",
+        "8765 8766",
     ),
 ];
 
@@ -174,13 +174,15 @@ fn parse_editor(values: &[String], base: &SignIn) -> anyhow::Result<SignIn> {
     let resource = values[4].trim();
     sign_in.resource = (!resource.is_empty()).then(|| resource.to_owned());
     sign_in.allowed_hosts = split_list(&values[5]);
-    let port = values[6].trim();
-    sign_in.callback_port = if port.is_empty() {
-        0
-    } else {
-        port.parse()
-            .map_err(|_| anyhow::anyhow!("Callback port must be a number from 1 to 65535."))?
-    };
+    sign_in.callback_ports = split_list(&values[6])
+        .iter()
+        .map(|port| match port.parse::<u16>() {
+            Ok(port) if port > 0 => Ok(port),
+            _ => Err(anyhow::anyhow!(
+                "Callback ports must be numbers from 1 to 65535."
+            )),
+        })
+        .collect::<anyhow::Result<_>>()?;
     sign_in.validate()?;
     Ok(sign_in)
 }
@@ -585,7 +587,6 @@ impl Qrow {
                         .child(
                             div().pt_1().child(
                                 Button::new("add-first-sign-in")
-                                    .small()
                                     .label("Add Sign-in…")
                                     .disabled(self.demo)
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -916,11 +917,11 @@ impl Qrow {
             base.scopes.join(" "),
             base.resource.clone().unwrap_or_default(),
             base.allowed_hosts.join(" "),
-            if base.callback_port == 0 {
-                String::new()
-            } else {
-                base.callback_port.to_string()
-            },
+            base.callback_ports
+                .iter()
+                .map(u16::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
         ];
         let fields: Vec<_> = values
             .into_iter()
@@ -1305,18 +1306,23 @@ mod tests {
             vec!["kyuubi-a.example.test", "kyuubi-b.example.test"]
         );
         assert_eq!(sign_in.resource, None);
-        assert_eq!(sign_in.callback_port, 0);
+        assert!(sign_in.callback_ports.is_empty());
         let mut values = values();
-        values[6] = "8765".into();
+        values[6] = "8765, 8766 8765".into();
         values[4] = "https://kyuubi.example.test".into();
         let sign_in = parse_editor(&values, &SignIn::default()).unwrap();
-        assert_eq!(sign_in.callback_port, 8765);
+        assert_eq!(sign_in.callback_ports, vec![8765, 8766]);
         assert_eq!(
             sign_in.resource.as_deref(),
             Some("https://kyuubi.example.test")
         );
-        values[6] = "port".into();
-        assert!(parse_editor(&values, &SignIn::default()).is_err());
+        for ports in ["port", "8765 0", "70000"] {
+            values[6] = ports.into();
+            assert!(
+                parse_editor(&values, &SignIn::default()).is_err(),
+                "{ports}"
+            );
+        }
     }
 
     #[test]

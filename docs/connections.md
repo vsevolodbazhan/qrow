@@ -2,8 +2,9 @@
 
 A connection profile stores the settings for a Kyuubi endpoint. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
-its tabs. To show the Connections sidebar, click the database button at the
-left end of the status bar, press **⌘1**, or select **View → Connections**. Qrow restores the last tab selected for that connection.
+its tabs. Qrow restores the last tab selected for that connection. To show the
+Connections sidebar, click the database button at the left end of the status
+bar, or select **View → Connections**.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -68,9 +69,9 @@ its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
 The **Sign-ins** sidebar shows each sign-in with its account. To open it,
-click the key button at the left end of the status bar, press **⌘2**, or
-select **View → Sign-ins**. Click the button again to hide the sidebar. The
-button shows a yellow dot when sign-ins need attention: a connection uses a sign-in
+click the key button at the left end of the status bar, or select
+**View → Sign-ins**. Click the button again to hide the sidebar. The button
+shows a yellow dot when sign-ins need attention: a connection uses a sign-in
 that is not signed in, a sign-in has expired, Qrow cannot reach the provider,
 or the last sign-in action failed. Point to the button to read how many
 sign-ins need attention.
@@ -87,8 +88,9 @@ sign-ins need attention.
 
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
-default, Qrow uses an available port. If the provider accepts only one port,
-enter it in **Callback port**. The provider must support the
+default, Qrow uses an available port. If the provider accepts only some ports,
+enter them in **Callback Ports**. Qrow tries them in order and uses the first
+port that no other program uses. The provider must support the
 authorization-code flow with PKCE (`S256`). Add the `offline_access` scope if
 the provider issues refresh tokens only with it. Use **Resource** only if the
 provider requires an RFC 8707 resource indicator.

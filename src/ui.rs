@@ -111,8 +111,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
         KeyBinding::new("cmd-b", ToggleSidebar, None),
-        KeyBinding::new("cmd-1", ShowConnections, None),
-        KeyBinding::new("cmd-2", ShowSignIns, None),
         KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(

@@ -133,17 +133,35 @@ impl std::fmt::Debug for Attempt {
     }
 }
 
+/// Listens on the first free port of `ports` on loopback only, or on an
+/// available port when `ports` is empty.
+fn bind_callback(ports: &[u16]) -> Result<TcpListener> {
+    if ports.is_empty() {
+        return TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .context("Could not listen for the sign-in callback on 127.0.0.1");
+    }
+    let mut last_error = None;
+    for &port in ports {
+        match TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+            Ok(listener) => return Ok(listener),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let ports: Vec<String> = ports.iter().map(u16::to_string).collect();
+    Err(anyhow::anyhow!(
+        "Could not listen for the sign-in callback on 127.0.0.1, port {}: {}",
+        ports.join(", "),
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_default()
+    ))
+}
+
 impl Attempt {
     /// Binds the callback listener to loopback only and builds the
     /// authorization URL with a new verifier, state, and nonce.
     pub fn prepare(config: &SignIn, discovery: &Discovery) -> Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, config.callback_port))
-            .with_context(|| {
-                format!(
-                    "Could not listen for the sign-in callback on 127.0.0.1:{}",
-                    config.callback_port
-                )
-            })?;
+        let listener = bind_callback(&config.callback_ports)?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let redirect_uri = format!("http://127.0.0.1:{port}{CALLBACK_PATH}");
@@ -515,9 +533,22 @@ mod tests {
             scopes: vec!["kyuubi".into()],
             resource: Some("https://kyuubi.example.test".into()),
             allowed_hosts: vec!["kyuubi.example.test".into()],
-            callback_port: port,
+            callback_ports: if port == 0 { vec![] } else { vec![port] },
             ..SignIn::default()
         }
+    }
+
+    #[test]
+    fn the_callback_uses_the_first_free_port() {
+        let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let busy_port = busy.local_addr().unwrap().port();
+        let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let free_port = free.local_addr().unwrap().port();
+        drop(free);
+        let listener = bind_callback(&[busy_port, free_port]).unwrap();
+        assert_eq!(listener.local_addr().unwrap().port(), free_port);
+        let error = bind_callback(&[busy_port]).unwrap_err().to_string();
+        assert!(error.contains(&format!("port {busy_port}")), "{error}");
     }
 
     fn discovery() -> Discovery {
