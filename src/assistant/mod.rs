@@ -1,6 +1,7 @@
 //! Harness-neutral state and operations for the optional AI assistant.
 
 pub mod broker;
+pub mod catalog;
 mod codex;
 mod inbox;
 pub mod service;

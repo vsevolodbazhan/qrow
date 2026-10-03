@@ -219,7 +219,7 @@ and an explicit preferred member for automatic refreshes.
     deletion, workspace migration. UI tests for the form and for status
     placement. Docs in `connections.md` and `workspace.md`.
 
-## Phase 3: assistant
+## Phase 3: assistant (implemented on feat/assistant-catalog-tools)
 
 23. Add three read-only tools in `src/assistant/tools.rs` and
     `src/ui/assistant_tools.rs`. Each result has a byte limit, plus

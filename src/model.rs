@@ -10,7 +10,8 @@ pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
-pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 1;
+/// Version 2 adds schema, table, and column names and comments.
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 2;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
 pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
 pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
@@ -496,7 +497,7 @@ impl CatalogSettings {
     }
 }
 
-fn glob_match(pattern: &str, text: &str) -> bool {
+pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
     let pattern: Vec<char> = pattern.trim().to_lowercase().chars().collect();
     let text: Vec<char> = text.to_lowercase().chars().collect();
     // Iterative matching with one backtrack point keeps the cost linear in practice.

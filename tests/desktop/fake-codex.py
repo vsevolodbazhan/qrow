@@ -635,6 +635,87 @@ for line in sys.stdin:
                 call_tool(thread_id, turn_id, "read_tab_sql", {"version": 1, "tab_id": tab["id"], "offset": offset}, received)
 
             read_sql(0)
+        elif message == "List live schemas":
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            connection = context["selected_tab"]["connection_id"]
+
+            def listed(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                names = ",".join(schema["name"] for schema in result["schemas"])
+                finish_turn(thread_id, turn_id, f"Live schemas: {names}")
+
+            call_tool(thread_id, turn_id, "list_schemas", {
+                "version": 1, "connection_id": connection,
+            }, listed)
+        elif message.startswith("Describe the live table "):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            target, _, connection_name = message.removeprefix("Describe the live table ").partition(" on ")
+            schema, relation = target.split(".")
+            connection = context["selected_tab"]["connection_id"]
+            if connection_name:
+                connection = next(c["id"] for c in context["connections"] if c["name"] == connection_name)
+
+            def described(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                columns = ",".join(f"{c['name']} {c['data_type']}" for c in result["columns"])
+                finish_turn(thread_id, turn_id, f"Live columns: {columns}")
+
+            call_tool(thread_id, turn_id, "describe_relation", {
+                "version": 1, "connection_id": connection,
+                "schema": schema, "relation": relation,
+            }, described)
+        elif message.startswith("Read the catalog"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            catalog = context.get("catalog") or {}
+            connection = catalog.get("connection_id")
+            referenced = ",".join(r["relation"] for r in catalog.get("referenced_relations", []))
+            found = {}
+
+            def failed(result):
+                return result.get("error", {}).get("code", "failed")
+
+            def described_missing(success, result):
+                missing = "ok" if success else failed(result)
+                finish_turn(
+                    thread_id,
+                    turn_id,
+                    f"Catalog: loaded {catalog.get('loaded')}, referenced {referenced}; "
+                    f"schemas {found['schemas']}; relations {found['relations']}; "
+                    f"columns {found['columns']}; daily {missing}",
+                )
+
+            def described(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                found["columns"] = ",".join(f"{c['name']} {c['data_type']}" for c in result["columns"])
+                call_tool(thread_id, turn_id, "describe_relation", {
+                    "version": 1, "connection_id": connection, "schema": "avia", "relation": "daily",
+                }, described_missing)
+
+            def listed_relations(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                found["relations"] = ",".join(r["name"] for r in result["relations"])
+                call_tool(thread_id, turn_id, "describe_relation", {
+                    "version": 1, "connection_id": connection, "schema": "avia", "relation": "bookings",
+                }, described)
+
+            def listed_schemas(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                found["schemas"] = ",".join(s["name"] for s in result["schemas"])
+                call_tool(thread_id, turn_id, "list_relations", {
+                    "version": 1, "connection_id": connection, "schema": "avia", "pattern": "b*",
+                }, listed_relations)
+
+            call_tool(thread_id, turn_id, "list_schemas", {"version": 1, "connection_id": connection}, listed_schemas)
         elif message.startswith("Read the latest execution logs"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
 

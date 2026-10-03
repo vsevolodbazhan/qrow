@@ -179,3 +179,71 @@ fn the_logs_tool_reads_only_the_latest_execution(cx: &mut TestAppContext) {
     app.send(cx, "Read the latest execution logs");
     app.wait_reply(cx, "Logs: query True, rejected SQL False");
 }
+
+#[gpui_kit::test]
+fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppContext) {
+    use qrow::catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind};
+    use qrow::model::CatalogSettings;
+    use std::collections::BTreeMap;
+
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Synthetic");
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(
+        vec!["avia".into(), "finance".into()],
+        &CatalogSettings::default(),
+        1,
+    );
+    let relation = |name: &str, kind| RelationEntry {
+        name: name.into(),
+        kind,
+        comment: None,
+    };
+    catalog.apply_relations(
+        "avia",
+        None,
+        vec![
+            relation("bookings", RelationKind::Table),
+            relation("daily", RelationKind::View),
+        ],
+        1,
+    );
+    let column = |name: &str, data_type: &str| CatalogColumn {
+        name: name.into(),
+        data_type: data_type.into(),
+        comment: None,
+    };
+    catalog.apply_columns(
+        "avia",
+        Some("bookings"),
+        BTreeMap::from([(
+            "bookings".into(),
+            vec![column("booking_id", "BIGINT"), column("gate", "STRING")],
+        )]),
+        1,
+    );
+    let cache = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    qrow::storage::save_catalog(&cache, &catalog).unwrap();
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT gate FROM avia.bookings".into();
+    let workspace = codex.workspace(Workspace {
+        profiles: vec![profile],
+        tabs: vec![tab],
+        ..Workspace::default()
+    });
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+
+    // The tools wait for the cache, and the connection has no session, so
+    // missing columns are not read.
+    app.send(cx, "Read the catalog");
+    app.wait_reply(
+        cx,
+        "schemas avia,finance; relations bookings; columns booking_id BIGINT,gate STRING; daily not_cached",
+    );
+    app.wait_idle(cx);
+    // The next message has the cached columns of the relation in the tab SQL.
+    app.send(cx, "Read the catalog again");
+    app.wait_reply(cx, "Catalog: loaded True, referenced bookings;");
+    assert_eq!(app.credentials.reads(), 0, "The tools must not connect");
+}

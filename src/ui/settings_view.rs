@@ -506,7 +506,7 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert.title("Enable the assistant?")
-                .description("Qrow sends selected SQL and allowed connection and tab details to Codex only when you send a message. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
+                .description("Qrow sends selected SQL, allowed connection and tab details, and the cached names and comments of schemas, tables, views, and columns to Codex. It sends them only when you send a message or when the assistant reads them with a tool. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
                 .footer(DialogFooter::new().justify_end()
                     .child(Button::new("cancel-enable-assistant").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
                     .child(Button::new("confirm-enable-assistant").primary().label("Enable")

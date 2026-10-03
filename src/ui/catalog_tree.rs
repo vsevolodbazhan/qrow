@@ -104,6 +104,8 @@ struct CatalogConnection {
     status: Status,
     /// The members with a live session, as the worker last received them.
     live: HashSet<Uuid>,
+    /// How many times the worker reported that it has no refresh.
+    idle_reports: u64,
 }
 
 pub(super) struct CatalogTree {
@@ -179,8 +181,28 @@ impl CatalogTree {
         self.connection(profile)?.worker.as_ref()
     }
 
-    fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
+    pub(super) fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
         self.connection(profile)?.catalog.as_deref()
+    }
+
+    /// How many times the catalog worker of `profile` reported that it has no
+    /// refresh. A refresh that Qrow asked for ended when this number grows.
+    pub(super) fn idle_reports(&self, profile: Uuid) -> u64 {
+        self.connection(profile)
+            .map_or(0, |connection| connection.idle_reports)
+    }
+
+    /// Whether a refresh in progress or waiting, of any connection of the
+    /// catalog of `profile`, reads `scope`.
+    pub(super) fn reads(&self, profile: Uuid, scope: &Scope) -> bool {
+        self.connection(profile).is_some_and(|connection| {
+            let status = &connection.status;
+            status
+                .active
+                .iter()
+                .chain(status.queued.iter().map(|request| &request.scope))
+                .any(|reading| reading.covers(scope))
+        })
     }
 
     /// The refreshes that `profile` runs or waits for. The refreshes of
@@ -195,6 +217,9 @@ impl CatalogTree {
             self.statuses.insert(*member, status.of_member(*member));
         }
         if let Some(connection) = self.connections.get_mut(&key) {
+            if status.is_idle() {
+                connection.idle_reports += 1;
+            }
             connection.status = status;
         }
     }
@@ -206,11 +231,9 @@ impl CatalogTree {
         let running = self
             .status(profile)
             .is_some_and(|status| status.active == Some(Scope::Connection));
-        let catalog = self.catalog(profile)?;
-        catalog
-            .error
-            .as_deref()
-            .filter(|_| !running && catalog.error_member.is_none_or(|member| member == profile))
+        self.catalog(profile)?
+            .error_for(profile)
+            .filter(|_| !running)
     }
 
     /// Whether a refresh of the connection is in progress or waits.
@@ -638,7 +661,7 @@ impl Qrow {
 
     /// Start the catalog worker of `profile` if it does not exist. The worker
     /// loads the cache; it opens a session only for a refresh.
-    fn ensure_catalog(&mut self, profile: Uuid) {
+    pub(super) fn ensure_catalog(&mut self, profile: Uuid) {
         self.ensure_catalog_with_seed(profile, None);
     }
 
@@ -767,7 +790,7 @@ impl Qrow {
 
     /// Whether a tab of `profile` has a live session. A refresh then uses
     /// the engine that the tab already started.
-    fn catalog_warm(&self, profile: Uuid) -> bool {
+    pub(super) fn catalog_warm(&self, profile: Uuid) -> bool {
         self.tabs
             .iter()
             .any(|tab| tab.worker_profile == Some(profile) && tab.connected)

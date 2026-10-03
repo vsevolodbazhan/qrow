@@ -23,6 +23,9 @@ pub(in crate::ui) enum ToolKind {
     ReadResults,
     FetchRows,
     ReadLogs,
+    ListSchemas,
+    ListRelations,
+    DescribeRelation,
     Other,
 }
 
@@ -39,6 +42,9 @@ impl ToolKind {
             "read_results" => Self::ReadResults,
             "fetch_more_results" => Self::FetchRows,
             "read_query_logs" => Self::ReadLogs,
+            "list_schemas" => Self::ListSchemas,
+            "list_relations" => Self::ListRelations,
+            "describe_relation" => Self::DescribeRelation,
             _ => Self::Other,
         }
     }
@@ -55,6 +61,9 @@ impl ToolKind {
             Self::ReadResults => "Read results",
             Self::FetchRows => "Fetch more rows",
             Self::ReadLogs => "Read logs",
+            Self::ListSchemas => "List schemas",
+            Self::ListRelations => "List tables",
+            Self::DescribeRelation => "Describe table",
             Self::Other => "Use tool",
         }
     }
@@ -71,6 +80,9 @@ impl ToolKind {
             Self::ReadResults => AssetIconName::Table,
             Self::FetchRows => AssetIconName::ListPlus,
             Self::ReadLogs => AssetIconName::ScrollText,
+            Self::ListSchemas => AssetIconName::Database,
+            Self::ListRelations => AssetIconName::Table2,
+            Self::DescribeRelation => AssetIconName::Columns3,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }
@@ -326,6 +338,51 @@ pub(in crate::ui) fn row_change(old: &[Row], new: &[Row]) -> RowChange {
 mod tests {
     use super::*;
     use crate::assistant::WORKSPACE_CONTEXT_SEPARATOR;
+
+    #[::core::prelude::v1::test]
+    fn the_icon_of_each_tool_kind_loads() {
+        use gpui_kit::AssetSource as _;
+        let kinds = [
+            ToolKind::Workspace,
+            ToolKind::ReadQuery,
+            ToolKind::AppendQuery,
+            ToolKind::EditQuery,
+            ToolKind::RunQuery,
+            ToolKind::CancelQuery,
+            ToolKind::QueryStatus,
+            ToolKind::ReadResults,
+            ToolKind::FetchRows,
+            ToolKind::ReadLogs,
+            ToolKind::ListSchemas,
+            ToolKind::ListRelations,
+            ToolKind::DescribeRelation,
+            ToolKind::Other,
+        ];
+        for kind in kinds {
+            // A new kind does not compile until it is in the list above.
+            match kind {
+                ToolKind::Workspace
+                | ToolKind::ReadQuery
+                | ToolKind::AppendQuery
+                | ToolKind::EditQuery
+                | ToolKind::RunQuery
+                | ToolKind::CancelQuery
+                | ToolKind::QueryStatus
+                | ToolKind::ReadResults
+                | ToolKind::FetchRows
+                | ToolKind::ReadLogs
+                | ToolKind::ListSchemas
+                | ToolKind::ListRelations
+                | ToolKind::DescribeRelation
+                | ToolKind::Other => {}
+            }
+            let path = kind.icon().path();
+            assert!(
+                crate::assets::Assets.load(&path).unwrap().is_some(),
+                "{path} of {kind:?} is missing"
+            );
+        }
+    }
 
     #[::core::prelude::v1::test]
     fn tool_cards_keep_the_tool_name_and_show_the_state_separately() {

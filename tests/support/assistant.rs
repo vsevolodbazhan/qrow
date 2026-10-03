@@ -89,7 +89,8 @@ impl FakeCodex {
     pub fn settings(&self) -> Settings {
         let mut settings = Settings::default();
         settings.assistant.enabled = true;
-        settings.assistant.data_sharing_notice_version = 1;
+        settings.assistant.data_sharing_notice_version =
+            qrow::model::ASSISTANT_DATA_SHARING_NOTICE_VERSION;
         settings.assistant.codex_executable = Some(self.executable.display().to_string());
         settings
     }

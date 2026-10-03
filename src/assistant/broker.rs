@@ -98,6 +98,9 @@ pub struct WorkspaceContext {
     pub connections: Vec<ConnectionContext>,
     pub tabs: Vec<TabSummary>,
     pub selected_tab: Option<SelectedTabContext>,
+    /// The schema catalog of the connection of `selected_tab`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<super::catalog::CatalogContext>,
 }
 
 /// Returns up to `MAX_CONTEXT_STATEMENTS` ranges of the statements that
@@ -161,7 +164,13 @@ impl WorkspaceContext {
             connections,
             tabs,
             selected_tab,
+            catalog: None,
         }
+    }
+
+    pub fn with_catalog(mut self, catalog: Option<super::catalog::CatalogContext>) -> Self {
+        self.catalog = catalog;
+        self
     }
 }
 

@@ -25,6 +25,8 @@ gpui_kit::assets::icon_assets!(
         RefreshCw,
         ListPlus,
         ScrollText,
+        Table2,
+        Columns3,
     ]
 );
 
@@ -80,20 +82,6 @@ mod tests {
     #[test]
     fn assistant_icons_are_available() {
         for icon in ASSISTANT_ICONS {
-            assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
-        }
-    }
-
-    #[test]
-    fn assistant_tool_icons_are_available() {
-        for icon in [
-            "icons/pencil.svg",
-            "icons/circle-stop.svg",
-            "icons/activity.svg",
-            "icons/table.svg",
-            "icons/list-plus.svg",
-            "icons/scroll-text.svg",
-        ] {
             assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
         }
     }
