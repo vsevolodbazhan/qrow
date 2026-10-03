@@ -351,6 +351,12 @@ impl Builder<'_> {
         name.to_lowercase().contains(&self.search)
     }
 
+    fn matches_relation(&self, schema: &str, name: &str) -> bool {
+        self.matches(name)
+            || self.matches(&format!("{schema}.{name}"))
+            || self.matches(&qualified_name(schema, name))
+    }
+
     fn connection(&mut self, profile: &Profile) -> TreeItem {
         let id = connection_id(profile.id);
         let item = self.add(
@@ -368,10 +374,9 @@ impl Builder<'_> {
             && catalog.is_some_and(|catalog| {
                 catalog.schemas.iter().any(|(name, schema)| {
                     self.matches(name)
-                        || schema
-                            .relations
-                            .as_ref()
-                            .is_some_and(|relations| relations.keys().any(|r| self.matches(r)))
+                        || schema.relations.as_ref().is_some_and(|relations| {
+                            relations.keys().any(|r| self.matches_relation(name, r))
+                        })
                 })
             });
         let expanded = if searching {
@@ -380,11 +385,16 @@ impl Builder<'_> {
             self.is_expanded(&id)
         };
         self.folder(item, expanded, profile.id, |builder| {
-            builder.connection_children(profile.id, &id)
+            builder.connection_children(profile.id, &id, has_matches)
         })
     }
 
-    fn connection_children(&mut self, profile: Uuid, id: &SharedString) -> Vec<TreeItem> {
+    fn connection_children(
+        &mut self,
+        profile: Uuid,
+        id: &SharedString,
+        has_matches: bool,
+    ) -> Vec<TreeItem> {
         let mut children = vec![];
         let status = self.tree.status(profile).cloned().unwrap_or_default();
         let Some(catalog) = self.tree.catalog(profile) else {
@@ -430,10 +440,9 @@ impl Builder<'_> {
             }
             let schema_matches = self.matches(name);
             let relation_matches = searching
-                && schema
-                    .relations
-                    .as_ref()
-                    .is_some_and(|relations| relations.keys().any(|r| self.matches(r)));
+                && schema.relations.as_ref().is_some_and(|relations| {
+                    relations.keys().any(|r| self.matches_relation(name, r))
+                });
             if searching && !schema_matches && !relation_matches {
                 continue;
             }
@@ -463,6 +472,14 @@ impl Builder<'_> {
             children.push(self.folder(item, expanded, profile, |builder| {
                 builder.schema_children(catalog, profile, name, &item_id, filtered)
             }));
+        }
+        if searching && children.is_empty() {
+            let text = if has_matches {
+                "Search limit reached"
+            } else {
+                "No matches"
+            };
+            children.push(self.notice(id, profile, text, Tone::Muted, None));
         }
         children
     }
@@ -497,7 +514,7 @@ impl Builder<'_> {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
-                    if filtered && !self.matches(name) {
+                    if filtered && !self.matches_relation(schema, name) {
                         continue;
                     }
                     if filtered {
@@ -1475,6 +1492,8 @@ fn render_entry(
     let right_clicked = state.is_right_clicked() && *menu_open;
     let id = entry.item().id.clone();
     let disclosure = div()
+        .id(child_id(&id, "disclosure"))
+        .test_support()
         .w(ui_px(16.))
         .flex_shrink_0()
         .flex()
@@ -1779,7 +1798,7 @@ fn connection_row(
     id: Uuid,
     row: &ConnectionRow,
     selected: bool,
-    disclosure: Div,
+    disclosure: impl IntoElement,
     context: &RowContext,
     cx: &App,
 ) -> Stateful<Div> {
@@ -1948,21 +1967,20 @@ fn notice_row(
             Tone::Error => cx.theme().danger,
             Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
         })
-        // The columns of the other rows: the disclosure, the icon, and the
-        // label. The spinner takes the place of an icon.
-        .child(div().w(px(scale * 16.)).flex_shrink_0())
+        .when(tone == Tone::Loading, |el| {
+            el.child(
+                div()
+                    .w(px(scale * 16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .justify_center()
+                    .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
+            )
+        })
         .child(
             div()
-                .w(px(scale * 16.))
-                .flex_shrink_0()
-                .flex()
-                .justify_center()
-                .when(tone == Tone::Loading, |el| {
-                    el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-                }),
-        )
-        .child(
-            div()
+                .id(child_id(id, "label"))
+                .test_support()
                 .flex_1()
                 .min_w_0()
                 .truncate()

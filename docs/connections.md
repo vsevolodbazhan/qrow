@@ -247,10 +247,19 @@ catalog and its copy of the schemas.
 ### Search the tree
 
 Type in **Search tables…** to find schemas and tables in all connections. The
-search does not find columns. Qrow expands the connections and schemas that
-contain matches. A schema that matches by name shows all its tables when you
-expand it. The search shows the first 500 matches. Clear the search field to
-show the full tree again.
+search also finds views. Use a name or part of a name. For a table or view,
+you can include the schema, for example `integrations.bookings`. The search
+also accepts names from **Copy Qualified Name**, for example
+`` `integrations`.`bookings` ``. The search ignores letter case and spaces
+at the start and end of the search text.
+
+The search does not find columns. Qrow expands the connections and schemas
+that contain matches. If you expand a connection with no matches, the tree
+shows **No matches**. You can collapse and expand the connection again.
+A schema that matches by name shows all its tables when you expand it. The
+search shows the first 500 matches. If the limit hides all matches in a
+connection, the tree shows **Search limit reached**. Clear the search field
+to show the full tree again.
 
 ### Use names in SQL
 
