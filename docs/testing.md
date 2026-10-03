@@ -575,8 +575,9 @@ report-only suite runs, and its measurements go into the run summary. Its
 failure does not fail the job.
 
 A `plan` job selects the jobs of a pull request from its changed files. It
-always selects `static`. Changes to Rust sources or `.cargo/config.toml` select all jobs. Changes to
-the server fixture or the E2E scripts select `backend` and both E2E jobs. Changes
+always selects `static`. Changes to Rust sources or `.cargo/config.toml`
+select all jobs. Changes to the server fixture or the E2E scripts select
+`backend` and both E2E jobs. Changes
 under `tests/desktop/` select both E2E jobs. Changes to the packaging or probe
 scripts, `assets/`, `LICENSE`, or `NOTICE` select both package jobs. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
@@ -587,13 +588,14 @@ To see the plan of your changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use `macos-15-intel`.
+accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use
+`macos-15-intel`.
 Each E2E job tests the package for its architecture and shares one set of
 servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
-cache belongs to one job, and only that job saves it. Each E2E job also restores the cache of its UI job, which builds the E2E
-test binary. Runs on `main`
-save the build caches. Other runs only restore them. CI keeps its artifacts
+cache belongs to one job, and only that job saves it. Each E2E job also
+restores the cache of its UI job, which builds the E2E test binary. Runs on
+`main` save the build caches. Other runs only restore them. CI keeps its artifacts
 for one day. Runs on `main` also keep the measurements of the
 package, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
 artifacts. See [Check performance](#check-performance). See
