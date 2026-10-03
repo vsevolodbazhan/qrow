@@ -1,5 +1,5 @@
 use crate::support::fixture::{Kyuubi, PASSWORD, QUERY_TIMEOUT};
-use crate::support::{TestApp, cell, header};
+use crate::support::{TestApp, bounds_of, cell, header};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::SavedTab;
@@ -51,7 +51,10 @@ fn query_dots_keep_unread_results_until_their_own_tabs_show(cx: &mut TestAppCont
     app.update(cx, |window, cx| {
         assert!(window.try_find(dot(first)).is_none());
         assert!(window.try_find(connection.clone()).is_none());
+        let idle_button = bounds_of(window, "toggle-activity");
+        assert_eq!(idle_button.size.width, idle_button.size.height);
         window.click("run", cx);
+        assert_eq!(bounds_of(window, "toggle-activity"), idle_button);
         assert!(window.find(dot(first)).label().unwrap().contains("running"));
         assert!(
             window

@@ -51,8 +51,9 @@ copies that error. **Clear** deletes the log of the connection.
 
 ## Unseen errors
 
-The Activity icon keeps its shape. A red dot means that a connection has an
-unseen refresh error or a tab has an unread error. The tooltip and the
+The Activity icon keeps its shape. Its dot is at the top right corner of the
+button. A red dot means that a connection has an unseen refresh error or a
+tab has an unread error. The tooltip and the
 accessible name give the count. A refresh with several failed requests counts
 once. Each tab with an unread query or keep-alive error counts once.
 

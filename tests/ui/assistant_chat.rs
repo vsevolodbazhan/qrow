@@ -126,6 +126,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
     let (app, codex) = launch(cx, Workspace::default());
+    let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-assistant"));
     app.open_assistant(cx);
     // The synthetic server holds this turn until the release.
     app.send(cx, "Return to the latest message while hidden");
@@ -143,10 +144,14 @@ fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
             label(window, "toggle-assistant").as_deref(),
             Some("Toggle Assistant, working")
         );
+        assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
     });
     codex.mark("latest-release");
     app.wait_until(cx, "the reply-ready toggle", REPLY_TIMEOUT, |window, _| {
         label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
+    });
+    app.update(cx, |window, _| {
+        assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
     });
     app.click(cx, "toggle-assistant");
     app.wait_reply(cx, "I can help with this query");

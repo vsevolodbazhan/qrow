@@ -1,4 +1,4 @@
-use gpui_kit::component::{ActiveTheme, Icon, badge::Badge};
+use gpui_kit::component::{ActiveTheme, badge::Badge, button::Button};
 use gpui_kit::{AnyElement, App, IntoElement, ParentElement, Styled, div};
 
 /// One shared priority for the dots of tabs, connections, and conversations.
@@ -31,14 +31,14 @@ impl DotStatus {
             .into_any_element()
     }
 
-    pub(super) fn on_icon(status: Option<Self>, icon: Icon, cx: &App) -> AnyElement {
+    pub(super) fn on_button(status: Option<Self>, button: Button, cx: &App) -> AnyElement {
         match status {
             Some(status) => Badge::new()
                 .dot()
                 .color(status.color(cx))
-                .child(icon)
+                .child(button)
                 .into_any_element(),
-            None => icon.into_any_element(),
+            None => button.into_any_element(),
         }
     }
 }

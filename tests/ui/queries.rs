@@ -165,10 +165,15 @@ fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
         },
         MemoryCredentials::default(),
     );
+    let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-activity"));
+    assert_eq!(idle_button.size.width, idle_button.size.height);
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
     app.dispatch(cx, qrow::ui::RunQuery);
     app.wait_label(cx, "Activity, 1 unseen error");
+    app.update(cx, |window, _| {
+        assert_eq!(bounds_of(window, "toggle-activity"), idle_button);
+    });
     app.dispatch(cx, qrow::ui::NewTab);
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");

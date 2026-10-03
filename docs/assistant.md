@@ -317,7 +317,8 @@ move the tab while its conversation works or waits for approval.
 Qrow shows the state of each conversation in the thread list and on its tab.
 A tab shows one status dot before its close button. The dot combines the
 query state and the conversation state. The **Toggle Assistant** button keeps
-its assistant icon. Its dot shows the most urgent state of all conversations.
+its assistant icon. Its dot is at the top right corner of the button.
+The dot shows the most urgent state of all conversations.
 The thread list shows a dot for each conversation.
 
 - A blue dot means that Codex works on a turn.

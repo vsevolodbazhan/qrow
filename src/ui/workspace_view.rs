@@ -279,15 +279,11 @@ impl Qrow {
                                 .h(self.ui_px(28.))
                                 .accessibility_label(accessibility_label)
                                 .tooltip(tooltip)
-                                .child(DotStatus::on_icon(
-                                    status.dot_status(),
-                                    Icon::new(AssetIconName::Bot).small(),
-                                    cx,
-                                ))
+                                .icon(Icon::new(AssetIconName::Bot).small())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
-                        bar.child(toggle)
+                        bar.child(DotStatus::on_button(status.dot_status(), toggle, cx))
                     }),
             )
     }
@@ -457,18 +453,15 @@ impl Qrow {
             1 => label.push_str(", 1 unseen error"),
             count => label.push_str(&format!(", {count} unseen errors")),
         }
-        Button::new("toggle-activity")
+        let button = Button::new("toggle-activity")
             .ghost()
             .small()
             .selected(open)
-            .child(DotStatus::on_icon(
-                status,
-                Icon::new(AssetIconName::Activity).small(),
-                cx,
-            ))
+            .icon(Icon::new(AssetIconName::Activity).small())
             .accessibility_label(label.clone())
             .tooltip(format!("{label} · ⇧⌘U"))
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
+        DotStatus::on_button(status, button, cx)
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
