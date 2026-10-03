@@ -526,7 +526,13 @@ pub struct ConnectionLifecycle {
     /// Zero disables keep-alive and enables idle disconnection.
     pub keep_alive_seconds: u64,
     pub keep_alive_sql: String,
+    /// The longest wait for one answer from Kyuubi. The first statement of
+    /// a session can wait while Kyuubi starts an engine.
+    pub response_timeout_seconds: u64,
 }
+
+/// The valid response timeouts, in seconds (10 seconds to 1 hour).
+pub const RESPONSE_TIMEOUT_SECONDS: std::ops::RangeInclusive<u64> = 10..=3_600;
 
 impl Default for ConnectionLifecycle {
     fn default() -> Self {
@@ -534,11 +540,16 @@ impl Default for ConnectionLifecycle {
             idle_seconds: 900,
             keep_alive_seconds: 0,
             keep_alive_sql: "SELECT 1".into(),
+            response_timeout_seconds: 300,
         }
     }
 }
 
 impl ConnectionLifecycle {
+    pub fn response_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.response_timeout_seconds)
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             (1..=604_800).contains(&self.idle_seconds),
@@ -547,6 +558,12 @@ impl ConnectionLifecycle {
         anyhow::ensure!(
             self.keep_alive_seconds <= 604_800,
             "Keep-alive interval must be between 0 and 604800 seconds."
+        );
+        anyhow::ensure!(
+            RESPONSE_TIMEOUT_SECONDS.contains(&self.response_timeout_seconds),
+            "Response timeout must be between {} and {} seconds.",
+            RESPONSE_TIMEOUT_SECONDS.start(),
+            RESPONSE_TIMEOUT_SECONDS.end()
         );
         if self.keep_alive_seconds > 0 {
             crate::sql::validate_single(&self.keep_alive_sql)?;
@@ -1074,6 +1091,21 @@ mod tests {
         assert_eq!(restored.id, original.id);
         assert_eq!(restored.lifecycle, ConnectionLifecycle::default());
         assert_eq!(restored.lifecycle.keep_alive_seconds, 0);
+    }
+
+    #[test]
+    fn a_lifecycle_without_a_response_timeout_waits_five_minutes() {
+        // Lifecycles saved before the setting existed get the default.
+        let restored: ConnectionLifecycle = serde_json::from_str(
+            r#"{"idle_seconds":900,"keep_alive_seconds":0,"keep_alive_sql":"SELECT 1"}"#,
+        )
+        .unwrap();
+        assert_eq!(restored.response_timeout_seconds, 300);
+        let mut policy = ConnectionLifecycle::default();
+        for (seconds, valid) in [(9, false), (10, true), (3_600, true), (3_601, false)] {
+            policy.response_timeout_seconds = seconds;
+            assert_eq!(policy.validate().is_ok(), valid, "{seconds}");
+        }
     }
 
     #[test]

@@ -403,7 +403,16 @@ edit the connection to save a password again.
 
 Each attempt to connect to one address of the host has a 10-second timeout.
 If the host has more than one address, Qrow tries the next address after a
-failure. Each network write has a 15-second timeout. For the read timeout, see
+failure. Each network write has a 15-second timeout.
+
+**Response timeout** sets how long Qrow waits for one answer from Kyuubi. The
+default is 300 seconds, and the range is 10 to 3600 seconds. The first query
+of a session can wait while Kyuubi starts an engine. Kyuubi limits that wait
+with `kyuubi.session.engine.initialize.timeout`. Set **Response timeout**
+higher than that limit, or a slow engine start fails with `Kyuubi did not
+answer within 300 seconds`. A change applies to the sessions that open after
+you save. The timeout does not limit the duration of a query, because Qrow
+asks for the status of a running query again and again. See
 [Cancel work](queries.md#cancel-work).
 
 Qrow discards a failed connection and reports the error. This includes recognized

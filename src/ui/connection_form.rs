@@ -124,7 +124,7 @@ use gpui_kit::{
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 14] = [
+pub(super) const FIELD_IDS: [&str; 15] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -139,6 +139,7 @@ pub(super) const FIELD_IDS: [&str; 14] = [
     "connection-hide-schemas",
     "connection-refresh-period",
     "connection-refresh-timeout",
+    "connection-response-timeout",
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";

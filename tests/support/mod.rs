@@ -482,14 +482,21 @@ impl TestApp {
 
     /// Scrolls the container of `target` with the wheel until `target` is
     /// visible, like a user who scrolls a form to a field below its fold. The
-    /// wheel turns over a visible element of the same container.
+    /// wheel turns over a visible element of the same container. A snapshot
+    /// is visible when any part of it shows, so a target in the lower half of
+    /// the window gets one more step, which shows all of it.
     pub fn scroll_to(&self, cx: &mut TestAppContext, target: &str) {
         let mut positions = Vec::new();
+        let mut extra_step = true;
         for _ in 0..30 {
             let position = self.update(cx, |window, _| {
                 let element = window.try_find(target.to_owned())?;
-                if element.visible() {
+                let low = element.bounds().center().y > window.viewport_size().height / 2.;
+                if element.visible() && !(low && extra_step) {
                     return None;
+                }
+                if element.visible() {
+                    extra_step = false;
                 }
                 let depth = element
                     .path()

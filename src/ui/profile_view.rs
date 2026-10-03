@@ -152,6 +152,11 @@ impl Qrow {
                                     .font_family("Menlo")
                                     .aria_label("Session parameters")
                                     .into_any_element(),
+                            ))
+                            .child(field(
+                                "Response timeout",
+                                Some("Seconds that Qrow waits for one answer from Kyuubi. The first query of a session can wait while Kyuubi starts an engine. A change applies to new sessions."),
+                                input(14, "Response timeout in seconds"),
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))

@@ -2237,6 +2237,7 @@ impl Qrow {
             settings.exclude.join(", "),
             settings.refresh_minutes.to_string(),
             settings.timeout_minutes.to_string(),
+            profile.lifecycle.response_timeout_seconds.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2515,6 +2516,10 @@ impl Qrow {
                     }
                 }
             }
+            profile.lifecycle.response_timeout_seconds =
+                values[14].trim().parse().map_err(|_| {
+                    anyhow::anyhow!("Response timeout must be a whole number of seconds.")
+                })?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),

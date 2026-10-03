@@ -263,3 +263,34 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
     );
     assert_eq!(saved_names(&app), ["Qrow E2E", "Qrow E2E copy"]);
 }
+
+#[gpui_kit::test]
+fn the_response_timeout_is_validated_and_saved(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    fill_connection(&app, cx, "Slow Engine");
+    app.scroll_to(cx, "connection-response-timeout");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-response-timeout").as_deref(),
+            Some("300")
+        );
+    });
+    app.fill(cx, "connection-response-timeout", "5");
+    app.click(cx, "save-profile");
+    wait_error(
+        &app,
+        cx,
+        "Response timeout must be between 10 and 3600 seconds.",
+    );
+    app.scroll_to(cx, "connection-response-timeout");
+    app.fill(cx, "connection-response-timeout", "600");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the saved timeout", Duration::from_secs(10), |_, _| {
+        app.saved()
+            .profiles
+            .iter()
+            .any(|profile| profile.lifecycle.response_timeout_seconds == 600)
+    });
+}

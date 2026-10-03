@@ -57,6 +57,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     // window cannot run or page during it. The interval is longer than any
     // step of this test on a loaded runner, so only the wait below meets one.
     app.fill(cx, "connection-keep-alive-interval", "15");
+    app.scroll_to(cx, "connection-keep-alive-query");
     app.fill(
         cx,
         "connection-keep-alive-query",

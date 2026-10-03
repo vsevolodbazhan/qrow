@@ -65,7 +65,13 @@ impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
         let p = &self.credentials.profile;
         // A separate authenticated transport keeps CancelOperation independent of blocked fetching/polling.
-        let mut client = sasl::connect(&p.host, p.port, &p.username, &self.credentials.password)?;
+        let mut client = sasl::connect(
+            &p.host,
+            p.port,
+            &p.username,
+            &self.credentials.password,
+            p.lifecycle.response_timeout(),
+        )?;
         check(
             client
                 .cancel_operation(TCancelOperationReq::new(self.handle.clone()))?
@@ -86,7 +92,13 @@ pub struct HiveSession {
 impl Connector for HiveConnector {
     fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
         profile.validate()?;
-        let mut client = sasl::connect(&profile.host, profile.port, &profile.username, &password)?;
+        let mut client = sasl::connect(
+            &profile.host,
+            profile.port,
+            &profile.username,
+            &password,
+            profile.lifecycle.response_timeout(),
+        )?;
         let opened = client.open_session(TOpenSessionReq::new(
             TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
             Some(profile.username.clone()),
