@@ -1,9 +1,10 @@
-//! The cached schemas, relations, and columns of a connection.
+//! The cached schemas, relations, and columns of a connection, or of the
+//! connections that share one catalog.
 //!
 //! Schemas and relations are behind `Arc`, so a snapshot for the UI copies
 //! only the maps that a refresh changed.
 
-use crate::model::{CatalogSettings, Column, Profile, Row};
+use crate::model::{CatalogSettings, Column, Profile, Row, SharedCatalog, effective_catalog};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -15,7 +16,7 @@ use uuid::Uuid;
 
 mod worker;
 
-pub use worker::{CatalogWorker, Event, MINUTE, Status, refresh_due};
+pub use worker::{CatalogWorker, Event, MINUTE, Request, Seed, Status, refresh_due};
 
 /// The cache format. Qrow discards a cache with another version.
 pub const CATALOG_VERSION: u32 = 1;
@@ -37,6 +38,84 @@ impl CatalogIdentity {
             username: profile.username.clone(),
             parameters: profile.parameters.clone(),
         }
+    }
+}
+
+/// The key of the catalog of `profile`: the shared catalog that it uses, or
+/// the profile itself.
+pub fn catalog_key(profile: &Profile, shared: &[SharedCatalog]) -> Uuid {
+    profile
+        .shared_catalog
+        .filter(|id| shared.iter().any(|catalog| catalog.id == *id))
+        .unwrap_or(profile.id)
+}
+
+/// What a catalog worker needs to know about its catalog and the
+/// connections that use it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CatalogConfig {
+    /// The profile ID of a private catalog, or the ID of a shared catalog.
+    pub id: Uuid,
+    pub shared: bool,
+    /// The connections that browse the catalog, in sidebar order. Each has
+    /// the catalog settings, with its own Logs option.
+    pub members: Vec<Profile>,
+    /// The settings that decide what a refresh reads.
+    pub settings: CatalogSettings,
+    /// The member that automatic refreshes use while it has a live session.
+    pub preferred: Option<Uuid>,
+}
+
+impl CatalogConfig {
+    /// The private catalog of one profile.
+    pub fn private(profile: Profile) -> Self {
+        Self {
+            id: profile.id,
+            shared: false,
+            settings: profile.catalog.clone(),
+            members: vec![profile],
+            preferred: None,
+        }
+    }
+
+    /// The catalog with the key `id`, or `None` when no connection browses it.
+    pub fn of(id: Uuid, profiles: &[Profile], shared: &[SharedCatalog]) -> Option<Self> {
+        if let Some(catalog) = shared.iter().find(|catalog| catalog.id == id) {
+            let members: Vec<Profile> = profiles
+                .iter()
+                .filter(|profile| profile.shared_catalog == Some(id) && profile.catalog.browses())
+                .map(|profile| Profile {
+                    catalog: effective_catalog(profile, shared),
+                    ..profile.clone()
+                })
+                .collect();
+            return (!members.is_empty()).then(|| Self {
+                id,
+                shared: true,
+                members,
+                settings: catalog.settings.clone(),
+                preferred: catalog.preferred,
+            });
+        }
+        profiles
+            .iter()
+            .find(|profile| profile.id == id && catalog_key(profile, shared) == id)
+            .filter(|profile| profile.catalog.browses())
+            .map(|profile| Self::private(profile.clone()))
+    }
+
+    /// The connection settings that the cache must match. A shared catalog
+    /// has none: its members state that they read the same metastore.
+    pub fn identity(&self) -> Option<CatalogIdentity> {
+        if self.shared {
+            None
+        } else {
+            self.members.first().map(CatalogIdentity::of)
+        }
+    }
+
+    pub fn member(&self, id: Uuid) -> Option<&Profile> {
+        self.members.iter().find(|member| member.id == id)
     }
 }
 
@@ -72,8 +151,12 @@ pub fn now() -> u64 {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Catalog {
     pub version: u32,
-    pub profile: Uuid,
-    pub identity: CatalogIdentity,
+    /// The profile of a private catalog, or the shared catalog.
+    #[serde(rename = "profile")]
+    pub owner: Uuid,
+    /// The connection settings of a private catalog. `None` for a shared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<CatalogIdentity>,
     /// When Qrow last read the schema list. `None` means never.
     pub fetched_at: Option<u64>,
     /// The error of the last connection refresh. Errors are not saved.
@@ -82,6 +165,9 @@ pub struct Catalog {
     /// A connection refresh that stopped before its end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unfinished: Option<Unfinished>,
+    /// The member whose connection refresh recorded `error`.
+    #[serde(skip)]
+    pub error_member: Option<Uuid>,
     pub schemas: BTreeMap<String, Arc<Schema>>,
 }
 
@@ -102,6 +188,9 @@ pub struct Schema {
     pub fetched_at: Option<u64>,
     #[serde(skip)]
     pub error: Option<String>,
+    /// The member whose refresh recorded `error`.
+    #[serde(skip)]
+    pub error_member: Option<Uuid>,
     /// `None` until Qrow reads the relation list.
     pub relations: Option<BTreeMap<String, Arc<Relation>>>,
 }
@@ -115,6 +204,9 @@ pub struct Relation {
     pub fetched_at: Option<u64>,
     #[serde(skip)]
     pub error: Option<String>,
+    /// The member whose refresh recorded `error`.
+    #[serde(skip)]
+    pub error_member: Option<Uuid>,
     /// `None` until Qrow reads the columns. Columns are in table order.
     pub columns: Option<Vec<CatalogColumn>>,
 }
@@ -142,21 +234,29 @@ pub struct RelationEntry {
 }
 
 impl Catalog {
-    pub fn new(profile: &Profile) -> Self {
+    /// An empty catalog of `owner`, for a cache that matches `identity`.
+    pub fn empty(owner: Uuid, identity: Option<CatalogIdentity>) -> Self {
         Self {
             version: CATALOG_VERSION,
-            profile: profile.id,
-            identity: CatalogIdentity::of(profile),
+            owner,
+            identity,
             fetched_at: None,
             error: None,
             unfinished: None,
+            error_member: None,
             schemas: BTreeMap::new(),
         }
     }
 
-    /// Return whether this cache describes the catalog of `profile`.
-    pub fn describes(&self, profile: &Profile) -> bool {
-        self.profile == profile.id && self.identity == CatalogIdentity::of(profile)
+    /// An empty private catalog of `profile`.
+    pub fn new(profile: &Profile) -> Self {
+        Self::empty(profile.id, Some(CatalogIdentity::of(profile)))
+    }
+
+    /// Return whether this cache describes the catalog of `owner` that
+    /// matches `identity`.
+    pub fn describes(&self, owner: Uuid, identity: Option<&CatalogIdentity>) -> bool {
+        self.owner == owner && self.identity.as_ref() == identity
     }
 
     pub fn schema(&self, name: &str) -> Option<&Schema> {
@@ -208,6 +308,7 @@ impl Catalog {
         }
         self.fetched_at = Some(at);
         self.error = None;
+        self.error_member = None;
     }
 
     /// Replace the relation list of `schema`, or only `relation` when given.
@@ -236,6 +337,7 @@ impl Catalog {
                                 comment: entry.comment,
                                 fetched_at: kept.as_ref().and_then(|kept| kept.fetched_at),
                                 error: None,
+                                error_member: None,
                                 columns: kept.and_then(|kept| kept.columns.clone()),
                             };
                             (entry.name, Arc::new(relation))
@@ -244,6 +346,7 @@ impl Catalog {
                 );
                 node.fetched_at = Some(at);
                 node.error = None;
+                node.error_member = None;
             }
             Some(name) => {
                 // Without a relation list, one relation cannot show which others exist.
@@ -258,6 +361,7 @@ impl Catalog {
                                 comment: None,
                                 fetched_at: None,
                                 error: None,
+                                error_member: None,
                                 columns: None,
                             })
                         });
@@ -265,6 +369,7 @@ impl Catalog {
                         relation.kind = entry.kind;
                         relation.comment = entry.comment;
                         relation.error = None;
+                        relation.error_member = None;
                     }
                     None => {
                         relations.remove(name);
@@ -298,16 +403,23 @@ impl Catalog {
             node.columns = Some(columns.remove(name).unwrap_or_default());
             node.fetched_at = Some(at);
             node.error = None;
+            node.error_member = None;
         }
     }
 
-    /// Record the error of a refresh on the node of `scope`.
-    pub fn set_error(&mut self, scope: &Scope, message: String) {
+    /// Record the error of a refresh on the node of `scope`. The error belongs
+    /// to `member`, the connection that ran the refresh.
+    pub fn set_error(&mut self, scope: &Scope, message: String, member: Uuid) {
         match scope {
-            Scope::Connection => self.error = Some(message),
+            Scope::Connection => {
+                self.error = Some(message);
+                self.error_member = Some(member);
+            }
             Scope::Schema(schema) => {
                 if let Some(node) = self.schemas.get_mut(schema) {
-                    Arc::make_mut(node).error = Some(message);
+                    let node = Arc::make_mut(node);
+                    node.error = Some(message);
+                    node.error_member = Some(member);
                 }
             }
             Scope::Relation(schema, relation) => {
@@ -317,11 +429,34 @@ impl Catalog {
                     .and_then(|node| Arc::make_mut(node).relations.as_mut())
                     .and_then(|relations| relations.get_mut(relation))
                 {
-                    Arc::make_mut(node).error = Some(message);
+                    let node = Arc::make_mut(node);
+                    node.error = Some(message);
+                    node.error_member = Some(member);
                 }
             }
         }
     }
+}
+
+impl Schema {
+    /// The error of the last refresh of this schema that `member` ran. A
+    /// member of a shared catalog does not show the errors of the others.
+    pub fn error_for(&self, member: Uuid) -> Option<&str> {
+        error_for(&self.error, self.error_member, member)
+    }
+}
+
+impl Relation {
+    /// The error of the last refresh of this relation that `member` ran.
+    pub fn error_for(&self, member: Uuid) -> Option<&str> {
+        error_for(&self.error, self.error_member, member)
+    }
+}
+
+fn error_for(error: &Option<String>, owner: Option<Uuid>, member: Uuid) -> Option<&str> {
+    error
+        .as_deref()
+        .filter(|_| owner.is_none_or(|owner| owner == member))
 }
 
 /// Quote a Spark SQL identifier, including reserved keywords.
@@ -694,10 +829,11 @@ mod tests {
     #[test]
     fn errors_stay_on_their_node_and_a_success_clears_them() {
         let mut catalog = loaded();
-        catalog.set_error(&Scope::Schema("sales".into()), "denied".into());
+        catalog.set_error(&Scope::Schema("sales".into()), "denied".into(), Uuid::nil());
         catalog.set_error(
             &Scope::Relation("sales".into(), "orders".into()),
             "broken".into(),
+            Uuid::nil(),
         );
         assert_eq!(
             catalog.schema("sales").unwrap().error.as_deref(),
@@ -711,10 +847,20 @@ mod tests {
                 .as_deref(),
             Some("broken")
         );
+        // Only the member that ran the refresh sees the error.
+        let other = Uuid::from_u128(1);
+        let sales = catalog.schema("sales").unwrap();
+        assert_eq!(sales.error_for(Uuid::nil()), Some("denied"));
+        assert_eq!(sales.error_for(other), None);
+        let orders = catalog.relation("sales", "orders").unwrap();
+        assert_eq!(orders.error_for(Uuid::nil()), Some("broken"));
+        assert_eq!(orders.error_for(other), None);
         catalog.apply_relations("sales", None, vec![table("orders")], 2);
-        assert_eq!(catalog.schema("sales").unwrap().error, None);
+        let sales = catalog.schema("sales").unwrap();
+        assert_eq!((sales.error.as_deref(), sales.error_member), (None, None));
         catalog.apply_columns("sales", None, BTreeMap::new(), 2);
-        assert_eq!(catalog.relation("sales", "orders").unwrap().error, None);
+        let orders = catalog.relation("sales", "orders").unwrap();
+        assert_eq!((orders.error.as_deref(), orders.error_member), (None, None));
     }
 
     #[test]
@@ -769,19 +915,114 @@ mod tests {
     #[test]
     fn the_cache_round_trips_without_errors_and_detects_other_connections() {
         let mut catalog = loaded();
-        catalog.set_error(&Scope::Connection, "offline".into());
+        catalog.set_error(&Scope::Connection, "offline".into(), catalog.owner);
         let restored: Catalog =
             serde_json::from_slice(&serde_json::to_vec(&catalog).unwrap()).unwrap();
         assert_eq!(restored.error, None);
+        assert_eq!(restored.error_member, None);
         assert_eq!(restored.schemas, catalog.schemas);
         let mut profile = Profile {
-            id: catalog.profile,
+            id: catalog.owner,
             ..Profile::default()
         };
-        assert!(catalog.describes(&profile));
+        let describes =
+            |profile: &Profile| catalog.describes(profile.id, Some(&CatalogIdentity::of(profile)));
+        assert!(describes(&profile));
         profile.database = "other".into();
-        assert!(catalog.describes(&profile));
+        assert!(describes(&profile));
         profile.host = "elsewhere".into();
-        assert!(!catalog.describes(&profile));
+        assert!(!describes(&profile));
+        // A shared catalog has no identity, so no member clears it.
+        let shared = Catalog::empty(Uuid::new_v4(), None);
+        assert!(shared.describes(shared.owner, None));
+        assert!(!shared.describes(shared.owner, Some(&CatalogIdentity::of(&profile))));
+    }
+
+    #[test]
+    fn a_shared_catalog_has_the_browsing_members_with_their_settings() {
+        use crate::model::{CatalogRefresh, SharedCatalog};
+        let shared = SharedCatalog {
+            id: Uuid::new_v4(),
+            name: "Lake".into(),
+            settings: CatalogSettings {
+                refresh: CatalogRefresh::Manual,
+                include: vec!["sales".into()],
+                ..CatalogSettings::default()
+            },
+            preferred: None,
+        };
+        let browsing = CatalogSettings {
+            refresh: CatalogRefresh::Manual,
+            log_refreshes: true,
+            ..CatalogSettings::default()
+        };
+        let member = |name: &str, catalog: CatalogSettings| Profile {
+            name: name.into(),
+            catalog,
+            shared_catalog: Some(shared.id),
+            ..Profile::default()
+        };
+        let small = member("small", browsing.clone());
+        let off = member("off", CatalogSettings::default());
+        let large = member("large", browsing.clone());
+        let private = Profile {
+            name: "private".into(),
+            catalog: browsing,
+            ..Profile::default()
+        };
+        let profiles = vec![small.clone(), off.clone(), large, private.clone()];
+        let catalogs = std::slice::from_ref(&shared);
+
+        assert_eq!(catalog_key(&small, catalogs), shared.id);
+        assert_eq!(catalog_key(&private, catalogs), private.id);
+        assert_eq!(catalog_key(&small, &[]), small.id);
+
+        let config = CatalogConfig::of(shared.id, &profiles, catalogs).unwrap();
+        assert!(config.shared);
+        assert_eq!(config.identity(), None);
+        let members: Vec<_> = config.members.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(members, ["small", "large"]);
+        assert_eq!(config.members[0].catalog.include, ["sales"]);
+        assert!(config.members[0].catalog.log_refreshes);
+        assert!(config.member(off.id).is_none());
+
+        let config = CatalogConfig::of(private.id, &profiles, catalogs).unwrap();
+        assert!(!config.shared);
+        assert_eq!(config.identity(), Some(CatalogIdentity::of(&private)));
+        // A member has no private catalog, and a connection that does not
+        // browse has no catalog.
+        assert!(CatalogConfig::of(small.id, &profiles, catalogs).is_none());
+        let none = [off];
+        assert!(CatalogConfig::of(shared.id, &none, catalogs).is_none());
+    }
+
+    #[test]
+    fn a_member_sees_only_its_own_refreshes() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let status = Status {
+            active: Some(Scope::Connection),
+            runner: Some(a),
+            queued: vec![
+                Request {
+                    member: b,
+                    scope: Scope::Schema("sales".into()),
+                },
+                Request {
+                    member: a,
+                    scope: Scope::Schema("hr".into()),
+                },
+            ],
+            done: 2,
+            total: 5,
+        };
+        let mine = status.of_member(a);
+        assert_eq!(mine.active, Some(Scope::Connection));
+        assert_eq!((mine.done, mine.total), (2, 5));
+        assert_eq!(mine.queued.len(), 1);
+        let theirs = status.of_member(b);
+        assert_eq!(theirs.active, None);
+        assert_eq!((theirs.done, theirs.total), (0, 0));
+        assert!(theirs.includes(&Scope::Schema("sales".into())));
+        assert!(!theirs.includes(&Scope::Schema("hr".into())));
     }
 }

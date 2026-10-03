@@ -612,8 +612,9 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
     }
     let mut profile = client.profile.clone();
     profile.catalog.include = vec![schema.clone(), sibling.clone()];
+    let member = profile.id;
     let worker = CatalogWorker::with_connector(
-        profile,
+        catalog::CatalogConfig::private(profile),
         None,
         Arc::new(|| {}),
         Arc::new(HiveConnector),
@@ -622,7 +623,7 @@ fn catalog_reads_exact_schemas_relations_and_columns() -> Result<()> {
     );
     let mut latest: Option<Arc<catalog::Catalog>> = None;
     let mut refresh = |scope: Scope| -> Result<Arc<catalog::Catalog>> {
-        worker.refresh(scope.clone());
+        worker.refresh(member, scope.clone());
         let deadline = Instant::now() + TIMEOUT;
         let mut started = false;
         loop {

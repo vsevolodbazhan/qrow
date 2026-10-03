@@ -1,4 +1,5 @@
-use crate::model::{CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile};
+use crate::model::{CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile, SharedCatalog};
+use uuid::Uuid;
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
     profiles
@@ -35,9 +36,11 @@ impl RefreshMode {
     /// What the mode does, in one line below the dropdown.
     fn help(self) -> &'static str {
         match self {
-            Self::Disabled => "Qrow does not read or show schemas.",
-            Self::Manual => "Qrow reads schemas when you refresh them.",
-            Self::WhileConnected => "Qrow also refreshes schemas while a tab is connected.",
+            Self::Disabled => "Never introspect schemas.",
+            Self::Manual => "Introspect schemas on demand.",
+            Self::WhileConnected => {
+                "Introspect schemas on demand and periodically while a tab is connected."
+            }
         }
     }
 
@@ -107,12 +110,17 @@ pub(super) fn parse_lifecycle(
 
 use super::{ProfileEditor, Qrow};
 use gpui_kit::component::{
-    IndexPath,
+    IconName, IndexPath, Sizable as _,
+    button::{Button, ButtonVariants as _},
+    combobox::{Combobox, ComboboxState},
     form::{Field, Form},
     input::Input,
-    select::{SearchableVec, Select, SelectEvent, SelectState},
+    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
-use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, IntoElement, Role, SharedString, TestSupportExt as _,
+    WeakEntity, Window, div, prelude::*,
+};
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
@@ -135,10 +143,217 @@ pub(super) const FIELD_IDS: [&str; 14] = [
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
 const DISABLED: &str = "Disabled";
+const PRIVATE_CATALOG: &str = "This connection";
+const NEW_SHARED_CATALOG: &str = "New shared catalog";
+const ANY_MEMBER: &str = "Any connected connection";
 const ENABLED: &str = "Enabled";
 
 /// A dropdown of a few fixed choices.
 pub(super) type ChoiceSelect = Entity<SelectState<SearchableVec<String>>>;
+
+/// The schema catalog that a connection uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatalogChoice {
+    Private,
+    Shared(Uuid),
+    New,
+}
+
+/// The choices of the Schema catalog list: the catalog of the connection
+/// and each shared catalog. The New shared catalog button adds a new one.
+pub(super) fn catalog_choices(shared: &[SharedCatalog]) -> Vec<(CatalogChoice, String)> {
+    std::iter::once((CatalogChoice::Private, PRIVATE_CATALOG.to_owned()))
+        .chain(
+            shared
+                .iter()
+                .map(|catalog| (CatalogChoice::Shared(catalog.id), catalog.name.clone())),
+        )
+        .collect()
+}
+
+/// Add the choice of a new shared catalog, if it is not there. Returns its row.
+pub(super) fn add_new_catalog(choices: &mut Vec<(CatalogChoice, String)>) -> usize {
+    match choices
+        .iter()
+        .position(|(choice, _)| *choice == CatalogChoice::New)
+    {
+        Some(row) => row,
+        None => {
+            choices.push((CatalogChoice::New, NEW_SHARED_CATALOG.to_owned()));
+            choices.len() - 1
+        }
+    }
+}
+
+/// Remove the choice of a new shared catalog. Returns whether it was there.
+pub(super) fn remove_new_catalog(choices: &mut Vec<(CatalogChoice, String)>) -> bool {
+    let count = choices.len();
+    choices.retain(|(choice, _)| *choice != CatalogChoice::New);
+    choices.len() != count
+}
+
+/// Whether a shared catalog can have `name`: the dropdown must tell it
+/// from the other choices.
+pub(super) fn shared_name_is_taken(shared: &[SharedCatalog], candidate: &SharedCatalog) -> bool {
+    let name = candidate.name.trim();
+    name == PRIVATE_CATALOG
+        || name == NEW_SHARED_CATALOG
+        || shared
+            .iter()
+            .any(|catalog| catalog.id != candidate.id && catalog.name.trim() == name)
+}
+
+/// The choices of the Preferred connection dropdown: any member, or one of
+/// the members. `profile` is the edited one.
+pub(super) fn preferred_choices(
+    profile: &Profile,
+    catalog: CatalogChoice,
+    profiles: &[Profile],
+) -> Vec<(Option<Uuid>, String)> {
+    let shared = match catalog {
+        CatalogChoice::Shared(id) => Some(id),
+        CatalogChoice::Private | CatalogChoice::New => None,
+    };
+    let mut members: Vec<(Option<Uuid>, String)> = profiles
+        .iter()
+        // A member with browsing off keeps its place, so a save of another
+        // member does not clear the preference.
+        .filter(|member| {
+            member.id != profile.id && shared.is_some() && member.shared_catalog == shared
+        })
+        .map(|member| (Some(member.id), member.name.clone()))
+        .collect();
+    let name = if profile.name.trim().is_empty() {
+        PRIVATE_CATALOG.to_owned()
+    } else {
+        profile.name.clone()
+    };
+    match profiles.iter().position(|member| member.id == profile.id) {
+        // The edited connection keeps its place in the sidebar order.
+        Some(index) => {
+            let before = profiles[..index]
+                .iter()
+                .filter(|member| members.iter().any(|(id, _)| *id == Some(member.id)))
+                .count();
+            members.insert(before, (Some(profile.id), name));
+        }
+        None => members.push((Some(profile.id), name)),
+    }
+    std::iter::once((None, ANY_MEMBER.to_owned()))
+        .chain(members)
+        .collect()
+}
+
+/// A dropdown row that knows its position, so two rows with the same
+/// label stay apart.
+#[derive(Clone)]
+pub(super) struct Row {
+    label: SharedString,
+    index: usize,
+}
+
+impl SelectItem for Row {
+    type Value = usize;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &usize {
+        &self.index
+    }
+}
+
+/// A dropdown of choices whose labels can repeat.
+pub(super) type RowSelect = Entity<SelectState<SearchableVec<Row>>>;
+
+/// A dropdown of choices whose labels can repeat, searchable, with room
+/// for a command below the list.
+pub(super) type RowCombobox = Entity<ComboboxState<SearchableVec<Row>>>;
+
+fn rows<T>(choices: &[(T, String)]) -> SearchableVec<Row> {
+    SearchableVec::new(
+        choices
+            .iter()
+            .enumerate()
+            .map(|(index, (_, label))| Row {
+                label: label.clone().into(),
+                index,
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn row_of<T: PartialEq>(choices: &[(T, String)], selected: &T) -> usize {
+    choices
+        .iter()
+        .position(|(choice, _)| choice == selected)
+        .unwrap_or_default()
+}
+
+/// A dropdown of `choices` with `selected` chosen, or the first choice.
+pub(super) fn choice_select<T: PartialEq>(
+    choices: &[(T, String)],
+    selected: &T,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> RowSelect {
+    let row = row_of(choices, selected);
+    let rows = rows(choices);
+    cx.new(|cx| SelectState::new(rows, Some(IndexPath::default().row(row)), window, cx))
+}
+
+/// The Schema catalog list, with `selected` chosen.
+pub(super) fn catalog_combobox(
+    choices: &[(CatalogChoice, String)],
+    selected: &CatalogChoice,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> RowCombobox {
+    let row = row_of(choices, selected);
+    let rows = rows(choices);
+    cx.new(|cx| {
+        ComboboxState::new(rows, vec![IndexPath::default().row(row)], window, cx).searchable(true)
+    })
+}
+
+/// Give the Schema catalog list new `choices`, with `selected` chosen and
+/// an empty search.
+pub(super) fn set_catalog_choices(
+    combobox: &RowCombobox,
+    choices: &[(CatalogChoice, String)],
+    selected: &CatalogChoice,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let row = row_of(choices, selected);
+    combobox.update(cx, |combobox, cx| {
+        combobox.set_items(rows(choices), window, cx);
+        combobox.set_selected_values(&[row], window, cx);
+    });
+}
+
+/// The catalog that the Schema catalog list shows.
+pub(super) fn chosen_catalog(
+    combobox: &RowCombobox,
+    choices: &[(CatalogChoice, String)],
+    cx: &App,
+) -> CatalogChoice {
+    let row = combobox.read(cx).selected_value().unwrap_or_default();
+    choices
+        .get(row)
+        .map_or(CatalogChoice::Private, |(choice, _)| *choice)
+}
+
+/// The choice that `select` shows, or the first choice.
+pub(super) fn chosen<T: Clone>(select: &RowSelect, choices: &[(T, String)], cx: &App) -> T {
+    let row = select
+        .read(cx)
+        .selected_value()
+        .copied()
+        .unwrap_or_default();
+    choices.get(row).unwrap_or(&choices[0]).0.clone()
+}
 
 pub(super) fn idle_behavior_select(
     keep_connected: bool,
@@ -289,9 +504,25 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement {
+pub(super) fn render_schemas(
+    form: &ProfileEditor,
+    qrow: WeakEntity<Qrow>,
+    cx: &App,
+) -> impl IntoElement {
     let saving = form.saving.is_some();
     let mode = refresh_mode(&form.schema_refresh, cx);
+    let catalog = chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
+    let catalog_label = form
+        .catalog_choices
+        .iter()
+        .find(|(choice, _)| *choice == catalog)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_default();
+    let has_new = form
+        .catalog_choices
+        .iter()
+        .any(|(choice, _)| *choice == CatalogChoice::New);
+    let shared = catalog != CatalogChoice::Private;
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
             .id(FIELD_IDS[index])
@@ -312,6 +543,70 @@ pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement
                 .accessibility_label("Schema refresh")
                 .into_any_element(),
         ))
+        .when(mode != RefreshMode::Disabled, |el| {
+            el.child(field(
+                "Schema catalog",
+                Some(if shared {
+                    "Its refresh and schema settings apply to each connection that uses it. These connections must read the same metastore with the same permissions. Qrow cannot check this."
+                } else {
+                    "Only this connection uses the catalog. Connections that read the same metastore can share one."
+                }),
+                // The combobox has no accessibility of its own in GPUI Kit
+                // 0.6.6, so this element names it and gives its value.
+                div()
+                    .id("connection-schema-catalog")
+                    .test_support()
+                    .role(Role::ComboBox)
+                    .aria_label("Schema catalog")
+                    .aria_value(catalog_label)
+                    .w_full()
+                    .child(
+                        Combobox::new(&form.catalog_select)
+                            .w_full()
+                            .disabled(saving)
+                            .search_placeholder("Search catalogs…")
+                            // One save makes at most one new shared catalog.
+                            .when(!has_new, |list| list.footer(move |_, _| {
+                                let qrow = qrow.clone();
+                                Button::new("connection-new-shared-catalog")
+                                    .ghost()
+                                    .small()
+                                    .w_full()
+                                    .justify_start()
+                                    .icon(IconName::Plus)
+                                    .label("New shared catalog…")
+                                    .on_click(move |_, window, cx| {
+                                        let _ = qrow.update(cx, |this, cx| {
+                                            this.new_shared_catalog(window, cx)
+                                        });
+                                    })
+                            })),
+                    )
+                    .into_any_element(),
+            ))
+        })
+        .when(mode != RefreshMode::Disabled && shared, |el| {
+            el.child(field(
+                "Shared catalog name",
+                Some("Shown in the settings of each connection that uses the catalog."),
+                Input::new(&form.shared_name)
+                    .id("connection-shared-catalog-name")
+                    .w_full()
+                    .disabled(saving)
+                    .aria_label("Shared catalog name")
+                    .into_any_element(),
+            ))
+            .child(field(
+                "Preferred connection",
+                Some("Automatic refreshes use this connection while one of its tabs is connected. Otherwise they use another connected connection."),
+                Select::new(&form.preferred_select)
+                    .id("connection-preferred-catalog-connection")
+                    .w_full()
+                    .disabled(saving)
+                    .accessibility_label("Preferred connection")
+                    .into_any_element(),
+            ))
+        })
         .when(mode == RefreshMode::WhileConnected, |el| {
             el.child(field(
                 "Refresh period",
@@ -447,5 +742,76 @@ mod tests {
         );
         assert!(keep_connected_from_event(&SelectEvent::Confirm(Some("Unknown".into()))).is_none());
         assert!(keep_connected_from_event(&SelectEvent::Confirm(None)).is_none());
+    }
+
+    #[test]
+    fn catalog_choices_name_each_shared_catalog_and_reject_ambiguous_names() {
+        let lake = SharedCatalog {
+            id: Uuid::new_v4(),
+            name: "Lake".into(),
+            settings: CatalogSettings::default(),
+            preferred: None,
+        };
+        let mut choices = catalog_choices(std::slice::from_ref(&lake));
+        let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
+        assert_eq!(labels, [PRIVATE_CATALOG, "Lake"]);
+        assert_eq!(choices[1].0, CatalogChoice::Shared(lake.id));
+        // The New shared catalog button adds its choice once.
+        assert_eq!(add_new_catalog(&mut choices), 2);
+        assert_eq!(add_new_catalog(&mut choices), 2);
+        assert_eq!(
+            choices[2],
+            (CatalogChoice::New, NEW_SHARED_CATALOG.to_owned())
+        );
+        // Another choice removes it, and the button shows again.
+        assert!(remove_new_catalog(&mut choices));
+        assert!(!remove_new_catalog(&mut choices));
+        assert_eq!(choices.len(), 2);
+
+        let shared = std::slice::from_ref(&lake);
+        assert!(!shared_name_is_taken(shared, &lake));
+        for name in [" Lake ", PRIVATE_CATALOG, NEW_SHARED_CATALOG] {
+            let candidate = SharedCatalog {
+                id: Uuid::new_v4(),
+                name: name.into(),
+                ..lake.clone()
+            };
+            assert!(shared_name_is_taken(shared, &candidate), "{name}");
+        }
+    }
+
+    #[test]
+    fn preferred_choices_list_the_members_in_sidebar_order() {
+        let catalog = Uuid::new_v4();
+        let member = |name: &str, refresh: CatalogRefresh| Profile {
+            name: name.into(),
+            catalog: CatalogSettings {
+                refresh,
+                ..CatalogSettings::default()
+            },
+            shared_catalog: Some(catalog),
+            ..Profile::default()
+        };
+        let first = member("first", CatalogRefresh::Manual);
+        let edited = member("edited", CatalogRefresh::Manual);
+        let off = member("off", CatalogRefresh::Disabled);
+        let last = member("last", CatalogRefresh::Manual);
+        let profiles = [first, edited.clone(), off, last.clone()];
+
+        let choices = preferred_choices(&edited, CatalogChoice::Shared(catalog), &profiles);
+        let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
+        // A member with browsing off stays, so its preference stays.
+        assert_eq!(labels, [ANY_MEMBER, "first", "edited", "off", "last"]);
+        assert_eq!(choices[0].0, None);
+        assert_eq!(choices[4].0, Some(last.id));
+
+        // A new catalog has only the edited connection, with a name.
+        let unnamed = Profile {
+            name: String::new(),
+            ..Profile::default()
+        };
+        let choices = preferred_choices(&unnamed, CatalogChoice::New, &profiles);
+        let labels: Vec<_> = choices.iter().map(|(_, label)| label.as_str()).collect();
+        assert_eq!(labels, [ANY_MEMBER, PRIVATE_CATALOG]);
     }
 }

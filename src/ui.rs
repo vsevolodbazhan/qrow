@@ -26,8 +26,8 @@ use crate::{
         AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
         MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
-        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, conversation_tab_title,
-        copied_tab_title, unique_tab_title,
+        Settings, SharedCatalog, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
+        conversation_tab_title, copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -228,12 +228,26 @@ struct ProfileEditor {
     _schema_refresh_subscription: Subscription,
     /// Whether schema refreshes write their requests to Logs.
     refresh_logs: connection_form::ChoiceSelect,
+    /// The catalog that the connection uses. A change loads the settings of
+    /// the chosen catalog into the Schemas fields.
+    catalog_select: connection_form::RowCombobox,
+    catalog_choices: Vec<(connection_form::CatalogChoice, String)>,
+    /// The catalog whose settings the fields show. The dialog compares it
+    /// with the list, because the list does not report each choice.
+    catalog_choice: connection_form::CatalogChoice,
+    /// The ID that a new shared catalog gets.
+    new_catalog: Uuid,
+    shared_name: Entity<InputState>,
+    preferred_select: connection_form::RowSelect,
+    preferred_choices: Vec<(Option<Uuid>, String)>,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
 }
 struct ProfileSave {
     profile: Profile,
+    /// The shared catalog that the connection uses, with its edited settings.
+    shared: Option<SharedCatalog>,
     password_changed: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,6 +364,8 @@ pub struct Qrow {
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
+    /// The schema catalogs that several connections share.
+    shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
@@ -525,6 +541,7 @@ impl Qrow {
             about_open: false,
             settings_form: None,
             profiles: workspace.profiles,
+            shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
@@ -567,6 +584,7 @@ impl Qrow {
             this.tabs.push(tab);
         }
         this.active = this.active.min(this.tabs.len() - 1);
+        this.sync_catalog_keys();
         this.assistant_state.composer_target = this
             .tabs
             .get(this.active)
@@ -674,6 +692,7 @@ impl Qrow {
                 assistant
             },
             profiles: self.profiles.clone(),
+            shared_catalogs: self.shared_catalogs.clone(),
             tabs: self
                 .tabs
                 .iter()
@@ -1162,6 +1181,7 @@ impl Qrow {
             Ok(saved) => {
                 let ProfileSave {
                     profile,
+                    shared,
                     password_changed,
                 } = saved;
                 let id = profile.id;
@@ -1174,6 +1194,17 @@ impl Qrow {
                 } else {
                     self.profiles.push(profile.clone());
                 }
+                if let Some(shared) = shared {
+                    match self
+                        .shared_catalogs
+                        .iter_mut()
+                        .find(|catalog| catalog.id == shared.id)
+                    {
+                        Some(existing) => *existing = shared,
+                        None => self.shared_catalogs.push(shared),
+                    }
+                }
+                crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
                 if is_new {
                     if had_profiles {
                         let tab = self.make_tab(SavedTab::new(1, Some(id)), window, cx);
@@ -1222,7 +1253,7 @@ impl Qrow {
                         }
                     }
                 }
-                self.catalog_profile_saved(&profile, cx);
+                self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
                 }
@@ -2120,6 +2151,26 @@ impl Qrow {
             cx.notify();
             return;
         }
+        let shared = profile.shared_catalog.and_then(|id| {
+            self.shared_catalogs
+                .iter()
+                .find(|catalog| catalog.id == id)
+                .cloned()
+        });
+        // A member shows the settings of its shared catalog, also while it
+        // does not browse schemas.
+        let settings = match &shared {
+            Some(shared) => CatalogSettings {
+                refresh: if profile.catalog.browses() {
+                    shared.settings.refresh
+                } else {
+                    CatalogRefresh::Disabled
+                },
+                log_refreshes: profile.catalog.log_refreshes,
+                ..shared.settings.clone()
+            },
+            None => profile.catalog.clone(),
+        };
         let values = [
             profile.name.clone(),
             profile.host.clone(),
@@ -2135,10 +2186,10 @@ impl Qrow {
                 profile.lifecycle.keep_alive_seconds.to_string()
             },
             profile.lifecycle.keep_alive_sql.clone(),
-            profile.catalog.include.join(", "),
-            profile.catalog.exclude.join(", "),
-            profile.catalog.refresh_minutes.to_string(),
-            profile.catalog.timeout_minutes.to_string(),
+            settings.include.join(", "),
+            settings.exclude.join(", "),
+            settings.refresh_minutes.to_string(),
+            settings.timeout_minutes.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2167,10 +2218,30 @@ impl Qrow {
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
         let schema_refresh = connection_form::schema_refresh_select(
-            connection_form::RefreshMode::of(profile.catalog.refresh),
+            connection_form::RefreshMode::of(settings.refresh),
             window,
             cx,
         );
+        let catalog_choices = connection_form::catalog_choices(&self.shared_catalogs);
+        let catalog = match &shared {
+            Some(shared) => connection_form::CatalogChoice::Shared(shared.id),
+            None => connection_form::CatalogChoice::Private,
+        };
+        let catalog_select =
+            connection_form::catalog_combobox(&catalog_choices, &catalog, window, cx);
+        let shared_name = cx.new(|cx| {
+            InputState::new(window, cx).default_value(
+                shared
+                    .as_ref()
+                    .map(|shared| shared.name.clone())
+                    .unwrap_or_default(),
+            )
+        });
+        let preferred_choices =
+            connection_form::preferred_choices(&profile, catalog, &self.profiles);
+        let preferred = shared.as_ref().and_then(|shared| shared.preferred);
+        let preferred_select =
+            connection_form::choice_select(&preferred_choices, &preferred, window, cx);
         // The choice decides which Schemas fields show.
         let schema_refresh_subscription =
             cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
@@ -2191,6 +2262,13 @@ impl Qrow {
             schema_refresh,
             _schema_refresh_subscription: schema_refresh_subscription,
             refresh_logs,
+            catalog_select,
+            catalog_choices,
+            catalog_choice: catalog,
+            new_catalog: Uuid::new_v4(),
+            shared_name,
+            preferred_select,
+            preferred_choices,
             profile,
             fields,
             is_new,
@@ -2198,6 +2276,92 @@ impl Qrow {
             saving: None,
         });
         self.open_profile_dialog(window, cx);
+        cx.notify();
+    }
+    /// Choose a new shared catalog, and move to its name. A new list
+    /// replaces the open one, because GPUI Kit 0.6.6 cannot close it.
+    fn new_shared_catalog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        connection_form::add_new_catalog(&mut form.catalog_choices);
+        form.catalog_select = connection_form::catalog_combobox(
+            &form.catalog_choices,
+            &connection_form::CatalogChoice::New,
+            window,
+            cx,
+        );
+        let name = form.shared_name.clone();
+        self.catalog_choice_changed(connection_form::CatalogChoice::New, window, cx);
+        name.update(cx, |input, cx| input.focus(window, cx));
+    }
+    /// Load the settings of the chosen catalog into the Schemas fields. A new
+    /// shared catalog starts with the settings in the fields.
+    fn catalog_choice_changed(
+        &mut self,
+        choice: connection_form::CatalogChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(form) = &mut self.form else {
+            return;
+        };
+        form.catalog_choice = choice;
+        // Another choice drops the new shared catalog, so the list shows the
+        // New shared catalog button again.
+        if choice != connection_form::CatalogChoice::New
+            && connection_form::remove_new_catalog(&mut form.catalog_choices)
+        {
+            connection_form::set_catalog_choices(
+                &form.catalog_select,
+                &form.catalog_choices,
+                &choice,
+                window,
+                cx,
+            );
+        }
+        let shared = match choice {
+            connection_form::CatalogChoice::Shared(id) => {
+                self.shared_catalogs.iter().find(|catalog| catalog.id == id)
+            }
+            connection_form::CatalogChoice::Private | connection_form::CatalogChoice::New => None,
+        };
+        let settings = match (choice, shared) {
+            (connection_form::CatalogChoice::Private, _) => Some(&form.profile.catalog),
+            (_, Some(shared)) => Some(&shared.settings),
+            _ => None,
+        };
+        if let Some(settings) = settings {
+            let values = [
+                (10, settings.include.join(", ")),
+                (11, settings.exclude.join(", ")),
+                (12, settings.refresh_minutes.to_string()),
+                (13, settings.timeout_minutes.to_string()),
+            ];
+            for (index, value) in values {
+                form.fields[index].update(cx, |input, cx| input.set_value(value, window, cx));
+            }
+            // A private catalog that is off still shows schemas once chosen.
+            let mode = match connection_form::RefreshMode::of(settings.refresh) {
+                connection_form::RefreshMode::Disabled => connection_form::RefreshMode::Manual,
+                mode => mode,
+            };
+            form.schema_refresh = connection_form::schema_refresh_select(mode, window, cx);
+            form._schema_refresh_subscription =
+                cx.subscribe_in(&form.schema_refresh, window, |_this, _, event, _, cx| {
+                    if matches!(event, SelectEvent::Confirm(Some(_))) {
+                        cx.notify();
+                    }
+                });
+        }
+        let name = shared.map(|shared| shared.name.clone()).unwrap_or_default();
+        form.shared_name
+            .update(cx, |input, cx| input.set_value(name, window, cx));
+        form.preferred_choices =
+            connection_form::preferred_choices(&form.profile, choice, &self.profiles);
+        let preferred = shared.and_then(|shared| shared.preferred);
+        form.preferred_select =
+            connection_form::choice_select(&form.preferred_choices, &preferred, window, cx);
         cx.notify();
     }
     fn save_profile(&mut self, cx: &mut Context<Self>) {
@@ -2221,6 +2385,7 @@ impl Qrow {
             .collect();
         values[6] = form.parameters.read(cx).value().to_string();
         let mut profile = form.profile.clone();
+        let mut shared = None;
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
@@ -2237,18 +2402,79 @@ impl Qrow {
                     )
                 })?;
             let mode = connection_form::refresh_mode(&form.schema_refresh, cx);
-            // Disabled hides the other Schemas fields and keeps their values.
-            if mode != connection_form::RefreshMode::Disabled {
-                profile.catalog.include = connection_form::parse_patterns(&values[10]);
-                profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
+            // Disabled hides the other Schemas fields and keeps their values,
+            // also the shared catalog of the connection.
+            if mode == connection_form::RefreshMode::Disabled {
+                profile.catalog.refresh = CatalogRefresh::Disabled;
+                shared = profile.shared_catalog.and_then(|id| {
+                    self.shared_catalogs
+                        .iter()
+                        .find(|catalog| catalog.id == id)
+                        .cloned()
+                });
+            } else {
+                let choice = connection_form::chosen_catalog(
+                    &form.catalog_select,
+                    &form.catalog_choices,
+                    cx,
+                );
+                let preferred =
+                    connection_form::chosen(&form.preferred_select, &form.preferred_choices, cx);
                 profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+                // A member keeps its own settings for a later private catalog.
+                // A shared catalog keeps the values of the fields that the
+                // mode hides, like the period of a manual refresh.
+                let mut settings = match choice {
+                    connection_form::CatalogChoice::Private => profile.catalog.clone(),
+                    connection_form::CatalogChoice::Shared(id) => self
+                        .shared_catalogs
+                        .iter()
+                        .find(|catalog| catalog.id == id)
+                        .map_or_else(
+                            || profile.catalog.clone(),
+                            |catalog| catalog.settings.clone(),
+                        ),
+                    connection_form::CatalogChoice::New => profile.catalog.clone(),
+                };
+                if choice != connection_form::CatalogChoice::Private {
+                    settings.log_refreshes = false;
+                }
+                settings.include = connection_form::parse_patterns(&values[10]);
+                settings.exclude = connection_form::parse_patterns(&values[11]);
+                connection_form::parse_refresh_policy(
+                    &values[12],
+                    &values[13],
+                    mode,
+                    &mut settings,
+                )?;
+                let id = match choice {
+                    connection_form::CatalogChoice::Private => None,
+                    connection_form::CatalogChoice::Shared(id) => Some(id),
+                    connection_form::CatalogChoice::New => Some(form.new_catalog),
+                };
+                match id {
+                    None => {
+                        profile.catalog = settings;
+                        profile.shared_catalog = None;
+                    }
+                    Some(id) => {
+                        profile.catalog.refresh = settings.refresh;
+                        profile.shared_catalog = Some(id);
+                        let catalog = SharedCatalog {
+                            id,
+                            name: form.shared_name.read(cx).value().trim().to_owned(),
+                            settings,
+                            preferred,
+                        };
+                        catalog.validate()?;
+                        anyhow::ensure!(
+                            !connection_form::shared_name_is_taken(&self.shared_catalogs, &catalog),
+                            "A shared catalog or a catalog choice with this name already exists."
+                        );
+                        shared = Some(catalog);
+                    }
+                }
             }
-            connection_form::parse_refresh_policy(
-                &values[12],
-                &values[13],
-                mode,
-                &mut profile.catalog,
-            )?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
@@ -2289,6 +2515,7 @@ impl Qrow {
             };
             let _ = send.send(result.map(|()| ProfileSave {
                 profile,
+                shared,
                 password_changed,
             }));
         });
@@ -2383,7 +2610,8 @@ impl Qrow {
         }
         self.profiles.retain(|p| p.id != id);
         self.active_tabs.remove(&id);
-        self.catalog_profile_deleted(id, cx);
+        crate::model::prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
+        self.sync_catalogs(None, cx);
         if self.tabs.is_empty() {
             let tab = self.make_tab(
                 SavedTab::new(1, self.profiles.first().map(|profile| profile.id)),
@@ -2557,16 +2785,27 @@ fn menu_section(title: &'static str) -> PopupMenuItem {
 }
 
 fn demo_workspace() -> Workspace {
+    let catalog = CatalogSettings {
+        refresh: CatalogRefresh::Manual,
+        ..CatalogSettings::default()
+    };
+    // The two Rivendell clusters read the same metastore.
+    let shared_catalogs = vec![SharedCatalog {
+        id: Uuid::new_v4(),
+        name: "Rivendell".into(),
+        settings: catalog.clone(),
+        preferred: None,
+    }];
     let profiles: Vec<_> = ["rivendell-s", "rivendell-xl", "analytics-s"]
         .into_iter()
         .map(|name| Profile {
             name: name.into(),
             host: "demo.local".into(),
             username: format!("kyuubi-{name}"),
-            catalog: CatalogSettings {
-                refresh: CatalogRefresh::Manual,
-                ..CatalogSettings::default()
-            },
+            catalog: catalog.clone(),
+            shared_catalog: name
+                .starts_with("rivendell")
+                .then_some(shared_catalogs[0].id),
             ..Default::default()
         })
         .collect();
@@ -2581,6 +2820,7 @@ fn demo_workspace() -> Workspace {
         tabs: vec![tab, SavedTab::new(2, Some(profiles[1].id))],
         active_tab: 0,
         active_tabs: BTreeMap::new(),
+        shared_catalogs,
     }
 }
 

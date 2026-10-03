@@ -15,7 +15,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Activity model](../src/activity.rs) | Group activity entries, apply retention, and define panel transitions. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
-| [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
+| [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection or of a shared catalog, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
@@ -53,8 +53,10 @@ duration when available. The UI stores them in the tab's in-memory activity
 model. It does not save them in the workspace.
 
 Each tab owns one session and can perform one active query. Tabs can work
-concurrently. A catalog worker for each connection reads schemas in its own
-session, so a refresh does not change the session of a tab. See
+concurrently. A catalog worker for each connection, or for each shared
+catalog, reads schemas in its own session, so a refresh does not change the
+session of a tab. The worker of a shared catalog runs one refresh at a time,
+each with the profile of the connection that asked for it. See
 [Browse schemas](connections.md#browse-schemas). [Connections](connections.md), [Queries](queries.md), and
 [Results](results.md) describe the behavior and its constraints.
 
@@ -94,8 +96,8 @@ client such as VoiceOver reads the window, the workspace and the pane render
 again in each frame.
 
 The catalog worker sleeps until a command arrives. It does not poll while it
-has no refresh. While a tab of its connection has a live session and the
-connection uses automatic refresh, the worker also wakes when the refresh
+has no refresh. While a tab of one of its connections has a live session and
+the catalog uses automatic refresh, the worker also wakes when the refresh
 period passes. It checks the clock at least each minute, because its wait
 does not count the time that the computer sleeps. The tree builds rows only for expanded nodes and renders only
 the rows on screen. The worker sends a new catalog to the window at most four

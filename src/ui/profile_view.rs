@@ -68,10 +68,19 @@ impl Qrow {
         });
     }
 
-    fn profile_content(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn profile_content(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(form) = &self.form else {
             return div().into_any_element();
         };
+        // A new choice in the Schema catalog list loads the settings of that
+        // catalog into the fields.
+        let catalog =
+            connection_form::chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
+        if catalog != form.catalog_choice {
+            cx.defer_in(window, move |this, window, cx| {
+                this.catalog_choice_changed(catalog, window, cx)
+            });
+        }
         let saving = form.saving.is_some();
         let input = |index: usize, label: &'static str| {
             Input::new(&form.fields[index])
@@ -146,7 +155,7 @@ impl Qrow {
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))
-                    .child(connection_form::render_schemas(form, cx)),
+                    .child(connection_form::render_schemas(form, cx.weak_entity(), cx)),
             )
             .into_any_element()
     }

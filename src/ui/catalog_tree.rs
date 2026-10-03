@@ -3,13 +3,14 @@
 //!
 //! Qrow owns the expansion state and rebuilds the tree items when a catalog,
 //! the profile list, the expansion, or the search changes. Each catalog
-//! worker loads the cache of its connection on first use, so the tree does
-//! not read files or open sessions at startup.
+//! worker loads the cache of its catalog on first use, so the tree does not
+//! read files or open sessions at startup. Connections that share a catalog
+//! use one worker and show the same data, each in its own tree.
 
 use super::*;
 use crate::catalog::{
-    Catalog, CatalogWorker, Event as CatalogEvent, RelationKind, Scope, Status, qualified_name,
-    quote_identifier,
+    Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
+    Scope, Seed, Status, catalog_key, qualified_name, quote_identifier,
 };
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::{
@@ -94,14 +95,15 @@ pub(super) enum Tone {
     Error,
 }
 
-/// The catalog of one connection, as the window knows it.
+/// The catalog of one connection, or of the connections that share it, as
+/// the window knows it.
 #[derive(Default)]
 struct CatalogConnection {
     worker: Option<CatalogWorker>,
     catalog: Option<Arc<Catalog>>,
     status: Status,
-    /// The live-session state that the worker last received.
-    warm: bool,
+    /// The members with a live session, as the worker last received them.
+    live: HashSet<Uuid>,
 }
 
 pub(super) struct CatalogTree {
@@ -110,7 +112,12 @@ pub(super) struct CatalogTree {
     expanded: HashSet<SharedString>,
     /// Rows that a search expands but that the user collapsed.
     collapsed: HashSet<SharedString>,
+    /// The catalogs by their key: a profile ID or a shared catalog ID.
     connections: HashMap<Uuid, CatalogConnection>,
+    /// The catalog key of each connection.
+    keys: HashMap<Uuid, Uuid>,
+    /// The refreshes of each connection, from the status of its catalog.
+    statuses: HashMap<Uuid, Status>,
     nodes: Rc<HashMap<SharedString, Node>>,
     /// The laid-out width of each label in the last frame, to know which
     /// names the rows truncate.
@@ -132,6 +139,8 @@ impl CatalogTree {
             expanded: HashSet::new(),
             collapsed: HashSet::new(),
             connections: HashMap::new(),
+            keys: HashMap::new(),
+            statuses: HashMap::new(),
             nodes: Rc::new(HashMap::new()),
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
@@ -157,23 +166,51 @@ impl CatalogTree {
         }
     }
 
+    /// The catalog key of `profile`.
+    fn key(&self, profile: Uuid) -> Uuid {
+        self.keys.get(&profile).copied().unwrap_or(profile)
+    }
+
+    fn connection(&self, profile: Uuid) -> Option<&CatalogConnection> {
+        self.connections.get(&self.key(profile))
+    }
+
+    fn worker(&self, profile: Uuid) -> Option<&CatalogWorker> {
+        self.connection(profile)?.worker.as_ref()
+    }
+
     fn catalog(&self, profile: Uuid) -> Option<&Catalog> {
-        self.connections.get(&profile)?.catalog.as_deref()
+        self.connection(profile)?.catalog.as_deref()
     }
 
+    /// The refreshes that `profile` runs or waits for. The refreshes of
+    /// other members of a shared catalog are not included.
     fn status(&self, profile: Uuid) -> Option<&Status> {
-        self.connections
-            .get(&profile)
-            .map(|connection| &connection.status)
+        self.statuses.get(&profile)
     }
 
-    /// The error of the last connection refresh, while no connection
-    /// refresh runs. A collapsed connection shows it too.
+    /// Give each member of the catalog `key` its part of `status`.
+    fn set_status(&mut self, key: Uuid, status: Status) {
+        for (member, _) in self.keys.iter().filter(|(_, k)| **k == key) {
+            self.statuses.insert(*member, status.of_member(*member));
+        }
+        if let Some(connection) = self.connections.get_mut(&key) {
+            connection.status = status;
+        }
+    }
+
+    /// The error of the last connection refresh of `profile`, while it runs
+    /// no connection refresh. A collapsed connection shows it too. A member
+    /// of a shared catalog does not show the errors of the others.
     fn connection_error(&self, profile: Uuid) -> Option<&str> {
         let running = self
             .status(profile)
             .is_some_and(|status| status.active == Some(Scope::Connection));
-        self.catalog(profile)?.error.as_deref().filter(|_| !running)
+        let catalog = self.catalog(profile)?;
+        catalog
+            .error
+            .as_deref()
+            .filter(|_| !running && catalog.error_member.is_none_or(|member| member == profile))
     }
 
     /// Whether a refresh of the connection is in progress or waits.
@@ -335,11 +372,11 @@ impl Builder<'_> {
                 format!("Loading schemas… {}/{}", status.done, status.total)
             };
             children.push(self.notice(id, profile, text, Tone::Loading, None));
-        } else if let Some(error) = &catalog.error {
+        } else if let Some(error) = self.tree.connection_error(profile) {
             children.push(self.notice(
                 id,
                 profile,
-                error.clone(),
+                error.to_owned(),
                 Tone::Error,
                 Some(Scope::Connection),
             ));
@@ -387,7 +424,7 @@ impl Builder<'_> {
                     name: name.clone(),
                     relations: schema.relations.as_ref().map(BTreeMap::len),
                     loading: status.includes(&Scope::Schema(name.clone())),
-                    error: schema.error.clone(),
+                    error: schema.error_for(profile).map(str::to_owned),
                 },
             );
             // A search shows only the matching relations of a schema that
@@ -418,25 +455,19 @@ impl Builder<'_> {
         let scope = Scope::Schema(schema.into());
         let mut children = vec![];
         let loading = status.includes(&scope) || status.includes(&Scope::Connection);
-        match (&node.relations, &node.error) {
+        match (&node.relations, node.error_for(profile)) {
             (None, _) if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
             }
             (None, Some(error)) => {
-                children.push(self.notice(id, profile, error.clone(), Tone::Error, Some(scope)))
+                children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))
             }
             (None, None) => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             (Some(relations), error) => {
                 if let Some(error) = error {
-                    children.push(self.notice(
-                        id,
-                        profile,
-                        error.clone(),
-                        Tone::Error,
-                        Some(scope),
-                    ));
+                    children.push(self.notice(id, profile, error, Tone::Error, Some(scope)));
                 } else if relations.is_empty() {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
@@ -462,7 +493,7 @@ impl Builder<'_> {
                             comment: relation.comment.clone(),
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
-                            error: relation.error.clone(),
+                            error: relation.error_for(profile).map(str::to_owned),
                         },
                     );
                     let expanded = self.is_expanded(&item_id);
@@ -490,20 +521,15 @@ impl Builder<'_> {
             || status.includes(&Scope::Schema(schema.into()))
             || status.includes(&Scope::Connection);
         let mut children = vec![];
-        if let Some(error) = &node.error {
-            children.push(self.notice(
-                id,
-                profile,
-                error.clone(),
-                Tone::Error,
-                Some(scope.clone()),
-            ));
+        let error = node.error_for(profile);
+        if let Some(error) = error {
+            children.push(self.notice(id, profile, error, Tone::Error, Some(scope.clone())));
         }
         match &node.columns {
             None if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
             }
-            None if node.error.is_none() => {
+            None if error.is_none() => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             None => {}
@@ -586,74 +612,121 @@ impl Qrow {
         });
     }
 
+    /// The catalog of `key` with its current members, or `None` when no
+    /// connection browses it.
+    fn catalog_config(&self, key: Uuid) -> Option<CatalogConfig> {
+        CatalogConfig::of(key, &self.profiles, &self.shared_catalogs)
+    }
+
+    /// The cache file of the catalog `key`, or `None` to keep it in memory.
+    fn catalog_cache(&self, key: Uuid) -> Option<PathBuf> {
+        self.catalog
+            .workspace
+            .as_deref()
+            .filter(|_| self.saver.is_some() && !self.demo)
+            .map(|workspace| storage::catalog_path(workspace, key))
+    }
+
+    /// Find the catalog key of each connection again.
+    pub(super) fn sync_catalog_keys(&mut self) {
+        self.catalog.keys = self
+            .profiles
+            .iter()
+            .map(|profile| (profile.id, catalog_key(profile, &self.shared_catalogs)))
+            .collect();
+    }
+
     /// Start the catalog worker of `profile` if it does not exist. The worker
     /// loads the cache; it opens a session only for a refresh.
     fn ensure_catalog(&mut self, profile: Uuid) {
+        self.ensure_catalog_with_seed(profile, None);
+    }
+
+    /// Transfer a private cache before live members can start a refresh.
+    fn ensure_catalog_with_seed(&mut self, profile: Uuid, seed: Option<Seed>) {
+        let key = self.catalog.key(profile);
         if self.demo {
             self.catalog
                 .connections
-                .entry(profile)
+                .entry(key)
                 .or_insert_with(|| CatalogConnection {
-                    worker: None,
-                    catalog: Some(Arc::new(demo_catalog(profile))),
-                    status: Status::default(),
-                    warm: false,
+                    catalog: Some(Arc::new(demo_catalog(key))),
+                    ..CatalogConnection::default()
                 });
             return;
         }
-        let Some(saved) = self
-            .profiles
-            .iter()
-            .find(|p| p.id == profile && p.catalog.browses())
-            .cloned()
-        else {
+        let Some(config) = self.catalog_config(key) else {
             return;
         };
-        let warm = self.catalog_warm(profile);
-        let connection = self.catalog.connections.entry(profile).or_default();
-        if connection.worker.is_some() {
+        if let Some(worker) = self
+            .catalog
+            .connections
+            .get(&key)
+            .and_then(|connection| connection.worker.as_ref())
+        {
+            if let Some(seed) = seed {
+                worker.seed(seed);
+            }
             return;
         }
+        let live: HashSet<Uuid> = config
+            .members
+            .iter()
+            .map(|member| member.id)
+            .filter(|member| self.catalog_warm(*member))
+            .collect();
         let wake = self.wake.clone();
-        let cache = self
-            .catalog
-            .workspace
-            .as_deref()
-            .filter(|_| self.saver.is_some())
-            .map(|workspace| storage::catalog_path(workspace, profile));
         let worker = CatalogWorker::new(
-            saved,
-            cache,
+            config,
+            self.catalog_cache(key),
             Arc::new(move || {
                 let _ = wake.try_send(());
             }),
             self.credentials.clone(),
         );
-        worker.set_warm(warm);
-        connection.warm = warm;
+        if let Some(seed) = seed {
+            worker.seed(seed);
+        }
+        for member in &live {
+            worker.set_live(*member, true);
+        }
+        let connection = self.catalog.connections.entry(key).or_default();
+        connection.live = live;
         connection.worker = Some(worker);
     }
 
-    /// Tell each catalog worker whether a tab of its connection has a live
-    /// session. A connection with automatic refresh gets its worker when it
-    /// first has one, so the worker can refresh a stale catalog.
+    /// Tell each catalog worker which members have a tab with a live
+    /// session. A catalog with automatic refresh gets its worker when a
+    /// member first has one, so the worker can refresh a stale catalog.
     pub(super) fn sync_catalog_warmth(&mut self) {
         for index in 0..self.profiles.len() {
             let profile = &self.profiles[index];
             let id = profile.id;
-            let automatic = profile.catalog.refresh == CatalogRefresh::WhileConnected;
+            if !profile.catalog.browses() {
+                continue;
+            }
+            let automatic = crate::model::effective_catalog(profile, &self.shared_catalogs).refresh
+                == CatalogRefresh::WhileConnected;
             let warm = self.catalog_warm(id);
-            let connection = self.catalog.connections.get_mut(&id);
-            match connection.and_then(|connection| {
-                connection
-                    .worker
-                    .as_ref()
-                    .map(|worker| (worker, &mut connection.warm))
-            }) {
+            let key = self.catalog.key(id);
+            match self
+                .catalog
+                .connections
+                .get_mut(&key)
+                .and_then(|connection| {
+                    connection
+                        .worker
+                        .as_ref()
+                        .map(|worker| (worker, &mut connection.live))
+                }) {
                 Some((worker, sent)) => {
-                    if *sent != warm {
-                        worker.set_warm(warm);
-                        *sent = warm;
+                    if sent.contains(&id) != warm {
+                        worker.set_live(id, warm);
+                        if warm {
+                            sent.insert(id);
+                        } else {
+                            sent.remove(&id);
+                        }
                     }
                 }
                 None if warm && automatic => self.ensure_catalog(id),
@@ -675,28 +748,20 @@ impl Qrow {
         ]);
     }
 
-    /// Ask the worker of `profile` to read `scope` again.
+    /// Ask the catalog worker to read `scope` again with `profile`.
     pub(super) fn refresh_catalog(&mut self, profile: Uuid, scope: Scope, cx: &mut Context<Self>) {
         self.ensure_catalog(profile);
-        if let Some(worker) = self
-            .catalog
-            .connections
-            .get(&profile)
-            .and_then(|connection| connection.worker.as_ref())
-        {
-            worker.refresh(scope);
+        if let Some(worker) = self.catalog.worker(profile) {
+            worker.refresh(profile, scope);
         }
         cx.notify();
     }
 
+    /// Stop the refreshes of `profile`. The refreshes of other members of a
+    /// shared catalog continue.
     pub(super) fn cancel_catalog_refresh(&mut self, profile: Uuid) {
-        if let Some(worker) = self
-            .catalog
-            .connections
-            .get(&profile)
-            .and_then(|connection| connection.worker.as_ref())
-        {
-            worker.cancel();
+        if let Some(worker) = self.catalog.worker(profile) {
+            worker.stop(profile);
         }
     }
 
@@ -712,22 +777,26 @@ impl Qrow {
     pub(super) fn drain_catalogs(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activities = Vec::new();
-        for (profile, connection) in &mut self.catalog.connections {
+        let mut statuses = Vec::new();
+        for (key, connection) in &mut self.catalog.connections {
             let Some(worker) = &connection.worker else {
                 continue;
             };
-            activities.extend(worker.activities.try_iter().map(|event| (*profile, event)));
+            activities.extend(worker.activities.try_iter());
             for event in worker.events.try_iter() {
                 changed = true;
                 match event {
                     CatalogEvent::Catalog(catalog) => connection.catalog = Some(catalog),
-                    CatalogEvent::Status(status) => connection.status = status,
+                    CatalogEvent::Status(status) => statuses.push((*key, status)),
                 }
             }
         }
-        // A refresh belongs to a connection. Its Logs entries go to each tab
-        // of the connection. They do not mark an unread error, because the
-        // tree shows refresh errors.
+        for (key, status) in statuses {
+            self.catalog.set_status(key, status);
+        }
+        // A refresh belongs to the connection that ran it. Its Logs entries
+        // go to each tab of that connection. They do not mark an unread
+        // error, because the tree shows refresh errors.
         for (profile, event) in activities {
             for tab in self
                 .tabs
@@ -766,13 +835,9 @@ impl Qrow {
                 Node::Connection(profile) => {
                     self.ensure_catalog(profile);
                     if self.catalog_warm(profile)
-                        && let Some(worker) = self
-                            .catalog
-                            .connections
-                            .get(&profile)
-                            .and_then(|connection| connection.worker.as_ref())
+                        && let Some(worker) = self.catalog.worker(profile)
                     {
-                        worker.refresh_if_unloaded();
+                        worker.refresh_if_unloaded(profile);
                     }
                 }
                 Node::Schema {
@@ -819,68 +884,111 @@ impl Qrow {
         cx.notify();
     }
 
-    /// Gives an edited profile to its catalog worker.
-    pub(super) fn catalog_profile_saved(&mut self, profile: &Profile, cx: &mut Context<Self>) {
-        if !profile.catalog.browses() {
-            // Stop reading schemas. The cache file stays for a later enable.
-            if let Some(worker) = self
-                .catalog
-                .connections
-                .remove(&profile.id)
-                .and_then(|connection| connection.worker)
-            {
-                worker.shutdown();
+    /// Bring the catalog workers in line with the saved profiles and shared
+    /// catalogs. `previous` is the saved profile before its change. A
+    /// catalog that no connection uses any more is deleted with its cache.
+    pub(super) fn sync_catalogs(&mut self, previous: Option<&Profile>, cx: &mut Context<Self>) {
+        let old: HashSet<Uuid> = self.catalog.keys.values().copied().collect();
+        self.sync_catalog_keys();
+        let current: HashSet<Uuid> = self.catalog.keys.values().copied().collect();
+        let retired: HashSet<Uuid> = old.difference(&current).copied().collect();
+        // A connection that makes a new shared catalog brings its schemas.
+        let seed = previous.and_then(|previous| {
+            let key = self.catalog.key(previous.id);
+            if !retired.contains(&previous.id) || old.contains(&key) {
+                return None;
             }
-            // The row has no children now, so it is not expanded. A later
-            // enable then starts with a collapsed connection.
-            let connection = connection_id(profile.id);
-            let prefixes = Self::descendant_prefixes(profile.id, None);
-            let below = |id: &SharedString| {
-                *id == connection
-                    || prefixes
-                        .iter()
-                        .any(|prefix| id.starts_with(prefix.as_str()))
+            let seed = match self.catalog.connections.get(&previous.id) {
+                Some(connection) => connection.catalog.clone().map(Seed::Catalog),
+                None => self.catalog_cache(previous.id).map(|path| Seed::File {
+                    path,
+                    owner: previous.id,
+                    identity: CatalogIdentity::of(previous),
+                }),
             };
-            self.catalog.expanded.retain(|id| !below(id));
-            self.catalog.collapsed.retain(|id| !below(id));
-            self.rebuild_catalog_tree(cx);
-            return;
-        }
-        match self
-            .catalog
-            .connections
-            .get(&profile.id)
-            .and_then(|connection| connection.worker.as_ref())
-        {
-            Some(worker) => worker.update_profile(profile.clone()),
-            // An expanded connection shows its cache at once.
-            None if self.catalog.expanded.contains(&connection_id(profile.id)) => {
-                self.ensure_catalog(profile.id)
+            Some((previous.id, seed?))
+        });
+        let keys: Vec<Uuid> = self.catalog.connections.keys().copied().collect();
+        for key in keys {
+            let config = self.catalog_config(key).filter(|_| !retired.contains(&key));
+            match config {
+                Some(config) => {
+                    let connection = self.catalog.connections.get_mut(&key).unwrap();
+                    connection
+                        .live
+                        .retain(|member| config.member(*member).is_some());
+                    if let Some(worker) = &connection.worker {
+                        worker.configure(config);
+                    }
+                }
+                None => {
+                    let connection = self.catalog.connections.remove(&key).unwrap();
+                    match connection.worker {
+                        Some(worker) if retired.contains(&key) => worker.delete(),
+                        // Stop reading schemas. The cache file stays for a later enable.
+                        Some(worker) => worker.shutdown(),
+                        None => {}
+                    }
+                }
             }
-            None => {}
+        }
+        for key in &retired {
+            let seeded = matches!(&seed, Some((_, Seed::File { owner, .. })) if owner == key);
+            if !seeded {
+                self.delete_catalog_cache(*key);
+            }
+        }
+        if let Some((member, seed)) = seed {
+            let path = match &seed {
+                Seed::File { path, .. } => Some(path.clone()),
+                Seed::Catalog(_) => None,
+            };
+            self.ensure_catalog_with_seed(member, Some(seed));
+            if self.catalog.worker(member).is_none()
+                && let Some(path) = path
+            {
+                std::thread::spawn(move || storage::delete_catalog(&path));
+            }
+        }
+        // Statuses of connections that left a catalog no longer apply.
+        let keys = self.catalog.keys.clone();
+        let connections = &self.catalog.connections;
+        self.catalog.statuses = keys
+            .iter()
+            .filter_map(|(member, key)| {
+                let status = &connections.get(key)?.status;
+                Some((*member, status.of_member(*member)))
+            })
+            .collect();
+        for index in 0..self.profiles.len() {
+            let profile = &self.profiles[index];
+            let id = profile.id;
+            if !profile.catalog.browses() {
+                // The row has no children now, so it is not expanded. A later
+                // enable then starts with a collapsed connection.
+                let connection = connection_id(id);
+                let prefixes = Self::descendant_prefixes(id, None);
+                let below = |row: &SharedString| {
+                    *row == connection
+                        || prefixes
+                            .iter()
+                            .any(|prefix| row.starts_with(prefix.as_str()))
+                };
+                self.catalog.expanded.retain(|row| !below(row));
+                self.catalog.collapsed.retain(|row| !below(row));
+            } else if self.catalog.expanded.contains(&connection_id(id)) {
+                // An expanded connection shows its cache at once.
+                self.ensure_catalog(id);
+            }
         }
         self.rebuild_catalog_tree(cx);
     }
 
-    /// Stops the worker of a deleted profile and deletes its cache.
-    pub(super) fn catalog_profile_deleted(&mut self, profile: Uuid, cx: &mut Context<Self>) {
-        let worker = self
-            .catalog
-            .connections
-            .remove(&profile)
-            .and_then(|connection| connection.worker);
-        match worker {
-            Some(worker) => worker.delete(),
-            None => {
-                if let Some(workspace) = self.catalog.workspace.clone().filter(|_| !self.demo) {
-                    // File work stays off the window thread.
-                    std::thread::spawn(move || {
-                        storage::delete_catalog(&storage::catalog_path(&workspace, profile))
-                    });
-                }
-            }
+    /// Delete the cache file of the catalog `key`, off the window thread.
+    fn delete_catalog_cache(&self, key: Uuid) {
+        if let Some(path) = self.catalog_cache(key) {
+            std::thread::spawn(move || storage::delete_catalog(&path));
         }
-        self.rebuild_catalog_tree(cx);
     }
 
     /// Inserts `text` at the cursor of the active query tab.
@@ -1838,10 +1946,7 @@ fn notice_row(
 /// A fixed catalog for the demo, which has no server.
 fn demo_catalog(profile: Uuid) -> Catalog {
     use crate::catalog::{CatalogColumn, RelationEntry};
-    let mut catalog = Catalog::new(&Profile {
-        id: profile,
-        ..Profile::default()
-    });
+    let mut catalog = Catalog::empty(profile, None);
     let settings = crate::model::CatalogSettings::default();
     let at = crate::catalog::now();
     catalog.apply_schemas(vec!["avia".into(), "finance".into()], &settings, at);

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 4;
+pub const WORKSPACE_VERSION: u32 = 5;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
@@ -313,6 +313,74 @@ pub struct Profile {
     pub lifecycle: ConnectionLifecycle,
     #[serde(default)]
     pub catalog: CatalogSettings,
+    /// The shared catalog that the connection uses, or `None` for a catalog
+    /// of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_catalog: Option<Uuid>,
+}
+
+/// One schema catalog for the connections that read the same metastore,
+/// for example through different users or compute clusters.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SharedCatalog {
+    pub id: Uuid,
+    pub name: String,
+    /// The settings that decide what a refresh reads. `log_refreshes` stays
+    /// with each member, so this value is not used.
+    pub settings: CatalogSettings,
+    /// The member that automatic refreshes use while it has a live session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred: Option<Uuid>,
+}
+
+/// The maximum length of a shared catalog name, in characters.
+pub const MAX_SHARED_CATALOG_NAME: usize = 60;
+
+impl SharedCatalog {
+    /// Repair a shared catalog that an edited file made invalid. A shared
+    /// catalog always browses schemas: each member can turn browsing off.
+    fn sanitize(&mut self) {
+        if !self.settings.browses() {
+            self.settings.refresh = CatalogRefresh::Manual;
+        }
+        if self.settings.validate().is_err() {
+            self.settings = CatalogSettings {
+                refresh: self.settings.refresh,
+                ..CatalogSettings::default()
+            };
+        }
+        if self.name.trim().is_empty() {
+            self.name = "Shared catalog".into();
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.name.trim().is_empty(),
+            "Give the shared catalog a name."
+        );
+        anyhow::ensure!(
+            self.name.chars().count() <= MAX_SHARED_CATALOG_NAME,
+            "Shared catalog name must be {MAX_SHARED_CATALOG_NAME} characters or fewer."
+        );
+        self.settings.validate()
+    }
+}
+
+/// The catalog settings that apply to `profile`. A member of a shared
+/// catalog uses the shared settings, with its own Logs option. A connection
+/// with schema browsing off stays off.
+pub fn effective_catalog(profile: &Profile, shared: &[SharedCatalog]) -> CatalogSettings {
+    match profile
+        .shared_catalog
+        .and_then(|id| shared.iter().find(|catalog| catalog.id == id))
+    {
+        Some(catalog) if profile.catalog.browses() => CatalogSettings {
+            log_refreshes: profile.catalog.log_refreshes,
+            ..catalog.settings.clone()
+        },
+        _ => profile.catalog.clone(),
+    }
 }
 
 /// The maximum number of include or exclude patterns of one connection.
@@ -505,6 +573,7 @@ impl Default for Profile {
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
+            shared_catalog: None,
         }
     }
 }
@@ -724,6 +793,45 @@ pub struct Workspace {
     pub active_tabs: BTreeMap<Uuid, Uuid>,
     #[serde(default)]
     pub assistant: AssistantWorkspace,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_catalogs: Vec<SharedCatalog>,
+}
+
+/// Remove the shared catalogs without members, and the references to
+/// catalogs or members that do not exist. Returns the IDs of the removed
+/// shared catalogs, whose cache files can go.
+pub fn prune_shared_catalogs(
+    profiles: &mut [Profile],
+    shared: &mut Vec<SharedCatalog>,
+) -> Vec<Uuid> {
+    for profile in profiles.iter_mut() {
+        if profile
+            .shared_catalog
+            .is_some_and(|id| !shared.iter().any(|catalog| catalog.id == id))
+        {
+            profile.shared_catalog = None;
+        }
+    }
+    let mut removed = Vec::new();
+    shared.retain(|catalog| {
+        let used = profiles
+            .iter()
+            .any(|profile| profile.shared_catalog == Some(catalog.id));
+        if !used {
+            removed.push(catalog.id);
+        }
+        used
+    });
+    for catalog in shared.iter_mut() {
+        if catalog.preferred.is_some_and(|preferred| {
+            !profiles
+                .iter()
+                .any(|p| p.id == preferred && p.shared_catalog == Some(catalog.id))
+        }) {
+            catalog.preferred = None;
+        }
+    }
+    removed
 }
 
 impl Workspace {
@@ -816,6 +924,10 @@ impl Workspace {
             }
         }
         self.assistant.link_tabs(&self.tabs, &self.profiles);
+        for catalog in &mut self.shared_catalogs {
+            catalog.sanitize();
+        }
+        prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
         self.version = WORKSPACE_VERSION;
     }
 }
@@ -830,6 +942,7 @@ impl Default for Workspace {
             active_tab: 0,
             active_tabs: BTreeMap::new(),
             assistant: AssistantWorkspace::default(),
+            shared_catalogs: Vec::new(),
         }
     }
 }
@@ -1404,5 +1517,128 @@ mod tests {
 
         assert_eq!(assistant.conversations.len(), 1);
         assert_eq!(assistant.conversations[0].thread_id, "used");
+    }
+
+    fn shared(settings: CatalogSettings) -> SharedCatalog {
+        SharedCatalog {
+            id: Uuid::new_v4(),
+            name: "Lake".into(),
+            settings,
+            preferred: None,
+        }
+    }
+
+    #[test]
+    fn a_member_uses_the_shared_settings_with_its_own_logs_option() {
+        let catalog = shared(CatalogSettings {
+            refresh: CatalogRefresh::WhileConnected,
+            include: vec!["sales_*".into()],
+            log_refreshes: false,
+            ..CatalogSettings::default()
+        });
+        let mut profile = Profile {
+            catalog: CatalogSettings {
+                refresh: CatalogRefresh::Manual,
+                include: vec!["hr".into()],
+                log_refreshes: true,
+                ..CatalogSettings::default()
+            },
+            shared_catalog: Some(catalog.id),
+            ..Profile::default()
+        };
+        let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));
+        assert_eq!(effective.include, ["sales_*"]);
+        assert_eq!(effective.refresh, CatalogRefresh::WhileConnected);
+        assert!(effective.log_refreshes);
+        // A member with browsing off stays off.
+        profile.catalog.refresh = CatalogRefresh::Disabled;
+        let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));
+        assert!(!effective.browses());
+        // A missing shared catalog leaves the settings of the connection.
+        profile.catalog.refresh = CatalogRefresh::Manual;
+        assert_eq!(effective_catalog(&profile, &[]), profile.catalog);
+    }
+
+    #[test]
+    fn normalize_repairs_shared_catalogs_and_drops_stale_references() {
+        let mut used = shared(CatalogSettings {
+            refresh: CatalogRefresh::Disabled,
+            refresh_minutes: 0,
+            ..CatalogSettings::default()
+        });
+        used.name = " ".into();
+        let unused = shared(CatalogSettings::default());
+        let member = Profile {
+            name: "a".into(),
+            shared_catalog: Some(used.id),
+            ..Profile::default()
+        };
+        let other = Profile {
+            name: "b".into(),
+            shared_catalog: Some(Uuid::new_v4()),
+            ..Profile::default()
+        };
+        used.preferred = Some(other.id);
+        let mut workspace = Workspace {
+            version: 4,
+            profiles: vec![member, other],
+            shared_catalogs: vec![used.clone(), unused],
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
+        assert_eq!(workspace.shared_catalogs.len(), 1);
+        let repaired = &workspace.shared_catalogs[0];
+        assert_eq!(repaired.id, used.id);
+        assert_eq!(repaired.name, "Shared catalog");
+        // A shared catalog always browses, and invalid bounds get defaults.
+        assert_eq!(repaired.settings.refresh, CatalogRefresh::Manual);
+        assert_eq!(
+            repaired.settings.refresh_minutes,
+            CatalogSettings::default().refresh_minutes
+        );
+        // The preferred connection must be a member.
+        assert_eq!(repaired.preferred, None);
+        assert_eq!(workspace.profiles[0].shared_catalog, Some(used.id));
+        assert_eq!(workspace.profiles[1].shared_catalog, None);
+    }
+
+    #[test]
+    fn shared_catalogs_round_trip_and_old_workspaces_have_none() {
+        let catalog = shared(CatalogSettings::default());
+        let profile = Profile {
+            shared_catalog: Some(catalog.id),
+            ..Profile::default()
+        };
+        let workspace = Workspace {
+            profiles: vec![profile],
+            shared_catalogs: vec![catalog],
+            ..Workspace::default()
+        };
+        let json = serde_json::to_string(&workspace).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.shared_catalogs, workspace.shared_catalogs);
+        assert_eq!(
+            restored.profiles[0].shared_catalog,
+            workspace.profiles[0].shared_catalog
+        );
+        // Version 4 files have no shared catalogs, and private catalogs do
+        // not write the field.
+        let private = serde_json::to_string(&Workspace::default()).unwrap();
+        assert!(!private.contains("shared_catalog"));
+        let restored: Workspace = serde_json::from_str(&private).unwrap();
+        assert!(restored.shared_catalogs.is_empty());
+    }
+
+    #[test]
+    fn shared_catalog_names_are_required_and_bounded() {
+        let mut catalog = shared(CatalogSettings::default());
+        assert!(catalog.validate().is_ok());
+        catalog.name = " ".into();
+        assert!(catalog.validate().is_err());
+        catalog.name = "x".repeat(MAX_SHARED_CATALOG_NAME + 1);
+        assert!(catalog.validate().is_err());
     }
 }

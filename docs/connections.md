@@ -95,7 +95,8 @@ To use the tree:
   shows no tooltip. The tree shows no tooltips while a context menu is open.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
-shows this copy, also when the connection has no session. Qrow reads the copy
+shows this copy, also when the connection has no session. Connections that
+read the same metastore can [share one copy](#share-schemas). Qrow reads the copy
 when you first expand the connection, search the tree, or connect a tab of
 the connection. Qrow does not read the copy or open a session at startup.
 
@@ -185,6 +186,9 @@ automatic refresh on a connection without one.
 - When no tab of the connection has a live session any more, Qrow stops an
   automatic refresh in progress. The tree keeps what the refresh read.
 
+For a [shared catalog](#share-schemas), the period and the timeout belong to
+the shared catalog.
+
 Set these fields in the Schemas section of the connection settings:
 
 - **Refresh period**: the minutes between automatic refreshes, from 5 to
@@ -192,6 +196,53 @@ Set these fields in the Schemas section of the connection settings:
   connected**.
 - **Refresh timeout**: the longest time of one refresh, manual or automatic,
   from 1 to 1,440 minutes (1 day). The default is 30.
+
+### Share schemas
+
+Connections that read the same metastore, for example through different
+users or Spark clusters, can share one schema catalog. Qrow then keeps one
+copy of the schemas for all of them, and a refresh of one connection fills the
+tree of each connection.
+
+To share a catalog:
+
+1. Open the settings of a connection that browses schemas.
+2. Open the **Schema catalog** list, then select **New shared catalog…** below
+   the list. The connection brings its copy of the schemas to the new
+   catalog before an automatic refresh can start.
+3. Enter a **Shared catalog name**, then select **Save**.
+4. Open the settings of each other connection, select the shared catalog in
+   **Schema catalog**, then select **Save**.
+
+The connections of a shared catalog must read the same metastore with the
+same permissions and the same Spark catalog. Qrow cannot check this.
+
+For a connection that uses a shared catalog:
+
+- **Schema refresh**, **Refresh period**, **Show schemas**, **Hide schemas**,
+  and **Refresh timeout** belong to the shared catalog. A change in the
+  settings of one connection applies to all connections of the catalog. When
+  you select a catalog in **Schema catalog**, the fields show its settings.
+- **Schema refresh logs** stays with each connection.
+- **Schema refresh** set to **Disabled** turns schema browsing off only for
+  this connection. The connection stays in the shared catalog.
+- **Preferred connection** selects the connection that automatic refreshes
+  use while one of its tabs has a live session. Otherwise, Qrow uses the
+  first connection in the sidebar that has a live session. The default is
+  **Any connected connection**.
+
+Each refresh uses the session, the user, and the cluster of the connection
+that asked for it. Qrow runs one refresh of a shared catalog at a time. A
+refresh that a running or waiting refresh includes does not wait again.
+Only the connection that runs a refresh shows its progress and its errors.
+This includes the errors of schemas, tables, and views. A connection whose
+refresh waits shows **Waiting…**. **Stop Refresh** stops only the refreshes of its
+connection.
+
+To stop sharing, select **This connection** in **Schema catalog**. The
+connection then starts with an empty copy of the schemas. When the last
+connection leaves a shared catalog, or you delete it, Qrow deletes the shared
+catalog and its copy of the schemas.
 
 ### Search the tree
 
@@ -225,7 +276,9 @@ backticks.
 
 To see the requests of each refresh, open the connection settings and set
 **Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
-records each refresh in the Logs of each tab of the connection:
+records each refresh of the connection in the Logs of each tab of the
+connection. For a shared catalog, the entries go to the tabs of the connection
+that ran the refresh:
 
 - The start of the refresh. An automatic refresh starts with **Started an
   automatic schema refresh**.
@@ -248,7 +301,8 @@ default is **Disabled**.
 ### Show or hide schemas
 
 Use **Show schemas** and **Hide schemas** in the connection settings to select
-which schemas the tree shows. Each field takes glob patterns separated by
+which schemas the tree shows. For a [shared catalog](#share-schemas), the
+patterns apply to all its connections. Each field takes glob patterns separated by
 commas. `*` matches any text, and `?` matches one character. Letter case does
 not matter.
 
@@ -279,6 +333,9 @@ use.
   does not answer. Thus, a refresh can take longer than its timeout.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   has more columns, its refresh fails. Hide schemas or refresh single tables.
+- The keyboard cannot reach **New shared catalog…** below the **Schema
+  catalog** list. Use the pointer. In the list, **Enter** selects a catalog
+  and **Escape** closes the list.
 
 ## Sessions and idle behavior
 
