@@ -2,7 +2,7 @@ use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{TestApp, connection_row, labelled};
 use gpui_kit::TestAppContext;
 use qrow::{
-    catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
+    catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind, Unfinished},
     model::{CatalogRefresh, CatalogSettings, SharedCatalog},
     storage,
 };
@@ -151,6 +151,102 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     );
 
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_live_shared_connection_resumes_an_unfinished_cache_before_its_period(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let suffix = uuid::Uuid::new_v4().simple().to_string();
+    let done = format!("qrow_done_{suffix}");
+    let pending = format!("qrow_pending_{suffix}");
+    let (mut workspace, credentials) = kyuubi.connections(&["Writer", "Reader"], "SELECT 1");
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Disabled;
+    let settings = CatalogSettings {
+        refresh: CatalogRefresh::WhileConnected,
+        refresh_minutes: 720,
+        include: vec![done.clone(), pending.clone()],
+        ..CatalogSettings::default()
+    };
+    let shared = SharedCatalog {
+        id: uuid::Uuid::new_v4(),
+        name: "Warehouse".into(),
+        settings: settings.clone(),
+        preferred: None,
+    };
+    workspace.profiles[1].catalog.refresh = CatalogRefresh::WhileConnected;
+    workspace.profiles[1].shared_catalog = Some(shared.id);
+    let reader = workspace.profiles[1].clone();
+    workspace.shared_catalogs.push(shared.clone());
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), shared.id);
+    let at = qrow::catalog::now();
+    let mut catalog = Catalog::empty(shared.id, None);
+    catalog.apply_schemas(vec![done.clone(), pending.clone()], &settings, at);
+    // The latest schema list is fresh, but the second schema was not read.
+    catalog.apply_relations(
+        &done,
+        None,
+        vec![RelationEntry {
+            name: "already_cached".into(),
+            kind: RelationKind::Table,
+            comment: None,
+        }],
+        at,
+    );
+    catalog.unfinished = Some(Unfinished {
+        started: at,
+        done: [done.clone()].into(),
+    });
+    storage::save_catalog(&path, &catalog).unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    app.run_complete(cx, &format!("CREATE DATABASE {done}"));
+    app.run_complete(cx, &format!("CREATE DATABASE {pending}"));
+    app.run_complete(
+        cx,
+        &format!("CREATE TABLE {pending}.bookings (id BIGINT, gate STRING) USING parquet"),
+    );
+
+    app.select_connection(cx, &reader);
+    app.run_complete(cx, "SELECT 1");
+    app.wait_until(cx, "the completed shared cache", QUERY_TIMEOUT, |_, _| {
+        storage::load_catalog(&path).is_some_and(|catalog| {
+            catalog.unfinished.is_none()
+                && catalog
+                    .relation(&pending, "bookings")
+                    .is_some_and(|relation| {
+                        relation.columns.as_ref().is_some_and(|columns| {
+                            columns.iter().any(|column| column.name == "gate")
+                        })
+                    })
+        })
+    });
+    let activity = app.activity(cx, reader.id);
+    assert!(
+        activity.contains("Started an automatic schema refresh"),
+        "{activity}"
+    );
+    assert!(
+        activity.contains("Continued a stopped schema refresh"),
+        "{activity}"
+    );
+    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    app.toggle_connection(cx, reader.id);
+    app.click_labelled(cx, &pending);
+    app.click_labelled(cx, "bookings");
+    app.wait_until(cx, "the resumed columns", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "gate STRING").is_some()
+    });
+    // Schemas already completed in this period are preserved.
+    assert!(
+        storage::load_catalog(&path)
+            .unwrap()
+            .relation(&done, "already_cached")
+            .is_some()
+    );
+    app.run_complete(cx, &format!("DROP DATABASE {done} CASCADE"));
+    app.run_complete(cx, &format!("DROP DATABASE {pending} CASCADE"));
 }
 
 #[gpui_kit::test]

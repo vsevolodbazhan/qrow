@@ -180,6 +180,10 @@ automatic refresh on a connection without one.
   refresh is older than the period, Qrow refreshes the connection at once. A
   connection that Qrow never read is always older than the period. Thus, the
   first query of a connection fills its tree.
+- If the last connection refresh stopped before its end, Qrow starts a
+  refresh when the connection gets a live session again. This also applies
+  after an application restart. Within the refresh period, the refresh
+  continues the unfinished schemas. After the period, it reads all schemas.
 - While a tab of the connection stays connected, Qrow refreshes the connection
   each time the period passes. The period starts at the start of the last
   connection refresh, also a manual refresh, or a refresh that failed or
@@ -188,7 +192,9 @@ automatic refresh on a connection without one.
   automatic refresh in progress. The tree keeps what the refresh read.
 
 For a [shared catalog](#share-schemas), the period and the timeout belong to
-the shared catalog.
+the shared catalog. An unfinished refresh starts again when the first
+member connects after all members disconnected. Another member that
+connects while the catalog stays connected does not start a new attempt.
 
 Set these fields in the Schemas section of the connection settings:
 
