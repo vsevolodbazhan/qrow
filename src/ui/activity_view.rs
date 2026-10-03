@@ -2,9 +2,9 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::output::timestamp_label;
 use super::{Qrow, button_pair::button_pair, panel_empty_state};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
+use crate::logs::timestamp_label;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
@@ -510,7 +510,9 @@ impl ActivityView {
         let header = format!("[{}] {first_line}", timestamp_label(entry.timestamp));
         let order = entry.id() * 2;
         let tab = entry.tab.filter(|tab| !self.closed_tabs.contains(tab));
-        let error = entry.is_error().then(|| entry.text.clone());
+        let error = entry
+            .is_error()
+            .then(|| format!("[{}] {}", timestamp_label(entry.timestamp), entry.text));
         h_flex()
             .id(("activity-entry", entry.id()))
             .test_support()
