@@ -46,7 +46,8 @@ A shared catalog refresh goes to the Activity of the connection that ran it.
 
 Select **Errors only** to show only errors. **All activity** shows all
 entries. **Copy All** copies the entries that show. **Copy** on an error
-copies that error. **Clear** deletes the log of the connection.
+copies that error. Both actions include the recorded timestamps and the full
+text of each entry. **Clear** deletes the log of the connection.
 
 ## Unseen errors
 

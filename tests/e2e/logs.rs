@@ -1,5 +1,5 @@
-use crate::support::TestApp;
 use crate::support::fixture::{Kyuubi, PASSWORD};
+use crate::support::{TestApp, connection_row, elements};
 use gpui_kit::TestAppContext;
 
 #[gpui_kit::test]
@@ -9,6 +9,7 @@ fn copy_actions_include_timestamps_on_server_errors(cx: &mut TestAppContext) {
         "SELECT qrow_timestamp_missing_column FROM range(1)",
         PASSWORD,
     );
+    let connection = workspace.profiles[0].id;
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "run");
     app.wait_status(cx, "Error · Query failed");
@@ -29,6 +30,34 @@ fn copy_actions_include_timestamps_on_server_errors(cx: &mut TestAppContext) {
     assert_timestamped(&error);
     assert!(error.contains("qrow_timestamp_missing_column"), "{error}");
     assert!(logs.contains(&error), "{logs}");
+
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Show Activity");
+    app.wait_for(cx, "activity");
+    app.click(cx, "activity-errors");
+    let activity_error = app.copy_activity(cx);
+    assert_timestamped(&activity_error);
+    assert!(
+        activity_error.ends_with("Query 1: Query failed"),
+        "{activity_error}"
+    );
+    let copy = app.update(cx, |window, _| {
+        elements(window)
+            .into_iter()
+            .flat_map(|element| element.path().to_vec())
+            .find(|id| matches!(id, gpui_kit::ElementId::NamedInteger(name, _) if name.as_ref() == "activity-copy"))
+            .expect("The failed query has a Copy action")
+    });
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.click(cx, copy);
+    app.settle(cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(activity_error),
+        "Activity Copy and Copy All include the same recorded timestamp"
+    );
+    app.click(cx, "activity-close");
+    app.wait_gone(cx, "activity");
 
     app.run_complete(cx, "SELECT 1 AS value");
     app.click(cx, "output-panel-tab");

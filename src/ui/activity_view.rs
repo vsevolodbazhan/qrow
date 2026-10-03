@@ -510,7 +510,9 @@ impl ActivityView {
         let header = format!("[{}] {first_line}", timestamp_label(entry.timestamp));
         let order = entry.id() * 2;
         let tab = entry.tab.filter(|tab| !self.closed_tabs.contains(tab));
-        let error = entry.is_error().then(|| entry.text.clone());
+        let error = entry
+            .is_error()
+            .then(|| format!("[{}] {}", timestamp_label(entry.timestamp), entry.text));
         h_flex()
             .id(("activity-entry", entry.id()))
             .test_support()
