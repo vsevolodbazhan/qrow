@@ -479,13 +479,13 @@ impl Qrow {
         }
         Button::new("toggle-activity")
             .ghost()
-            .xsmall()
+            .small()
             .selected(open)
             .map(|button| {
                 if refreshing {
-                    button.icon(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
                 } else {
-                    button.icon(Icon::new(AssetIconName::Activity).xsmall())
+                    button.icon(Icon::new(AssetIconName::Activity).small())
                 }
             })
             .when(unseen > 0, |button| {
@@ -541,6 +541,9 @@ impl Qrow {
                     .min_w_0()
                     .justify_end()
                     .gap_2()
+                    // Keep the Activity button out of the resize area at the
+                    // corner of the window.
+                    .pr_2()
                     .child(
                         div()
                             .id("workspace-status")
