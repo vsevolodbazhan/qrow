@@ -1,34 +1,7 @@
 use super::*;
+use crate::logs::timestamp_label;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{Selectable, h_flex, v_flex};
-use std::time::{SystemTime, UNIX_EPOCH};
-
-pub(super) fn timestamp_label(timestamp: SystemTime) -> String {
-    let seconds = timestamp
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-    let days = seconds.div_euclid(86_400);
-    let day_seconds = seconds.rem_euclid(86_400);
-    let hour = day_seconds / 3_600;
-    let minute = day_seconds % 3_600 / 60;
-    let second = day_seconds % 60;
-
-    // Convert days since 1970-01-01 to a Gregorian date without another crate.
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }).div_euclid(146_097);
-    let day_of_era = z - era * 146_097;
-    let year_part = (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096)
-        .div_euclid(365);
-    let year = year_part + era * 400;
-    let day_of_year = day_of_era - (365 * year_part + year_part / 4 - year_part / 100);
-    let month_part = (5 * day_of_year + 2).div_euclid(153);
-    let day = day_of_year - (153 * month_part + 2).div_euclid(5) + 1;
-    let month = month_part + if month_part < 10 { 3 } else { -9 };
-    let year = year + i64::from(month <= 2);
-
-    format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02}")
-}
 
 impl Qrow {
     pub(super) fn panel_switcher(&self, cx: &mut Context<Self>) -> impl IntoElement {

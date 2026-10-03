@@ -2,10 +2,68 @@ use crate::support::{MemoryCredentials, TestApp, bounds_of, connection_row, labe
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px};
 use qrow::{
+    activity::ActivityEntry,
+    logs::Severity,
     model::{Profile, SavedTab, Workspace},
     storage::Credentials,
 };
-use std::{net::TcpListener, time::Duration};
+use std::{
+    net::TcpListener,
+    time::{Duration, SystemTime},
+};
+
+#[gpui_kit::test]
+fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext) {
+    let profile = Profile {
+        name: "Activity timestamps".into(),
+        ..Profile::default()
+    };
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    app.qrow
+        .update(cx, |qrow, cx| {
+            for (seconds, severity, text) in [
+                (86_400, Severity::Info, "Schema refresh started"),
+                (86_401, Severity::Error, "Schema refresh failed\n詳細 🐦"),
+            ] {
+                let mut entry = ActivityEntry::new(severity, text);
+                entry.timestamp = SystemTime::UNIX_EPOCH + Duration::from_secs(seconds);
+                qrow.record_activity(id, entry, cx);
+            }
+        })
+        .expect("The window is open");
+    app.settle(cx);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Show Activity");
+    app.wait_for(cx, "activity");
+    app.click(cx, "activity-errors");
+
+    let expected = "[1970-01-02 00:00:01] Schema refresh failed\n詳細 🐦";
+    assert_eq!(app.copy_activity(cx), expected);
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.click(cx, ("activity-copy", 2u64));
+    app.settle(cx);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some(expected.to_owned())
+    );
+
+    app.click(cx, "activity-all");
+    assert_eq!(
+        app.copy_activity(cx),
+        concat!(
+            "[1970-01-02 00:00:00] Schema refresh started\n",
+            "[1970-01-02 00:00:01] Schema refresh failed\n詳細 🐦",
+        )
+    );
+}
 
 #[gpui_kit::test]
 fn connection_failure_reaches_the_connection_list(cx: &mut TestAppContext) {
