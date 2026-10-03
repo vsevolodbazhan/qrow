@@ -2,9 +2,9 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::output::timestamp_label;
 use super::{Qrow, button_pair::button_pair, panel_empty_state};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
+use crate::logs::timestamp_label;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,

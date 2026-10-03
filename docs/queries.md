@@ -44,9 +44,10 @@ Successful keep-alives and schema refreshes show only in
 batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
-deletes that history. **Clear** deletes the current history. **Copy All** and
-**Copy Error** copy the stored text. Text selection and copying preserve
-multiline and Unicode error details.
+deletes that history. **Clear** deletes the current history. **Copy All** copies
+all stored entries with the timestamps that Logs shows. **Copy Error** copies
+the latest error with its timestamp. Text selection and both copy commands
+preserve multiline text and Unicode error details.
 
 Qrow selects Logs when a query fails. It selects Results when a query succeeds,
 after the first preview fetch or completion without a result set. This applies
