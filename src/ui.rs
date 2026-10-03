@@ -2258,7 +2258,10 @@ impl Qrow {
             })
             .collect::<Vec<_>>();
         let parameters = cx.new(|cx| {
+            // The field is as tall as its text, so a short object has no
+            // empty lines below its closing brace.
             TextareaState::new(window, cx)
+                .auto_grow(1, 8)
                 .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
         });
         let keep_connected = profile.lifecycle.keep_alive_seconds > 0;
