@@ -541,9 +541,6 @@ impl Qrow {
                     .min_w_0()
                     .justify_end()
                     .gap_2()
-                    // Keep the Activity button out of the resize area at the
-                    // corner of the window.
-                    .pr_2()
                     .child(
                         div()
                             .id("workspace-status")
