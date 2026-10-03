@@ -13,7 +13,7 @@ use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     Action, AnyWindowHandle, App, AppContext, Bounds, ElementId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, TestAppContext, Window, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -721,6 +721,53 @@ pub fn offline_profile(name: &str) -> Profile {
         username: "synthetic".into(),
         database: "default".into(),
         ..Profile::default()
+    }
+}
+
+/// Presses the left button at `position` `count` times in a row, like a
+/// double-click when `count` is 2.
+pub fn press_at(window: &mut Window, position: Point<Pixels>, count: usize, cx: &mut App) {
+    for click_count in 1..=count {
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Default::default(),
+                click_count,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position,
+                modifiers: Default::default(),
+                click_count,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    }
+    window.render_frame(cx);
+}
+
+impl TestApp {
+    /// Expands or collapses a connection in the schema tree with the
+    /// disclosure before its button. A click on the button selects it.
+    pub fn toggle_connection(&self, cx: &mut TestAppContext, profile: Uuid) {
+        let button = self.update(cx, |window, _| {
+            window.find(connection_row(profile)).bounds()
+        });
+        self.update(cx, |window, cx| {
+            press_at(
+                window,
+                point(button.left() - px(8.), button.center().y),
+                1,
+                cx,
+            )
+        });
     }
 }
 

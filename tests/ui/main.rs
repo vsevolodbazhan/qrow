@@ -9,6 +9,7 @@ mod assistant_sql;
 mod assistant_tabs;
 mod assistant_threads;
 mod assistant_transcript;
+mod catalog;
 mod connections;
 mod dialogs;
 mod queries;

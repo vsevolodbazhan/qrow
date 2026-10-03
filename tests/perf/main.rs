@@ -160,3 +160,111 @@ fn assistant_composer_keystroke(cx: &mut TestAppContext) {
     });
     report("ui.assistant.keystroke", median_ms(&samples), "ms", 50.);
 }
+
+/// A cached catalog of two schemas with 1,000 tables of 40 columns each, with
+/// one schema and one table expanded.
+fn large_catalog(cx: &mut TestAppContext) -> TestApp {
+    use qrow::catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind};
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    let mut catalog = Catalog::new(&profile);
+    let schemas = ["events", "sales"];
+    catalog.apply_schemas(
+        schemas.iter().map(|s| (*s).into()).collect(),
+        &Default::default(),
+        1,
+    );
+    for schema in schemas {
+        let names: Vec<String> = (0..1000)
+            .map(|n| format!("{schema}_table_{n:04}"))
+            .collect();
+        catalog.apply_relations(
+            schema,
+            None,
+            names
+                .iter()
+                .map(|name| RelationEntry {
+                    name: name.clone(),
+                    kind: RelationKind::Table,
+                    comment: None,
+                })
+                .collect(),
+            1,
+        );
+        let columns = names
+            .into_iter()
+            .map(|name| {
+                let columns = (0..40)
+                    .map(|n| CatalogColumn {
+                        name: format!("column_{n:02}"),
+                        data_type: "STRING".into(),
+                        comment: None,
+                    })
+                    .collect();
+                (name, columns)
+            })
+            .collect();
+        catalog.apply_columns(schema, None, columns, 1);
+    }
+    let path = qrow::storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    qrow::storage::save_catalog(&path, &catalog).unwrap();
+    let workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        profiles: vec![profile.clone()],
+        ..Workspace::default()
+    };
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.toggle_connection(cx, profile.id);
+    for row in ["sales", "sales_table_0000"] {
+        app.click_labelled(cx, row);
+    }
+    app.wait_until(
+        cx,
+        "the expanded table",
+        std::time::Duration::from_secs(10),
+        |window, _| support::labelled(window, "column_00 STRING").is_some(),
+    );
+    app
+}
+
+#[gpui_kit::test]
+#[ignore = "a performance probe: ./qtest run perf-ui"]
+fn catalog_tree(cx: &mut TestAppContext) {
+    let app = large_catalog(cx);
+    let frame = app.update(cx, |window, cx| sample(5, 40, || window.render_frame(cx)));
+    report("ui.catalog.frame", median_ms(&frame), "ms", 50.);
+
+    let scroll = app.update(cx, |window, cx| {
+        let position = support::labelled(window, "column_00 STRING")
+            .expect("A visible column row")
+            .bounds()
+            .center();
+        let samples = sample(5, 40, || {
+            window.dispatch_event(
+                ScrollWheelEvent {
+                    position,
+                    delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.render_frame(cx);
+        });
+        median_ms(&samples)
+    });
+    report("ui.catalog.scroll", scroll, "ms", 50.);
+
+    // Each search keystroke rebuilds the tree from 2,000 cached tables.
+    app.click_labelled(cx, "Search Tables");
+    let mut toggle = false;
+    let search = app.update(cx, |window, cx| {
+        let samples = sample(3, 20, || {
+            toggle = !toggle;
+            window.press(if toggle { "7" } else { "backspace" }, cx);
+            window.render_frame(cx);
+        });
+        median_ms(&samples)
+    });
+    report("ui.catalog.search_keystroke", search, "ms", 50.);
+}

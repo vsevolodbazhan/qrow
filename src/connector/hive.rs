@@ -1,6 +1,6 @@
 use super::{
-    Cancellation, Completion, Connector, QueryError, QueryState, Session, sasl, t_c_l_i_service::*,
-    wait_for_completion,
+    Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Session, sasl,
+    t_c_l_i_service::*, wait_for_completion,
 };
 use crate::model::{Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row};
 use anyhow::{Context, Result, ensure};
@@ -247,14 +247,45 @@ impl Session for HiveSession {
             None,
         ))?;
         check(response.status)?;
-        let operation = response
-            .operation_handle
-            .context("Kyuubi returned no operation handle")?;
-        self.operation = Some(operation.clone());
-        Ok(Arc::new(Cancel {
-            credentials: self.credentials.clone(),
-            handle: operation,
-        }))
+        self.start_operation(response.operation_handle)
+    }
+
+    fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
+        self.close_operation()?;
+        let session = self.session.clone().context("Session is closed")?;
+        // HiveServer2 reads names as patterns where `_` matches any character.
+        // Spark does not apply an escape character in all versions, so Qrow
+        // sends the names unchanged and the caller removes the extra rows.
+        let (status, handle) = match request {
+            MetadataRequest::Schemas => {
+                let response = self
+                    .client
+                    .get_schemas(TGetSchemasReq::new(session, None, None))?;
+                (response.status, response.operation_handle)
+            }
+            MetadataRequest::Relations { schema, relation } => {
+                let response = self.client.get_tables(TGetTablesReq::new(
+                    session,
+                    None,
+                    Some(schema.clone()),
+                    Some(relation.clone().unwrap_or_else(|| "%".into())),
+                    None,
+                ))?;
+                (response.status, response.operation_handle)
+            }
+            MetadataRequest::Columns { schema, relation } => {
+                let response = self.client.get_columns(TGetColumnsReq::new(
+                    session,
+                    None,
+                    Some(schema.clone()),
+                    Some(relation.clone().unwrap_or_else(|| "%".into())),
+                    Some("%".to_owned()),
+                ))?;
+                (response.status, response.operation_handle)
+            }
+        };
+        check(status)?;
+        self.start_operation(handle)
     }
 
     fn poll(&mut self) -> Result<QueryState> {
@@ -372,6 +403,20 @@ impl Session for HiveSession {
             )?;
         }
         operation_result
+    }
+}
+
+impl HiveSession {
+    fn start_operation(
+        &mut self,
+        handle: Option<TOperationHandle>,
+    ) -> Result<Arc<dyn Cancellation>> {
+        let operation = handle.context("Kyuubi returned no operation handle")?;
+        self.operation = Some(operation.clone());
+        Ok(Arc::new(Cancel {
+            credentials: self.credentials.clone(),
+            handle: operation,
+        }))
     }
 }
 

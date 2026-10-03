@@ -15,6 +15,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Activity model](../src/activity.rs) | Group activity entries, apply retention, and define panel transitions. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
+| [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
@@ -52,7 +53,9 @@ duration when available. The UI stores them in the tab's in-memory activity
 model. It does not save them in the workspace.
 
 Each tab owns one session and can perform one active query. Tabs can work
-concurrently. [Connections](connections.md), [Queries](queries.md), and
+concurrently. A catalog worker for each connection reads schemas in its own
+session, so a refresh does not change the session of a tab. See
+[Browse schemas](connections.md#browse-schemas). [Connections](connections.md), [Queries](queries.md), and
 [Results](results.md) describe the behavior and its constraints.
 
 ## Responsiveness and state
@@ -90,6 +93,11 @@ nodes of a view that it does not render again. Thus, while an accessibility
 client such as VoiceOver reads the window, the workspace and the pane render
 again in each frame.
 
+The catalog worker sleeps until a command arrives. It does not poll while it
+has no refresh. The tree builds rows only for expanded nodes and renders only
+the rows on screen. The worker sends a new catalog to the window at most four
+times each second during a refresh.
+
 Result rendering virtualizes both dimensions. Stored values remain separate
 from shortened cell previews. Restoring the workspace does not restore sessions
 or results. It does not restore Logs history, so database connections do not
@@ -101,8 +109,10 @@ out of the root render method.
 
 ## Connector and framework boundaries
 
-The connector interface covers session lifecycle, execution, status, cancellation,
-and batched results. Only HiveServer2 is implemented. Another connector should
+The connector interface covers session lifecycle, execution, catalog requests,
+status, cancellation, and batched results. A catalog request returns a result
+set with the JDBC `DatabaseMetaData` column names, so the catalog code does not
+depend on HiveServer2. Only HiveServer2 is implemented. Another connector should
 use this boundary without changing editor behavior. Qrow has no dynamic driver
 plugin system.
 

@@ -1,6 +1,6 @@
-use crate::support::{MemoryCredentials, TestApp};
-use gpui_kit::TestAppContext;
+use crate::support::{MemoryCredentials, TestApp, bounds_of};
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{TestAppContext, px};
 use qrow::{
     model::{Profile, SavedTab, Workspace},
     storage::Credentials,
@@ -30,6 +30,7 @@ fn connection_failure_reaches_the_connection_list(cx: &mut TestAppContext) {
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT 1".into();
     let row = gpui_kit::ElementId::Name(format!("profile-{}", profile.id).into());
+    let profile_id = profile.id;
     let app = TestApp::launch_with(
         cx,
         Workspace {
@@ -50,6 +51,13 @@ fn connection_failure_reaches_the_connection_list(cx: &mut TestAppContext) {
         Duration::from_secs(20),
         |window, _| window.find(row.clone()).label() == Some("Unreachable, unread error"),
     );
+    // The warning shares the centerline of the New Connection button.
+    app.update(cx, |window, _| {
+        let warning = bounds_of(window, &format!("connection-error-{}", profile_id));
+        let add = bounds_of(window, "add-connection");
+        let (warning, add) = (warning.center().x, add.center().x);
+        assert!((warning - add).abs() < px(0.5), "{warning:?} != {add:?}");
+    });
     assert_eq!(
         app.credentials.reads(),
         1,

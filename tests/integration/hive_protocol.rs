@@ -1,7 +1,7 @@
 //! Local wire-level fixture. No Java, Kyuubi installation, or real credentials required.
 use qrow::{
     connector::{
-        Connector, QueryState,
+        Connector, MetadataRequest, QueryState,
         hive::HiveConnector,
         sasl::{FrameReader, FrameWriter, MAX_FRAME},
         t_c_l_i_service::*,
@@ -484,5 +484,127 @@ fn connector_rejects_aggregate_response_before_reading_oversized_string() {
         Err(error) => error,
     };
     assert!(qrow::connector::error_message(&error).contains("remaining response byte limit"));
+    server.join().unwrap();
+}
+
+#[test]
+fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let metadata = |id: u8, kind: TOperationType| {
+        TOperationHandle::new(
+            THandleIdentifier::new(vec![id; 16], vec![id; 16]),
+            kind,
+            true,
+            None,
+        )
+    };
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let req: TGetSchemasReq = peer.read("GetSchemas");
+        assert_eq!((req.catalog_name, req.schema_name), (None, None));
+        peer.reply(TGetSchemasResp::new(
+            success(),
+            Some(metadata(5, TOperationType::GET_SCHEMAS)),
+        ));
+        let req: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        assert_eq!(
+            req.operation_handle,
+            metadata(5, TOperationType::GET_SCHEMAS)
+        );
+        peer.reply(status(TOperationState::FINISHED_STATE, true));
+        // The next request closes the previous operation first.
+        let req: TCloseOperationReq = peer.read("CloseOperation");
+        assert_eq!(
+            req.operation_handle,
+            metadata(5, TOperationType::GET_SCHEMAS)
+        );
+        peer.reply(TCloseOperationResp::new(success()));
+        let req: TGetTablesReq = peer.read("GetTables");
+        assert_eq!(req.catalog_name, None);
+        assert_eq!(req.schema_name.as_deref(), Some("sales_eu"));
+        assert_eq!(req.table_name.as_deref(), Some("%"));
+        assert_eq!(req.table_types, None);
+        peer.reply(TGetTablesResp::new(
+            success(),
+            Some(metadata(6, TOperationType::GET_TABLES)),
+        ));
+        let _: TCloseOperationReq = peer.read("CloseOperation");
+        peer.reply(TCloseOperationResp::new(success()));
+        let req: TGetColumnsReq = peer.read("GetColumns");
+        assert_eq!(req.schema_name.as_deref(), Some("sales_eu"));
+        assert_eq!(req.table_name.as_deref(), Some("daily_orders"));
+        assert_eq!(req.column_name.as_deref(), Some("%"));
+        peer.reply(TGetColumnsResp::new(
+            success(),
+            Some(metadata(7, TOperationType::GET_COLUMNS)),
+        ));
+        let req: TFetchResultsReq = peer.read("FetchResults");
+        assert_eq!(
+            req.operation_handle,
+            metadata(7, TOperationType::GET_COLUMNS)
+        );
+        peer.reply(TFetchResultsResp::new(
+            success(),
+            Some(false),
+            Some(TRowSet::new(0, vec![], Some(vec![]), None, None)),
+        ));
+        let req: TCloseOperationReq = peer.read("CloseOperation");
+        assert_eq!(
+            req.operation_handle,
+            metadata(7, TOperationType::GET_COLUMNS)
+        );
+        peer.reply(TCloseOperationResp::new(success()));
+        let req: TGetColumnsReq = peer.read("GetColumns");
+        assert_eq!(req.table_name.as_deref(), Some("%"));
+        peer.reply(TGetColumnsResp::new(
+            TStatus::new(
+                TStatusCode::ERROR_STATUS,
+                None,
+                None,
+                None,
+                Some("Schema sales_eu not found".into()),
+            ),
+            None,
+        ));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let mut session = HiveConnector
+        .connect(&p, Zeroizing::new("test-password".into()))
+        .unwrap();
+    session.execute_metadata(&MetadataRequest::Schemas).unwrap();
+    assert_eq!(
+        session.poll().unwrap(),
+        QueryState::Finished { has_results: true }
+    );
+    session
+        .execute_metadata(&MetadataRequest::Relations {
+            schema: "sales_eu".into(),
+            relation: None,
+        })
+        .unwrap();
+    session
+        .execute_metadata(&MetadataRequest::Columns {
+            schema: "sales_eu".into(),
+            relation: Some("daily_orders".into()),
+        })
+        .unwrap();
+    assert!(session.fetch(1000).unwrap().rows.is_empty());
+    let error = session
+        .execute_metadata(&MetadataRequest::Columns {
+            schema: "sales_eu".into(),
+            relation: None,
+        })
+        .err()
+        .unwrap();
+    // An ordinary server error keeps the session for the next request.
+    assert!(
+        error
+            .downcast_ref::<qrow::connector::QueryError>()
+            .is_some()
+    );
+    session.close().unwrap();
     server.join().unwrap();
 }

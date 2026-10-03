@@ -5,6 +5,7 @@ mod support;
 
 mod assistant;
 mod blocking;
+mod catalog;
 mod connections;
 mod logs;
 mod perf;

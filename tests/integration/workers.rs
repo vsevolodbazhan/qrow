@@ -1,7 +1,7 @@
 use anyhow::Result;
 use qrow::{
     activity::{ActivityKind, Severity},
-    connector::{Cancellation, Connector, QueryState, Session},
+    connector::{Cancellation, Connector, MetadataRequest, QueryState, Session},
     model::{Batch, Column, Profile},
     worker::{Event, Worker},
 };
@@ -88,6 +88,9 @@ impl Session for FakeSession {
             return Err(qrow::connector::QueryError("syntax error".into()).into());
         }
         Ok(Arc::new(Cancel(self.cancelled.clone())))
+    }
+    fn execute_metadata(&mut self, _: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
+        unreachable!("tab workers do not read the catalog")
     }
     fn poll(&mut self) -> Result<QueryState> {
         Ok(if self.cancelled.load(Ordering::SeqCst) {
