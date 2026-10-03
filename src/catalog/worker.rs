@@ -233,6 +233,7 @@ impl CatalogWorker {
             live: BTreeSet::new(),
             minute,
             last_refresh: None,
+            resume_unfinished: false,
             deadline: None,
             automatic: false,
         };
@@ -407,6 +408,9 @@ struct Runner {
     minute: Duration,
     /// When the last connection refresh started.
     last_refresh: Option<SystemTime>,
+    /// Continue an unfinished connection refresh when the catalog becomes
+    /// warm again, even if the last attempt was within the refresh period.
+    resume_unfinished: bool,
     /// When the refresh in progress times out.
     deadline: Option<Instant>,
     /// The refresh in progress started by itself, not at a request.
@@ -654,6 +658,7 @@ impl Runner {
             .fetched_at
             .map(|at| UNIX_EPOCH + Duration::from_secs(at));
         self.catalog = Arc::new(catalog);
+        self.resume_unfinished = false;
     }
 
     /// The member that runs an automatic refresh: the preferred member while
@@ -680,7 +685,7 @@ impl Runner {
         }
         loop {
             let runner = self.automatic_runner();
-            let Some(due) = refresh_due(
+            let Some(mut due) = refresh_due(
                 &self.config.settings,
                 runner.is_some(),
                 self.last_refresh,
@@ -688,6 +693,9 @@ impl Runner {
             ) else {
                 return self.rx.recv().ok();
             };
+            if self.resume_unfinished {
+                due = UNIX_EPOCH;
+            }
             // A due time in the past is an error, which means no wait.
             let wait = due.duration_since(SystemTime::now()).unwrap_or_default();
             if wait.is_zero()
@@ -765,6 +773,13 @@ impl Runner {
             Command::Configure(config) => self.configure(*config),
             Command::SetLive(member, live) => {
                 if live {
+                    if self.live.is_empty()
+                        && self.config.member(member).is_some()
+                        && (self.catalog.unfinished.is_some()
+                            || self.status.active == Some(Scope::Connection))
+                    {
+                        self.resume_unfinished = true;
+                    }
                     self.live.insert(member);
                 } else {
                     self.live.remove(&member);
@@ -788,6 +803,7 @@ impl Runner {
             self.close_session();
             self.catalog = Arc::new(Catalog::empty(config.id, config.identity()));
             self.last_refresh = None;
+            self.resume_unfinished = false;
             self.dirty = false;
             if let Some(path) = &self.cache {
                 storage::delete_catalog(path);
@@ -902,6 +918,7 @@ impl Runner {
     }
 
     fn refresh_connection(&mut self) -> Result<(), Interrupt> {
+        self.resume_unfinished = false;
         self.last_refresh = Some(SystemTime::now());
         let names = match self.read_parsed(&MetadataRequest::Schemas, parse_schemas)? {
             Ok(names) => names,
@@ -973,6 +990,7 @@ impl Runner {
             self.publish(false);
         }
         self.update(|catalog| catalog.unfinished = None);
+        self.resume_unfinished = false;
         Ok(())
     }
 
