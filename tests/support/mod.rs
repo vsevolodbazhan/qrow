@@ -387,6 +387,8 @@ impl TestApp {
 
     /// Opens the select `id` and chooses `option`. A searchable select filters
     /// to the option; another select moves down its list with the keyboard.
+    /// Each attempt confirms the next option, and the list opens at the
+    /// confirmed option, so one step down per attempt reaches every option.
     pub fn select(&self, cx: &mut TestAppContext, id: &str, option: &str) {
         let chosen = |app: &Self, cx: &mut TestAppContext| {
             app.settle(cx);
@@ -404,14 +406,12 @@ impl TestApp {
         if chosen(self, cx) {
             return;
         }
-        for downs in 1..10 {
+        for _ in 1..10 {
             self.update(cx, |window, cx| {
                 window.within(id.to_owned()).click("input", cx)
             });
             self.settle(cx);
-            for _ in 0..downs {
-                self.press(cx, "down");
-            }
+            self.press(cx, "down");
             self.press(cx, "enter");
             if chosen(self, cx) {
                 return;
@@ -712,16 +712,19 @@ impl TestApp {
     }
 }
 
-/// A synthetic connection that no test connects to.
+/// A synthetic connection that no test connects to. It browses schemas on
+/// request, so tests can show a cached schema tree.
 pub fn offline_profile(name: &str) -> Profile {
-    Profile {
+    let mut profile = Profile {
         name: name.into(),
         host: "example.invalid".into(),
         port: 10009,
         username: "synthetic".into(),
         database: "default".into(),
         ..Profile::default()
-    }
+    };
+    profile.catalog.refresh = qrow::model::CatalogRefresh::Manual;
+    profile
 }
 
 /// Presses the left button at `position` `count` times in a row, like a

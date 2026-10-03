@@ -94,7 +94,10 @@ client such as VoiceOver reads the window, the workspace and the pane render
 again in each frame.
 
 The catalog worker sleeps until a command arrives. It does not poll while it
-has no refresh. The tree builds rows only for expanded nodes and renders only
+has no refresh. While a tab of its connection has a live session and the
+connection uses automatic refresh, the worker also wakes when the refresh
+period passes. It checks the clock at least each minute, because its wait
+does not count the time that the computer sleeps. The tree builds rows only for expanded nodes and renders only
 the rows on screen. The worker sends a new catalog to the window at most four
 times each second during a refresh.
 

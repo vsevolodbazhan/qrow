@@ -23,10 +23,11 @@ use crate::{
         ActivityEvent, ActivityKind, ActivityLog, ExecutionId, Panel, PanelState, Severity,
     },
     model::{
-        AssistantWorkspace, LINE_HEIGHT_STEP, MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE,
-        MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE, MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile,
-        SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab, Settings, UI_SCALE_STEP, WORKSPACE_VERSION,
-        Workspace, conversation_tab_title, copied_tab_title, unique_tab_title,
+        AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
+        MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
+        MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
+        Settings, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace, conversation_tab_title,
+        copied_tab_title, unique_tab_title,
     },
     sql,
     storage::{self, Saver},
@@ -39,6 +40,7 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
+    select::SelectEvent,
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -221,6 +223,9 @@ struct ProfileEditor {
     parameters: Entity<TextareaState>,
     idle_behavior: connection_form::ChoiceSelect,
     _idle_behavior_subscription: Subscription,
+    /// Manual or automatic schema refresh.
+    schema_refresh: connection_form::ChoiceSelect,
+    _schema_refresh_subscription: Subscription,
     /// Whether schema refreshes write their requests to Logs.
     refresh_logs: connection_form::ChoiceSelect,
     is_new: bool,
@@ -954,6 +959,7 @@ impl Qrow {
         changed |= self.autosave(cx);
         changed |= self.finish_profile_save(window, cx);
         changed |= self.finish_quit(window, cx);
+        self.sync_catalog_warmth();
         if changed {
             cx.notify();
         }
@@ -1366,6 +1372,7 @@ impl Qrow {
         let profile = self.tabs[index].saved.profile;
         let tab_id = self.tabs[index].saved.id;
         self.tabs.remove(index);
+        self.sync_catalog_warmth();
         self.assistant_tab_removed(tab_id, profile);
         if let Some(profile) = profile
             && !self
@@ -1899,6 +1906,10 @@ impl Qrow {
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_profile(id, window, cx)
         });
+        let browses = self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == id && profile.catalog.browses());
         let has_expanded = self.has_expanded_descendants(id, None, cx);
         let collapse =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.collapse_catalog(id, None, cx));
@@ -1913,32 +1924,32 @@ impl Qrow {
         self.open_context_menu(
             position,
             move |menu, _, _| {
-                menu.item(
-                    PopupMenuItem::new(if refreshing {
-                        "Stop Refresh"
-                    } else {
-                        "Refresh Schemas"
+                // Labeled sections: what the row is, then what it contains.
+                menu.item(menu_section("Connection"))
+                    .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
+                    .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
+                    .item(
+                        PopupMenuItem::new("Delete")
+                            .on_click(delete)
+                            .disabled(in_use),
+                    )
+                    .when(browses, |menu| {
+                        menu.separator()
+                            .item(menu_section("Schemas"))
+                            .item(
+                                PopupMenuItem::new(if refreshing {
+                                    "Stop Refresh"
+                                } else {
+                                    "Refresh"
+                                })
+                                .on_click(refresh),
+                            )
+                            .item(
+                                PopupMenuItem::new("Collapse")
+                                    .on_click(collapse)
+                                    .disabled(!has_expanded),
+                            )
                     })
-                    .on_click(refresh),
-                )
-                .item(
-                    PopupMenuItem::new("Collapse All")
-                        .on_click(collapse)
-                        .disabled(!has_expanded),
-                )
-                .separator()
-                .item(
-                    PopupMenuItem::new("Edit Connection…")
-                        .on_click(edit)
-                        .disabled(busy),
-                )
-                .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
-                .separator()
-                .item(
-                    PopupMenuItem::new("Delete")
-                        .on_click(delete)
-                        .disabled(in_use),
-                )
             },
             window,
             cx,
@@ -2126,6 +2137,8 @@ impl Qrow {
             profile.lifecycle.keep_alive_sql.clone(),
             profile.catalog.include.join(", "),
             profile.catalog.exclude.join(", "),
+            profile.catalog.refresh_minutes.to_string(),
+            profile.catalog.timeout_minutes.to_string(),
         ];
         let fields = values
             .into_iter()
@@ -2153,6 +2166,18 @@ impl Qrow {
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
         let refresh_logs =
             connection_form::enabled_select(profile.catalog.log_refreshes, window, cx);
+        let schema_refresh = connection_form::schema_refresh_select(
+            connection_form::RefreshMode::of(profile.catalog.refresh),
+            window,
+            cx,
+        );
+        // The choice decides which Schemas fields show.
+        let schema_refresh_subscription =
+            cx.subscribe_in(&schema_refresh, window, |_this, _, event, _, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    cx.notify();
+                }
+            });
         let idle_behavior_subscription =
             cx.subscribe_in(&idle_behavior, window, |_this, _, event, _, cx| {
                 if connection_form::keep_connected_from_event(event).is_some() {
@@ -2163,6 +2188,8 @@ impl Qrow {
             parameters,
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
+            schema_refresh,
+            _schema_refresh_subscription: schema_refresh_subscription,
             refresh_logs,
             profile,
             fields,
@@ -2209,9 +2236,19 @@ impl Qrow {
                         "Session parameters must be a JSON object with string values: {e}"
                     )
                 })?;
-            profile.catalog.include = connection_form::parse_patterns(&values[10]);
-            profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
-            profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+            let mode = connection_form::refresh_mode(&form.schema_refresh, cx);
+            // Disabled hides the other Schemas fields and keeps their values.
+            if mode != connection_form::RefreshMode::Disabled {
+                profile.catalog.include = connection_form::parse_patterns(&values[10]);
+                profile.catalog.exclude = connection_form::parse_patterns(&values[11]);
+                profile.catalog.log_refreshes = connection_form::is_enabled(&form.refresh_logs, cx);
+            }
+            connection_form::parse_refresh_policy(
+                &values[12],
+                &values[13],
+                mode,
+                &mut profile.catalog,
+            )?;
             profile.lifecycle = connection_form::parse_lifecycle(
                 &values[7..10],
                 connection_form::keeps_connected(&form.idle_behavior, cx),
@@ -2502,6 +2539,23 @@ impl Qrow {
         tab.panel.success();
     }
 }
+/// The title of a section of a context menu. GPUI Kit draws its menu labels
+/// like disabled items, so the title uses the style of a native menu section
+/// header instead: smaller, semibold, and muted.
+fn menu_section(title: &'static str) -> PopupMenuItem {
+    PopupMenuItem::element(move |_, cx| {
+        div()
+            .id(SharedString::from(format!("menu-section-{title}")))
+            .test_support()
+            .aria_label(title)
+            .text_xs()
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(cx.theme().muted_foreground)
+            .child(title)
+    })
+    .disabled(true)
+}
+
 fn demo_workspace() -> Workspace {
     let profiles: Vec<_> = ["rivendell-s", "rivendell-xl", "analytics-s"]
         .into_iter()
@@ -2509,6 +2563,10 @@ fn demo_workspace() -> Workspace {
             name: name.into(),
             host: "demo.local".into(),
             username: format!("kyuubi-{name}"),
+            catalog: CatalogSettings {
+                refresh: CatalogRefresh::Manual,
+                ..CatalogSettings::default()
+            },
             ..Default::default()
         })
         .collect();

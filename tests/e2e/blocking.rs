@@ -28,7 +28,7 @@ fn wait_tab(app: &TestApp, cx: &mut TestAppContext, expected: &str) {
 /// Opening the edit form of a busy connection does nothing.
 fn edit_is_unavailable(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) {
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.settle(cx);
     app.update(cx, |window, _| {
         assert!(
@@ -48,7 +48,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     let keep_alive = token("keep-alive");
 
     app.context_menu(cx, connection_row(alpha.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
     app.scroll_to(cx, "connection-idle-behavior");
     app.select(cx, "connection-idle-behavior", "Keep connected");

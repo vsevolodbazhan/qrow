@@ -1,4 +1,4 @@
-use crate::model::{ConnectionLifecycle, Profile};
+use crate::model::{CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile};
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
     profiles
@@ -13,6 +13,70 @@ pub(super) fn parse_patterns(text: &str) -> Vec<String> {
         .filter(|pattern| !pattern.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// Read the schema refresh fields into `settings`. Only an automatic
+/// refresh reads the period.
+/// The choices of the Schema refresh dropdown, in their order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefreshMode {
+    Disabled,
+    Manual,
+    WhileConnected,
+}
+
+const REFRESH_MODES: [(RefreshMode, &str); 3] = [
+    (RefreshMode::Disabled, "Disabled"),
+    (RefreshMode::Manual, "Manual"),
+    (RefreshMode::WhileConnected, "While connected"),
+];
+
+impl RefreshMode {
+    /// What the mode does, in one line below the dropdown.
+    fn help(self) -> &'static str {
+        match self {
+            Self::Disabled => "Qrow does not read or show schemas.",
+            Self::Manual => "Qrow reads schemas when you refresh them.",
+            Self::WhileConnected => "Qrow also refreshes schemas while a tab is connected.",
+        }
+    }
+
+    pub(super) fn of(refresh: CatalogRefresh) -> Self {
+        match refresh {
+            CatalogRefresh::Disabled => Self::Disabled,
+            CatalogRefresh::Manual => Self::Manual,
+            CatalogRefresh::WhileConnected => Self::WhileConnected,
+        }
+    }
+}
+
+/// Read the schema refresh fields into `settings`. A mode reads only the
+/// fields that it shows: Disabled reads none, and only While connected
+/// reads the period.
+pub(super) fn parse_refresh_policy(
+    period: &str,
+    timeout: &str,
+    mode: RefreshMode,
+    settings: &mut CatalogSettings,
+) -> anyhow::Result<()> {
+    if mode == RefreshMode::Disabled {
+        settings.refresh = CatalogRefresh::Disabled;
+        return Ok(());
+    }
+    settings.refresh = match mode {
+        RefreshMode::Disabled | RefreshMode::Manual => CatalogRefresh::Manual,
+        RefreshMode::WhileConnected => {
+            settings.refresh_minutes = period.trim().parse().map_err(|_| {
+                anyhow::anyhow!("Refresh period must be a whole number of minutes.")
+            })?;
+            CatalogRefresh::WhileConnected
+        }
+    };
+    settings.timeout_minutes = timeout
+        .trim()
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Refresh timeout must be a whole number of minutes."))?;
+    settings.validate()
 }
 
 pub(super) fn parse_lifecycle(
@@ -52,7 +116,7 @@ use gpui_kit::{AnyElement, App, Context, Entity, IntoElement, Window, prelude::*
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 12] = [
+pub(super) const FIELD_IDS: [&str; 14] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -65,6 +129,8 @@ pub(super) const FIELD_IDS: [&str; 12] = [
     "connection-keep-alive-query",
     "connection-show-schemas",
     "connection-hide-schemas",
+    "connection-refresh-period",
+    "connection-refresh-timeout",
 ];
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
@@ -87,6 +153,39 @@ pub(super) fn idle_behavior_select(
             cx,
         )
     })
+}
+
+/// The Schema refresh dropdown, with `mode` selected.
+pub(super) fn schema_refresh_select(
+    mode: RefreshMode,
+    window: &mut Window,
+    cx: &mut Context<Qrow>,
+) -> ChoiceSelect {
+    let row = REFRESH_MODES
+        .iter()
+        .position(|(choice, _)| *choice == mode)
+        .unwrap_or_default();
+    cx.new(|cx| {
+        SelectState::new(
+            SearchableVec::new(
+                REFRESH_MODES
+                    .iter()
+                    .map(|(_, label)| (*label).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+            Some(IndexPath::default().row(row)),
+            window,
+            cx,
+        )
+    })
+}
+
+pub(super) fn refresh_mode(select: &ChoiceSelect, cx: &App) -> RefreshMode {
+    let selected = select.read(cx).selected_value().cloned();
+    REFRESH_MODES
+        .iter()
+        .find(|(_, label)| selected.as_deref() == Some(*label))
+        .map_or(RefreshMode::Disabled, |(mode, _)| *mode)
 }
 
 /// A choice between Disabled and Enabled.
@@ -190,8 +289,9 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
         })
 }
 
-pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
+pub(super) fn render_schemas(form: &ProfileEditor, cx: &App) -> impl IntoElement {
     let saving = form.saving.is_some();
+    let mode = refresh_mode(&form.schema_refresh, cx);
     let input = |index: usize, label: &'static str| {
         Input::new(&form.fields[index])
             .id(FIELD_IDS[index])
@@ -203,25 +303,51 @@ pub(super) fn render_schemas(form: &ProfileEditor) -> impl IntoElement {
     Form::vertical()
         .w_full()
         .child(field(
-            "Show schemas",
-            Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
-            input(10, "Show schemas"),
-        ))
-        .child(field(
-            "Hide schemas",
-            Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
-            input(11, "Hide schemas"),
-        ))
-        .child(field(
-            "Schema refresh logs",
-            Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
-            Select::new(&form.refresh_logs)
-                .id("connection-refresh-logs")
+            "Schema refresh",
+            Some(mode.help()),
+            Select::new(&form.schema_refresh)
+                .id("connection-schema-refresh")
                 .w_full()
                 .disabled(saving)
-                .accessibility_label("Schema refresh logs")
+                .accessibility_label("Schema refresh")
                 .into_any_element(),
         ))
+        .when(mode == RefreshMode::WhileConnected, |el| {
+            el.child(field(
+                "Refresh period",
+                Some("Minutes between automatic schema refreshes, from 5 to 10080."),
+                input(12, "Refresh period in minutes"),
+            ))
+        })
+        .when(mode != RefreshMode::Disabled, |el| {
+            el.child(field(
+                "Show schemas",
+                Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
+                input(10, "Show schemas"),
+            ))
+            .child(field(
+                "Hide schemas",
+                Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
+                input(11, "Hide schemas"),
+            ))
+            .child(field(
+                "Refresh timeout",
+                Some(
+                    "Minutes before Qrow stops a schema refresh, from 1 to 1440. The schemas that it read stay in the tree.",
+                ),
+                input(13, "Refresh timeout in minutes"),
+            ))
+            .child(field(
+                "Schema refresh logs",
+                Some("Records each request of a schema refresh in the Logs of each tab of the connection. Errors go to Logs also when this is off."),
+                Select::new(&form.refresh_logs)
+                    .id("connection-refresh-logs")
+                    .w_full()
+                    .disabled(saving)
+                    .accessibility_label("Schema refresh logs")
+                    .into_any_element(),
+            ))
+        })
 }
 
 #[cfg(test)]
@@ -232,6 +358,34 @@ mod tests {
     fn schema_patterns_are_split_at_commas_without_blanks() {
         assert_eq!(parse_patterns(" sales_*, ,ops ,"), ["sales_*", "ops"]);
         assert!(parse_patterns("  ").is_empty());
+    }
+
+    #[test]
+    fn each_schema_refresh_mode_reads_only_the_fields_that_it_shows() {
+        let mut settings = CatalogSettings::default();
+        parse_refresh_policy("invalid", " 10 ", RefreshMode::Manual, &mut settings).unwrap();
+        assert_eq!(settings.refresh, CatalogRefresh::Manual);
+        assert_eq!(settings.timeout_minutes, 10);
+        parse_refresh_policy(" 15 ", "10", RefreshMode::WhileConnected, &mut settings).unwrap();
+        assert_eq!(settings.refresh, CatalogRefresh::WhileConnected);
+        assert_eq!(settings.refresh_minutes, 15);
+        // Disabled and Manual keep the hidden period, and Disabled keeps the
+        // hidden timeout.
+        parse_refresh_policy("invalid", "invalid", RefreshMode::Disabled, &mut settings).unwrap();
+        assert_eq!(settings.refresh, CatalogRefresh::Disabled);
+        assert_eq!(settings.timeout_minutes, 10);
+        assert_eq!(settings.refresh_minutes, 15);
+        parse_refresh_policy("invalid", "10", RefreshMode::Manual, &mut settings).unwrap();
+        assert_eq!(settings.refresh_minutes, 15);
+        let mode = RefreshMode::WhileConnected;
+        assert!(parse_refresh_policy("invalid", "10", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("4", "10", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("15", "0", mode, &mut settings).is_err());
+        assert!(parse_refresh_policy("15", "1.5", RefreshMode::Manual, &mut settings).is_err());
+        assert_eq!(
+            RefreshMode::of(CatalogRefresh::WhileConnected),
+            RefreshMode::WhileConnected
+        );
     }
 
     #[test]

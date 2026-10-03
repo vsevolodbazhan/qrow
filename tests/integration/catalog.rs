@@ -1,9 +1,9 @@
 //! The catalog worker against a fake connector that serves metadata from memory.
 use anyhow::Result;
 use qrow::{
-    catalog::{Catalog, CatalogWorker, Event, RelationKind, Scope, Status},
+    catalog::{Catalog, CatalogWorker, Event, MINUTE, RelationKind, Scope, Status, refresh_due},
     connector::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Session},
-    model::{Batch, CatalogSettings, Column, Profile, Row},
+    model::{Batch, CatalogRefresh, CatalogSettings, Column, Profile, Row},
     storage,
 };
 use std::{
@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use zeroize::Zeroizing;
 
@@ -26,10 +26,24 @@ struct Server {
     requests: Mutex<Vec<MetadataRequest>>,
     /// Column requests for these schemas fail like a schema with a broken view.
     broken_schemas: Mutex<Vec<String>>,
+    broken_relation_lists: Mutex<Vec<String>>,
     /// Column requests for these relations fail.
     broken_relations: Mutex<Vec<String>>,
     /// Requests stay running until they are cancelled.
     block: AtomicBool,
+    /// Requests for this schema stay running until they are cancelled.
+    block_schema: Mutex<Option<String>>,
+    /// A status call for this schema does not return until the request is
+    /// cancelled, like a call that waits for a slow server.
+    hang_schema: Mutex<Option<String>>,
+    /// Requests for this schema return rows without an end.
+    endless_schema: Mutex<Option<String>>,
+    /// How long opening a session takes.
+    connect_delay: Mutex<Duration>,
+    /// How long the cancel transport takes.
+    cancel_delay: Mutex<Duration>,
+    /// How many requests the worker cancelled.
+    cancels: AtomicUsize,
     refuse: AtomicBool,
     block_after_schema_list: AtomicBool,
     request_started: Mutex<Option<std::sync::mpsc::Sender<MetadataRequest>>>,
@@ -63,12 +77,14 @@ impl Connector for Fake {
     fn connect(&self, _: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
         assert_eq!(password.as_str(), "synthetic-password");
         self.0.connects.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.0.connect_delay.lock().unwrap());
         anyhow::ensure!(!self.0.refuse.load(Ordering::SeqCst), "Connection refused");
         Ok(Box::new(FakeSession {
             server: self.0.clone(),
             columns: vec![],
             rows: vec![],
             cancelled: Arc::new(AtomicBool::new(false)),
+            schema: None,
         }))
     }
 }
@@ -78,12 +94,16 @@ struct FakeSession {
     columns: Vec<Column>,
     rows: Vec<Row>,
     cancelled: Arc<AtomicBool>,
+    /// The schema of the request in progress.
+    schema: Option<String>,
 }
 
-struct Cancel(Arc<AtomicBool>);
+struct Cancel(Arc<AtomicBool>, Arc<Server>);
 impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
         self.0.store(true, Ordering::SeqCst);
+        self.1.cancels.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(*self.1.cancel_delay.lock().unwrap());
         Ok(())
     }
 }
@@ -108,6 +128,12 @@ impl Session for FakeSession {
             let _ = sender.send(request.clone());
         }
         self.cancelled = Arc::new(AtomicBool::new(false));
+        self.schema = match request {
+            MetadataRequest::Schemas => None,
+            MetadataRequest::Relations { schema, .. } | MetadataRequest::Columns { schema, .. } => {
+                Some(schema.clone())
+            }
+        };
         let tables = self.server.tables.lock().unwrap();
         let text = |value: &str| Some(value.to_owned());
         // Like HiveServer2, `_` in a name is a pattern that matches any character.
@@ -127,6 +153,15 @@ impl Session for FakeSession {
                     .collect();
             }
             MetadataRequest::Relations { schema, relation } => {
+                if self
+                    .server
+                    .broken_relation_lists
+                    .lock()
+                    .unwrap()
+                    .contains(schema)
+                {
+                    return Err(QueryError("Table list is unavailable".into()).into());
+                }
                 self.columns = names(&[
                     "TABLE_CAT",
                     "TABLE_SCHEM",
@@ -203,9 +238,19 @@ impl Session for FakeSession {
                     .collect();
             }
         }
-        Ok(Arc::new(Cancel(self.cancelled.clone())))
+        Ok(Arc::new(Cancel(
+            self.cancelled.clone(),
+            self.server.clone(),
+        )))
     }
     fn poll(&mut self) -> Result<QueryState> {
+        if self.schema.is_some() && *self.server.hang_schema.lock().unwrap() == self.schema {
+            while !self.cancelled.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        let blocked =
+            self.schema.is_some() && *self.server.block_schema.lock().unwrap() == self.schema;
         Ok(if self.cancelled.load(Ordering::SeqCst) {
             QueryState::Cancelled
         } else if self.server.block.load(Ordering::SeqCst)
@@ -214,6 +259,7 @@ impl Session for FakeSession {
                     self.server.requests.lock().unwrap().last(),
                     Some(MetadataRequest::Schemas)
                 ))
+            || blocked
         {
             QueryState::Running
         } else {
@@ -224,6 +270,12 @@ impl Session for FakeSession {
         Ok(self.columns.clone())
     }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        if self.schema.is_some() && *self.server.endless_schema.lock().unwrap() == self.schema {
+            std::thread::sleep(Duration::from_millis(10));
+            return Ok(Batch {
+                rows: vec![vec![None; self.columns.len()]],
+            });
+        }
         // Small batches check that the worker reads until an empty batch.
         let take = count.min(2).min(self.rows.len());
         Ok(Batch {
@@ -254,12 +306,23 @@ struct Harness {
 
 impl Harness {
     fn new(server: Arc<Server>, profile: Profile, cache: Option<std::path::PathBuf>) -> Self {
+        Self::timed(server, profile, cache, MINUTE)
+    }
+
+    /// A worker whose refresh period and timeout count in `minute`.
+    fn timed(
+        server: Arc<Server>,
+        profile: Profile,
+        cache: Option<std::path::PathBuf>,
+        minute: Duration,
+    ) -> Self {
         let worker = CatalogWorker::with_connector(
             profile,
             cache,
             Arc::new(|| {}),
             Arc::new(Fake(server.clone())),
             Arc::new(|_| Ok(Zeroizing::new("synthetic-password".into()))),
+            minute,
         );
         let mut harness = Self {
             worker,
@@ -305,12 +368,14 @@ impl Harness {
 }
 
 fn profile() -> Profile {
-    Profile {
+    let mut profile = Profile {
         name: "Catalog".into(),
         host: "127.0.0.1".into(),
         username: "synthetic-user".into(),
         ..Profile::default()
-    }
+    };
+    profile.catalog.refresh = CatalogRefresh::WhileConnected;
+    profile
 }
 
 fn warehouse() -> Arc<Server> {
@@ -727,5 +792,456 @@ fn logs_entries_count_only_the_requested_names() {
             .iter()
             .any(|t| t.starts_with("List columns of all relations in myxdb: 2 columns (")),
         "{texts:?}"
+    );
+}
+
+/// Wait until the worker cancelled a request. A cancellation runs on its own
+/// thread, and the watchdog and the worker can both cancel a timed-out request.
+fn wait_for_cancel(server: &Server) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.cancels.load(Ordering::SeqCst) == 0 {
+        assert!(Instant::now() < deadline, "no request was cancelled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn connects(server: &Server) -> usize {
+    server.connects.load(Ordering::SeqCst)
+}
+
+/// A cache of `warehouse()` read at `at`, with `sales` read later than the
+/// other schemas.
+fn cached_warehouse(path: &std::path::Path, profile: &Profile, at: u64) {
+    let mut h = Harness::new(warehouse(), profile.clone(), None);
+    h.refresh(Scope::Connection);
+    let mut catalog = h.catalog().clone();
+    catalog.fetched_at = Some(at);
+    for (name, schema) in catalog.schemas.iter_mut() {
+        let schema = Arc::make_mut(schema);
+        schema.fetched_at = Some(if name == "sales" { at + 1 } else { at });
+    }
+    storage::save_catalog(path, &catalog).unwrap();
+}
+
+#[test]
+fn an_automatic_refresh_is_due_only_while_warm_and_after_its_period() {
+    let every = CatalogSettings {
+        refresh: CatalogRefresh::WhileConnected,
+        ..CatalogSettings::default()
+    };
+    let last = UNIX_EPOCH + Duration::from_secs(1_000_000);
+    let hour = Duration::from_secs(3600);
+    assert_eq!(
+        refresh_due(&every, true, Some(last), MINUTE),
+        Some(last + hour)
+    );
+    // A catalog that Qrow never read is due at once.
+    assert_eq!(refresh_due(&every, true, None, MINUTE), Some(UNIX_EPOCH));
+    // No live session, or another choice: nothing is due.
+    assert_eq!(refresh_due(&every, false, Some(last), MINUTE), None);
+    for refresh in [CatalogRefresh::Manual, CatalogRefresh::Disabled] {
+        let settings = CatalogSettings {
+            refresh,
+            ..every.clone()
+        };
+        assert_eq!(refresh_due(&settings, true, None, MINUTE), None);
+    }
+    // A period change moves the due time.
+    let often = CatalogSettings {
+        refresh_minutes: 5,
+        ..every
+    };
+    assert_eq!(
+        refresh_due(&often, true, Some(last), MINUTE),
+        Some(last + Duration::from_secs(300))
+    );
+}
+
+#[test]
+fn a_warm_connection_refreshes_by_itself_and_a_cold_one_never_connects() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.refresh = CatalogRefresh::WhileConnected;
+    profile.catalog.refresh_minutes = 5;
+    // One "minute" is 40 ms, so the period is 200 ms.
+    let mut h = Harness::timed(
+        server.clone(),
+        profile.clone(),
+        None,
+        Duration::from_millis(40),
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(connects(&server), 0, "a cold connection opened a session");
+
+    // A catalog that Qrow never read is stale, so it is read at once.
+    h.worker.set_warm(true);
+    h.wait(|h| h.catalog().fetched_at.is_some() && h.status.is_idle());
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    // Then again after each period.
+    h.wait(|_| connects(&server) >= 3);
+
+    h.worker.set_warm(false);
+    // The worker applies the command before it starts another refresh.
+    std::thread::sleep(Duration::from_millis(100));
+    h.wait(|h| h.status.is_idle());
+    let after = connects(&server);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(connects(&server), after);
+
+    // A manual policy never refreshes by itself.
+    profile.catalog.refresh = CatalogRefresh::Manual;
+    h.worker.update_profile(profile);
+    h.worker.set_warm(true);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(connects(&server), after);
+}
+
+#[test]
+fn a_fresh_cache_waits_for_its_period_and_a_stale_one_refreshes_when_warm() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let now = qrow::catalog::now();
+    cached_warehouse(&path, &profile, now);
+
+    // Read now, with a period of 60 minutes: no refresh is due.
+    let server = warehouse();
+    let h = Harness::new(server.clone(), profile.clone(), Some(path.clone()));
+    h.worker.set_warm(true);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(connects(&server), 0);
+    h.worker.shutdown();
+    h.worker.wait_for_shutdown(Duration::from_secs(5));
+
+    // Read two hours ago: the refresh starts when the connection is warm.
+    cached_warehouse(&path, &profile, now - 2 * 3600);
+    let server = warehouse();
+    let mut h = Harness::new(server.clone(), profile, Some(path));
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(connects(&server), 0);
+    h.worker.set_warm(true);
+    h.wait(|h| h.catalog().fetched_at.is_some_and(|at| at >= now));
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(connects(&server), 1);
+}
+
+#[test]
+fn a_connection_refresh_reads_the_oldest_schemas_first() {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = profile();
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    cached_warehouse(&path, &profile, 1_000);
+    let server = warehouse();
+    let mut h = Harness::new(server.clone(), profile, Some(path));
+    h.refresh(Scope::Connection);
+    let order: Vec<_> = server
+        .requests()
+        .into_iter()
+        .filter_map(|request| match request {
+            MetadataRequest::Relations {
+                schema,
+                relation: None,
+            } => Some(schema),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["empty", "sales_tmp", "salesx", "sales"]);
+}
+
+/// The schemas whose relation lists the server returned, in order.
+fn relation_lists(server: &Server) -> Vec<String> {
+    server
+        .requests()
+        .into_iter()
+        .filter_map(|request| match request {
+            MetadataRequest::Relations {
+                schema,
+                relation: None,
+            } => Some(schema),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_stopped_connection_refresh_continues_in_the_refresh_period() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("salesx".into());
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    profile.catalog.log_refreshes = true;
+    // One "minute" is 250 ms: the timeout is 500 ms, and the refresh period
+    // of 60 minutes is 15 s.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
+    h.worker.refresh(Scope::Connection);
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(
+        relation_lists(&server),
+        ["empty", "sales", "sales_tmp", "salesx"]
+    );
+    let unfinished = h.catalog().unfinished.clone().unwrap();
+    assert_eq!(
+        unfinished.done.into_iter().collect::<Vec<_>>(),
+        ["empty", "sales", "sales_tmp"]
+    );
+    wait_for_cancel(&server);
+
+    // The next connection refresh reads only the schema that it did not read.
+    *server.block_schema.lock().unwrap() = None;
+    let before = relation_lists(&server).len();
+    let _ = h.worker.activities.try_iter().count();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server)[before..], ["salesx"]);
+    assert_eq!(h.columns("salesx", "other").unwrap(), ["y"]);
+    assert!(h.catalog().unfinished.is_none());
+    let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|text| text
+                == "Continued a stopped schema refresh: 3 of 4 schemas were already read"),
+        "{texts:?}"
+    );
+
+    // A completed refresh does not continue: the next one reads all schemas.
+    let before = relation_lists(&server).len();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server).len() - before, 4);
+}
+
+#[test]
+fn a_continued_refresh_retries_a_schema_with_failed_reads() {
+    for relation_list_fails in [false, true] {
+        let server = warehouse();
+        if relation_list_fails {
+            server
+                .broken_relation_lists
+                .lock()
+                .unwrap()
+                .push("sales".into());
+        } else {
+            server.broken_schemas.lock().unwrap().push("sales".into());
+            server.broken_relations.lock().unwrap().push("daily".into());
+        }
+        *server.block_schema.lock().unwrap() = Some("salesx".into());
+        let mut profile = profile();
+        profile.catalog.timeout_minutes = 2;
+        let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
+        h.refresh(Scope::Connection);
+        assert!(
+            !h.catalog()
+                .unfinished
+                .as_ref()
+                .unwrap()
+                .done
+                .contains("sales")
+        );
+        wait_for_cancel(&server);
+        server.broken_relation_lists.lock().unwrap().clear();
+        server.broken_schemas.lock().unwrap().clear();
+        server.broken_relations.lock().unwrap().clear();
+        *server.block_schema.lock().unwrap() = None;
+        let before = relation_lists(&server).len();
+        h.refresh(Scope::Connection);
+        let expected = if relation_list_fails {
+            ["sales", "salesx"]
+        } else {
+            ["salesx", "sales"]
+        };
+        assert_eq!(relation_lists(&server)[before..], expected);
+        assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
+        assert!(
+            h.catalog()
+                .relation("sales", "daily")
+                .unwrap()
+                .error
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn a_continued_refresh_rereads_a_schema_hidden_and_shown_again() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("salesx".into());
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    let mut h = Harness::timed(
+        server.clone(),
+        profile.clone(),
+        None,
+        Duration::from_millis(250),
+    );
+    h.refresh(Scope::Connection);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    wait_for_cancel(&server);
+    profile.catalog.exclude = vec!["sales".into()];
+    h.worker.update_profile(profile.clone());
+    h.wait(|h| h.catalog().schema("sales").is_none());
+    assert!(
+        !h.catalog()
+            .unfinished
+            .as_ref()
+            .unwrap()
+            .done
+            .contains("sales")
+    );
+    profile.catalog.exclude.clear();
+    h.worker.update_profile(profile);
+    *server.block_schema.lock().unwrap() = None;
+    let before = relation_lists(&server).len();
+    h.refresh(Scope::Connection);
+    assert_eq!(relation_lists(&server)[before..], ["sales", "salesx"]);
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert!(h.catalog().unfinished.is_none());
+}
+
+#[test]
+fn a_timeout_stops_the_refresh_and_keeps_what_it_read() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("salesx".into());
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    profile.catalog.log_refreshes = true;
+    // One "minute" is 250 ms, so the timeout is 500 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(250));
+    let started = Instant::now();
+    h.worker.refresh(Scope::Connection);
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert!(started.elapsed() >= Duration::from_millis(500));
+    let catalog = h.catalog();
+    assert_eq!(
+        catalog.error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
+    );
+    // The schemas before the blocked one stay in the catalog.
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+    assert!(catalog.schema("empty").unwrap().relations.is_some());
+    assert!(catalog.schema("salesx").unwrap().relations.is_none());
+    wait_for_cancel(&server);
+    assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
+    let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
+    assert!(
+        texts
+            .last()
+            .unwrap()
+            .starts_with("Schema refresh stopped after 2 minutes"),
+        "{texts:?}"
+    );
+
+    // A schema refresh has the same limit.
+    h.worker.refresh(Scope::Schema("salesx".into()));
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(
+        h.catalog().schema("salesx").unwrap().error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
+    );
+}
+
+#[test]
+fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("sales".into());
+    let mut profile = profile();
+    profile.catalog.log_refreshes = true;
+    let mut h = Harness::new(server.clone(), profile, None);
+    h.worker.set_warm(true);
+    h.wait(|h| h.status.active == Some(Scope::Connection));
+    // `empty` goes before the blocked `sales`.
+    std::thread::sleep(Duration::from_millis(200));
+    h.worker.set_warm(false);
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(h.catalog().error, None);
+    assert!(h.catalog().schema("empty").unwrap().relations.is_some());
+    wait_for_cancel(&server);
+    assert_eq!(server.closes.load(Ordering::SeqCst), connects(&server));
+    let texts: Vec<_> = h.worker.activities.try_iter().map(|e| e.text).collect();
+    assert!(
+        texts[0].starts_with("Started an automatic schema refresh of the connection"),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .last()
+            .unwrap()
+            .starts_with("Schema refresh stopped because no tab of the connection is connected"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn a_timeout_cancels_a_call_that_blocks() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 150 ms, so the timeout is 300 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(150));
+    h.refresh(Scope::Connection);
+    *server.hang_schema.lock().unwrap() = Some("sales".into());
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    wait_for_cancel(&server);
+    assert_eq!(
+        h.catalog().schema("sales").unwrap().error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
+    );
+    assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
+}
+
+#[test]
+fn an_automatic_refresh_stops_between_fetches_when_the_connection_becomes_cold() {
+    let server = warehouse();
+    *server.endless_schema.lock().unwrap() = Some("sales".into());
+    let mut h = Harness::new(server.clone(), profile(), None);
+    h.worker.set_warm(true);
+    h.wait(|h| h.status.active == Some(Scope::Connection));
+    std::thread::sleep(Duration::from_millis(200));
+    h.worker.set_warm(false);
+    h.wait(|h| h.status.is_idle());
+    wait_for_cancel(&server);
+    assert_eq!(h.catalog().error, None);
+}
+
+#[test]
+fn a_slow_cancel_transport_does_not_block_a_cancel_from_the_window() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 100 ms, so the timeout is 200 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(100));
+    h.refresh(Scope::Connection);
+    *server.hang_schema.lock().unwrap() = Some("sales".into());
+    *server.cancel_delay.lock().unwrap() = Duration::from_secs(2);
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    // The watchdog is now in its slow cancellation.
+    wait_for_cancel(&server);
+    let started = Instant::now();
+    h.worker.cancel();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    h.wait(|h| h.status.is_idle());
+}
+
+#[test]
+fn a_refresh_that_times_out_while_it_connects_sends_no_request() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 2;
+    // One "minute" is 100 ms, so the timeout is 200 ms.
+    let mut h = Harness::timed(server.clone(), profile, None, Duration::from_millis(100));
+    h.refresh(Scope::Connection);
+    let earlier = server.requests().len();
+    *server.connect_delay.lock().unwrap() = Duration::from_millis(400);
+    h.worker.refresh(Scope::Schema("sales".into()));
+    h.wait(|h| h.status.active.is_some());
+    h.wait(|h| h.status.is_idle());
+    assert_eq!(server.requests().len(), earlier);
+    assert_eq!(
+        h.catalog().schema("sales").unwrap().error.as_deref(),
+        Some("Refresh stopped after 2 minutes")
     );
 }

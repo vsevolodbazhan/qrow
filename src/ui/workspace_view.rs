@@ -18,8 +18,15 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-pub(super) fn connection_tooltip(profile: &Profile) -> String {
-    format!("{} · {}", profile.host, profile.username)
+/// The tooltip of a connection row: its host and user, then the error of
+/// the last schema refresh of the connection.
+pub(super) fn connection_tooltip(profile: &Profile, refresh_error: Option<&str>) -> String {
+    let mut tooltip = format!("{} · {}", profile.host, profile.username);
+    if let Some(error) = refresh_error {
+        tooltip.push('\n');
+        tooltip.push_str(&super::catalog_tree::error_summary(error));
+    }
+    tooltip
 }
 
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
@@ -930,8 +937,12 @@ mod tests {
             ..Profile::default()
         };
         assert_eq!(
-            connection_tooltip(&tooltip_profile),
+            connection_tooltip(&tooltip_profile, None),
             "kyuubi.example.com · aviaservice"
+        );
+        assert_eq!(
+            connection_tooltip(&tooltip_profile, Some("Refresh stopped after 30 minutes")),
+            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nThe Logs of each tab of the connection show the full error."
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(

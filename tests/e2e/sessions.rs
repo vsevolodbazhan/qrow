@@ -21,7 +21,7 @@ fn tab_sql(app: &TestApp, profile: &Profile, title: &str) -> Option<String> {
 
 fn edit(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) {
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
 }
 

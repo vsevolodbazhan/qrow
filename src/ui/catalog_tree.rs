@@ -100,6 +100,8 @@ struct CatalogConnection {
     worker: Option<CatalogWorker>,
     catalog: Option<Arc<Catalog>>,
     status: Status,
+    /// The live-session state that the worker last received.
+    warm: bool,
 }
 
 pub(super) struct CatalogTree {
@@ -163,6 +165,15 @@ impl CatalogTree {
         self.connections
             .get(&profile)
             .map(|connection| &connection.status)
+    }
+
+    /// The error of the last connection refresh, while no connection
+    /// refresh runs. A collapsed connection shows it too.
+    fn connection_error(&self, profile: Uuid) -> Option<&str> {
+        let running = self
+            .status(profile)
+            .is_some_and(|status| status.active == Some(Scope::Connection));
+        self.catalog(profile)?.error.as_deref().filter(|_| !running)
     }
 
     /// Whether a refresh of the connection is in progress or waits.
@@ -285,6 +296,10 @@ impl Builder<'_> {
             profile.name.clone(),
             Node::Connection(profile.id),
         );
+        // A connection without schema browsing is a row without children.
+        if !profile.catalog.browses() {
+            return item;
+        }
         let catalog = self.tree.catalog(profile.id);
         let searching = !self.search.is_empty();
         let has_matches = searching
@@ -524,6 +539,8 @@ struct ConnectionRow {
     busy: bool,
     refreshing: bool,
     unread_error: bool,
+    /// The error of the last connection refresh.
+    refresh_error: bool,
     active: bool,
 }
 
@@ -580,12 +597,19 @@ impl Qrow {
                     worker: None,
                     catalog: Some(Arc::new(demo_catalog(profile))),
                     status: Status::default(),
+                    warm: false,
                 });
             return;
         }
-        let Some(saved) = self.profiles.iter().find(|p| p.id == profile).cloned() else {
+        let Some(saved) = self
+            .profiles
+            .iter()
+            .find(|p| p.id == profile && p.catalog.browses())
+            .cloned()
+        else {
             return;
         };
+        let warm = self.catalog_warm(profile);
         let connection = self.catalog.connections.entry(profile).or_default();
         if connection.worker.is_some() {
             return;
@@ -597,14 +621,45 @@ impl Qrow {
             .as_deref()
             .filter(|_| self.saver.is_some())
             .map(|workspace| storage::catalog_path(workspace, profile));
-        connection.worker = Some(CatalogWorker::new(
+        let worker = CatalogWorker::new(
             saved,
             cache,
             Arc::new(move || {
                 let _ = wake.try_send(());
             }),
             self.credentials.clone(),
-        ));
+        );
+        worker.set_warm(warm);
+        connection.warm = warm;
+        connection.worker = Some(worker);
+    }
+
+    /// Tell each catalog worker whether a tab of its connection has a live
+    /// session. A connection with automatic refresh gets its worker when it
+    /// first has one, so the worker can refresh a stale catalog.
+    pub(super) fn sync_catalog_warmth(&mut self) {
+        for index in 0..self.profiles.len() {
+            let profile = &self.profiles[index];
+            let id = profile.id;
+            let automatic = profile.catalog.refresh == CatalogRefresh::WhileConnected;
+            let warm = self.catalog_warm(id);
+            let connection = self.catalog.connections.get_mut(&id);
+            match connection.and_then(|connection| {
+                connection
+                    .worker
+                    .as_ref()
+                    .map(|worker| (worker, &mut connection.warm))
+            }) {
+                Some((worker, sent)) => {
+                    if *sent != warm {
+                        worker.set_warm(warm);
+                        *sent = warm;
+                    }
+                }
+                None if warm && automatic => self.ensure_catalog(id),
+                None => {}
+            }
+        }
     }
 
     /// The demo shows the tree of its first connection open to one table.
@@ -766,13 +821,43 @@ impl Qrow {
 
     /// Gives an edited profile to its catalog worker.
     pub(super) fn catalog_profile_saved(&mut self, profile: &Profile, cx: &mut Context<Self>) {
-        if let Some(worker) = self
+        if !profile.catalog.browses() {
+            // Stop reading schemas. The cache file stays for a later enable.
+            if let Some(worker) = self
+                .catalog
+                .connections
+                .remove(&profile.id)
+                .and_then(|connection| connection.worker)
+            {
+                worker.shutdown();
+            }
+            // The row has no children now, so it is not expanded. A later
+            // enable then starts with a collapsed connection.
+            let connection = connection_id(profile.id);
+            let prefixes = Self::descendant_prefixes(profile.id, None);
+            let below = |id: &SharedString| {
+                *id == connection
+                    || prefixes
+                        .iter()
+                        .any(|prefix| id.starts_with(prefix.as_str()))
+            };
+            self.catalog.expanded.retain(|id| !below(id));
+            self.catalog.collapsed.retain(|id| !below(id));
+            self.rebuild_catalog_tree(cx);
+            return;
+        }
+        match self
             .catalog
             .connections
             .get(&profile.id)
             .and_then(|connection| connection.worker.as_ref())
         {
-            worker.update_profile(profile.clone());
+            Some(worker) => worker.update_profile(profile.clone()),
+            // An expanded connection shows its cache at once.
+            None if self.catalog.expanded.contains(&connection_id(profile.id)) => {
+                self.ensure_catalog(profile.id)
+            }
+            None => {}
         }
         self.rebuild_catalog_tree(cx);
     }
@@ -821,7 +906,7 @@ impl Qrow {
         }
     }
 
-    /// Whether Collapse All has rows to collapse below the connection or
+    /// Whether Collapse has rows to collapse below the connection or
     /// schema. The built tree knows which rows are open, also the rows that
     /// a search opens.
     pub(super) fn has_expanded_descendants(
@@ -969,7 +1054,7 @@ impl Qrow {
                 };
                 let menu = match collapse {
                     Some((collapse, has_expanded)) => menu.item(
-                        PopupMenuItem::new("Collapse All")
+                        PopupMenuItem::new("Collapse")
                             .on_click(collapse)
                             .disabled(!has_expanded),
                     ),
@@ -993,11 +1078,13 @@ impl Qrow {
                 .iter()
                 .map(|profile| {
                     let id = profile.id;
+                    let refresh_error = self.catalog.connection_error(id);
                     (
                         id,
                         ConnectionRow {
                             name: profile.name.clone(),
-                            tooltip: workspace_view::connection_tooltip(profile),
+                            tooltip: workspace_view::connection_tooltip(profile, refresh_error),
+                            refresh_error: refresh_error.is_some(),
                             busy: self.profile_busy(id),
                             refreshing: self.catalog.is_refreshing(id),
                             unread_error: self
@@ -1112,6 +1199,33 @@ struct RowContext {
 }
 
 impl RowContext {
+    /// Records the current tooltip of the row `id` for its open tooltip view.
+    fn record_tip(&self, id: &SharedString, text: String, truncation: Option<Truncation>) {
+        let mut tips = self.tips.borrow_mut();
+        if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(id) {
+            tips.clear();
+        }
+        tips.insert(id.clone(), RowTip { text, truncation });
+    }
+
+    /// A tooltip that follows the tooltip that the row `id` records.
+    fn live_tooltip(
+        &self,
+        id: &SharedString,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        let (id, tips, widths) = (id.clone(), self.tips.clone(), self.widths.clone());
+        move |_, cx| {
+            let (id, tips, widths) = (id.clone(), tips.clone(), widths.clone());
+            cx.new(|_| LiveTooltip {
+                id,
+                tips,
+                widths,
+                shown: None,
+            })
+            .into()
+        }
+    }
+
     /// Records the laid-out width of the label `key` during prepaint.
     fn record_width(
         &self,
@@ -1272,7 +1386,7 @@ fn render_entry(
             .h(ui_px(ROW_HEIGHT))
             .py_0p5()
             .child(
-                connection_row(*profile, row, selected, disclosure, context, cx)
+                connection_row(&id, *profile, row, selected, disclosure, context, cx)
                     .pl(ui_px(4.))
                     .h_full()
                     .on_mouse_down(MouseButton::Left, focus),
@@ -1366,17 +1480,7 @@ fn render_entry(
             .collect(),
     });
     if let Some(text) = &tooltip {
-        let mut tips = context.tips.borrow_mut();
-        if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(&id) {
-            tips.clear();
-        }
-        tips.insert(
-            id.clone(),
-            RowTip {
-                text: text.clone(),
-                truncation,
-            },
-        );
+        context.record_tip(&id, text.clone(), truncation);
     }
     let menu_id = id.clone();
     let row = h_flex()
@@ -1441,17 +1545,7 @@ fn render_entry(
             )
         })
         .when(tooltip.is_some() && !*menu_open, |el| {
-            let (id, tips, widths) = (id.clone(), context.tips.clone(), context.widths.clone());
-            el.tooltip(move |_, cx| {
-                let (id, tips, widths) = (id.clone(), tips.clone(), widths.clone());
-                cx.new(|_| LiveTooltip {
-                    id,
-                    tips,
-                    widths,
-                    shown: None,
-                })
-                .into()
-            })
+            el.tooltip(context.live_tooltip(&id))
         })
         .on_mouse_down(MouseButton::Left, focus)
         .on_mouse_down(MouseButton::Right, {
@@ -1536,6 +1630,7 @@ fn status_slot(id: String, width: Pixels) -> impl IntoElement + ParentElement {
 
 /// The row of a connection: the disclosure and the connection button.
 fn connection_row(
+    entry: &SharedString,
     id: Uuid,
     row: &ConnectionRow,
     selected: bool,
@@ -1546,9 +1641,12 @@ fn connection_row(
     let (menu_open, weak) = (context.menu_open, &context.weak);
     // As wide as the header's New Connection button.
     let slot_width = px(context.scale * 28.);
-    let has_status = row.busy || row.refreshing || row.unread_error;
+    let has_status = row.busy || row.refreshing || row.unread_error || row.refresh_error;
+    // The tooltip can change while it is open: a refresh error arrives or
+    // goes away.
+    context.record_tip(entry, row.tooltip.clone(), None);
     let accessibility_label = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}",
         row.name,
         if row.busy { ", running" } else { "" },
         if row.refreshing {
@@ -1558,6 +1656,11 @@ fn connection_row(
         },
         if row.unread_error {
             ", unread error"
+        } else {
+            ""
+        },
+        if row.refresh_error {
+            ", schema refresh error"
         } else {
             ""
         }
@@ -1609,7 +1712,9 @@ fn connection_row(
                             .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
                     )
                 })
-                .when(row.unread_error, |el| {
+                // One warning icon covers an unread query error and a
+                // schema refresh error. The tooltip and the label tell which.
+                .when(row.unread_error || row.refresh_error, |el| {
                     el.child(
                         status_slot(format!("connection-error-{id}"), slot_width).child(
                             Icon::new(AssetIconName::TriangleAlert)
@@ -1619,7 +1724,6 @@ fn connection_row(
                     )
                 }),
         )
-        .when(!menu_open, |button| button.tooltip(row.tooltip.clone()))
         .on_click({
             let weak = weak.clone();
             move |_, window, cx| {
@@ -1628,6 +1732,7 @@ fn connection_row(
         });
     h_flex()
         .id(SharedString::from(format!("connection-{id}")))
+        .when(!menu_open, |el| el.tooltip(context.live_tooltip(entry)))
         .w_full()
         .gap_0p5()
         .rounded(cx.theme().radius)

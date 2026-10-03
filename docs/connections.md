@@ -15,8 +15,9 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 4. Enter your LDAP username and password.
 5. Enter the initial database.
 6. Enter session parameters as a JSON object with string values.
-7. Optional: Enter [schema patterns](#show-or-hide-schemas) in **Show schemas**
-   and **Hide schemas**.
+7. Optional: To [browse the schemas](#browse-schemas) of the connection, set
+   **Schema refresh** to **Manual** or **While connected**. Then you can enter
+   [schema patterns](#show-or-hide-schemas).
 8. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
@@ -32,13 +33,14 @@ macOS can request Keychain access when you save the password.
 
 ## Edit, duplicate, or delete a profile
 
-Right-click a profile to use **Edit Connection…**, **Duplicate**, or **Delete**.
+Right-click a profile and use the **Connection** section of the menu: **Edit**,
+**Duplicate**, or **Delete**.
 An empty password field during an edit keeps the stored password. A duplicate
 has a new profile identifier, a unique name based on the source name, and
 requires a password.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name, the Connection Lifecycle fields, or the schema patterns. The worker applies the new lifecycle
+name, the Connection Lifecycle fields, or the Schemas fields. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -55,16 +57,33 @@ so a failed deletion can leave the password in Keychain.
 ## Browse schemas
 
 The Connections sidebar is a tree. Each connection is a root row. Under a
-connection, the tree shows its schemas, then the tables and views of each
-schema, then the columns of each table or view. A column row shows the column
-name and its type. A schema row shows the number of its tables and views.
+connection that browses schemas, the tree shows its schemas, then the tables
+and views of each schema, then the columns of each table or view. A column
+row shows the column name and its type. A schema row shows the number of its
+tables and views.
+
+Schema browsing is off for a new connection. To turn it on, open the
+connection settings and set **Schema refresh**, the first field of the
+Schemas section:
+
+- **Disabled**: Qrow does not read or show the schemas of the connection. The
+  connection row has no arrow, and its menu has no **Schemas** section. The
+  other Schemas fields do not show, and they keep their values. Qrow keeps
+  the copy of the schemas on your computer, so the tree shows it again when
+  you turn browsing on.
+- **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
+  expand an unread row while a tab of the connection is connected.
+- **While connected**: as **Manual**, and Qrow also
+  [refreshes the schemas automatically](#refresh-schemas-automatically).
+
+To use the tree:
 
 - Click a connection to select it. This does not expand the connection.
 - Click the arrow before a connection to expand or collapse it.
 - Click a schema, a table, or a view to expand or collapse it.
 - To collapse all rows below a connection or a schema, right-click it and
-  select **Collapse All**. The connection or the schema stays expanded. During
-  a search, **Collapse All** on a connection also collapses the schemas that
+  select **Collapse**. The connection or the schema stays expanded. During
+  a search, **Collapse** on a connection also collapses the schemas that
   the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
@@ -77,8 +96,8 @@ name and its type. A schema row shows the number of its tables and views.
 
 Qrow keeps a copy of the schemas of each connection on your computer. The tree
 shows this copy, also when the connection has no session. Qrow reads the copy
-when you first expand the connection or search the tree. Qrow does not read
-the copy or open a session at startup.
+when you first expand the connection, search the tree, or connect a tab of
+the connection. Qrow does not read the copy or open a session at startup.
 
 ### Refresh schemas
 
@@ -87,7 +106,8 @@ session for the refresh and closes it when the refresh ends. This session does
 not change the idle timer, the keep-alive, or the results of a tab.
 
 - To refresh all schemas, with the tables and the columns of each schema,
-  right-click the connection and select **Refresh Schemas**.
+  right-click the connection and select **Refresh** in the **Schemas**
+  section.
 - To refresh one schema and the columns of all its tables, right-click the
   schema and select **Refresh**.
 - To refresh one table or view and its columns, right-click it and select
@@ -96,13 +116,29 @@ not change the idle timer, the keep-alive, or the results of a tab.
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
 A connection refresh reads one schema at a time: first its tables, then their
-columns. The progress row shows the number of schemas that are done. A
-connection with many schemas or tables can need many minutes. To make it
-faster, hide the schemas that you do not use.
+columns. It starts with the schemas that Qrow read longest ago. The progress
+row shows the number of schemas that are done. A connection with many schemas
+or tables can need many minutes. To make it faster, hide the schemas that you
+do not use.
 
-Qrow does not start a session to read schemas by itself. When a tab of the
-connection has a live session, Qrow reads the missing data when you expand a
-row:
+Each refresh stops when it takes longer than **Refresh timeout** in the
+connection settings. The default is 30 minutes. The tree keeps what the
+refresh read before it stopped. The error **Refresh stopped after 30
+minutes** shows like other [refresh errors](#refresh-errors).
+
+When a connection refresh stops before its end, for example at its timeout,
+when you stop it, or when the session fails, the next connection refresh in
+the **Refresh period** continues it. It does not read again the schemas that
+the stopped refresh read without an error, and its progress starts at their
+number. A schema with a failed read is read again. A schema that you hide
+and show again is read again because its cached data was removed. After the
+refresh period, the next connection refresh reads all schemas again. With
+**Manual** refresh, the period is the last saved **Refresh period**, 60
+minutes by default.
+
+Qrow does not start a session to read schemas when no tab of the connection
+has a live session. When a tab of the connection has a live session, Qrow
+reads the missing data when you expand a row:
 
 - A connection that Qrow never read.
 - A schema without its list of tables.
@@ -111,11 +147,51 @@ row:
 When the connection has no live session, an unread row shows **Not loaded**.
 Click **Refresh** in that row to read it. This opens a session.
 
-If a refresh fails, the row of the failed part shows the error. Point to the
-row to read the first line of the error. The Logs of each tab of the
-connection show the full error. The tree keeps the data that it had before the
-refresh. If Qrow cannot connect, it stops the refreshes that wait for that
-connection.
+#### Refresh errors
+
+If a refresh fails or stops at its timeout, the tree keeps the data that it
+had before the refresh. The error shows on the row of the refreshed part:
+
+- A connection: the connection row shows a warning icon, also when the
+  connection is collapsed. Point to the row to read the first line of the
+  error below the host and the user. The first row under the expanded
+  connection shows the error with **Refresh**. The icon goes away when the
+  next connection refresh starts.
+- A schema, a table, or a view: the row shows a warning icon. Point to the row
+  to read the first line of the error. The first row under the expanded row
+  shows the error with **Refresh**.
+
+The Logs of each tab of the connection show the full error. The connection
+row uses the same warning icon for an unread query error. Only a refresh error
+adds text to the tooltip of the row. If Qrow cannot connect, it stops the
+refreshes that wait for that connection.
+
+### Refresh schemas automatically
+
+When **Schema refresh** is **While connected**, Qrow refreshes the schemas of
+the connection after each refresh period, but only while a tab of the
+connection has a live session. The refresh then uses
+the engine that the tab already started. Qrow never opens a session for an
+automatic refresh on a connection without one.
+
+- When a tab of a connection gets a live session and the last connection
+  refresh is older than the period, Qrow refreshes the connection at once. A
+  connection that Qrow never read is always older than the period. Thus, the
+  first query of a connection fills its tree.
+- While a tab of the connection stays connected, Qrow refreshes the connection
+  each time the period passes. The period starts at the start of the last
+  connection refresh, also a manual refresh, or a refresh that failed or
+  stopped.
+- When no tab of the connection has a live session any more, Qrow stops an
+  automatic refresh in progress. The tree keeps what the refresh read.
+
+Set these fields in the Schemas section of the connection settings:
+
+- **Refresh period**: the minutes between automatic refreshes, from 5 to
+  10,080 (7 days). The default is 60. This field shows only for **While
+  connected**.
+- **Refresh timeout**: the longest time of one refresh, manual or automatic,
+  from 1 to 1,440 minutes (1 day). The default is 30.
 
 ### Search the tree
 
@@ -151,14 +227,15 @@ To see the requests of each refresh, open the connection settings and set
 **Schema refresh logs** to **Enabled**. The option applies to the connection. Qrow then
 records each refresh in the Logs of each tab of the connection:
 
-- The start of the refresh.
+- The start of the refresh. An automatic refresh starts with **Started an
+  automatic schema refresh**.
 - The session that the refresh opens.
 - Each request, with its duration and the number of schemas, relations, or
   columns that it returned. For example, `List columns of all relations in
   sales: 769 columns` is one request for the columns of all tables and views
   in the schema `sales`.
-- The result of the refresh: completed, cancelled, or failed. If some schemas
-  or tables could not be read, the result tells how many.
+- The result of the refresh: completed, cancelled, stopped, or failed. If some
+  schemas or tables could not be read, the result tells how many.
 
 When the option is **Disabled**, Logs show only the errors of a refresh: each
 failed request and the result of a failed refresh, with the full error.
@@ -190,13 +267,16 @@ use.
 ### Schema limitations
 
 - With the Kyuubi share level `CONNECTION`, each refresh session starts its own
-  Spark engine. The default share level, `USER`, uses the engine of your
-  other sessions.
+  Spark engine, also for an automatic refresh. The default share level,
+  `USER`, uses the engine of your other sessions.
 - The tree does not show temporary views, because they belong to the session
   of a tab.
 - The tree does not show which columns are partition columns. HiveServer2 does
   not report this.
 - Qrow does not save which rows are expanded.
+- Qrow cannot stop a refresh while it opens its session or sends a request to
+  the server. Each of these steps can take up to 2 minutes when the server
+  does not answer. Thus, a refresh can take longer than its timeout.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   has more columns, its refresh fails. Hide schemas or refresh single tables.
 

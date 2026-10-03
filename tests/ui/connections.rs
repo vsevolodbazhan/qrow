@@ -131,7 +131,7 @@ fn connection_names_stay_unique_on_create_and_rename(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.count(), 2);
 
     app.context_menu(cx, connection_row(other));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
     app.fill(cx, "connection-name", "Qrow E2E");
     app.click(cx, "save-profile");
@@ -148,19 +148,44 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
 
     app.context_menu(cx, connection_row(original));
     app.update(cx, |window, _| {
-        for item in ["Edit Connection…", "Duplicate", "Delete"] {
-            assert!(
-                menu_item(window, "popup-menu", item).is_some(),
-                "The menu has no {item}"
-            );
-        }
+        // The connection section, then the schemas section, from top to
+        // bottom. Section titles are not items, so they have their own IDs.
+        let top = |window: &mut gpui_kit::Window, entry: &str| {
+            if let Some(title) = window.try_find(format!("menu-section-{entry}")) {
+                return title.bounds().origin.y;
+            }
+            let index = menu_item(window, "popup-menu", entry)
+                .unwrap_or_else(|| panic!("The menu has no {entry}"));
+            window
+                .within("popup-menu".to_owned())
+                .find(index)
+                .bounds()
+                .origin
+                .y
+        };
+        let order = [
+            "Connection",
+            "Edit",
+            "Duplicate",
+            "Delete",
+            "Schemas",
+            "Refresh",
+            "Collapse",
+        ]
+        .map(|entry| top(window, entry));
+        assert!(order.is_sorted_by(|a, b| a < b), "{order:?}");
+        // A section title is not a command.
+        assert_eq!(
+            window.find("menu-section-Connection").label(),
+            Some("Connection")
+        );
     });
     // A dismissed menu is released; the leak detector fails the test otherwise.
     app.press(cx, "escape");
     app.wait_gone(cx, "popup-menu");
 
     app.context_menu(cx, connection_row(original));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-password");
     cancel_form(&app, cx);
 

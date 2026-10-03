@@ -1,12 +1,14 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, label, labelled, offline_profile, press_at, shows,
+    MemoryCredentials, TestApp, bounds_of, connection_row, label, labelled, menu_item,
+    offline_profile, press_at, shows, value,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
-    model::{CatalogSettings, Profile, SavedTab, Workspace},
+    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, Workspace},
     storage::{self, Credentials},
 };
 use std::{collections::BTreeMap, net::TcpListener, time::Duration};
@@ -296,7 +298,7 @@ fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
     assert_eq!(app.credentials.reads(), 1);
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "a second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -344,7 +346,7 @@ fn hidden_schemas_leave_the_tree_when_the_connection_is_saved(cx: &mut TestAppCo
     wait_shows(&app, cx, "finance");
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.scroll_to(cx, "connection-hide-schemas");
     app.fill(cx, "connection-hide-schemas", "fin*, scratch");
     app.click(cx, "save-profile");
@@ -450,7 +452,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
 
     // Off by default: only the errors of a refresh go to Logs, in full.
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the first attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 1
     });
@@ -473,7 +475,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
     app.settle(cx);
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Edit Connection…");
+    app.choose(cx, "popup-menu", "Edit");
     app.scroll_to(cx, "connection-refresh-logs");
     app.select(cx, "connection-refresh-logs", "Enabled");
     app.click(cx, "save-profile");
@@ -483,7 +485,7 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
     });
 
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Refresh Schemas");
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the second attempt", Duration::from_secs(20), |_, _| {
         app.credentials.reads() == 2
     });
@@ -505,13 +507,17 @@ fn schema_refresh_errors_always_show_in_logs_and_requests_when_enabled(cx: &mut 
         "{logs}"
     );
     assert!(logs.contains("Schema refresh failed"), "{logs}");
-    // A refresh error does not mark the connection as having an unread error.
-    app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, connection_row(profile.id)).as_deref(),
-            Some("Unreachable")
-        );
-    });
+    // A refresh error does not mark the connection as having an unread
+    // error. The collapsed connection row shows the refresh error.
+    app.wait_until(
+        cx,
+        "the refresh error",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, connection_row(profile.id)).as_deref()
+                == Some("Unreachable, schema refresh error")
+        },
+    );
 }
 
 #[gpui_kit::test]
@@ -609,7 +615,7 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
 
     // A schema keeps its relations open, but their columns close.
     app.context_menu_labelled(cx, "avia");
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "gate STRING");
     wait_shows(&app, cx, "bookings");
 
@@ -617,15 +623,260 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     app.click_labelled(cx, "bookings");
     wait_shows(&app, cx, "gate STRING");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "bookings");
     wait_shows(&app, cx, "avia");
 
-    // A search expands the schemas with matches. Collapse All closes them too.
+    // A search expands the schemas with matches. Collapse closes them too.
     app.fill_labelled(cx, "Search Tables", "book");
     wait_shows(&app, cx, "bookings");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Collapse All");
+    app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "bookings");
     wait_shows(&app, cx, "avia");
+}
+
+#[gpui_kit::test]
+fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let wait_error = |cx: &mut TestAppContext, expected: &str| {
+        app.wait_until(cx, expected, Duration::from_secs(10), |window, _| {
+            label(window, "connection-form-error-accessibility").as_deref() == Some(expected)
+        });
+    };
+    let edit = |cx: &mut TestAppContext| {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.scroll_to(cx, "connection-schema-refresh");
+    };
+    let saved = |app: &TestApp| app.saved().profiles[0].catalog.clone();
+
+    // Manual: Schema refresh comes first, with no refresh period.
+    edit(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-refresh").as_deref(),
+            Some("Manual")
+        );
+        assert!(window.try_find("connection-refresh-period").is_none());
+        let refresh = bounds_of(window, "connection-schema-refresh");
+        let show = bounds_of(window, "connection-show-schemas");
+        assert!(refresh.origin.y < show.origin.y);
+    });
+    app.scroll_to(cx, "connection-refresh-timeout");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-refresh-timeout").as_deref(),
+            Some("30")
+        );
+    });
+
+    // While connected shows the period, and both fields are validated.
+    app.scroll_to(cx, "connection-schema-refresh");
+    app.select(cx, "connection-schema-refresh", "While connected");
+    app.wait_for(cx, "connection-refresh-period");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-refresh-period").as_deref(),
+            Some("60")
+        );
+    });
+    app.fill(cx, "connection-refresh-period", "4");
+    app.click(cx, "save-profile");
+    wait_error(cx, "Refresh period must be between 5 and 10080 minutes.");
+    app.fill(cx, "connection-refresh-period", "15");
+    app.scroll_to(cx, "connection-refresh-timeout");
+    app.fill(cx, "connection-refresh-timeout", "0");
+    app.click(cx, "save-profile");
+    wait_error(cx, "Refresh timeout must be between 1 and 1440 minutes.");
+    app.fill(cx, "connection-refresh-timeout", "45");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the saved policy", Duration::from_secs(10), |_, _| {
+        let saved = saved(&app);
+        saved.refresh == CatalogRefresh::WhileConnected
+            && saved.refresh_minutes == 15
+            && saved.timeout_minutes == 45
+    });
+
+    // Disabled hides the other Schemas fields and keeps their values.
+    edit(cx);
+    app.select(cx, "connection-schema-refresh", "Disabled");
+    for hidden in [
+        "connection-refresh-period",
+        "connection-show-schemas",
+        "connection-hide-schemas",
+        "connection-refresh-timeout",
+        "connection-refresh-logs",
+    ] {
+        app.wait_gone(cx, hidden);
+    }
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(
+        cx,
+        "the disabled policy",
+        Duration::from_secs(10),
+        |_, _| {
+            let saved = saved(&app);
+            saved.refresh == CatalogRefresh::Disabled
+                && saved.refresh_minutes == 15
+                && saved.timeout_minutes == 45
+        },
+    );
+
+    // The hidden period stays for a change back to While connected.
+    edit(cx);
+    app.select(cx, "connection-schema-refresh", "While connected");
+    app.wait_for(cx, "connection-refresh-period");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-refresh-period").as_deref(),
+            Some("15")
+        );
+    });
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "connection-name");
+
+    // A new connection does not browse schemas.
+    app.click(cx, "add-connection");
+    app.wait_for(cx, "connection-name");
+    app.scroll_to(cx, "connection-schema-refresh");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-schema-refresh").as_deref(),
+            Some("Disabled")
+        );
+        assert!(window.try_find("connection-show-schemas").is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let profile = offline_profile("Warehouse");
+    cache(&directory, &profile, &[("avia", None)]);
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    let set_mode = |cx: &mut TestAppContext, mode: &str| {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.scroll_to(cx, "connection-schema-refresh");
+        app.select(cx, "connection-schema-refresh", mode);
+        app.click(cx, "save-profile");
+        app.wait_gone(cx, "connection-name");
+    };
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cached schema",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "avia").is_some(),
+    );
+
+    set_mode(cx, "Disabled");
+    app.wait_until(cx, "no tree", Duration::from_secs(10), |window, _| {
+        labelled(window, "avia").is_none()
+    });
+
+    // Browsing starts collapsed and reads the cache when expanded.
+    set_mode(cx, "Manual");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(labelled(window, "avia").is_none());
+        assert!(!shows(window, "Loading…"));
+    });
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the cache again",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "avia").is_some(),
+    );
+}
+
+#[gpui_kit::test]
+fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut profile = offline_profile("Warehouse");
+    // The cache stays from a time when the connection browsed schemas.
+    cache(&directory, &profile, &[("avia", None)]);
+    profile.catalog.refresh = CatalogRefresh::Disabled;
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    app.toggle_connection(cx, profile.id);
+    app.settle(cx);
+    app.update(cx, |window, _| assert!(labelled(window, "avia").is_none()));
+    app.context_menu(cx, connection_row(profile.id));
+    app.update(cx, |window, _| {
+        assert!(menu_item(window, "popup-menu", "Edit").is_some());
+        // Without schema browsing, the menu has no Schemas section.
+        assert!(window.try_find("menu-section-Schemas").is_none());
+        for item in ["Refresh", "Collapse"] {
+            assert!(menu_item(window, "popup-menu", item).is_none(), "{item}");
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut TestAppContext) {
+    // The server accepts the session, then closes it after a second, so the
+    // refresh fails while the tooltip is open.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        if let Ok((stream, _)) = listener.accept() {
+            std::thread::sleep(Duration::from_secs(1));
+            drop(stream);
+        }
+    });
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port,
+        ..offline_profile("Closing")
+    };
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let tooltip = |app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, _| label(window, "catalog-tooltip"))
+    };
+
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh");
+    app.hover_labelled(cx, "Closing, refreshing schemas");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("127.0.0.1 · synthetic"));
+
+    // The pointer stays on the row. The open tooltip adds the error.
+    app.wait_until(
+        cx,
+        "the error in the tooltip",
+        Duration::from_secs(20),
+        |window, _| {
+            label(window, "catalog-tooltip")
+                .is_some_and(|text| text.starts_with("127.0.0.1 · synthetic\n"))
+        },
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, connection_row(profile.id)).as_deref(),
+            Some("Closing, schema refresh error")
+        );
+    });
 }

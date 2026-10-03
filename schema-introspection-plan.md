@@ -123,10 +123,17 @@ tree in the sidebar and give them to the assistant.
     exclude patterns. Changes to these fields, like the Lifecycle fields, do
     not release sessions.
 
-## Phase 2: refresh while connected
+## Phase 2: refresh while connected (implemented on feat/schema-refresh-policy)
 
 Both the refresh period and the refresh timeout are configurable for each
 connection (user decision, 2026-10-01).
+
+Schema browsing is off by default (user decision, 2026-10-01). The
+**Schema refresh** choice is the first field of the Schemas section:
+**Disabled** (the default for new connections), **Manual**, or **While
+connected**. Disabled hides the tree under the connection, its refresh menu
+items, and the other Schemas fields. Saved connections keep their behavior:
+settings saved with the schema tree but without a choice use Manual.
 
 20. Add `CatalogPolicy` to `CatalogSettings`, with `#[serde(default)]`:
     - `refresh: Manual | WhileConnected { minutes }`. The default is
