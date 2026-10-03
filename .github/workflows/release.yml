@@ -109,28 +109,39 @@ jobs:
       release-version: ${{ needs.resolve-target.outputs.release_version }}
 
   dmg:
-    name: dmg
+    name: dmg-${{ matrix.arch }}
     needs:
       - resolve-target
       - checks
-    runs-on: macos-15
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            package: macos-package
+          - arch: x86_64
+            runner: macos-15-intel
+            package: macos-package-x86_64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - name: download-package
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: macos-package
+          name: ${{ matrix.package }}
           path: package
       - name: create-dmg
         shell: bash
         env:
           RELEASE_VERSION: ${{ needs.resolve-target.outputs.release_version }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
           mkdir dist
           ditto -x -k package/Qrow-macos.zip dist
           codesign --verify --deep --strict dist/Qrow.app
-          dmg_path="dist/Qrow-${RELEASE_VERSION}.dmg"
+          test "$(lipo -archs dist/Qrow.app/Contents/MacOS/qrow)" = "$PACKAGE_ARCH"
+          dmg_path="dist/Qrow-${RELEASE_VERSION}-${PACKAGE_ARCH}.dmg"
           hdiutil create \
             -volname "Qrow ${RELEASE_VERSION}" \
             -srcfolder dist/Qrow.app \
@@ -138,11 +149,15 @@ jobs:
             -format UDZO \
             "$dmg_path"
           hdiutil imageinfo "$dmg_path" >/dev/null
+          # Keep the old ARM64 URL valid until the tap updater supports both architectures.
+          if [ "$PACKAGE_ARCH" = arm64 ]; then
+            cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"
+          fi
       - name: upload-dmg
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-dmg
-          path: dist/Qrow-${{ needs.resolve-target.outputs.release_version }}.dmg
+          name: release-dmg-${{ matrix.arch }}
+          path: dist/*.dmg
           retention-days: 1
           if-no-files-found: error
 
@@ -165,7 +180,8 @@ jobs:
       - name: download-dmg
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          name: release-dmg
+          pattern: release-dmg-*
+          merge-multiple: true
           path: dist
       - name: resolve-previous-release
         id: previous
@@ -278,6 +294,8 @@ jobs:
           release_args=(
             release create "$RELEASE_TAG"
             "dist/Qrow-${RELEASE_VERSION}.dmg"
+            "dist/Qrow-${RELEASE_VERSION}-arm64.dmg"
+            "dist/Qrow-${RELEASE_VERSION}-x86_64.dmg"
             --repo "$GITHUB_REPOSITORY"
             --target "$TARGET_SHA"
             --title "$RELEASE_TITLE"

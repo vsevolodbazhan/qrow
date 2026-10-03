@@ -107,6 +107,9 @@ checks / package
 checks / backend
 checks / e2e
 checks / perf
+checks / ui-intel
+checks / package-intel
+checks / e2e-intel
 ```
 
 There is no aggregate CI gate. A skipped job counts as passed: a job that the
@@ -129,8 +132,11 @@ resolve-target -> checks -> dmg -> publish
 
 `resolve-target` finds the commit and the release version. `checks` is the
 checks workflow with all jobs. Its `package` job builds the package with the
-release version, and its `e2e` job tests that package. `dmg` puts the tested package in a DMG. The publish job creates the
-release tag, and then the GitHub Release with the DMG as its asset. The
+release version, and its `e2e` job tests that package. `package-intel` and
+`e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
+with `arm64` or `x86_64` in its name. The publish job creates the release
+tag, and then the GitHub Release with both DMGs as its assets. It also
+keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
 workflow uses the latest non-draft release on the selected channel as the
 changelog start tag. If the channel has no previous release, it writes the
 target commit history as the changelog. The first release on a channel can
@@ -176,7 +182,7 @@ intact when fixing a failure. Investigate the cause instead of weakening checks.
 exceptions. [dependency-reviews.toml](../dependency-reviews.toml) records the scoped
 license review. These files are authoritative for exact versions and review dates.
 The [policy checker](../scripts/core/policy.py) rejects expired or mismatched
-exceptions and unpinned GitHub Actions. The dependency audit targets macOS ARM64.
+exceptions and unpinned GitHub Actions. The dependency audit targets macOS ARM64 and x86_64.
 
 GPUI brings some incompatible transitive versions. Duplicate versions produce
 warnings. Advisory and license exceptions must remain specific and justified.

@@ -20,6 +20,11 @@ class EnvironmentTests(unittest.TestCase):
             os.environ.pop("CARGO_TARGET_DIR", None)
             self.assertEqual(environment.target_dir(), ROOT / "target")
 
+    def test_relative_target_directory_stays_absolute_when_fixture_changes_cwd(self):
+        with patch.dict(os.environ, {"CARGO_TARGET_DIR": "target/intel"}):
+            self.assertEqual(environment.target_dir(), ROOT / "target/intel")
+            self.assertTrue(environment.target_dir().is_absolute())
+
     def test_docker_status_tells_a_stopped_daemon_from_a_missing_command(self):
         with patch.object(environment.shutil, "which", return_value=None):
             self.assertEqual(environment.docker_status(), "missing")

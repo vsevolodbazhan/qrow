@@ -116,8 +116,15 @@ class DockerFixture:
             fixture.port = int(published.rsplit(":", 1)[1])
             wait_ready(fixture)
         except BaseException:
-            fixture.collect(Path(artifacts))
-            fixture.stop()
+            try:
+                fixture.collect(Path(artifacts))
+            except Exception as error:
+                announce(f"Could not collect Docker fixture evidence: {error}")
+            finally:
+                try:
+                    fixture.stop()
+                except Exception as error:
+                    announce(f"Could not remove Docker fixture {project}: {error}")
             raise
         return fixture
 

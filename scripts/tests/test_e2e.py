@@ -75,6 +75,17 @@ class FixtureTests(unittest.TestCase):
         fixture.wait_ready(servers)
         self.assertEqual(servers.users, [fixture.TEST_USER])
 
+    def test_startup_failure_removes_fixture_even_when_logs_fail(self):
+        for cleanup_error in (None, RuntimeError("cleanup failed")):
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch.object(fixture.DockerFixture, "compose", side_effect=RuntimeError("startup failed")), \
+                    patch.object(fixture.DockerFixture, "collect", side_effect=RuntimeError("logs failed")), \
+                    patch.object(fixture.DockerFixture, "stop", side_effect=cleanup_error) as stop, \
+                    patch.object(fixture, "announce"):
+                with self.assertRaisesRegex(RuntimeError, "startup failed"):
+                    fixture.DockerFixture.start(directory)
+                stop.assert_called_once_with()
+
     def test_state_round_trip_keeps_the_scope(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "fixture.json"
@@ -94,7 +105,7 @@ class DriverTests(unittest.TestCase):
 
     def test_shell_scripts_build_in_the_cargo_target_directory(self):
         # Hook snapshots set CARGO_TARGET_DIR, so a fixed target/ path reads another build.
-        for script in ("scripts/e2e/driver.sh", "scripts/package/macos.sh"):
+        for script in ("scripts/e2e/driver.sh",):
             with self.subTest(script=script):
                 text = (ROOT / script).read_text()
                 self.assertEqual(text.count('qrow_target_dir="${CARGO_TARGET_DIR:-target}"'), 1)

@@ -14,7 +14,8 @@ JDK_TOOLS = ("java", "javac", "jar")
 
 def target_dir():
     """The Cargo target directory. Hook snapshots set CARGO_TARGET_DIR."""
-    return Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
+    directory = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
+    return directory if directory.is_absolute() else ROOT / directory
 
 
 def docker_status():
