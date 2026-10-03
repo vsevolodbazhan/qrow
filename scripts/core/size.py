@@ -6,8 +6,9 @@ import sys
 
 root = Path(__file__).resolve().parents[2]
 dist = os.environ.get("QROW_DIST_DIR", "dist")
+# The TLS stack and OpenID Connect sign-in took the executable over 24 MiB.
 limits = {
-    f"{dist}/Qrow.app/Contents/MacOS/qrow": 24 * 1024 * 1024,
+    f"{dist}/Qrow.app/Contents/MacOS/qrow": 30 * 1024 * 1024,
     f"{dist}/Qrow-macos.zip": 10 * 1024 * 1024,
 }
 errors = []
