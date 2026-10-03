@@ -9,6 +9,21 @@ pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_SIGN_IN_NAME: usize = 60;
+/// The scopes that each sign-in requests: the account, and its name and
+/// email for display.
+pub const BASE_SCOPES: [&str; 3] = ["openid", "profile", "email"];
+
+/// The scopes of `scopes` that are not in [`BASE_SCOPES`], without repeats.
+pub fn extra_scopes(scopes: &[String]) -> Vec<&str> {
+    let mut extra: Vec<&str> = Vec::new();
+    for scope in scopes {
+        if !BASE_SCOPES.contains(&scope.as_str()) && !extra.contains(&scope.as_str()) {
+            extra.push(scope);
+        }
+    }
+    extra
+}
+
 /// The most callback ports of one sign-in.
 pub const MAX_CALLBACK_PORTS: usize = 16;
 pub const MAX_TAB_TITLE: usize = 60;
@@ -669,7 +684,7 @@ pub struct SignIn {
     pub issuer: String,
     /// The public client registered for Qrow. Qrow uses no client secret.
     pub client_id: String,
-    /// Scopes in addition to `openid`.
+    /// Scopes in addition to [`BASE_SCOPES`].
     #[serde(default)]
     pub scopes: Vec<String>,
     /// An optional RFC 8707 resource indicator for the access tokens.
@@ -716,7 +731,7 @@ impl Default for SignIn {
             name: String::new(),
             issuer: String::new(),
             client_id: String::new(),
-            scopes: vec!["profile".into(), "email".into()],
+            scopes: vec![],
             resource: None,
             allowed_hosts: vec![],
             callback_ports: vec![],
@@ -732,7 +747,7 @@ impl SignIn {
         self.id == other.id
             && self.issuer == other.issuer
             && self.client_id == other.client_id
-            && self.scopes == other.scopes
+            && extra_scopes(&self.scopes) == extra_scopes(&other.scopes)
             && self.resource == other.resource
     }
 
@@ -744,14 +759,11 @@ impl SignIn {
             .any(|allowed| allowed.trim_end_matches('.').eq_ignore_ascii_case(host))
     }
 
-    /// The scopes of an authorization request, `openid` first.
+    /// The scopes of an authorization request: [`BASE_SCOPES`], then the
+    /// other scopes of the sign-in.
     pub fn requested_scopes(&self) -> Vec<&str> {
-        let mut scopes = vec!["openid"];
-        for scope in &self.scopes {
-            if !scopes.contains(&scope.as_str()) {
-                scopes.push(scope);
-            }
-        }
+        let mut scopes = BASE_SCOPES.to_vec();
+        scopes.extend(extra_scopes(&self.scopes));
         scopes
     }
 
@@ -1462,14 +1474,19 @@ mod tests {
         assert!(!value.allows_host("other.example.test"));
         assert_eq!(
             value.requested_scopes(),
-            vec!["openid", "kyuubi", "offline_access"]
+            vec!["openid", "profile", "email", "kyuubi", "offline_access"]
         );
         let mut renamed = value.clone();
         renamed.name = "Renamed".into();
         renamed.allowed_hosts.push("another.example.test".into());
         assert!(value.token_requirements_eq(&renamed));
+        // The base scopes are always requested, so naming them changes
+        // nothing.
+        let mut same = value.clone();
+        same.scopes.push("profile".into());
+        assert!(value.token_requirements_eq(&same));
         let mut changed = value.clone();
-        changed.scopes.push("profile".into());
+        changed.scopes.push("groups".into());
         assert!(!value.token_requirements_eq(&changed));
     }
 

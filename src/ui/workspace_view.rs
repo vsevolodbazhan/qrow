@@ -481,7 +481,7 @@ impl Qrow {
                     .ghost()
                     .small()
                     .selected(shown(SidebarPanel::Connections))
-                    .icon(Icon::new(AssetIconName::Database).small())
+                    .icon(Icon::new(AssetIconName::Plug).small())
                     .accessibility_label("Connections")
                     .tooltip("Connections")
                     .on_click(cx.listener(|this, _, _, cx| {

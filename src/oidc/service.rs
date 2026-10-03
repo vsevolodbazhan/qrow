@@ -96,7 +96,8 @@ impl Stored {
         self.version == 1
             && self.issuer == config.issuer
             && self.client_id == config.client_id
-            && self.scopes == config.scopes
+            && crate::model::extra_scopes(&self.scopes)
+                == crate::model::extra_scopes(&config.scopes)
             && self.resource == config.resource
             && self.subject == subject
     }

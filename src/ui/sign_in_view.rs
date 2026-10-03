@@ -4,7 +4,7 @@
 use super::environment::Browser;
 use super::*;
 use crate::{
-    model::{Authentication, Identity, SignIn},
+    model::{Authentication, BASE_SCOPES, Identity, SignIn, extra_scopes},
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
@@ -55,37 +55,37 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     (
         "sign-in-issuer",
         "Issuer",
-        "The issuer URL of the provider, for example the URL of a Keycloak realm.",
+        "The issuer URL of the provider, for example a Keycloak realm URL.",
         "https://id.example.com/realms/data",
     ),
     (
         "sign-in-client-id",
         "Client ID",
-        "The public client that the provider registered for Qrow. Qrow uses no client secret.",
-        "qrow-desktop",
+        "The ID of the public client at the provider. No client secret is necessary.",
+        "desktop-app",
     ),
     (
         "sign-in-scopes",
         "Scopes",
-        "Separate scopes with spaces. Qrow always requests openid. Add offline_access if the provider requires it for refresh tokens.",
-        "profile email",
+        "Optional. Other scopes that the provider requires, separated by spaces.",
+        "offline_access",
     ),
     (
         "sign-in-resource",
         "Resource",
-        "Optional. An RFC 8707 resource indicator for the access tokens.",
-        "",
+        "Optional. The resource URI, if the provider requires one.",
+        "https://db.example.com",
     ),
     (
         "sign-in-database-hosts",
         "Database Hosts",
-        "The database servers that can receive the access tokens. Separate hosts with spaces or commas.",
+        "The servers that can receive the access tokens, separated by spaces.",
         "db.example.com",
     ),
     (
         "sign-in-callback-ports",
         "Callback Ports",
-        "Optional. The loopback ports of the browser callback, in the order to try them. Qrow uses the first free port. Separate ports with spaces or commas. Leave empty to use an available port.",
+        "Optional. Local ports to try in order. Empty uses any free port.",
         "8765 8766",
     ),
 ];
@@ -169,7 +169,7 @@ fn parse_editor(values: &[String], base: &SignIn) -> anyhow::Result<SignIn> {
     sign_in.client_id = values[2].trim().to_owned();
     sign_in.scopes = split_list(&values[3])
         .into_iter()
-        .filter(|scope| scope != "openid")
+        .filter(|scope| !BASE_SCOPES.contains(&scope.as_str()))
         .collect();
     let resource = values[4].trim();
     sign_in.resource = (!resource.is_empty()).then(|| resource.to_owned());
@@ -914,7 +914,7 @@ impl Qrow {
             base.name.clone(),
             base.issuer.clone(),
             base.client_id.clone(),
-            base.scopes.join(" "),
+            extra_scopes(&base.scopes).join(" "),
             base.resource.clone().unwrap_or_default(),
             base.allowed_hosts.join(" "),
             base.callback_ports
@@ -1300,7 +1300,7 @@ mod tests {
     fn the_editor_reads_lists_and_optional_fields() {
         let sign_in = parse_editor(&values(), &SignIn::default()).unwrap();
         assert_eq!(sign_in.issuer, "https://id.example.test/realms/data");
-        assert_eq!(sign_in.scopes, vec!["profile", "kyuubi"]);
+        assert_eq!(sign_in.scopes, vec!["kyuubi"]);
         assert_eq!(
             sign_in.allowed_hosts,
             vec!["kyuubi-a.example.test", "kyuubi-b.example.test"]

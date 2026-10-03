@@ -839,7 +839,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button in the tab bar, and ⌘J opens the assistant pane.",
+                    "Shows the assistant button in the status bar, and ⌘J opens the assistant pane.",
                     &["assistant", "enable", "codex", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();

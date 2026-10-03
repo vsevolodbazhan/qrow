@@ -3,7 +3,7 @@
 A connection profile stores the settings for a Kyuubi endpoint. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
-Connections sidebar, click the database button at the left end of the status
+Connections sidebar, click the plug button at the left end of the status
 bar, or select **View → Connections**.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
@@ -59,7 +59,8 @@ sign-ins need attention.
    can also click **New Sign-in…** at the bottom of the **Sign-in** list. The
    connection then uses the new sign-in.
 2. Enter a name, the issuer URL, and the client ID.
-3. Enter the scopes that the server requires. Qrow always requests `openid`.
+3. Enter other scopes if the server requires them. Qrow always requests
+   `openid`, `profile`, and `email`.
 4. Enter the database hosts that can receive the access tokens.
 5. Click **Save**, or press **Enter** or **⌘Enter**.
 

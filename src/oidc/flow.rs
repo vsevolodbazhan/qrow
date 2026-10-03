@@ -512,11 +512,10 @@ pub fn missing_scopes(config: &SignIn, granted: Option<&str>) -> Vec<String> {
         return vec![];
     };
     let granted: Vec<&str> = granted.split_ascii_whitespace().collect();
-    config
-        .scopes
-        .iter()
-        .filter(|scope| *scope != "offline_access" && !granted.contains(&scope.as_str()))
-        .cloned()
+    crate::model::extra_scopes(&config.scopes)
+        .into_iter()
+        .filter(|scope| *scope != "offline_access" && !granted.contains(scope))
+        .map(str::to_owned)
         .collect()
 }
 
@@ -590,7 +589,7 @@ mod tests {
             query(&attempt, "redirect_uri"),
             format!("http://127.0.0.1:{port}/callback")
         );
-        assert_eq!(query(&attempt, "scope"), "openid kyuubi");
+        assert_eq!(query(&attempt, "scope"), "openid profile email kyuubi");
         assert_eq!(query(&attempt, "code_challenge_method"), "S256");
         assert_eq!(
             query(&attempt, "code_challenge"),
