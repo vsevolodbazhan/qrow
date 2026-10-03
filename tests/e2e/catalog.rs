@@ -1,11 +1,99 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, connection_row, labelled};
+use crate::support::{TestApp, bounds_of, connection_row, labelled};
 use gpui_kit::TestAppContext;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind, Unfinished},
     model::{CatalogRefresh, CatalogSettings, SharedCatalog},
     storage,
 };
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let schema = format!("qrow_search_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.profiles[0].catalog.include = vec![schema.clone()];
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    let profile = workspace.profiles[0].clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    app.run_complete(
+        cx,
+        &format!("CREATE TABLE {schema}.bookings (id INT) USING parquet"),
+    );
+    app.run_complete(cx, &format!("CREATE VIEW {schema}.daily AS SELECT 1 AS id"));
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(cx, "the schema", QUERY_TIMEOUT, |window, _| {
+        labelled(window, &schema).is_some()
+    });
+    let connection_left = app.update(cx, |window, _| {
+        bounds_of(window, &format!("c\u{1f}{}\u{1f}label", profile.id)).left()
+    });
+    app.click_labelled(cx, &schema);
+    app.wait_until(cx, "the catalog to load", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "bookings").is_some() && labelled(window, "daily").is_some()
+    });
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the connection to collapse",
+        QUERY_TIMEOUT,
+        |window, _| labelled(window, &schema).is_none(),
+    );
+
+    app.fill_labelled(cx, "Search Tables", &format!("{schema}.bookings"));
+    app.wait_until(cx, "the qualified match", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "bookings").is_some() && labelled(window, "daily").is_none()
+    });
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Copy Qualified Name");
+    let name = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert_eq!(name, format!("`{schema}`.`bookings`"));
+    app.fill_labelled(cx, "Search Tables", &name);
+    app.wait_until(
+        cx,
+        "the copied name to match",
+        QUERY_TIMEOUT,
+        |window, _| labelled(window, "bookings").is_some() && labelled(window, "daily").is_none(),
+    );
+
+    app.fill_labelled(cx, "Search Tables", &format!("{schema}.missing"));
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(cx, "the empty search notice", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "No matches").is_some() && labelled(window, "bookings").is_none()
+    });
+    app.update(cx, |window, _| {
+        let notice = bounds_of(
+            window,
+            &format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id),
+        );
+        assert_eq!(notice.left(), connection_left);
+    });
+    app.toggle_connection(cx, profile.id);
+    app.wait_until(
+        cx,
+        "the connection to collapse",
+        QUERY_TIMEOUT,
+        |window, _| labelled(window, "No matches").is_none(),
+    );
+    app.fill_labelled(cx, "Search Tables", &name);
+    app.wait_until(cx, "the table to return", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "bookings").is_some() && labelled(window, "No matches").is_none()
+    });
+
+    app.type_sql(cx, "SELECT COUNT(*) FROM ");
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Insert into Editor");
+    let sql = format!("SELECT COUNT(*) FROM `{schema}`.`bookings`");
+    app.wait_until(cx, "the inserted name", QUERY_TIMEOUT, |_, _| {
+        app.saved().tabs[0].sql == sql
+    });
+    app.run_complete(cx, &sql);
+    app.wait_cell(cx, 0, 1, "0");
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
