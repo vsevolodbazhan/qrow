@@ -9,7 +9,9 @@ Qrow changes these files:
   of space above and below its highlight. Before, the highlights of two
   adjacent rows touched, for example a hovered row below the chosen row. Popup
   menu items have a 2-pixel gap between them. GPUI Component 0.7.0 does not
-  have the fix.
+  have the fix. The row with the highlight keeps the element ID: GPUI stores
+  the hover state of an element under its ID, so a row without one draws no
+  hover highlight.
 - `src/root.rs`: Root hides the managed tooltip when a dialog or a sheet opens
   or closes. Before, a shortcut that closed a dialog under the pointer, for
   example ⌘Enter on a hovered Save button, left the tooltip of the button on
