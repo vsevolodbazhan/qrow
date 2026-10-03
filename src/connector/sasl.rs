@@ -236,11 +236,12 @@ mod tests {
         assert!(bad.read(&mut value).is_err());
     }
 
-    /// A reader whose socket timeout elapsed.
+    /// A reader whose socket timeout elapsed. macOS reports it as
+    /// `WouldBlock` (os error 35).
     struct Stalled;
     impl Read for Stalled {
         fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-            Err(io::Error::from_raw_os_error(35))
+            Err(io::Error::from(io::ErrorKind::WouldBlock))
         }
     }
 
