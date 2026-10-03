@@ -393,26 +393,46 @@ pub(super) fn uses_sign_in(select: &AuthenticationSelect, cx: &App) -> bool {
         .is_some_and(|choice| choice == SIGN_IN)
 }
 
-/// A picker of the sign-ins by name. Names are unique.
-pub(super) fn sign_in_select(
-    sign_ins: &[SignIn],
+/// The choices of the Sign-in list: each sign-in by name. Names are unique.
+pub(super) fn sign_in_choices(sign_ins: &[SignIn]) -> Vec<(Uuid, String)> {
+    sign_ins
+        .iter()
+        .map(|sign_in| (sign_in.id, sign_in.name.clone()))
+        .collect()
+}
+
+/// The rows of the Sign-in list that show `selected`, if it is a choice.
+fn sign_in_rows(choices: &[(Uuid, String)], selected: Option<Uuid>) -> Vec<usize> {
+    selected
+        .and_then(|id| choices.iter().position(|(choice, _)| *choice == id))
+        .into_iter()
+        .collect()
+}
+
+/// The Sign-in list, with `selected` chosen. A list without a choice shows
+/// its placeholder.
+pub(super) fn sign_in_combobox(
+    choices: &[(Uuid, String)],
     selected: Option<Uuid>,
     window: &mut Window,
     cx: &mut Context<Qrow>,
-) -> AuthenticationSelect {
-    let names: Vec<String> = sign_ins
-        .iter()
-        .map(|sign_in| sign_in.name.clone())
+) -> RowCombobox {
+    let selection = sign_in_rows(choices, selected)
+        .into_iter()
+        .map(|row| IndexPath::default().row(row))
         .collect();
-    let index = selected.and_then(|id| sign_ins.iter().position(|sign_in| sign_in.id == id));
-    cx.new(|cx| {
-        SelectState::new(
-            SearchableVec::new(names),
-            index.map(|index| IndexPath::default().row(index)),
-            window,
-            cx,
-        )
-    })
+    let rows = rows(choices);
+    cx.new(|cx| ComboboxState::new(rows, selection, window, cx).searchable(true))
+}
+
+/// The sign-in that the Sign-in list shows, if any.
+pub(super) fn chosen_sign_in(
+    combobox: &RowCombobox,
+    choices: &[(Uuid, String)],
+    cx: &App,
+) -> Option<Uuid> {
+    let row = combobox.read(cx).selected_value()?;
+    choices.get(row).map(|(id, _)| *id)
 }
 
 pub(super) fn idle_behavior_select(

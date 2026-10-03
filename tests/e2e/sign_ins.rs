@@ -4,10 +4,7 @@ use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::oidc::FixtureProvider;
 use crate::support::{MemoryCredentials, SignIns, TestApp, label};
 use gpui_kit::TestAppContext;
-use qrow::{
-    model::{Authentication, SavedTab, Workspace},
-    ui::OpenSignIns,
-};
+use qrow::model::{Authentication, SavedTab, Workspace};
 use std::sync::Arc;
 
 #[gpui_kit::test]
@@ -45,15 +42,12 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
             .is_some_and(|status| status.starts_with("Error · Sign-in required"))
     });
 
-    app.dispatch(cx, OpenSignIns);
-    app.wait_for(cx, "save-settings");
+    app.click(cx, "show-sign-ins");
     app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
-    let status = format!("sign-in-{}-account-description", sign_in.id);
+    let status = format!("sign-in-{}-account", sign_in.id);
     app.wait_until(cx, "the signed-in account", QUERY_TIMEOUT, |window, _| {
-        label(window, status.clone()).as_deref() == Some("Signed in as alice@qrow.test")
+        label(window, status.clone()).as_deref() == Some("alice@qrow.test")
     });
-    app.click(cx, "save-settings");
-    app.wait_gone(cx, "save-settings");
 
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
