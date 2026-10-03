@@ -9,6 +9,8 @@ pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
 pub const MAX_SIGN_IN_NAME: usize = 60;
+/// The most callback ports of one sign-in.
+pub const MAX_CALLBACK_PORTS: usize = 16;
 pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
 /// Version 2 adds schema, table, and column names and comments.
@@ -676,9 +678,10 @@ pub struct SignIn {
     /// The database hosts that can receive the access tokens.
     #[serde(default)]
     pub allowed_hosts: Vec<String>,
-    /// The loopback port of the callback. Zero selects an available port.
-    #[serde(default)]
-    pub callback_port: u16,
+    /// The loopback ports of the callback, in the order to try them. An
+    /// empty list selects an available port.
+    #[serde(default, alias = "callback_port", deserialize_with = "callback_ports")]
+    pub callback_ports: Vec<u16>,
     /// The signed-in account. `None` until the first sign-in.
     #[serde(default)]
     pub identity: Option<Identity>,
@@ -716,7 +719,7 @@ impl Default for SignIn {
             scopes: vec!["profile".into(), "email".into()],
             resource: None,
             allowed_hosts: vec![],
-            callback_port: 0,
+            callback_ports: vec![],
             identity: None,
         }
     }
@@ -801,8 +804,32 @@ impl SignIn {
                 "\"{host}\" is not a host name or IP address."
             );
         }
+        anyhow::ensure!(
+            self.callback_ports.len() <= MAX_CALLBACK_PORTS,
+            "Enter {MAX_CALLBACK_PORTS} callback ports or fewer."
+        );
+        anyhow::ensure!(
+            !self.callback_ports.contains(&0),
+            "Callback ports must be numbers from 1 to 65535."
+        );
         Ok(())
     }
+}
+
+/// Reads the callback ports of a sign-in. Workspaces before this list kept
+/// one port, where zero selected an available port.
+fn callback_ports<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u16>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Ports {
+        One(u16),
+        Many(Vec<u16>),
+    }
+    Ok(match Ports::deserialize(deserializer)? {
+        Ports::One(0) => vec![],
+        Ports::One(port) => vec![port],
+        Ports::Many(ports) => ports,
+    })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1328,6 +1355,21 @@ mod tests {
         }))
         .unwrap();
         assert!(workspace.sign_ins.is_empty());
+    }
+
+    #[test]
+    fn a_saved_callback_port_loads_as_a_list() {
+        let mut json = serde_json::to_value(SignIn::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("callback_ports");
+        object.insert("callback_port".into(), serde_json::json!(8765));
+        let restored: SignIn = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored.callback_ports, vec![8765]);
+        json["callback_port"] = serde_json::json!(0);
+        let restored: SignIn = serde_json::from_value(json).unwrap();
+        assert!(restored.callback_ports.is_empty());
+        let saved = serde_json::to_value(&restored).unwrap();
+        assert_eq!(saved["callback_ports"], serde_json::json!([]));
     }
 
     #[test]

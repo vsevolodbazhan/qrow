@@ -466,9 +466,9 @@ impl Qrow {
             })
             .accessibility_label(sign_ins_label)
             .tooltip(match attention {
-                0 => "Sign-ins · ⌘2".to_owned(),
-                1 => "Sign-ins · 1 needs attention · ⌘2".to_owned(),
-                count => format!("Sign-ins · {count} need attention · ⌘2"),
+                0 => "Sign-ins".to_owned(),
+                1 => "Sign-ins · 1 needs attention".to_owned(),
+                count => format!("Sign-ins · {count} need attention"),
             })
             .on_click(
                 cx.listener(|this, _, _, cx| this.show_sidebar_panel(SidebarPanel::SignIns, cx)),
@@ -483,7 +483,7 @@ impl Qrow {
                     .selected(shown(SidebarPanel::Connections))
                     .icon(Icon::new(AssetIconName::Database).small())
                     .accessibility_label("Connections")
-                    .tooltip("Connections · ⌘1")
+                    .tooltip("Connections")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_sidebar_panel(SidebarPanel::Connections, cx)
                     })),
