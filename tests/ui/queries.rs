@@ -1,6 +1,6 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot,
-    assert_tooltip_header_baseline, bounds_of, connection_row, label, labelled,
+    assert_tooltip_header_center, bounds_of, connection_row, label, labelled,
 };
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
@@ -68,7 +68,7 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
                 label(window, "status-tooltip-status").as_deref(),
                 Some("Connecting")
             );
-            assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
+            assert_tooltip_header_center(window, cx, "status-tooltip-status");
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
@@ -106,7 +106,7 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mu
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
         app.update(cx, |window, cx| {
-            assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
+            assert_tooltip_header_center(window, cx, "status-tooltip-status");
             assert_eq!(
                 label(window, "status-tooltip-title").as_deref(),
                 Some(name.as_str())
@@ -170,7 +170,7 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         assert!(shortcut.top() < title.bottom());
         assert_eq!(title.left(), status.left());
         assert!(status.top() > title.bottom());
-        assert_tooltip_header_baseline(window, cx, "status-tooltip-shortcut");
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
     });
     app.qrow
         .update(cx, |qrow, cx| {

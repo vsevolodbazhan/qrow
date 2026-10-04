@@ -1,6 +1,6 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, assert_tab_dot, assert_tooltip_header_baseline, bounds_of, label};
+use crate::support::{TestApp, assert_tab_dot, assert_tooltip_header_center, bounds_of, label};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
@@ -49,7 +49,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         assert!(status.left() > title.right());
         assert!(status.top() < title.bottom());
         assert!(window.try_find("status-tooltip-shortcut").is_none());
-        assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
+        assert_tooltip_header_center(window, cx, "status-tooltip-status");
     });
     app.hover_labelled(cx, "Toggle Assistant, working");
     cx.executor().advance_clock(Duration::from_millis(800));
@@ -71,7 +71,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         let status = bounds_of(window, "status-tooltip-status");
         assert_eq!(title.left(), status.left());
         assert!(status.top() > title.bottom());
-        assert_tooltip_header_baseline(window, cx, "status-tooltip-shortcut");
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
     });
 
     // A reply completed while the pane is hidden stays on the assistant icon.

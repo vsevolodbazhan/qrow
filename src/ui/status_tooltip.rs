@@ -141,14 +141,14 @@ impl StatusTooltip {
             };
             let (title, trailing) = match trailing {
                 Some((text, mut element)) => {
-                    let title_baseline =
-                        first_line_baseline(&content.title, &title.style().text, window, cx);
-                    let trailing_baseline =
-                        first_line_baseline(&text, &element.style().text, window, cx);
-                    let baseline = title_baseline.max(trailing_baseline);
+                    let title_center =
+                        first_line_center(&content.title, &title.style().text, window, cx);
+                    let trailing_center =
+                        first_line_center(&text, &element.style().text, window, cx);
+                    let center = title_center.max(trailing_center);
                     (
-                        title.mt(baseline - title_baseline),
-                        Some(element.mt(baseline - trailing_baseline)),
+                        title.mt(center - title_center),
+                        Some(element.mt(center - trailing_center)),
                     )
                 }
                 None => (title, None),
@@ -238,11 +238,11 @@ impl StatusTooltip {
     }
 }
 
-/// GPUI flex baselines use box bottoms. Match the baselines used to paint text,
-/// with each font's shaped metrics and the current snapped line height. Snap
-/// the painted baselines before taking their difference, so the margin is a
-/// whole device pixel and does not round independently from the glyphs.
-fn first_line_baseline(
+/// Center smaller status and shortcut text on the title's first line. Use
+/// capital-letter centers, so descenders and wrapped titles do not move the
+/// alignment. Snap the painted baseline and center before taking their
+/// difference, keeping the correction in whole device pixels at every scale.
+fn first_line_center(
     text: &SharedString,
     refinement: &TextStyleRefinement,
     window: &mut Window,
@@ -264,7 +264,10 @@ fn first_line_baseline(
             .shape_line(first.clone(), size, &[style.to_run(first.len())], None);
     let line_height =
         window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
-    window.pixel_snap((line_height - line.ascent - line.descent) / 2. + line.ascent)
+    let baseline = window.pixel_snap((line_height - line.ascent - line.descent) / 2. + line.ascent);
+    let font = window.text_system().resolve_font(&style.font());
+    let cap_height = window.text_system().cap_height(font, size);
+    window.pixel_snap(baseline - cap_height / 2.)
 }
 
 type TooltipContent<T> = Rc<dyn Fn(&T, &App) -> Option<StatusTooltip>>;

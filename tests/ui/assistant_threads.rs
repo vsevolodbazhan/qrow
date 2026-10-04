@@ -1,8 +1,8 @@
 //! Conversation titles, the thread list, sign-in, and restarts.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT};
 use crate::support::{
-    MemoryCredentials, TestApp, assert_tooltip_header_baseline, bounds_of, label,
-    labelled_starting, labels, value,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, bounds_of, label, labelled_starting,
+    labels, value,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
@@ -68,7 +68,7 @@ fn an_open_conversation_tooltip_follows_its_title_and_reply_state(cx: &mut TestA
             label(window, "status-tooltip-title").as_deref(),
             Some("Title: Title before first")
         );
-        assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
+        assert_tooltip_header_center(window, cx, "status-tooltip-status");
     });
 
     // The pointer remains on the same row through both changes.

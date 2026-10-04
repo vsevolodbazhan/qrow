@@ -1,5 +1,5 @@
 //! Related values have separate layout and accessible names.
-use crate::support::{TestApp, assert_tooltip_header_baseline, bounds_of, label, offline_profile};
+use crate::support::{TestApp, assert_tooltip_header_center, bounds_of, label, offline_profile};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px, size};
 use qrow::model::{SavedTab, Workspace};
@@ -99,7 +99,7 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
                 Some(shortcut)
             );
             assert!(window.try_find("status-tooltip-status").is_none());
-            assert_tooltip_header_baseline(window, cx, "status-tooltip-shortcut");
+            assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
         });
     }
     app.hover_labelled(cx, "Warehouse · East");

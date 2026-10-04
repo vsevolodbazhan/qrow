@@ -96,14 +96,14 @@ pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
 }
 
-/// Compare the first text baselines, rather than the bottoms of their boxes.
-pub fn assert_tooltip_header_baseline(window: &mut Window, cx: &App, secondary: &str) {
+/// Compare the visual centers of the first line's capital letters.
+pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &str) {
     use gpui_kit::component::ActiveTheme;
     use gpui_kit::{FontWeight, Styled, div};
 
     let mut title = div().text_sm().font_weight(FontWeight::MEDIUM);
     let mut secondary_style = div().text_xs();
-    let baseline = |id: &str, font_size, weight, window: &mut Window| {
+    let center = |id: &str, font_size, weight, window: &mut Window| {
         let mut style = window.text_style();
         style.font_family = cx.theme().font_family.clone();
         style.font_size = font_size;
@@ -119,24 +119,30 @@ pub fn assert_tooltip_header_baseline(window: &mut Window, cx: &App, secondary: 
         );
         let line_height =
             window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
-        bounds_of(window, id).top() + (line_height - line.ascent - line.descent) / 2. + line.ascent
+        let baseline = window.pixel_snap(
+            bounds_of(window, id).top()
+                + (line_height - line.ascent - line.descent) / 2.
+                + line.ascent,
+        );
+        let font = window.text_system().resolve_font(&style.font());
+        let cap_height = window.text_system().cap_height(font, size);
+        window.pixel_snap(baseline - cap_height / 2.)
     };
-    let title_baseline = baseline(
+    let title_center = center(
         "status-tooltip-title",
         title.style().text.font_size.unwrap(),
         FontWeight::MEDIUM,
         window,
     );
-    let secondary_baseline = baseline(
+    let secondary_center = center(
         secondary,
         secondary_style.style().text.font_size.unwrap(),
         FontWeight::NORMAL,
         window,
     );
     assert_eq!(
-        window.pixel_snap(title_baseline),
-        window.pixel_snap(secondary_baseline),
-        "{secondary} painted baseline differs from the title"
+        title_center, secondary_center,
+        "{secondary} visual center differs from the title's first line"
     );
 }
 

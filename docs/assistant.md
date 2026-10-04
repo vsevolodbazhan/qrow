@@ -333,9 +333,9 @@ A ready reply or an error stays until its transcript shows. The thread list
 and Activity do not read replies. Approval stays until you approve or cancel
 the request. Tooltips and accessible names give the state in words.
 Conversation tooltips show the title and a short status beside its first line.
-The title and status share a text baseline. The
+The title and status share a vertical center. The
 assistant toggle tooltip shows **Assistant** and its keyboard shortcut first.
-Its status appears below. The name and shortcut share a text baseline.
+Its status appears below. The name and shortcut share a vertical center.
 Status text uses secondary styling.
 
 The [query tab dot](queries.md#query-tab-state) shows SQL execution and session

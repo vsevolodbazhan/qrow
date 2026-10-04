@@ -18,7 +18,8 @@ Qrow rejects multiple statements before sending them to the server.
 
 The status bar shows the query status, its detail, and elapsed time as separate
 labels. The detail and elapsed time use secondary text. Action tooltips show
-the command name and its keyboard shortcut on one line.
+the command name and its keyboard shortcut on one line. The name and shortcut
+share a vertical center.
 
 A new accepted execution clears the previous preview and the unread outcome
 of that tab. The blue dot shows that the execution continues. Results appear
@@ -74,7 +75,7 @@ Each query tab has one status dot before its close button:
 | No dot | No live session, work, or unread result. |
 
 Point to the dot to see the tab name and a short status beside it. The status
-uses secondary text. The name and status share a text baseline. If the name
+uses secondary text. The name and status share a vertical center. If the name
 wraps, the status stays beside its first line. The accessible name also gives
 the states in words.
 The dot shows SQL execution and session state. The priority is error, running

@@ -1,5 +1,6 @@
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, label, menu_item, offline_profile,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, connection_row, label, menu_item,
+    offline_profile,
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext};
@@ -164,6 +165,13 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
     });
     cx.executor().advance_clock(Duration::from_millis(800));
     app.wait_for(cx, "tooltip");
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Save Connection")
+        );
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
 
     // The shortcut closes the form under the pointer, so the Save button
     // never gets a hover-out. The tooltip closes with the form.

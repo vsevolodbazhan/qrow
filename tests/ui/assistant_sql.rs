@@ -1,7 +1,7 @@
 //! The assistant edits, formats, and requests SQL in its tab.
 use crate::support::assistant::{FakeCodex, approval};
 use crate::support::{
-    MemoryCredentials, TestApp, assert_tab_dot, assert_tooltip_header_baseline, bounds_of, label,
+    MemoryCredentials, TestApp, assert_tab_dot, assert_tooltip_header_center, bounds_of, label,
     offline_profile, present,
 };
 use gpui_kit::{ElementId, TestAppContext};
@@ -47,7 +47,7 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
             label(window, "status-tooltip-shortcut").as_deref(),
             Some("⌘⏎")
         );
-        assert_tooltip_header_baseline(window, cx, "status-tooltip-shortcut");
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
         assert_eq!(
             label(window, "assistant-send-mode").as_deref(),
             Some("SQL Mode: Ask First")

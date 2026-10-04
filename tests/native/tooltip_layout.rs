@@ -9,8 +9,8 @@ fn main() {
     use qrow::model::{SavedTab, Workspace};
     use std::time::Duration;
     use support::{
-        MemoryCredentials, TestApp, assert_tooltip_header_baseline, assistant::FakeCodex,
-        bounds_of, label, offline_profile,
+        MemoryCredentials, TestApp, assert_tooltip_header_center, assistant::FakeCodex, bounds_of,
+        label, offline_profile,
     };
 
     let text_system = gpui_kit::platform::current_platform(true).text_system();
@@ -46,6 +46,14 @@ fn main() {
                 app.settle(&mut cx);
                 for (target, title, secondary) in [
                     (name.as_str(), name.as_str(), "status-tooltip-status"),
+                    ("New Tab", "New Tab", "status-tooltip-shortcut"),
+                    ("Run", "Run Query", "status-tooltip-shortcut"),
+                    (
+                        "Toggle Sidebar",
+                        "Toggle Sidebar",
+                        "status-tooltip-shortcut",
+                    ),
+                    ("Close Query 1", "Close Tab", "status-tooltip-shortcut"),
                     ("Activity", "Activity", "status-tooltip-shortcut"),
                     ("Toggle Assistant", "Assistant", "status-tooltip-shortcut"),
                 ] {
@@ -58,7 +66,7 @@ fn main() {
                             label(window, "status-tooltip-title").as_deref(),
                             Some(title)
                         );
-                        assert_tooltip_header_baseline(window, cx, secondary);
+                        assert_tooltip_header_center(window, cx, secondary);
                         let popup = bounds_of(window, "status-tooltip");
                         for id in ["status-tooltip-title", secondary] {
                             let text = bounds_of(window, id);
@@ -73,7 +81,7 @@ fn main() {
             }
         }
     }
-    println!("tooltip-layout: 36 native font and display scale checks passed");
+    println!("tooltip-layout: 84 native font and display scale checks passed");
 }
 
 #[cfg(not(target_os = "macos"))]
