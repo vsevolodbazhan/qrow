@@ -1,6 +1,9 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, assert_tab_dot, assert_tooltip_header_center, bounds_of, label};
+use crate::support::{
+    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows, bounds_of,
+    label,
+};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
@@ -14,16 +17,33 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
     workspace.tabs[0].title = "SQL only".into();
     let tab = workspace.tabs[0].id;
+    let connection = workspace.profiles[0].id;
     let dot = format!("query-status-{tab}");
     let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
     app.run_complete(cx, "SELECT 1 AS value");
     app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        window.hover(format!("connection-status-{connection}"), cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| assert_tooltip_metadata_rows(window));
     app.open_assistant(cx);
     app.send(cx, "Title before first reply");
     app.wait_until(cx, "the held reply", QUERY_TIMEOUT, |_, _| {
         codex.marked("first-reply-pending")
     });
     app.wait_label(cx, "Toggle Assistant, working");
+    app.wait_label(cx, "Activity, in use");
+    app.hover_labelled(cx, "Activity, in use");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("In Use")
+        );
+    });
     app.update(cx, |window, cx| {
         assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
         assert_eq!(

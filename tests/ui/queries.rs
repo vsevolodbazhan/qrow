@@ -58,6 +58,10 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
             label(window, format!("connection-status-{connection}")).as_deref(),
             Some("Connecting warehouse, connecting")
         );
+        assert_eq!(
+            label(window, "toggle-activity").as_deref(),
+            Some("Activity")
+        );
     });
     let hover = |id: String, app: &TestApp, cx: &mut TestAppContext| {
         app.update(cx, |window, cx| window.hover(id, cx));
@@ -130,6 +134,73 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mu
             }
         });
     }
+}
+
+#[gpui_kit::test]
+fn activity_tooltip_summarizes_connections_in_use_and_updates_live(cx: &mut TestAppContext) {
+    use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT};
+    use crate::support::offline_profile;
+    use qrow::model::SavedTab;
+
+    let (directory, codex) = FakeCodex::new();
+    let unused = offline_profile("Unused warehouse");
+    let profile = offline_profile("Assistant warehouse");
+    let connection = profile.id;
+    let tab = SavedTab::new(1, Some(connection));
+    let query = tab.id;
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        codex.workspace(Workspace {
+            tabs: vec![tab],
+            profiles: vec![profile, unused.clone()],
+            ..Workspace::default()
+        }),
+        MemoryCredentials::default(),
+    );
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.wait_label(cx, "Activity, in use");
+    app.hover_labelled(cx, "Activity, in use");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("In Use")
+        );
+        assert_connection_dot(window, connection, cx.theme().info);
+        assert_tab_dot(window, query, None);
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
+    // An error on another connection keeps its count with the work summary.
+    app.qrow
+        .update(cx, |qrow, cx| {
+            qrow.record_activity(
+                unused.id,
+                ActivityEntry::new(Severity::Error, "Synthetic refresh error"),
+                cx,
+            );
+        })
+        .unwrap();
+    app.wait_until(
+        cx,
+        "the unread error and work",
+        REPLY_TIMEOUT,
+        |window, _| {
+            label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error\nIn Use")
+        },
+    );
+
+    // Keep the pointer over Activity as the working connection becomes idle.
+    codex.mark("first-reply-release");
+    app.wait_until(cx, "the finished work", REPLY_TIMEOUT, |window, _| {
+        label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error")
+    });
 }
 
 #[gpui_kit::test]

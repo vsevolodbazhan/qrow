@@ -436,11 +436,10 @@ impl Qrow {
     fn activity_status(&self, cx: &App) -> (Option<DotStatus>, String, StatusTooltip) {
         let view = self.activity.read(cx);
         let unseen = view.activity().unseen_errors();
-        let refreshing = self
+        let in_use = self
             .profiles
             .iter()
-            .any(|profile| self.catalog.is_refreshing(profile.id));
-        let working = self.tabs.iter().any(|tab| tab.busy);
+            .any(|profile| self.connection_dot_status(profile.id, cx) == Some(DotStatus::Working));
         let unseen = unseen
             + self
                 .tabs
@@ -449,7 +448,7 @@ impl Qrow {
                 .count();
         let status = if unseen > 0 {
             Some(DotStatus::Error)
-        } else if refreshing || working {
+        } else if in_use {
             Some(DotStatus::Working)
         } else {
             None
@@ -462,13 +461,9 @@ impl Qrow {
                 if unseen == 1 { "Error" } else { "Errors" }
             ));
         }
-        if refreshing {
-            label.push_str(", schema refresh running");
-            statuses.push("Schema Refresh Running".into());
-        }
-        if working {
-            label.push_str(", query or session work running");
-            statuses.push("Query Work Running".into());
+        if in_use {
+            label.push_str(", in use");
+            statuses.push("In Use".into());
         }
         match unseen {
             0 => {}

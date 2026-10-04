@@ -101,13 +101,7 @@ fn query_dots_keep_unread_results_until_their_own_tabs_show(cx: &mut TestAppCont
                 .unwrap()
                 .contains("connecting")
         );
-        assert!(
-            window
-                .find("toggle-activity")
-                .label()
-                .unwrap()
-                .contains("work running")
-        );
+        assert_eq!(window.find("toggle-activity").label(), Some("Activity"));
         let second = crate::support::labelled(window, "Query 2").unwrap();
         crate::support::click_element(window, &second, cx);
     });
@@ -213,7 +207,10 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
         cx,
         "the completed hidden query",
         QUERY_TIMEOUT,
-        |window, _| window.find("toggle-activity").label() == Some("Activity"),
+        |window, _| {
+            label(window, format!("query-status-{first}"))
+                .is_some_and(|status| status.contains("unread query result"))
+        },
     );
     app.dispatch(cx, qrow::ui::NewTab);
     app.press(cx, "escape");

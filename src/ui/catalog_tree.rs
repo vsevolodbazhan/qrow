@@ -1218,6 +1218,34 @@ impl Qrow {
         );
     }
 
+    /// The status shown by a connection row and summarized by Activity.
+    pub(super) fn connection_dot_status(&self, id: Uuid, cx: &App) -> Option<DotStatus> {
+        let query_status = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.saved.profile == Some(id))
+            .filter_map(|tab| {
+                tab.dot_status().max(
+                    self.settings
+                        .assistant
+                        .enabled
+                        .then(|| self.tab_assistant_status(tab.saved.id))
+                        .flatten()
+                        .and_then(assistant_view::ThreadStatus::dot_status),
+                )
+            })
+            .max();
+        query_status.max(
+            if self.activity.read(cx).activity().unseen_errors_of(id) > 0 {
+                Some(DotStatus::Error)
+            } else if self.catalog.is_refreshing(id) {
+                Some(DotStatus::Working)
+            } else {
+                None
+            },
+        )
+    }
+
     /// The Connections sidebar: its header, the search, and the tree.
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(STATUS_SLOT_WIDTH);
@@ -1229,29 +1257,7 @@ impl Qrow {
                     .map(|profile| {
                         let id = profile.id;
                         let refresh_error = self.catalog.connection_error(id);
-                        let unseen = self.activity.read(cx).activity().unseen_errors_of(id);
-                        let query_status = self
-                            .tabs
-                            .iter()
-                            .filter(|tab| tab.saved.profile == Some(id))
-                            .filter_map(|tab| {
-                                tab.dot_status().max(
-                                    self.settings
-                                        .assistant
-                                        .enabled
-                                        .then(|| self.tab_assistant_status(tab.saved.id))
-                                        .flatten()
-                                        .and_then(assistant_view::ThreadStatus::dot_status),
-                                )
-                            })
-                            .max();
-                        let status = query_status.max(if unseen > 0 {
-                            Some(DotStatus::Error)
-                        } else if self.catalog.is_refreshing(id) {
-                            Some(DotStatus::Working)
-                        } else {
-                            None
-                        });
+                        let status = self.connection_dot_status(id, cx);
                         let connected = self
                             .tabs
                             .iter()

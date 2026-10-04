@@ -146,6 +146,18 @@ pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &s
     );
 }
 
+/// Connection fields stack without an extra blank spacer between rows.
+pub fn assert_tooltip_metadata_rows(window: &Window) {
+    let host = bounds_of(window, "status-tooltip-Host");
+    let user = bounds_of(window, "status-tooltip-User");
+    assert_eq!(host.left(), user.left());
+    assert_eq!(
+        host.bottom(),
+        user.top(),
+        "metadata rows have an extra spacer"
+    );
+}
+
 /// The labels of every observed element, for failure messages.
 pub fn labels(window: &Window) -> Vec<String> {
     let mut labels: Vec<_> = elements(window)

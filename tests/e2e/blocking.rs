@@ -152,10 +152,7 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
         cx,
         "the retry without an unread error",
         QUERY_TIMEOUT,
-        |window, _| {
-            window.find("toggle-activity").label()
-                == Some("Activity, query or session work running")
-        },
+        |window, _| window.find("toggle-activity").label() == Some("Activity, in use"),
     );
     app.wait_until(cx, "the retry error", QUERY_TIMEOUT, |window, _| {
         window.find("toggle-activity").label() == Some("Activity, 1 unseen error")

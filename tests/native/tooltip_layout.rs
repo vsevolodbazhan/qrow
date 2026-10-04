@@ -9,8 +9,8 @@ fn main() {
     use qrow::model::{SavedTab, Workspace};
     use std::time::Duration;
     use support::{
-        MemoryCredentials, TestApp, assert_tooltip_header_center, assistant::FakeCodex, bounds_of,
-        label, offline_profile,
+        MemoryCredentials, TestApp, assert_tooltip_header_center, assert_tooltip_metadata_rows,
+        assistant::FakeCodex, bounds_of, label, offline_profile,
     };
 
     let text_system = gpui_kit::platform::current_platform(true).text_system();
@@ -67,6 +67,9 @@ fn main() {
                             Some(title)
                         );
                         assert_tooltip_header_center(window, cx, secondary);
+                        if title == name {
+                            assert_tooltip_metadata_rows(window);
+                        }
                         let popup = bounds_of(window, "status-tooltip");
                         for id in ["status-tooltip-title", secondary] {
                             let text = bounds_of(window, id);

@@ -158,7 +158,7 @@ impl StatusTooltip {
                 .test_support()
                 .max_w_96()
                 .whitespace_normal()
-                .gap_1()
+                .gap_0p5()
                 .child(
                     h_flex()
                         .min_w_0()
@@ -179,7 +179,7 @@ impl StatusTooltip {
                         v_flex()
                             .id("status-tooltip-metadata")
                             .test_support()
-                            .gap_1()
+                            .gap_0()
                             .children(content.metadata.iter().map(|(label, value)| {
                                 h_flex()
                                     .id(SharedString::from(format!("status-tooltip-{label}")))

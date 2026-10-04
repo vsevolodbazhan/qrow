@@ -66,12 +66,14 @@ An unread tab error stays until the Logs of that tab show. Use **Show Tab**
 to open the tab. The Activity entry keeps its error color after the error
 becomes seen.
 
-A blue dot means that query or session work continues, or a schema refresh
-runs or waits. An unread error takes priority over work. The tooltip shows
+A blue dot means that at least one connection shows **In Use**. This includes
+query or session work, schema refreshes, and assistant turns. An unread error
+takes priority over work. The tooltip shows
 **Activity** and its keyboard shortcut on the first line.
 The name and shortcut share a vertical center.
-Short status lines below it give the error count and the work that continues.
-These lines use secondary text, also when the dot is red. Activity has no
+The status below it shows **In Use** while a connection shows that status.
+Otherwise, the status shows **Idle**. Unread errors add their count and replace
+**Idle**. These lines use secondary text, also when the dot is red. Activity has no
 green completion dot.
 
 ## Limits

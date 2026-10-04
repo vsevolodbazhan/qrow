@@ -1,5 +1,8 @@
 //! Related values have separate layout and accessible names.
-use crate::support::{TestApp, assert_tooltip_header_center, bounds_of, label, offline_profile};
+use crate::support::{
+    TestApp, assert_tooltip_header_center, assert_tooltip_metadata_rows, bounds_of, label,
+    offline_profile,
+};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px, size};
 use qrow::model::{SavedTab, Workspace};
@@ -118,9 +121,6 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
             label(window, "status-tooltip-User").as_deref(),
             Some("User: synthetic · user")
         );
-        let host = bounds_of(window, "status-tooltip-Host");
-        let user = bounds_of(window, "status-tooltip-User");
-        assert_eq!(host.left(), user.left());
-        assert!(user.top() >= host.bottom());
+        assert_tooltip_metadata_rows(window);
     });
 }
