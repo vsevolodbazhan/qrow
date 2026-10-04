@@ -66,13 +66,13 @@ Each query tab has one status dot before its close button:
 | Blue | Query or session work continues. |
 | Green | A query result is ready and unread. |
 | Red | A query or keep-alive error is unread. |
-| Yellow | An assistant query needs approval. |
 | No dot | No live session, work, or unread result. |
 
-The tooltip and the accessible name give the states in words. A tab with a
-conversation combines its query state and its [conversation
-state](assistant.md#conversation-state). The priority is approval, error,
-work, unread success, then connected and idle.
+The tooltip and the accessible name give the states in words. The dot shows
+SQL execution and session state. The priority is error, work, unread success,
+then connected and idle. Assistant turns and approval requests use the
+[conversation indicators](assistant.md#conversation-state). SQL that the
+assistant runs uses the same query dot.
 
 Results and errors that finish behind [Activity](activity.md) stay unread.
 Show the Results to read a successful query. Show Logs to read an error.

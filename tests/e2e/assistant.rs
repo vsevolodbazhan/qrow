@@ -1,8 +1,62 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, bounds_of, label};
+use crate::support::{TestApp, assert_tab_dot, bounds_of, label};
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    workspace.tabs[0].title = "SQL only".into();
+    let tab = workspace.tabs[0].id;
+    let dot = format!("query-status-{tab}");
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.wait_cell(cx, 0, 1, "1");
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", QUERY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.wait_label(cx, "Toggle Assistant, working");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
+        assert_eq!(
+            label(window, dot.clone()).as_deref(),
+            Some("SQL only, connected, idle")
+        );
+    });
+
+    // A reply completed while the pane is hidden stays on the assistant icon.
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    codex.mark("first-reply-release");
+    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)))
+    });
+    app.click(cx, "toggle-assistant");
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_idle(cx);
+
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_approval(cx, "Run in SQL only · Spark? SELECT 1 AS value");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
+        window.click("assistant-approve-query", cx);
+        assert_tab_dot(window, tab, Some(cx.theme().info));
+    });
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)))
+    });
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]

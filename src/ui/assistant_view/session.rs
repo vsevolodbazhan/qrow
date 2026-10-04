@@ -118,8 +118,8 @@ pub(in crate::ui) struct ThreadRun {
     pub catalog_calls: Vec<super::super::assistant_tools::PendingCatalogCall>,
 }
 
-/// The conversation state that the thread list, the tab strip, and the
-/// assistant toggle show. A higher state is more urgent.
+/// The conversation state that the thread list and the assistant toggle show.
+/// A higher state is more urgent.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::ui) enum ThreadStatus {
     Idle,

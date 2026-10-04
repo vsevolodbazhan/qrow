@@ -1,6 +1,6 @@
 //! The assistant edits, formats, and requests SQL in its tab.
 use crate::support::assistant::{FakeCodex, approval};
-use crate::support::{MemoryCredentials, TestApp, label, offline_profile, present};
+use crate::support::{MemoryCredentials, TestApp, assert_tab_dot, label, offline_profile, present};
 use gpui_kit::{ElementId, TestAppContext};
 use qrow::model::{AssistantTitleSource::Codex, SavedTab, Workspace};
 use qrow::sql::KeywordCase;
@@ -226,6 +226,7 @@ fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppC
     qrow::storage::save_catalog(&cache, &catalog).unwrap();
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT gate FROM avia.bookings".into();
+    let tab_id = tab.id;
     let workspace = codex.workspace(Workspace {
         profiles: vec![profile],
         tabs: vec![tab],
@@ -237,11 +238,13 @@ fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppC
     // The tools wait for the cache, and the connection has no session, so
     // missing columns are not read.
     app.send(cx, "Read the catalog");
+    app.update(cx, |window, _| assert_tab_dot(window, tab_id, None));
     app.wait_reply(
         cx,
         "schemas avia,finance; relations bookings; columns booking_id BIGINT,gate STRING; daily not_cached",
     );
     app.wait_idle(cx);
+    app.update(cx, |window, _| assert_tab_dot(window, tab_id, None));
     // The next message has the cached columns of the relation in the tab SQL.
     app.send(cx, "Read the catalog again");
     app.wait_reply(cx, "Catalog: loaded True, referenced bookings;");

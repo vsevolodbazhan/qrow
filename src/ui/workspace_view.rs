@@ -105,13 +105,7 @@ impl Qrow {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
-                let assistant = self
-                    .settings
-                    .assistant
-                    .enabled
-                    .then(|| self.tab_assistant_status(id))
-                    .flatten();
-                let assistant_busy = assistant.is_some_and(|status| status.busy());
+                let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
                 let title_generating =
                     self.assistant
                         .conversation_for_tab(id)
@@ -146,7 +140,7 @@ impl Qrow {
                         )
                     })
                     .aria_label(format!(
-                        "{}{}{}{}{}{}",
+                        "{}{}{}{}{}",
                         tab.saved.title,
                         if tab.busy { ", running" } else { "" },
                         if tab.panel.unread_error {
@@ -159,7 +153,6 @@ impl Qrow {
                         } else {
                             ""
                         },
-                        assistant.map_or("", ThreadStatus::accessible_suffix),
                         if title_generating {
                             ", generating title"
                         } else {
@@ -170,32 +163,23 @@ impl Qrow {
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when_some(
-                                tab.dot_status()
-                                    .max(assistant.and_then(ThreadStatus::dot_status)),
-                                |el, status| {
-                                    let label = format!(
-                                        "{}{}{}",
-                                        tab.saved.title,
-                                        tab.status_suffix(),
-                                        assistant.map_or("", ThreadStatus::accessible_suffix)
-                                    );
-                                    el.child(
-                                        div()
-                                            .id(SharedString::from(format!("query-status-{id}")))
-                                            .test_support()
-                                            .role(Role::Status)
-                                            .aria_label(label.clone())
-                                            .tooltip(move |window, cx| {
-                                                gpui_kit::component::tooltip::Tooltip::new(
-                                                    label.clone(),
-                                                )
-                                                .build(window, cx)
-                                            })
-                                            .child(status.dot(cx)),
-                                    )
-                                },
-                            )
+                            .when_some(tab.dot_status(), |el, status| {
+                                let label = format!("{}{}", tab.saved.title, tab.status_suffix());
+                                el.child(
+                                    div()
+                                        .id(SharedString::from(format!("query-status-{id}")))
+                                        .test_support()
+                                        .role(Role::Status)
+                                        .aria_label(label.clone())
+                                        .tooltip(move |window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                label.clone(),
+                                            )
+                                            .build(window, cx)
+                                        })
+                                        .child(status.dot(cx)),
+                                )
+                            })
                             .child(
                                 Button::new(SharedString::from(format!(
                                     "close-tab-{}",

@@ -60,7 +60,7 @@ fn tabs_of(app: &TestApp, profile: Uuid) -> Vec<SavedTab> {
 }
 
 #[gpui_kit::test]
-fn a_query_error_shares_one_dot_with_assistant_work_replies_and_approval(cx: &mut TestAppContext) {
+fn query_dots_keep_sql_state_while_their_conversation_works_or_waits(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let profile = offline_profile("Synthetic");
     let connection = profile.id;
@@ -79,8 +79,9 @@ fn a_query_error_shares_one_dot_with_assistant_work_replies_and_approval(cx: &mu
     app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
         codex.marked("first-reply-pending")
     });
+    app.wait_label(cx, "Toggle Assistant, working");
     app.update(cx, |window, cx| {
-        assert_tab_dot(window, tab, Some(cx.theme().info));
+        assert_tab_dot(window, tab, None);
         // The password is missing in the synthetic store. Hide the tab before
         // its query fails so that its Logs do not read the error.
         window.click("run", cx);
@@ -104,7 +105,7 @@ fn a_query_error_shares_one_dot_with_assistant_work_replies_and_approval(cx: &mu
         assert_tab_dot(window, tab, Some(cx.theme().danger))
     });
 
-    app.click_labelled(cx, "First query, unread error, assistant reply ready");
+    app.click_labelled(cx, "First query, unread error");
     app.wait_reply(cx, "I can help with this query");
     // Showing the tab reads its query error too.
     app.wait_gone(cx, format!("query-status-{tab}"));
@@ -119,19 +120,17 @@ fn a_query_error_shares_one_dot_with_assistant_work_replies_and_approval(cx: &mu
     codex.mark("release-Alpha");
     app.wait_label_containing(cx, ", unread error, assistant waiting for approval");
     app.update(cx, |window, cx| {
-        assert_tab_dot(window, tab, Some(cx.theme().warning));
+        assert_tab_dot(window, tab, Some(cx.theme().danger));
         assert_connection_dot(window, connection, cx.theme().warning);
     });
     app.click(cx, format!("close-tab-{tab}"));
     app.settle(cx);
     app.update(cx, |window, cx| {
-        assert_tab_dot(window, tab, Some(cx.theme().warning))
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
     });
-    app.click_labelled(
-        cx,
-        "First query, unread error, assistant waiting for approval",
-    );
+    app.click_labelled(cx, "First query, unread error");
     app.wait_approval(cx, "Run in First query · Synthetic? SELECT 11");
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
     app.click(cx, "assistant-cancel-query");
     app.wait_reply(cx, "Finished Alpha: approval_cancelled");
     app.wait_idle(cx);
@@ -172,12 +171,11 @@ fn a_conversation_keeps_its_tab_when_another_tab_is_renamed_and_selected(cx: &mu
     codex.mark("retarget-ready");
 
     // The request waits in the conversation tab. The selected tab does not show it.
-    app.wait_label(cx, "Query 1, assistant waiting for approval");
     app.wait_label(cx, "Toggle Assistant, waiting for approval");
     app.update(cx, |window, _| {
         assert_eq!(approval(window), None, "The request showed in another tab")
     });
-    app.click_labelled(cx, "Query 1, assistant waiting for approval");
+    app.click_labelled(cx, "Query 1");
     app.wait_approval(cx, "Run in Query 1 · Synthetic? SELECT 1;");
     app.wait_editor(cx, "SELECT 1;");
     app.click(cx, "assistant-cancel-query");
@@ -228,7 +226,10 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     app.send(cx, "Hold parallel Alpha");
     app.wait_for(cx, "assistant-working");
-    app.wait_label(cx, "Query 1, assistant working");
+    app.wait_label(cx, "Toggle Assistant, working");
+    app.update(cx, |window, _| {
+        assert_tab_dot(window, tab_of(&app, alpha).unwrap().id, None)
+    });
     app.click(cx, connection_row(beta));
     // The Beta tab has no conversation, so its pane does not wait.
     app.wait_gone(cx, "assistant-working");

@@ -50,7 +50,7 @@ turn ends or fails. It also shows while Codex writes text or uses tools. It does
 not show while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
-list, the tabs, and the assistant toggle show.
+list and the assistant toggle show.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
@@ -314,10 +314,9 @@ move the tab while its conversation works or waits for approval.
 
 ## Conversation state
 
-Qrow shows the state of each conversation in the thread list and on its tab.
-A tab shows one status dot before its close button. The dot combines the
-query state and the conversation state. The **Toggle Assistant** button keeps
-its assistant icon. Its dot is at the top right corner of the button.
+Qrow shows the state of each conversation in the thread list.
+The **Toggle Assistant** button keeps its assistant icon. Its dot is at the
+top right corner of the button.
 The dot shows the most urgent state of all conversations.
 The thread list shows a dot for each conversation.
 
@@ -332,8 +331,9 @@ A ready reply or an error stays until its transcript shows. The thread list
 and Activity do not read replies. Approval stays until you approve or cancel
 the request. Tooltips and accessible names give the state in words.
 
-A tab can also show dim blue for an idle database session. See
-[query tab state](queries.md#query-tab-state).
+The [query tab dot](queries.md#query-tab-state) shows SQL execution and session
+state. Assistant turns and approval requests do not change that dot. When the
+assistant runs SQL, the query tab shows its execution state.
 
 ## Pane and connection state
 
