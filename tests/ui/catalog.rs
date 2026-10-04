@@ -1301,7 +1301,7 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut TestAppContext) {
+fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAppContext) {
     // The server accepts the session, then closes it after a second, so the
     // refresh fails while the tooltip is open.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1351,14 +1351,15 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         assert_tooltip_header_center(window, cx, "status-tooltip-status");
     });
 
-    // The pointer stays on the row. The open tooltip adds the error.
+    // The pointer stays on the row. The open tooltip changes only its status.
     app.wait_until(
         cx,
-        "the error in the tooltip",
+        "the unread error status in the tooltip",
         Duration::from_secs(20),
         |window, _| {
-            label(window, "status-tooltip-error")
-                .is_some_and(|text| text.contains("Activity shows the full error."))
+            label(window, "status-tooltip-status").as_deref() == Some("Unread Error")
+                && label(window, connection_row(profile.id)).as_deref()
+                    == Some("Closing, schema refresh error")
         },
     );
     app.update(cx, |window, _| {
@@ -1370,7 +1371,14 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
             label(window, connection_row(profile.id)).as_deref(),
             Some("Closing, schema refresh error")
         );
+        assert!(window.try_find("status-tooltip-error").is_none());
+        assert_eq!(
+            label(window, "status-tooltip-User").as_deref(),
+            Some("User: synthetic")
+        );
     });
+    app.click(cx, format!("connection-status-{}", profile.id));
+    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
 
 #[gpui_kit::test]

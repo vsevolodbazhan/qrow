@@ -1,8 +1,70 @@
 use crate::support::fixture::{Kyuubi, PASSWORD, QUERY_TIMEOUT};
-use crate::support::{TestApp, assert_connection_dot, assert_tab_dot, cell, label};
+use crate::support::{
+    TestApp, assert_connection_dot, assert_tab_dot, cell, connection_row, label, labels,
+};
 use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
+use std::time::Duration;
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 1", "not-the-password");
+    let connection = workspace.profiles[0].id;
+    workspace.profiles[0].catalog.refresh = qrow::model::CatalogRefresh::Manual;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Refresh");
+    app.wait_label(cx, "Spark, schema refresh error");
+    app.update(cx, |window, cx| {
+        window.hover(format!("connection-status-{connection}"), cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Spark")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Unread Error")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-Host").as_deref(),
+            Some("Host: 127.0.0.1")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-User").as_deref(),
+            Some("User: qrow")
+        );
+        assert!(window.try_find("status-tooltip-error").is_none());
+        assert!(
+            labels(window)
+                .iter()
+                .all(|text| !text.contains("Activity shows the full error"))
+        );
+        assert_connection_dot(window, connection, cx.theme().danger);
+    });
+    app.click(cx, format!("connection-status-{connection}"));
+    app.wait_for(cx, "activity");
+    let activity = app.copy_activity(cx);
+    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("authentication"), "{activity}");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.hover_labelled(cx, "Spark, schema refresh error");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Disconnected")
+        );
+        assert!(window.try_find("status-tooltip-error").is_none());
+    });
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]

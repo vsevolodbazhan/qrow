@@ -10,7 +10,6 @@ pub(super) struct StatusTooltip {
     status: SharedString,
     detail: Option<SharedString>,
     metadata: Vec<(SharedString, SharedString)>,
-    error: Option<SharedString>,
     key_context: Option<SharedString>,
     shortcut_focus: Option<FocusHandle>,
 }
@@ -24,7 +23,6 @@ impl StatusTooltip {
             status: status.into(),
             detail: None,
             metadata: Vec::new(),
-            error: None,
             key_context: None,
             shortcut_focus: None,
         }
@@ -32,11 +30,6 @@ impl StatusTooltip {
 
     pub(super) fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());
-        self
-    }
-
-    pub(super) fn error(mut self, error: impl Into<SharedString>) -> Self {
-        self.error = Some(error.into());
         self
     }
 
@@ -198,15 +191,6 @@ impl StatusTooltip {
                                     )
                                     .child(div().min_w_0().flex_1().child(value.clone()))
                             })),
-                    )
-                })
-                .when_some(content.error.clone(), |tooltip, error| {
-                    tooltip.child(
-                        div()
-                            .id("status-tooltip-error")
-                            .test_support()
-                            .aria_label(error.clone())
-                            .child(error),
                     )
                 })
         })

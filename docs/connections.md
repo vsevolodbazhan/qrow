@@ -20,8 +20,8 @@ then connected and idle.
 The tooltip shows the connection name and a short status beside it. The status
 uses secondary text. The name and status share a vertical center. The status
 stays beside the first line when the name wraps.
-Host and User show on compact labeled rows below the name. Refresh
-errors appear below these details. No dot means that no session, work, or
+Host and User show on compact labeled rows below the name. **Unread Error**
+identifies an unread error. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.
 
@@ -178,8 +178,8 @@ If a refresh fails or stops at its timeout, the tree keeps the data that it
 had before the refresh. The error shows on the row of the refreshed part:
 
 - A connection: the connection row shows a red dot, also when the
-  connection is collapsed. Point to the row to read the first line of the
-  error below the host and the user. The first row under the expanded
+  connection is collapsed. Point to the row to see **Unread Error** beside
+  the connection name. The first row under the expanded
   connection shows the error with **Refresh**. The dot goes away when you view
   the Activity of the connection. The error text stays until the next refresh
   starts.
@@ -189,8 +189,7 @@ had before the refresh. The error shows on the row of the refreshed part:
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show Activity** from the connection menu to open it. The connection row uses
-the same red dot for an unread query error. Only refresh errors
-add error details to the tooltip of the row. If Qrow cannot connect, it stops the
+the same red dot for an unread query error. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
 ### Refresh schemas automatically

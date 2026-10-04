@@ -1291,10 +1291,7 @@ impl Qrow {
                             },
                         )
                         .metadata("Host", profile.host.clone())
-                        .metadata("User", profile.username.clone())
-                        .when_some(refresh_error, |tooltip, error| {
-                            tooltip.error(error_summary(error))
-                        });
+                        .metadata("User", profile.username.clone());
                         (
                             id,
                             ConnectionRow {
@@ -1862,9 +1859,7 @@ fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
 /// The longest error summary in a tooltip, in characters.
 const ERROR_SUMMARY_CHARS: usize = 200;
 
-/// The tooltip text of a refresh error: its first line, cut to
-/// [`ERROR_SUMMARY_CHARS`]. A server error can have a long stack trace, so
-/// the tooltip points to Logs, which keep the full error.
+/// The first line of a catalog row error, cut to [`ERROR_SUMMARY_CHARS`].
 pub(super) fn error_summary(error: &str) -> String {
     let line = error
         .lines()
@@ -1875,7 +1870,6 @@ pub(super) fn error_summary(error: &str) -> String {
     if summary.len() < line.len() {
         summary.push('…');
     }
-    summary.push_str("\nActivity shows the full error.");
     summary
 }
 
@@ -2229,15 +2223,15 @@ mod tests {
     use super::*;
 
     #[::core::prelude::v1::test]
-    fn an_error_summary_keeps_the_first_line_and_points_to_activity() {
+    fn an_error_summary_keeps_only_the_first_line() {
         let trace =
             "\n  Could not open the session: host unreachable\n\tat org.apache.Foo(Foo.java:1)";
         assert_eq!(
             error_summary(trace),
-            "Could not open the session: host unreachable\nActivity shows the full error."
+            "Could not open the session: host unreachable"
         );
         let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
         let summary = error_summary(&long);
-        assert!(summary.starts_with(&format!("{}…\n", "x".repeat(ERROR_SUMMARY_CHARS))));
+        assert_eq!(summary, format!("{}…", "x".repeat(ERROR_SUMMARY_CHARS)));
     }
 }
