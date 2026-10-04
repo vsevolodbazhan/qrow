@@ -67,6 +67,12 @@ core library are modules of one test binary,
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
 
+The full `ui` suite also checks tooltip alignment with the native macOS font
+backend at 1× and 2× display scales. It runs this check on the process main
+thread because AppKit requires that thread. The other headless UI tests
+use GPUI's test text backend. Run `./qtest run ui` to include the native
+check. A test filter runs only the matching GPUI tests.
+
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.

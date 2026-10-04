@@ -133,11 +133,10 @@ pub fn assert_tooltip_header_baseline(window: &mut Window, cx: &App, secondary: 
         FontWeight::NORMAL,
         window,
     );
-    assert!(
-        // GPUI snaps element origins to device pixels. Permit less than half
-        // a device pixel of rounding, never a whole rendered pixel of drift.
-        (title_baseline - secondary_baseline).abs() * window.scale_factor() < px(0.5),
-        "{secondary} baseline {secondary_baseline:?} differs from the title {title_baseline:?}"
+    assert_eq!(
+        window.pixel_snap(title_baseline),
+        window.pixel_snap(secondary_baseline),
+        "{secondary} painted baseline differs from the title"
     );
 }
 

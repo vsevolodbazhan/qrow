@@ -51,6 +51,12 @@ required-features = ["ui"]
 name = "perf"
 required-features = ["ui"]
 
+# AppKit's native font backend must be created on the process main thread.
+[[example]]
+name = "tooltip-layout"
+path = "tests/native/tooltip_layout.rs"
+required-features = ["ui"]
+
 [patch.crates-io]
 # GPUI Base 0.6.6 with Qrow fixes to the editor and Markdown text.
 # vendor/gpui-base/QROW-PATCH.md lists them. Remove this patch when a GPUI Kit

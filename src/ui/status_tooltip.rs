@@ -167,7 +167,9 @@ impl StatusTooltip {
 }
 
 /// GPUI flex baselines use box bottoms. Match the baselines used to paint text,
-/// with each font's shaped metrics and the current snapped line height.
+/// with each font's shaped metrics and the current snapped line height. Snap
+/// the painted baselines before taking their difference, so the margin is a
+/// whole device pixel and does not round independently from the glyphs.
 fn first_line_baseline(
     text: &SharedString,
     refinement: &TextStyleRefinement,
@@ -190,7 +192,7 @@ fn first_line_baseline(
             .shape_line(first.clone(), size, &[style.to_run(first.len())], None);
     let line_height =
         window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
-    (line_height - line.ascent - line.descent) / 2. + line.ascent
+    window.pixel_snap((line_height - line.ascent - line.descent) / 2. + line.ascent)
 }
 
 type TooltipContent<T> = Rc<dyn Fn(&T, &App) -> Option<StatusTooltip>>;

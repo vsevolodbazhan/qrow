@@ -89,15 +89,8 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_font(cx: &mut TestAppContext) {
-    for (scale, font, theme) in [
-        (0.75, ".SystemUIFont", "One Dark"),
-        (1., ".SystemUIFont", "Ayu Light"),
-        (1.5, ".SystemUIFont", "Ayu Light"),
-        (0.75, "Menlo", "Ayu Light"),
-        (1., "Menlo", "One Dark"),
-        (1.5, "Menlo", "One Dark"),
-    ] {
+fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mut TestAppContext) {
+    for (scale, theme) in [(0.75, "One Dark"), (1., "Ayu Light"), (1.5, "Ayu Light")] {
         let name = "W".repeat(60);
         let profile = crate::support::offline_profile(&name);
         let id = profile.id;
@@ -107,7 +100,6 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_font(cx: &mut
             ..Workspace::default()
         };
         workspace.settings.ui_scale = scale;
-        workspace.settings.ui_font_family = font.into();
         workspace.settings.theme = theme.into();
         let app = TestApp::launch(cx, workspace);
         app.hover_labelled(cx, &name);
