@@ -4,7 +4,7 @@ A connection profile stores the settings for a Kyuubi endpoint. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
-bar, or select **View → Connections**.
+bar, press **⌘B**, or select **View → Connections**.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.

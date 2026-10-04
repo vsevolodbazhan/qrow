@@ -42,8 +42,9 @@ reports the substitution.
 The sidebar at the left of the window shows
 [Connections](connections.md) or [Sign-ins](connections.md#sign-in-with-openid-connect).
 The two buttons at the left end of the status bar choose the sidebar. Click the
-button of the visible sidebar to hide it. Press **⌘B** to hide or show the
-sidebar. The **View** menu has the same commands. Qrow opens with the Connections sidebar. Drag the sidebar divider
+button of the visible sidebar to hide it. Press **⌘B** to show or hide the
+Connections sidebar. **View → Toggle Sidebar** hides or shows the sidebar that
+was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the

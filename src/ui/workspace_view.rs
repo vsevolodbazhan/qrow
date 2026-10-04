@@ -443,25 +443,24 @@ impl Qrow {
     fn sidebar_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let shown = |panel| self.sidebar && self.sidebar_panel == panel;
         let (status, label, _) = self.sign_ins_status();
-        let connections =
-            Button::new("show-connections")
-                .ghost()
-                .small()
-                .selected(shown(SidebarPanel::Connections))
-                .icon(Icon::new(AssetIconName::Plug).small())
-                .accessibility_label("Connections")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.show_sidebar_panel(SidebarPanel::Connections, cx)
-                }));
+        let connections = Button::new("show-connections")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::Connections))
+            .icon(Icon::new(AssetIconName::Plug).small())
+            .accessibility_label("Connections")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
+            }));
         let sign_ins = Button::new("show-sign-ins")
             .ghost()
             .small()
             .selected(shown(SidebarPanel::SignIns))
             .icon(Icon::new(AssetIconName::KeyRound).small())
             .accessibility_label(label)
-            .on_click(
-                cx.listener(|this, _, _, cx| this.show_sidebar_panel(SidebarPanel::SignIns, cx)),
-            );
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
+            }));
         h_flex()
             .flex_shrink_0()
             .gap_1()
@@ -487,9 +486,26 @@ impl Qrow {
 
     /// Shows `panel` in the sidebar, or hides the sidebar when it shows
     /// `panel` already.
-    pub(super) fn show_sidebar_panel(&mut self, panel: SidebarPanel, cx: &mut Context<Self>) {
-        self.sidebar = !(self.sidebar && self.sidebar_panel == panel);
+    pub(super) fn show_sidebar_panel(
+        &mut self,
+        panel: SidebarPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = !(self.sidebar && self.sidebar_panel == panel);
         self.sidebar_panel = panel;
+        self.set_sidebar(shown, window, cx);
+    }
+
+    /// Shows or hides the sidebar. A hidden sidebar gives its focus to the
+    /// SQL editor: without a focused element, shortcuts like ⌘B reach no
+    /// handler.
+    pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.sidebar = shown;
+        if !shown {
+            let editor = self.tabs[self.active].input.clone();
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        }
         cx.notify();
     }
 
@@ -801,15 +817,14 @@ impl Qrow {
                     this.close_tab(this.active, window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar = !this.sidebar;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
+                this.set_sidebar(!this.sidebar, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ShowConnections, _, cx| {
-                this.show_sidebar_panel(SidebarPanel::Connections, cx)
+            .on_action(cx.listener(|this, _: &ShowConnections, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ShowSignIns, _, cx| {
-                this.show_sidebar_panel(SidebarPanel::SignIns, cx)
+            .on_action(cx.listener(|this, _: &ShowSignIns, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
                 this.toggle_assistant(window, cx)

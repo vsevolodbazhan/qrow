@@ -94,8 +94,7 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
             assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
         });
     }
-    // The sidebar buttons have no shortcut, so the tooltip shows the title
-    // alone.
+    // ⌘B shows the Connections sidebar. The Sign-ins button has no shortcut.
     app.update(cx, |window, cx| window.hover("show-connections", cx));
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
@@ -104,8 +103,10 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
             label(window, "status-tooltip-title").as_deref(),
             Some("Connections")
         );
-        assert!(window.try_find("status-tooltip-shortcut").is_none());
-        assert!(window.try_find("status-tooltip-status").is_none());
+        assert_eq!(
+            label(window, "status-tooltip-shortcut").as_deref(),
+            Some("⌘B")
+        );
     });
     app.hover_labelled(cx, "Warehouse · East");
     cx.executor().advance_clock(Duration::from_millis(800));

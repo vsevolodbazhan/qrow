@@ -151,6 +151,24 @@ fn the_status_bar_buttons_choose_and_hide_the_sidebar_panel(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn command_b_hides_and_shows_the_connections_from_the_sidebar(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, _) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    app.wait_for(cx, "add-connection");
+    // The focus is in the sidebar when it closes.
+    app.click(cx, "connections-list");
+    app.press(cx, "cmd-b");
+    app.wait_gone(cx, "add-connection");
+    app.press(cx, "cmd-b");
+    app.wait_for(cx, "add-connection");
+    // From the Sign-ins sidebar, ⌘B shows the Connections.
+    open_sign_ins(&app, cx);
+    app.press(cx, "cmd-b");
+    app.wait_for(cx, "add-connection");
+}
+
+#[gpui_kit::test]
 fn the_sign_ins_button_counts_the_sign_ins_that_need_attention(cx: &mut TestAppContext) {
     let provider = Provider::start();
     let (workspace, sign_in) = workspace(&provider, true);
