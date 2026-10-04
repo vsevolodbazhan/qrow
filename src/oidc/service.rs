@@ -491,6 +491,30 @@ impl Service {
             }
         };
         let tokens = flow::refresh(&self.trust, config, &discovery, refresh_token)?;
+        // The provider replaced the refresh token, so the old one is gone.
+        // Keychain gets the new one before the ID token check, which can fail
+        // on the network. Its access token is not used until the check passes.
+        if let Some(rotated) = tokens
+            .refresh_token
+            .as_deref()
+            .filter(|rotated| *rotated != refresh_token)
+            && let Some(current) = &work.tokens
+        {
+            let pending = Stored {
+                version: current.version,
+                issuer: current.issuer.clone(),
+                client_id: current.client_id.clone(),
+                subject: current.subject.clone(),
+                scopes: current.scopes.clone(),
+                resource: current.resource.clone(),
+                access_token: String::new(),
+                expires_at: 0,
+                refresh_token: Some(rotated.to_string()),
+            };
+            self.save(config.id, &pending)
+                .context("Could not save the refreshed sign-in")?;
+            work.tokens = Some(pending);
+        }
         if let Some(id_token) = &tokens.id_token {
             let known = jwt::key_id(id_token).is_none_or(|kid| {
                 work.keys.as_ref().is_some_and(|keys| {

@@ -172,6 +172,32 @@ fn a_new_service_reads_the_tokens_from_keychain() {
 }
 
 #[test]
+fn a_rotated_refresh_token_survives_a_failed_key_request() {
+    let setup = setup();
+    // Each access token needs a refresh.
+    setup.provider.set_access_ttl(10);
+    let sign_in = signed_in(&setup, "alice");
+    // A new service has no keys yet, so the refresh must fetch them.
+    let restarted = Service::new(setup.store.clone(), trust());
+    let mut restored = sign_in.clone();
+    restored.identity = setup.service.identity(sign_in.id);
+    restarted.configure(&[restored]);
+    setup.provider.set_keys_down(true);
+    let error = restarted
+        .access_token(sign_in.id, &subject("alice"), "127.0.0.1")
+        .unwrap_err();
+    assert_ne!(failure(&error), Failure::SignInRequired, "{error:#}");
+    assert_eq!(setup.provider.refresh_grants(), 1);
+    // The provider rotated the refresh token. The next attempt uses the new
+    // one; the old one would revoke the sign-in.
+    setup.provider.set_keys_down(false);
+    restarted
+        .access_token(sign_in.id, &subject("alice"), "127.0.0.1")
+        .unwrap();
+    assert_eq!(setup.provider.refresh_grants(), 2);
+}
+
+#[test]
 fn one_provider_can_have_several_identities_without_mixing_tokens() {
     let setup = setup();
     let alice = setup.provider.sign_in("Alice");

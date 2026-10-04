@@ -88,6 +88,8 @@ struct Settings {
     wrong_nonce: bool,
     /// Grants only these scopes, when set.
     granted_scope: Option<String>,
+    /// Makes the key endpoint answer 503.
+    keys_down: bool,
 }
 
 struct State {
@@ -182,6 +184,10 @@ impl Provider {
     }
     pub fn set_refresh_tokens(&self, issue: bool) {
         self.state.settings.lock().unwrap().refresh = issue;
+    }
+    /// Makes the key endpoint answer 503.
+    pub fn set_keys_down(&self, down: bool) {
+        self.state.settings.lock().unwrap().keys_down = down;
     }
     /// Makes the token endpoint answer 503.
     pub fn set_down(&self, down: bool) {
@@ -371,6 +377,9 @@ fn route(state: &State, path: &str, body: &[u8]) -> (u16, Value) {
                 "code_challenge_methods_supported": ["S256"],
             }),
         ),
+        "/jwks" if state.settings.lock().unwrap().keys_down => {
+            (503, json!({"error": "temporarily_unavailable"}))
+        }
         "/jwks" => {
             let point = state.key.public_key().as_ref();
             (
