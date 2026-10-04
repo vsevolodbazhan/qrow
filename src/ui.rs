@@ -1203,6 +1203,13 @@ impl Qrow {
                 }
             }
             changed |= !events.is_empty();
+            // A query that waits for a sign-in keeps its tab busy and its
+            // status while the session of the tab sends keep-alives or
+            // closes.
+            let waiting = tab
+                .sign_in_wait
+                .is_some()
+                .then(|| (tab.status.clone(), tab.status_detail.clone()));
             for event in events {
                 if wait.is_some() && matches!(event, Event::Error { .. }) {
                     continue;
@@ -1214,6 +1221,11 @@ impl Qrow {
                     &self.profiles,
                     cx,
                 );
+                if let Some((status, detail)) = &waiting {
+                    tab.busy = true;
+                    tab.status = status.clone();
+                    tab.status_detail = detail.clone();
+                }
             }
             if let Some(wait) = wait {
                 waits.push((index, wait));
