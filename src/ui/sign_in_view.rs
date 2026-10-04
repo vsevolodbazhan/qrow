@@ -142,9 +142,10 @@ pub(super) struct SignInWait {
 
 /// The sign-in to open in the browser after a sign-in error of `tab`, and the
 /// SQL to run after it. A query that already ran after an automatic sign-in
-/// gets none, so a sign-in that does not help ends in an error.
+/// gets none, so a sign-in that does not help ends in an error. A query that
+/// the user cancelled gets none, so it does not run after the sign-in.
 pub(super) fn automatic_sign_in(tab: &Tab, profiles: &[Profile]) -> Option<(Uuid, String)> {
-    if tab.signed_in_for_run {
+    if tab.signed_in_for_run || tab.cancelling {
         return None;
     }
     let sign_in = profiles
@@ -445,6 +446,8 @@ impl Qrow {
                 }
             }
         }
+        // A query of another tab that blocked a browser sign-in can end.
+        self.start_waiting_sign_ins(cx);
         let statuses: Vec<(Uuid, Status)> = self
             .sign_ins
             .iter()
@@ -560,15 +563,48 @@ impl Qrow {
         tab.pending_page = None;
         tab.elapsed = None;
         tab.started = Some(Instant::now());
-        tab.set_status_detail("Waiting for sign-in", "Finish it in the browser");
         Self::record_local_log(
             tab,
             Severity::Info,
             LogKind::SignIn,
             format!("Sign in to \"{name}\" in the browser. The query runs after the sign-in."),
         );
-        self.start_sign_in(sign_in, cx);
-        cx.notify();
+        self.start_waiting_sign_ins(cx);
+    }
+
+    /// Starts the browser sign-ins that waiting queries need, and shows in
+    /// each waiting tab whether its browser sign-in runs. A sign-in waits
+    /// while a query of another tab uses its account, because a sign-in as
+    /// another account releases sessions.
+    pub(super) fn start_waiting_sign_ins(&mut self, cx: &mut Context<Self>) {
+        let mut needed: Vec<Uuid> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| tab.sign_in_wait.as_ref().map(|wait| wait.sign_in))
+            .collect();
+        needed.sort();
+        needed.dedup();
+        for id in needed {
+            if !self.sign_in_ui.pending.contains_key(&id) {
+                self.start_sign_in(id, cx);
+            }
+            let detail = if self.sign_in_ui.pending.contains_key(&id) {
+                "Finish it in the browser"
+            } else {
+                "Another query uses this sign-in"
+            };
+            for tab in &mut self.tabs {
+                if tab
+                    .sign_in_wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.sign_in == id)
+                    && tab.status_detail.as_deref() != Some(detail)
+                {
+                    tab.set_status_detail("Waiting for sign-in", detail);
+                    cx.notify();
+                }
+            }
+        }
     }
 
     /// Runs the queries that waited for the sign-in `id`, or ends them when

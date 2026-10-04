@@ -485,6 +485,58 @@ fn an_expired_sign_in_opens_the_browser_and_runs_the_query_after_it(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn a_query_cancelled_during_the_refresh_does_not_open_the_browser(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    provider.set_access_ttl(10);
+    let (workspace, sign_in) = unreachable_workspace(&provider);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    provider.revoke("alice");
+    // The refresh takes long enough to cancel the query during it.
+    provider.set_refresh_delay(Duration::from_secs(1));
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Connecting");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Error: Sign-in required");
+    app.settle(cx);
+    assert_eq!(
+        provider.authorization_grants(),
+        1,
+        "no second browser sign-in"
+    );
+}
+
+#[gpui_kit::test]
+fn two_tabs_that_need_the_same_sign_in_share_one_browser_sign_in(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    provider.set_access_ttl(10);
+    let (mut workspace, sign_in) = unreachable_workspace(&provider);
+    let mut second = SavedTab::new(2, workspace.profiles.first().map(|profile| profile.id));
+    second.sql = "SELECT 2".into();
+    workspace.tabs.push(second);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    provider.revoke("alice");
+    // Both refreshes fail at about the same time.
+    provider.set_refresh_delay(Duration::from_millis(500));
+    app.click(cx, "run");
+    app.click_labelled(cx, "Query 2");
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    app.click_starting(cx, "Query 1");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    assert_eq!(
+        provider.authorization_grants(),
+        2,
+        "one browser sign-in for both tabs"
+    );
+}
+
+#[gpui_kit::test]
 fn a_denied_sign_in_ends_the_waiting_query_with_the_reason(cx: &mut TestAppContext) {
     let provider = Provider::start();
     let (workspace, _) = unreachable_workspace(&provider);
