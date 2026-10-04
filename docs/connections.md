@@ -214,6 +214,8 @@ automatic refresh on a connection without one.
   stopped.
 - When no tab of the connection has a live session any more, Qrow stops an
   automatic refresh in progress. The tree keeps what the refresh read.
+  An idle disconnection waits for an active refresh to finish. An explicit
+  disconnection does not wait.
 
 For a [shared catalog](#share-schemas), the period and the timeout belong to
 the shared catalog. An unfinished refresh starts again when the first
@@ -383,6 +385,14 @@ Use the **When idle** picker to control each session:
 The idle timer and the keep-alive interval start again when a query, a fetch
 of more rows from the server, a policy update, or a keep-alive finishes.
 Paging through downloaded rows and editing SQL do not reset them.
+
+A schema refresh uses a separate session. While a refresh runs, the tabs of
+the connection that runs it do not disconnect because of idle time. The
+refresh does not reset their idle timers. If the idle time has passed, the
+tabs disconnect after the refresh finishes, fails, or stops. The **Refresh
+timeout** still applies. A later refresh does not extend an idle time that
+has already passed. Other connections of a shared catalog keep their
+own idle behavior.
 
 Use a lightweight, read-only statement for keep-alive query. Qrow checks that the
 text contains one statement, but does not enforce read-only behavior. Keep-alives
