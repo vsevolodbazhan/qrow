@@ -53,15 +53,59 @@ impl StatusTooltip {
                     .map(|key| key.as_keystroke().clone())
             });
         let status_below = action.is_some();
-        Tooltip::element(move |_, cx| {
+        Tooltip::element(move |window, cx| {
             let secondary = |id, text: SharedString| {
                 div()
                     .id(id)
                     .test_support()
                     .aria_label(text.clone())
                     .text_xs()
+                    .font_weight(FontWeight::NORMAL)
                     .text_color(cx.theme().secondary_foreground)
                     .child(text)
+            };
+            let mut title = div()
+                .id("status-tooltip-title")
+                .test_support()
+                .flex_1()
+                .min_w_0()
+                .aria_label(content.title.clone())
+                .text_sm()
+                .font_weight(FontWeight::MEDIUM)
+                .child(content.title.clone());
+            let trailing = if status_below {
+                shortcut.clone().map(|shortcut| {
+                    let label: SharedString = Kbd::format(&shortcut).into();
+                    let element = div()
+                        .id("status-tooltip-shortcut")
+                        .test_support()
+                        .flex_shrink_0()
+                        .aria_label(label.clone())
+                        .text_xs()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(cx.theme().secondary_foreground)
+                        .child(Kbd::new(shortcut).appearance(false));
+                    (label, element)
+                })
+            } else {
+                Some((
+                    content.status.clone(),
+                    secondary("status-tooltip-status", content.status.clone()).flex_shrink_0(),
+                ))
+            };
+            let (title, trailing) = match trailing {
+                Some((text, mut element)) => {
+                    let title_baseline =
+                        first_line_baseline(&content.title, &title.style().text, window, cx);
+                    let trailing_baseline =
+                        first_line_baseline(&text, &element.style().text, window, cx);
+                    let baseline = title_baseline.max(trailing_baseline);
+                    (
+                        title.mt(baseline - title_baseline),
+                        Some(element.mt(baseline - trailing_baseline)),
+                    )
+                }
+                None => (title, None),
             };
             v_flex()
                 .id("status-tooltip")
@@ -72,37 +116,11 @@ impl StatusTooltip {
                 .child(
                     h_flex()
                         .min_w_0()
-                        .items_baseline()
+                        .items_start()
                         .justify_between()
                         .gap_3()
-                        .child(
-                            div()
-                                .id("status-tooltip-title")
-                                .test_support()
-                                .flex_1()
-                                .min_w_0()
-                                .aria_label(content.title.clone())
-                                .font_weight(FontWeight::MEDIUM)
-                                .child(content.title.clone()),
-                        )
-                        .when(!status_below, |header| {
-                            header.child(
-                                secondary("status-tooltip-status", content.status.clone())
-                                    .flex_shrink_0(),
-                            )
-                        })
-                        .when_some(shortcut.clone(), |header, shortcut| {
-                            header.child(
-                                div()
-                                    .id("status-tooltip-shortcut")
-                                    .test_support()
-                                    .flex_shrink_0()
-                                    .aria_label(Kbd::format(&shortcut))
-                                    .text_xs()
-                                    .text_color(cx.theme().secondary_foreground)
-                                    .child(Kbd::new(shortcut).appearance(false)),
-                            )
-                        }),
+                        .child(title)
+                        .children(trailing),
                 )
                 .when(status_below, |tooltip| {
                     tooltip.child(secondary("status-tooltip-status", content.status.clone()))
@@ -146,6 +164,33 @@ impl StatusTooltip {
             .into()
         }
     }
+}
+
+/// GPUI flex baselines use box bottoms. Match the baselines used to paint text,
+/// with each font's shaped metrics and the current snapped line height.
+fn first_line_baseline(
+    text: &SharedString,
+    refinement: &TextStyleRefinement,
+    window: &mut Window,
+    cx: &App,
+) -> Pixels {
+    let mut style = window.text_style();
+    style.font_family = cx.theme().font_family.clone();
+    style.refine(refinement);
+    let first: SharedString = text
+        .split('\n')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+        .into();
+    let size = style.font_size.to_pixels(window.rem_size());
+    let line =
+        window
+            .text_system()
+            .shape_line(first.clone(), size, &[style.to_run(first.len())], None);
+    let line_height =
+        window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
+    (line_height - line.ascent - line.descent) / 2. + line.ascent
 }
 
 type TooltipContent<T> = Rc<dyn Fn(&T, &App) -> Option<StatusTooltip>>;

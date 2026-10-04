@@ -18,7 +18,8 @@ error is unread. Yellow means that an assistant query needs approval.
 The priority is approval, error, running work, connecting, unread success,
 then connected and idle.
 The tooltip shows the connection name and a short status beside it. The status
-uses secondary text. The host and the user appear below the name. Refresh
+uses secondary text and stays beside the first line when the name wraps.
+The host and the user appear below the name. Refresh
 errors appear below these details. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.

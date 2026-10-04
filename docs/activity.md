@@ -66,6 +66,7 @@ becomes seen.
 A blue dot means that query or session work continues, or a schema refresh
 runs or waits. An unread error takes priority over work. The tooltip shows
 **Activity** and its keyboard shortcut on the first line.
+The name and shortcut share a text baseline.
 Short status lines below it give the error count and the work that continues.
 These lines use secondary text, also when the dot is red. Activity has no
 green completion dot.

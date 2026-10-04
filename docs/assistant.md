@@ -330,9 +330,11 @@ The dots use this order of priority: approval, error, work, unread reply.
 A ready reply or an error stays until its transcript shows. The thread list
 and Activity do not read replies. Approval stays until you approve or cancel
 the request. Tooltips and accessible names give the state in words.
-Conversation tooltips show the title and a short status beside it. The
+Conversation tooltips show the title and a short status beside its first line.
+The title and status share a text baseline. The
 assistant toggle tooltip shows **Assistant** and its keyboard shortcut first.
-Its status appears below. Status text uses secondary styling.
+Its status appears below. The name and shortcut share a text baseline.
+Status text uses secondary styling.
 
 The [query tab dot](queries.md#query-tab-state) shows SQL execution and session
 state. Assistant turns and approval requests do not change that dot. When the

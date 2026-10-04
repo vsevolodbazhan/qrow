@@ -1,6 +1,6 @@
 use crate::support::{
-    MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot, bounds_of, connection_row,
-    label, labelled,
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot,
+    assert_tooltip_header_baseline, bounds_of, connection_row, label, labelled,
 };
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
@@ -63,11 +63,12 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         app.update(cx, |window, cx| window.hover(id, cx));
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
-        app.update(cx, |window, _| {
+        app.update(cx, |window, cx| {
             assert_eq!(
                 label(window, "status-tooltip-status").as_deref(),
                 Some("Connecting")
             );
+            assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
@@ -88,44 +89,55 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn long_connection_tooltips_keep_status_and_details_inside_at_large_scale(cx: &mut TestAppContext) {
-    let name = "W".repeat(60);
-    let profile = crate::support::offline_profile(&name);
-    let id = profile.id;
-    let mut workspace = Workspace {
-        tabs: vec![SavedTab::new(1, Some(id))],
-        profiles: vec![profile],
-        ..Workspace::default()
-    };
-    workspace.settings.ui_scale = 1.5;
-    workspace.settings.theme = "Ayu Light".into();
-    let app = TestApp::launch(cx, workspace);
-    app.hover_labelled(cx, &name);
-    cx.executor().advance_clock(Duration::from_millis(800));
-    app.settle(cx);
-    app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "status-tooltip-title").as_deref(),
-            Some(name.as_str())
-        );
-        assert_eq!(
-            label(window, "status-tooltip-status").as_deref(),
-            Some("Disconnected")
-        );
-        let popup = bounds_of(window, "status-tooltip");
-        for id in [
-            "status-tooltip-title",
-            "status-tooltip-status",
-            "status-tooltip-detail",
-        ] {
-            let bounds = bounds_of(window, id);
-            assert!(
-                bounds.right() <= popup.right(),
-                "{id} extends beyond the tooltip: {bounds:?} > {popup:?}"
+fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_font(cx: &mut TestAppContext) {
+    for (scale, font, theme) in [
+        (0.75, ".SystemUIFont", "One Dark"),
+        (1., ".SystemUIFont", "Ayu Light"),
+        (1.5, ".SystemUIFont", "Ayu Light"),
+        (0.75, "Menlo", "Ayu Light"),
+        (1., "Menlo", "One Dark"),
+        (1.5, "Menlo", "One Dark"),
+    ] {
+        let name = "W".repeat(60);
+        let profile = crate::support::offline_profile(&name);
+        let id = profile.id;
+        let mut workspace = Workspace {
+            tabs: vec![SavedTab::new(1, Some(id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.settings.ui_scale = scale;
+        workspace.settings.ui_font_family = font.into();
+        workspace.settings.theme = theme.into();
+        let app = TestApp::launch(cx, workspace);
+        app.hover_labelled(cx, &name);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, cx| {
+            assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
+            assert_eq!(
+                label(window, "status-tooltip-title").as_deref(),
+                Some(name.as_str())
             );
-            assert!(bounds.bottom() <= popup.bottom());
-        }
-    });
+            assert_eq!(
+                label(window, "status-tooltip-status").as_deref(),
+                Some("Disconnected")
+            );
+            let popup = bounds_of(window, "status-tooltip");
+            for id in [
+                "status-tooltip-title",
+                "status-tooltip-status",
+                "status-tooltip-detail",
+            ] {
+                let bounds = bounds_of(window, id);
+                assert!(
+                    bounds.right() <= popup.right(),
+                    "{id} extends beyond the tooltip: {bounds:?} > {popup:?}"
+                );
+                assert!(bounds.bottom() <= popup.bottom());
+            }
+        });
+    }
 }
 
 #[gpui_kit::test]
@@ -146,7 +158,7 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         app.settle(cx);
     };
     hover(&app, cx, "Activity");
-    app.update(cx, |window, _| {
+    app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("Activity")
@@ -166,6 +178,7 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         assert!(shortcut.top() < title.bottom());
         assert_eq!(title.left(), status.left());
         assert!(status.top() > title.bottom());
+        assert_tooltip_header_baseline(window, cx, "status-tooltip-shortcut");
     });
     app.qrow
         .update(cx, |qrow, cx| {

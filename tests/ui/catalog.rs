@@ -1,8 +1,8 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, assert_connection_dot, bounds_of, connection_row, elements, label,
-    labelled, menu_item, offline_profile, press_at, shows, value,
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tooltip_header_baseline, bounds_of,
+    connection_row, elements, label, labelled, menu_item, offline_profile, press_at, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -1332,7 +1332,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     assert_eq!(tooltip(&app, cx).as_deref(), Some("In Use"));
-    app.update(cx, |window, _| {
+    app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
             Some("Closing")
@@ -1348,6 +1348,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         assert!(status.top() < title.bottom());
         assert_eq!(title.left(), detail.left());
         assert!(detail.top() > title.bottom());
+        assert_tooltip_header_baseline(window, cx, "status-tooltip-status");
     });
 
     // The pointer stays on the row. The open tooltip adds the error.

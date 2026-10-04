@@ -70,7 +70,9 @@ Each query tab has one status dot before its close button:
 | No dot | No live session, work, or unread result. |
 
 Point to the dot to see the tab name and a short status beside it. The status
-uses secondary text. The accessible name also gives the states in words.
+uses secondary text. The name and status share a text baseline. If the name
+wraps, the status stays beside its first line. The accessible name also gives
+the states in words.
 The dot shows SQL execution and session state. The priority is error, running
 work, connecting, unread success, then connected and idle. Assistant turns and
 approval requests use the

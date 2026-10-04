@@ -96,6 +96,51 @@ pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
 }
 
+/// Compare the first text baselines, rather than the bottoms of their boxes.
+pub fn assert_tooltip_header_baseline(window: &mut Window, cx: &App, secondary: &str) {
+    use gpui_kit::component::ActiveTheme;
+    use gpui_kit::{FontWeight, Styled, div};
+
+    let mut title = div().text_sm().font_weight(FontWeight::MEDIUM);
+    let mut secondary_style = div().text_xs();
+    let baseline = |id: &str, font_size, weight, window: &mut Window| {
+        let mut style = window.text_style();
+        style.font_family = cx.theme().font_family.clone();
+        style.font_size = font_size;
+        style.font_weight = weight;
+        let text = label(window, id.to_owned()).unwrap();
+        let first = text.lines().next().unwrap_or_default().to_owned();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let line = window.text_system().shape_line(
+            first.clone().into(),
+            size,
+            &[style.to_run(first.len())],
+            None,
+        );
+        let line_height =
+            window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
+        bounds_of(window, id).top() + (line_height - line.ascent - line.descent) / 2. + line.ascent
+    };
+    let title_baseline = baseline(
+        "status-tooltip-title",
+        title.style().text.font_size.unwrap(),
+        FontWeight::MEDIUM,
+        window,
+    );
+    let secondary_baseline = baseline(
+        secondary,
+        secondary_style.style().text.font_size.unwrap(),
+        FontWeight::NORMAL,
+        window,
+    );
+    assert!(
+        // GPUI snaps element origins to device pixels. Permit less than half
+        // a device pixel of rounding, never a whole rendered pixel of drift.
+        (title_baseline - secondary_baseline).abs() * window.scale_factor() < px(0.5),
+        "{secondary} baseline {secondary_baseline:?} differs from the title {title_baseline:?}"
+    );
+}
+
 /// The labels of every observed element, for failure messages.
 pub fn labels(window: &Window) -> Vec<String> {
     let mut labels: Vec<_> = elements(window)
