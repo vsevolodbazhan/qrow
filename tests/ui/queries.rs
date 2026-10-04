@@ -13,6 +13,118 @@ use std::{
 };
 
 #[gpui_kit::test]
+fn long_connection_tooltips_keep_status_and_details_inside_at_large_scale(cx: &mut TestAppContext) {
+    let name = "W".repeat(60);
+    let profile = crate::support::offline_profile(&name);
+    let id = profile.id;
+    let mut workspace = Workspace {
+        tabs: vec![SavedTab::new(1, Some(id))],
+        profiles: vec![profile],
+        ..Workspace::default()
+    };
+    workspace.settings.ui_scale = 1.5;
+    workspace.settings.theme = "Ayu Light".into();
+    let app = TestApp::launch(cx, workspace);
+    app.hover_labelled(cx, &name);
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some(name.as_str())
+        );
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Disconnected")
+        );
+        let popup = bounds_of(window, "status-tooltip");
+        for id in [
+            "status-tooltip-title",
+            "status-tooltip-status",
+            "status-tooltip-detail",
+        ] {
+            let bounds = bounds_of(window, id);
+            assert!(
+                bounds.right() <= popup.right(),
+                "{id} extends beyond the tooltip: {bounds:?} > {popup:?}"
+            );
+            assert!(bounds.bottom() <= popup.bottom());
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppContext) {
+    let profile = crate::support::offline_profile("Tooltip warehouse");
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            tabs: vec![SavedTab::new(1, Some(id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        },
+    );
+    let hover = |app: &TestApp, cx: &mut TestAppContext, title| {
+        app.hover_labelled(cx, title);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+    };
+    hover(&app, cx, "Activity");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Activity")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Idle")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-shortcut").as_deref(),
+            Some("⇧⌘U")
+        );
+        let title = bounds_of(window, "status-tooltip-title");
+        let shortcut = bounds_of(window, "status-tooltip-shortcut");
+        let status = bounds_of(window, "status-tooltip-status");
+        assert!(shortcut.left() > title.right());
+        assert!(shortcut.top() < title.bottom());
+        assert_eq!(title.left(), status.left());
+        assert!(status.top() > title.bottom());
+    });
+    app.qrow
+        .update(cx, |qrow, cx| {
+            qrow.record_activity(
+                id,
+                ActivityEntry::new(Severity::Error, "Synthetic refresh error"),
+                cx,
+            );
+        })
+        .unwrap();
+    app.wait_until(
+        cx,
+        "the unread error in the open tooltip",
+        Duration::from_secs(10),
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error"),
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("1 Unread Error")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-shortcut").as_deref(),
+            Some("⇧⌘U")
+        );
+    });
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("status-tooltip").is_none())
+    });
+}
+
+#[gpui_kit::test]
 fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext) {
     let profile = Profile {
         name: "Activity timestamps".into(),

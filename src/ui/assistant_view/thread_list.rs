@@ -132,8 +132,15 @@ impl AssistantPane {
                             .map(|(conversation, place)| {
                                 let id = conversation.thread_id.clone();
                                 let status = qrow.thread_status(&id);
+                                let tooltip_thread = id.clone();
+                                let tooltip = StatusTooltip::live(self.qrow.clone(), None, move |qrow, _| {
+                                    qrow.assistant.conversations.iter().find(|conversation| conversation.thread_id == tooltip_thread).map(|conversation| {
+                                        StatusTooltip::new(conversation.title.clone(), qrow.thread_status(&tooltip_thread).tooltip_status())
+                                    })
+                                });
                                 let row = h_flex()
                                     .id(SharedString::from(format!("assistant-thread-row-{id}")))
+                                    .tooltip(tooltip)
                                     .w_full()
                                     .h(qrow.ui_px(48.))
                                     .flex_shrink_0();

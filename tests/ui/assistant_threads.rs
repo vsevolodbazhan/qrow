@@ -42,6 +42,53 @@ fn row(title: &str) -> String {
 }
 
 #[gpui_kit::test]
+fn an_open_conversation_tooltip_follows_its_title_and_reply_state(cx: &mut TestAppContext) {
+    let (app, codex) = launch(cx, |workspace, _| {
+        workspace.settings.assistant.panel_width = 536.;
+    });
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply Hold title generation");
+    app.wait_until(cx, "the held reply and title", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending") && codex.marked("title-generation-pending")
+    });
+    app.show_threads(cx);
+    let row_label = app.update(cx, |window, _| {
+        label(window, "assistant-thread-synthetic-thread-1").unwrap()
+    });
+    app.hover_labelled(cx, &row_label);
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Working")
+        );
+        assert_ne!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Title: Title before first")
+        );
+    });
+
+    // The pointer remains on the same row through both changes.
+    codex.mark("title-generation-release");
+    app.wait_until(
+        cx,
+        "the generated tooltip title",
+        REPLY_TIMEOUT,
+        |window, _| {
+            label(window, "status-tooltip-title").as_deref() == Some("Title: Title before first")
+        },
+    );
+    codex.mark("first-reply-release");
+    app.wait_until(
+        cx,
+        "the unread reply in the open tooltip",
+        REPLY_TIMEOUT,
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread Reply"),
+    );
+}
+
+#[gpui_kit::test]
 fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     // Below 600 pixels the pane is narrow: the list replaces the conversation.
     let (app, _codex) = launch(cx, |workspace, _| {

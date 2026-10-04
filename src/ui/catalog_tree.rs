@@ -605,7 +605,7 @@ impl Builder<'_> {
 /// What a connection row shows in the current frame.
 struct ConnectionRow {
     name: String,
-    tooltip: String,
+    tooltip: StatusTooltip,
     busy: bool,
     refreshing: bool,
     unread_error: bool,
@@ -1221,107 +1221,92 @@ impl Qrow {
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(STATUS_SLOT_WIDTH);
         let active = self.active_profile();
-        let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
-            self.profiles
-                .iter()
-                .map(|profile| {
-                    let id = profile.id;
-                    let refresh_error = self.catalog.connection_error(id);
-                    let unseen = self.activity.read(cx).activity().unseen_errors_of(id);
-                    let query_status = self
-                        .tabs
-                        .iter()
-                        .filter(|tab| tab.saved.profile == Some(id))
-                        .filter_map(|tab| {
-                            tab.dot_status().max(
+        let rows: Rc<HashMap<Uuid, ConnectionRow>> =
+            Rc::new(
+                self.profiles
+                    .iter()
+                    .map(|profile| {
+                        let id = profile.id;
+                        let refresh_error = self.catalog.connection_error(id);
+                        let unseen = self.activity.read(cx).activity().unseen_errors_of(id);
+                        let query_status = self
+                            .tabs
+                            .iter()
+                            .filter(|tab| tab.saved.profile == Some(id))
+                            .filter_map(|tab| {
+                                tab.dot_status().max(
+                                    self.settings
+                                        .assistant
+                                        .enabled
+                                        .then(|| self.tab_assistant_status(tab.saved.id))
+                                        .flatten()
+                                        .and_then(assistant_view::ThreadStatus::dot_status),
+                                )
+                            })
+                            .max();
+                        let status = query_status.max(if unseen > 0 {
+                            Some(DotStatus::Error)
+                        } else if self.catalog.is_refreshing(id) {
+                            Some(DotStatus::Working)
+                        } else {
+                            None
+                        });
+                        let connected = self
+                            .tabs
+                            .iter()
+                            .any(|tab| tab.worker_profile == Some(id) && tab.connected);
+                        let unread_success = self.tabs.iter().any(|tab| {
+                            tab.saved.profile == Some(id) && tab.panel.has_unread_success()
+                        });
+                        let assistant_states: Vec<_> = self
+                            .tabs
+                            .iter()
+                            .filter(|tab| tab.saved.profile == Some(id))
+                            .filter_map(|tab| {
                                 self.settings
                                     .assistant
                                     .enabled
                                     .then(|| self.tab_assistant_status(tab.saved.id))
                                     .flatten()
-                                    .and_then(assistant_view::ThreadStatus::dot_status),
-                            )
-                        })
-                        .max();
-                    let status = query_status.max(if unseen > 0 {
-                        Some(DotStatus::Error)
-                    } else if self.catalog.is_refreshing(id) {
-                        Some(DotStatus::Working)
-                    } else {
-                        None
-                    });
-                    let connected = self
-                        .tabs
-                        .iter()
-                        .any(|tab| tab.worker_profile == Some(id) && tab.connected);
-                    let unread_success = self
-                        .tabs
-                        .iter()
-                        .any(|tab| tab.saved.profile == Some(id) && tab.panel.has_unread_success());
-                    let mut tooltip = workspace_view::connection_tooltip(profile, refresh_error);
-                    if connected {
-                        tooltip.push_str("\nConnected");
-                    }
-                    let assistant_states: Vec<_> = self
-                        .tabs
-                        .iter()
-                        .filter(|tab| tab.saved.profile == Some(id))
-                        .filter_map(|tab| {
-                            self.settings
-                                .assistant
-                                .enabled
-                                .then(|| self.tab_assistant_status(tab.saved.id))
-                                .flatten()
-                        })
-                        .collect();
-                    let working = self.profile_busy(id)
-                        || self.catalog.is_refreshing(id)
-                        || assistant_states.contains(&assistant_view::ThreadStatus::Working);
-                    if connected && !working {
-                        tooltip.push_str(", idle");
-                    }
-                    if working {
-                        tooltip.push_str("\nWork running");
-                    }
-                    if unread_success
-                        || assistant_states.contains(&assistant_view::ThreadStatus::Ready)
-                    {
-                        tooltip.push_str("\nUnread result or reply");
-                    }
-                    if unseen > 0
-                        || self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error)
-                        || assistant_states.contains(&assistant_view::ThreadStatus::Failed)
-                    {
-                        tooltip.push_str("\nUnread error");
-                    }
-                    if assistant_states.contains(&assistant_view::ThreadStatus::Approval) {
-                        tooltip.push_str("\nWaiting for approval");
-                    }
-                    (
-                        id,
-                        ConnectionRow {
-                            name: profile.name.clone(),
-                            tooltip,
-                            connected,
-                            unread_success,
-                            status,
-                            assistant_states,
-                            refresh_error: refresh_error.is_some(),
-                            busy: self.profile_busy(id),
-                            refreshing: self.catalog.is_refreshing(id),
-                            unread_error: self
-                                .tabs
-                                .iter()
-                                .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error),
-                            active: active == Some(id),
-                        },
-                    )
-                })
-                .collect(),
-        );
+                            })
+                            .collect();
+                        let tooltip = StatusTooltip::new(
+                            profile.name.clone(),
+                            match status {
+                                Some(DotStatus::Connected) => "Idle",
+                                Some(DotStatus::Working) => "In Use",
+                                Some(DotStatus::Ready) if unread_success => "Unread Result",
+                                Some(DotStatus::Ready) => "Unread Reply",
+                                Some(DotStatus::Error) => "Unread Error",
+                                Some(DotStatus::Attention) => "Needs Approval",
+                                None => "Disconnected",
+                            },
+                        )
+                        .detail(workspace_view::connection_detail(profile))
+                        .when_some(refresh_error, |tooltip, error| {
+                            tooltip.error(error_summary(error))
+                        });
+                        (
+                            id,
+                            ConnectionRow {
+                                name: profile.name.clone(),
+                                tooltip,
+                                connected,
+                                unread_success,
+                                status,
+                                assistant_states,
+                                refresh_error: refresh_error.is_some(),
+                                busy: self.profile_busy(id),
+                                refreshing: self.catalog.is_refreshing(id),
+                                unread_error: self.tabs.iter().any(|tab| {
+                                    tab.saved.profile == Some(id) && tab.panel.unread_error
+                                }),
+                                active: active == Some(id),
+                            },
+                        )
+                    })
+                    .collect(),
+            );
         let context = Rc::new(RowContext {
             nodes: self.catalog.nodes.clone(),
             rows,
@@ -1425,12 +1410,23 @@ struct RowContext {
 
 impl RowContext {
     /// Records the current tooltip of the row `id` for its open tooltip view.
-    fn record_tip(&self, id: &SharedString, text: String, truncation: Option<Truncation>) {
+    fn record_tip(
+        &self,
+        id: &SharedString,
+        text: impl Into<RowTooltip>,
+        truncation: Option<Truncation>,
+    ) {
         let mut tips = self.tips.borrow_mut();
         if tips.len() >= MAX_LABEL_WIDTHS && !tips.contains_key(id) {
             tips.clear();
         }
-        tips.insert(id.clone(), RowTip { text, truncation });
+        tips.insert(
+            id.clone(),
+            RowTip {
+                text: text.into(),
+                truncation,
+            },
+        );
     }
 
     /// A tooltip that follows the tooltip that the row `id` records.
@@ -1507,8 +1503,26 @@ impl Truncation {
 }
 
 /// The current tooltip of a row. The row writes it in each frame.
+#[derive(Clone, PartialEq)]
+enum RowTooltip {
+    Text(String),
+    Status(StatusTooltip),
+}
+
+impl From<String> for RowTooltip {
+    fn from(text: String) -> Self {
+        Self::Text(text)
+    }
+}
+
+impl From<StatusTooltip> for RowTooltip {
+    fn from(tooltip: StatusTooltip) -> Self {
+        Self::Status(tooltip)
+    }
+}
+
 struct RowTip {
-    text: String,
+    text: RowTooltip,
     /// `None` when the tooltip has a comment or an error, so it always shows.
     truncation: Option<Truncation>,
 }
@@ -1522,7 +1536,7 @@ struct LiveTooltip {
     tips: Rc<RefCell<HashMap<SharedString, RowTip>>>,
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
     /// The tooltip on screen and its text. It changes only with the text.
-    shown: Option<(String, AnyView)>,
+    shown: Option<(RowTooltip, AnyView)>,
 }
 
 impl Render for LiveTooltip {
@@ -1536,7 +1550,10 @@ impl Render for LiveTooltip {
         match text {
             Some(text) => {
                 if self.shown.as_ref().is_none_or(|(shown, _)| *shown != text) {
-                    let view = row_tooltip_view(&text, window, cx);
+                    let view = match &text {
+                        RowTooltip::Text(text) => row_tooltip_view(text, window, cx),
+                        RowTooltip::Status(tooltip) => tooltip.build(None, window, cx),
+                    };
                     self.shown = Some((text, view));
                 }
                 div().children(self.shown.as_ref().map(|(_, view)| view.clone()))

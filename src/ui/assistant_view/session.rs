@@ -130,6 +130,16 @@ pub(in crate::ui) enum ThreadStatus {
 }
 
 impl ThreadStatus {
+    pub(in crate::ui) fn tooltip_status(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Ready => "Unread Reply",
+            Self::Working => "Working",
+            Self::Failed => "Unread Error",
+            Self::Approval => "Needs Approval",
+        }
+    }
+
     pub(in crate::ui) fn dot_status(self) -> Option<DotStatus> {
         match self {
             Self::Idle => None,

@@ -17,15 +17,8 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-/// The tooltip of a connection row: its host and user, then the error of
-/// the last schema refresh of the connection.
-pub(super) fn connection_tooltip(profile: &Profile, refresh_error: Option<&str>) -> String {
-    let mut tooltip = format!("{} · {}", profile.host, profile.username);
-    if let Some(error) = refresh_error {
-        tooltip.push('\n');
-        tooltip.push_str(&super::catalog_tree::error_summary(error));
-    }
-    tooltip
+pub(super) fn connection_detail(profile: &Profile) -> String {
+    format!("{} · {}", profile.host, profile.username)
 }
 
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
@@ -165,18 +158,23 @@ impl Qrow {
                             .pr_2()
                             .when_some(tab.dot_status(), |el, status| {
                                 let label = format!("{}{}", tab.saved.title, tab.status_suffix());
+                                let tooltip = StatusTooltip::live(
+                                    cx.entity().downgrade(),
+                                    None,
+                                    move |qrow, _| {
+                                        qrow.tabs
+                                            .iter()
+                                            .find(|tab| tab.saved.id == id)
+                                            .and_then(Tab::status_tooltip)
+                                    },
+                                );
                                 el.child(
                                     div()
                                         .id(SharedString::from(format!("query-status-{id}")))
                                         .test_support()
                                         .role(Role::Status)
-                                        .aria_label(label.clone())
-                                        .tooltip(move |window, cx| {
-                                            gpui_kit::component::tooltip::Tooltip::new(
-                                                label.clone(),
-                                            )
-                                            .build(window, cx)
-                                        })
+                                        .aria_label(label)
+                                        .tooltip(tooltip)
                                         .child(status.dot(cx)),
                                 )
                             })
@@ -235,25 +233,16 @@ impl Qrow {
                         let failed = status == ThreadStatus::Failed;
                         let unread = failed || status == ThreadStatus::Ready;
                         let working = status == ThreadStatus::Working;
-                        let (accessibility_label, tooltip) = if failed {
-                            (
-                                "Toggle Assistant, reply failed",
-                                "Assistant reply failed · ⌘J",
-                            )
+                        let accessibility_label = if failed {
+                            "Toggle Assistant, reply failed"
                         } else if unread {
-                            (
-                                "Toggle Assistant, reply ready",
-                                "Assistant reply ready · ⌘J",
-                            )
+                            "Toggle Assistant, reply ready"
                         } else if waiting_for_approval {
-                            (
-                                "Toggle Assistant, waiting for approval",
-                                "Assistant waiting for approval · ⌘J",
-                            )
+                            "Toggle Assistant, waiting for approval"
                         } else if working {
-                            ("Toggle Assistant, working", "Assistant is working · ⌘J")
+                            "Toggle Assistant, working"
                         } else {
-                            ("Toggle Assistant", "Toggle Assistant · ⌘J")
+                            "Toggle Assistant"
                         };
                         let toggle =
                             Button::new("toggle-assistant")
@@ -262,12 +251,25 @@ impl Qrow {
                                 .w(self.ui_px(28.))
                                 .h(self.ui_px(28.))
                                 .accessibility_label(accessibility_label)
-                                .tooltip(tooltip)
                                 .icon(Icon::new(AssetIconName::Bot).small())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
-                        bar.child(DotStatus::on_button(status.dot_status(), toggle, cx))
+                        bar.child(
+                            div()
+                                .id("assistant-tooltip-trigger")
+                                .tooltip(StatusTooltip::live(
+                                    cx.entity().downgrade(),
+                                    Some(&ToggleAssistant),
+                                    |qrow, _| {
+                                        Some(StatusTooltip::new(
+                                            "Assistant",
+                                            qrow.assistant_status().tooltip_status(),
+                                        ))
+                                    },
+                                ))
+                                .child(DotStatus::on_button(status.dot_status(), toggle, cx)),
+                        )
                     }),
             )
     }
@@ -403,9 +405,8 @@ impl Qrow {
     }
 
     /// Activity keeps its icon, with a dot for unread errors or current work.
-    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn activity_status(&self, cx: &App) -> (Option<DotStatus>, String, StatusTooltip) {
         let view = self.activity.read(cx);
-        let open = view.is_open();
         let unseen = view.activity().unseen_errors();
         let refreshing = self
             .profiles
@@ -426,26 +427,54 @@ impl Qrow {
             None
         };
         let mut label = String::from("Activity");
+        let mut statuses = Vec::new();
+        if unseen > 0 {
+            statuses.push(format!(
+                "{unseen} Unread {}",
+                if unseen == 1 { "Error" } else { "Errors" }
+            ));
+        }
         if refreshing {
             label.push_str(", schema refresh running");
+            statuses.push("Schema Refresh Running".into());
         }
         if working {
             label.push_str(", query or session work running");
+            statuses.push("Query Work Running".into());
         }
         match unseen {
             0 => {}
             1 => label.push_str(", 1 unseen error"),
             count => label.push_str(&format!(", {count} unseen errors")),
         }
+        let tooltip = StatusTooltip::new(
+            "Activity",
+            if statuses.is_empty() {
+                "Idle".into()
+            } else {
+                statuses.join("\n")
+            },
+        );
+        (status, label, tooltip)
+    }
+
+    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (status, label, _) = self.activity_status(cx);
         let button = Button::new("toggle-activity")
             .ghost()
             .small()
-            .selected(open)
+            .selected(self.activity.read(cx).is_open())
             .icon(Icon::new(AssetIconName::Activity).small())
-            .accessibility_label(label.clone())
-            .tooltip(format!("{label} · ⇧⌘U"))
+            .accessibility_label(label)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
-        DotStatus::on_button(status, button, cx)
+        div()
+            .id("activity-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                Some(&ToggleActivity),
+                |qrow, cx| Some(qrow.activity_status(cx).2),
+            ))
+            .child(DotStatus::on_button(status, button, cx))
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -955,12 +984,8 @@ mod tests {
             ..Profile::default()
         };
         assert_eq!(
-            connection_tooltip(&tooltip_profile, None),
+            connection_detail(&tooltip_profile),
             "kyuubi.example.com · aviaservice"
-        );
-        assert_eq!(
-            connection_tooltip(&tooltip_profile, Some("Refresh stopped after 30 minutes")),
-            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nActivity shows the full error."
         );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(

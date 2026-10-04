@@ -12,6 +12,7 @@ mod results;
 mod setting_row;
 mod settings_view;
 mod status_dot;
+mod status_tooltip;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
@@ -47,6 +48,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use results::Results;
 use status_dot::DotStatus;
+use status_tooltip::StatusTooltip;
 use std::{
     collections::BTreeMap,
     sync::{Arc, mpsc},
@@ -220,6 +222,21 @@ struct Tab {
     next_execution_id: u64,
 }
 impl Tab {
+    fn status_tooltip(&self) -> Option<StatusTooltip> {
+        self.dot_status().map(|status| {
+            StatusTooltip::new(
+                self.saved.title.clone(),
+                match status {
+                    DotStatus::Connected => "Idle",
+                    DotStatus::Working => "Running",
+                    DotStatus::Ready => "Unread Result",
+                    DotStatus::Error => "Unread Error",
+                    DotStatus::Attention => unreachable!("SQL never needs approval"),
+                },
+            )
+        })
+    }
+
     fn dot_status(&self) -> Option<DotStatus> {
         if self.panel.unread_error {
             Some(DotStatus::Error)

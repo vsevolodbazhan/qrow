@@ -1323,7 +1323,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         .unwrap();
     let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
     let tooltip = |app: &TestApp, cx: &mut TestAppContext| {
-        app.update(cx, |window, _| label(window, "catalog-tooltip"))
+        app.update(cx, |window, _| label(window, "status-tooltip-status"))
     };
 
     app.context_menu(cx, connection_row(profile.id));
@@ -1331,10 +1331,24 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    assert_eq!(
-        tooltip(&app, cx).as_deref(),
-        Some("127.0.0.1 · synthetic\nWork running")
-    );
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("In Use"));
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Closing")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-detail").as_deref(),
+            Some("127.0.0.1 · synthetic")
+        );
+        let title = bounds_of(window, "status-tooltip-title");
+        let status = bounds_of(window, "status-tooltip-status");
+        let detail = bounds_of(window, "status-tooltip-detail");
+        assert!(status.left() > title.right());
+        assert!(status.top() < title.bottom());
+        assert_eq!(title.left(), detail.left());
+        assert!(detail.top() > title.bottom());
+    });
 
     // The pointer stays on the row. The open tooltip adds the error.
     app.wait_until(
@@ -1342,11 +1356,15 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         "the error in the tooltip",
         Duration::from_secs(20),
         |window, _| {
-            label(window, "catalog-tooltip")
+            label(window, "status-tooltip-error")
                 .is_some_and(|text| text.contains("Activity shows the full error."))
         },
     );
     app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Unread Error")
+        );
         assert_eq!(
             label(window, connection_row(profile.id)).as_deref(),
             Some("Closing, schema refresh error")

@@ -15,7 +15,9 @@ continues. Green means that a result or reply is unread. Red means that an
 error is unread. Yellow means that an assistant query needs approval.
 
 The priority is approval, error, work, unread success, then connected and idle.
-The tooltip gives the state in words. No dot means that no session, work, or
+The tooltip shows the connection name and a short status beside it. The status
+uses secondary text. The host and the user appear below the name. Refresh
+errors appear below these details. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.
 
@@ -183,8 +185,8 @@ had before the refresh. The error shows on the row of the refreshed part:
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show Activity** from the connection menu to open it. The connection row uses
-the same red dot for an unread query error. Only a refresh error
-adds text to the tooltip of the row. If Qrow cannot connect, it stops the
+the same red dot for an unread query error. Only refresh errors
+add error details to the tooltip of the row. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
 ### Refresh schemas automatically
