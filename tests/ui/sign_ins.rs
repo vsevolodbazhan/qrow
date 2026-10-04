@@ -11,7 +11,7 @@ use gpui_kit::test::TestWindowExt;
 use qrow::{
     model::{Authentication, SavedTab, SignIn, Workspace},
     storage::TokenStore,
-    ui::{ShowConnections, ShowSignIns, ToggleSidebar},
+    ui::{ShowConnections, ShowSignIns, ToggleActivity, ToggleSidebar},
 };
 use std::{sync::Arc, time::Duration};
 
@@ -166,6 +166,19 @@ fn command_b_hides_and_shows_the_connections_from_the_sidebar(cx: &mut TestAppCo
     open_sign_ins(&app, cx);
     app.press(cx, "cmd-b");
     app.wait_for(cx, "add-connection");
+}
+
+#[gpui_kit::test]
+fn command_b_with_activity_open_keeps_the_activity_focus(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, _) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    app.dispatch(cx, ToggleActivity);
+    app.wait_for(cx, "activity");
+    app.press(cx, "cmd-b");
+    // Escape still reaches Activity, so its focus stayed.
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
 }
 
 #[gpui_kit::test]

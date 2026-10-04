@@ -62,6 +62,22 @@ impl Qrow {
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
+                    // A tab without a dot shows its status on the tab itself.
+                    .when(tab.dot_status().is_none(), |query_tab| {
+                        query_tab.map(|mut query_tab| {
+                            query_tab.interactivity().tooltip(StatusTooltip::live(
+                                cx.entity().downgrade(),
+                                None,
+                                move |qrow, _| {
+                                    qrow.tabs
+                                        .iter()
+                                        .find(|tab| tab.saved.id == id)
+                                        .map(Tab::status_tooltip)
+                                },
+                            ));
+                            query_tab
+                        })
+                    })
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,
@@ -116,7 +132,7 @@ impl Qrow {
                                         qrow.tabs
                                             .iter()
                                             .find(|tab| tab.saved.id == id)
-                                            .and_then(Tab::status_tooltip)
+                                            .map(Tab::status_tooltip)
                                     },
                                 );
                                 el.child(
@@ -499,10 +515,11 @@ impl Qrow {
 
     /// Shows or hides the sidebar. A hidden sidebar gives its focus to the
     /// SQL editor: without a focused element, shortcuts like ⌘B reach no
-    /// handler.
+    /// handler. A focus outside the sidebar, like in Activity, stays.
     pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self.sidebar && self.sidebar_focus.contains_focused(window, cx);
         self.sidebar = shown;
-        if !shown {
+        if !shown && had_focus {
             let editor = self.tabs[self.active].input.clone();
             editor.update(cx, |editor, cx| editor.focus(window, cx));
         }
@@ -975,16 +992,20 @@ impl Render for Qrow {
             .size_full()
             .items_stretch()
             .when(self.sidebar, |el| {
-                el.child(div().w(self.sidebar_width).flex_shrink_0().map(|el| {
-                    match self.sidebar_panel {
-                        SidebarPanel::Connections => {
-                            el.child(self.connections(window, cx).into_any_element())
-                        }
-                        SidebarPanel::SignIns => {
-                            el.child(self.sign_ins_sidebar(cx).into_any_element())
-                        }
-                    }
-                }))
+                el.child(
+                    div()
+                        .track_focus(&self.sidebar_focus)
+                        .w(self.sidebar_width)
+                        .flex_shrink_0()
+                        .map(|el| match self.sidebar_panel {
+                            SidebarPanel::Connections => {
+                                el.child(self.connections(window, cx).into_any_element())
+                            }
+                            SidebarPanel::SignIns => {
+                                el.child(self.sign_ins_sidebar(cx).into_any_element())
+                            }
+                        }),
+                )
                 .child(self.splitter(true, cx))
             })
             .child(

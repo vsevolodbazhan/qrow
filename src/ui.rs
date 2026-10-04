@@ -266,23 +266,28 @@ impl Tab {
         }
     }
 
-    /// The tooltip of the dot of the tab: the state of the dot, then the
-    /// status of the last work of the tab, like "Error: Connection failed".
-    fn status_tooltip(&self) -> Option<StatusTooltip> {
-        self.dot_status().map(|status| {
-            StatusTooltip::new(
-                self.saved.title.clone(),
-                match status {
-                    DotStatus::Connected => "Idle",
-                    DotStatus::Connecting => "Connecting",
-                    DotStatus::Working => "Running",
-                    DotStatus::Ready => "Unread Result",
-                    DotStatus::Error => "Unread Error",
-                    DotStatus::Attention => unreachable!("SQL never needs approval"),
-                },
-            )
-            .detail(self.status_label())
-        })
+    /// The tooltip of the tab: the state of its dot, then the status of the
+    /// last work of the tab, like "Error: Connection failed". A tab without
+    /// a dot has the tooltip on the tab itself.
+    fn status_tooltip(&self) -> StatusTooltip {
+        let tooltip = StatusTooltip::new(
+            self.saved.title.clone(),
+            match self.dot_status() {
+                Some(DotStatus::Connected) => "Idle",
+                Some(DotStatus::Connecting) => "Connecting",
+                Some(DotStatus::Working) => "Running",
+                Some(DotStatus::Ready) => "Unread Result",
+                Some(DotStatus::Error) => "Unread Error",
+                Some(DotStatus::Attention) => unreachable!("SQL never needs approval"),
+                None => "Not Connected",
+            },
+        );
+        let status = self.status_label();
+        if status == "Not connected" {
+            tooltip
+        } else {
+            tooltip.detail(status)
+        }
     }
 
     fn dot_status(&self) -> Option<DotStatus> {
@@ -514,6 +519,8 @@ pub struct Qrow {
     /// The panel that the sidebar shows, also while it is hidden.
     sidebar_panel: SidebarPanel,
     sidebar_width: Pixels,
+    /// The focus inside the sidebar, which a hidden sidebar gives back.
+    sidebar_focus: FocusHandle,
     editor_height: Pixels,
     resize: Option<(bool, Point<Pixels>, Pixels)>,
     focus: FocusHandle,
@@ -708,6 +715,7 @@ impl Qrow {
             sidebar: true,
             sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
+            sidebar_focus: cx.focus_handle(),
             editor_height: px(285. * scale),
             resize: None,
             focus: cx.focus_handle(),
