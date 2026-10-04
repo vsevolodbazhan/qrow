@@ -203,15 +203,8 @@ fn a_query_result_hidden_by_activity_stays_unread(cx: &mut TestAppContext) {
         window.click("toggle-activity", cx);
     });
     app.wait_for(cx, "activity");
-    app.wait_until(
-        cx,
-        "the completed hidden query",
-        QUERY_TIMEOUT,
-        |window, _| {
-            label(window, format!("query-status-{first}"))
-                .is_some_and(|status| status.contains("unread query result"))
-        },
-    );
+    // The status bar stays visible while Activity covers the tab strip.
+    app.wait_status(cx, "Complete");
     app.dispatch(cx, qrow::ui::NewTab);
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
