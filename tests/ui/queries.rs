@@ -59,8 +59,8 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
             Some("Connecting warehouse, connecting")
         );
     });
-    let hover = |text, app: &TestApp, cx: &mut TestAppContext| {
-        app.hover_labelled(cx, text);
+    let hover = |id: String, app: &TestApp, cx: &mut TestAppContext| {
+        app.update(cx, |window, cx| window.hover(id, cx));
         cx.executor().advance_clock(Duration::from_millis(800));
         app.settle(cx);
         app.update(cx, |window, _| {
@@ -70,10 +70,10 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
             );
         });
     };
-    hover("Query 1, connecting", &app, cx);
+    hover(format!("query-status-{query}"), &app, cx);
     // Keep the failure unread by showing a different tab.
     app.click(cx, "new-tab");
-    hover("Connecting warehouse, connecting", &app, cx);
+    hover(format!("connection-status-{connection}"), &app, cx);
     drop(listener);
     app.wait_until(
         cx,
