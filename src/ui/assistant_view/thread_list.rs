@@ -22,7 +22,10 @@ pub(super) fn conversation_age(last_activity: u64, now: u64) -> String {
 impl Qrow {
     /// Names the connection of a conversation. A conversation whose tab
     /// closed names the connection of its next tab.
-    pub(super) fn conversation_place(&self, conversation: &AssistantConversation) -> String {
+    pub(super) fn conversation_place(
+        &self,
+        conversation: &AssistantConversation,
+    ) -> (String, bool) {
         let (profile, closed) = match conversation
             .tab_id
             .and_then(|tab| self.tabs.iter().find(|candidate| candidate.saved.id == tab))
@@ -33,11 +36,7 @@ impl Qrow {
         let name = profile
             .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
             .map_or("No connection", |profile| profile.name.as_str());
-        if closed {
-            format!("{name} · Tab closed")
-        } else {
-            name.to_owned()
-        }
+        (name.to_owned(), closed)
     }
 }
 
@@ -124,12 +123,13 @@ impl AssistantPane {
                             .map(|conversation| {
                                 (conversation, qrow.conversation_place(conversation))
                             })
-                            .filter(|(conversation, place)| {
+                            .filter(|(conversation, (place, closed))| {
                                 search.is_empty()
                                     || self.search_matches(&conversation.title, &search)
                                     || self.search_matches(place, &search)
+                                    || (*closed && self.search_matches("Tab Closed", &search))
                             })
-                            .map(|(conversation, place)| {
+                            .map(|(conversation, (place, closed))| {
                                 let id = conversation.thread_id.clone();
                                 let status = qrow.thread_status(&id);
                                 let tooltip_thread = id.clone();
@@ -148,7 +148,8 @@ impl AssistantPane {
                                 let label = conversation.title.clone();
                                 let generating = qrow.assistant_title_generating(&id);
                                 let accessible = format!(
-                                    "{label}, {place}{}{}",
+                                    "{label}, {place}{}{}{}",
+                                    if closed { ", Tab Closed" } else { "" },
                                     status.accessible_suffix(),
                                     if generating { ", generating title" } else { "" }
                                 );
@@ -183,18 +184,23 @@ impl AssistantPane {
                                                             .when(!generating, |title| title.child(label)),
                                                     )
                                                     .child(
-                                                        div()
+                                                        h_flex()
                                                             .min_w_0()
-                                                            .truncate()
+                                                            .gap_2()
                                                             .text_xs()
                                                             .text_color(cx.theme().muted_foreground)
-                                                            .child(format!(
-                                                                "{place} · {}",
-                                                                conversation_age(
-                                                                    conversation.last_activity,
-                                                                    unix_now_seconds(),
-                                                                )
-                                                            )),
+                                                            .child(div()
+                                                                .id(SharedString::from(format!("assistant-thread-place-{id}")))
+                                                                .test_support().aria_label(place.clone())
+                                                                .flex_1().min_w_0().truncate().child(place))
+                                                            .when(closed, |row| row.child(div()
+                                                                .id(SharedString::from(format!("assistant-thread-closed-{id}")))
+                                                                .test_support().aria_label("Tab Closed")
+                                                                .flex_shrink_0().child("Tab Closed")))
+                                                            .child(div()
+                                                                .id(SharedString::from(format!("assistant-thread-age-{id}")))
+                                                                .test_support().flex_shrink_0()
+                                                                .child(conversation_age(conversation.last_activity, unix_now_seconds()))),
                                                     ),
                                             )
                                             .when_some(

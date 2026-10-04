@@ -101,7 +101,7 @@ fn disconnect_and_connection_edits_act_on_their_own_session(cx: &mut TestAppCont
         cx,
         "SELECT concat('b-', lpad(CAST(id AS STRING), 4, '0'), '-', current_timezone()) AS value FROM range(4001) ORDER BY id",
     );
-    app.wait_status(cx, "Preview · More rows available");
+    app.wait_status(cx, "Preview: More rows available");
     app.wait_cell(cx, 0, 1, "b-0000-UTC");
 
     // Disconnect acts on the active tab only.
@@ -129,7 +129,7 @@ fn disconnect_and_connection_edits_act_on_their_own_session(cx: &mut TestAppCont
     app.fill(cx, "connection-keep-alive-query", "SELECT 'updated-b'");
     save_form(&app, cx);
     app.select_connection(cx, beta);
-    app.wait_status(cx, "Connected · Keep-alive enabled");
+    app.wait_status(cx, "Connected: Keep-alive enabled");
     app.wait_cell(cx, 0, 1, "b-2000-UTC");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "b-3000-UTC");
@@ -188,7 +188,7 @@ fn a_metadata_edit_keeps_the_sessions_of_its_tabs(cx: &mut TestAppContext) {
 fn pages_move_through_a_long_result(cx: &mut TestAppContext) {
     let (app, _) = launch(cx, &["Alpha"], "");
     app.run_sql(cx, "SELECT concat('row-', lpad(CAST(id AS STRING), 4, '0')) AS value FROM range(1001) ORDER BY id");
-    app.wait_status(cx, "Preview · More rows available");
+    app.wait_status(cx, "Preview: More rows available");
     app.wait_cell(cx, 0, 1, "row-0000");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "row-1000");

@@ -168,15 +168,38 @@ fn tool_entry(
                 .child(tool.kind.title()),
         )
         .child(div().flex_1())
-        .when_some(tool.state.label().map(str::to_owned), |row, state| {
+        .when_some(
+            tool.state.label().map(|label| label.into_owned()),
+            |row, state| {
+                row.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "assistant-tool-outcome-{}",
+                            entry.id
+                        )))
+                        .test_support()
+                        .aria_label(state.clone())
+                        .flex_none()
+                        .text_xs()
+                        .when(tool.state == ToolState::Failed, |label| {
+                            label.text_color(destructive)
+                        })
+                        .child(state),
+                )
+            },
+        )
+        .when_some(tool.state.elapsed(), |row, elapsed| {
             row.child(
                 div()
+                    .id(SharedString::from(format!(
+                        "assistant-tool-elapsed-{}",
+                        entry.id
+                    )))
+                    .test_support()
+                    .aria_label(format!("Elapsed: {:.2} s", elapsed.as_secs_f64()))
                     .flex_none()
                     .text_xs()
-                    .when(tool.state == ToolState::Failed, |label| {
-                        label.text_color(destructive)
-                    })
-                    .child(state),
+                    .child(format!("{:.2} s", elapsed.as_secs_f64())),
             )
         });
     let header = if entry.detail.is_some() {

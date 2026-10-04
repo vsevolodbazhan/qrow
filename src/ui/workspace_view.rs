@@ -17,41 +17,16 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-pub(super) fn connection_detail(profile: &Profile) -> String {
-    format!("{} · {}", profile.host, profile.username)
-}
-
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
-    let status = capitalize_status_details(status);
     match elapsed {
-        Some(elapsed) => format!("{status} · {:.2} s", elapsed.as_secs_f64()),
-        None => status,
+        Some(elapsed) => format!("{status}. Elapsed: {:.2} s", elapsed.as_secs_f64()),
+        None => status.to_owned(),
     }
-}
-
-fn capitalize_status_details(status: &str) -> String {
-    let mut capitalized = false;
-    let mut label = String::with_capacity(status.len());
-
-    for character in status.chars() {
-        if capitalized && !character.is_whitespace() {
-            label.extend(character.to_uppercase());
-            capitalized = false;
-        } else {
-            label.push(character);
-        }
-
-        if character == '·' {
-            capitalized = true;
-        }
-    }
-
-    label
 }
 
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
-        "Demo · Nothing is saved"
+        "Demo changes are not saved"
     } else if !saving_enabled {
         "Workspace saving disabled"
     } else if dirty {
@@ -87,7 +62,13 @@ impl Qrow {
                         .flex_shrink_0()
                         .icon(IconName::PanelLeft)
                         .accessibility_label("Toggle Sidebar")
-                        .tooltip("Toggle Sidebar · ⌘B")
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("Toggle Sidebar", "")
+                                    .for_action(&ToggleSidebar, None),
+                            );
+                            button
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar = !this.sidebar;
                             cx.notify();
@@ -187,7 +168,13 @@ impl Qrow {
                                 .small()
                                 .icon(IconName::Close)
                                 .accessibility_label(format!("Close {}", tab.saved.title))
-                                .tooltip("Close Tab · ⌘W")
+                                .map(|mut button| {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Close Tab", "")
+                                            .for_action(&CloseTab, None),
+                                    );
+                                    button
+                                })
                                 .disabled(tab.busy || assistant_busy)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -218,7 +205,12 @@ impl Qrow {
                             .icon(IconName::Plus)
                             .disabled(self.active_profile().is_none())
                             .accessibility_label("New Tab")
-                            .tooltip("New Tab · ⌘T")
+                            .map(|mut button| {
+                                button.interactivity().tooltip(
+                                    StatusTooltip::new("New Tab", "").for_action(&NewTab, None),
+                                );
+                                button
+                            })
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.new_tab(&NewTab, window, cx)
@@ -290,7 +282,9 @@ impl Qrow {
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .tooltip("Run SQL selection, or editor contents if nothing is selected. One statement only · ⌘Enter")
+                        .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Run Query", "")
+                            .detail("Run the selected SQL or the editor contents. One statement only.")
+                            .for_action(&RunQuery, None)); button })
                         .disabled(active.is_none() && !self.demo)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
@@ -330,17 +324,22 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let range = data.pagination.range(data.rows.len());
-        let count = if range.is_empty() {
-            format!("0 rows · {} columns", data.columns.len())
+        let range_label = if range.is_empty() {
+            "0 rows".to_owned()
         } else {
-            format!(
-                "Rows {}–{} · {} loaded · {} columns",
-                range.start + 1,
-                range.end,
-                data.rows.len(),
-                data.columns.len()
-            )
+            format!("Rows {}–{}", range.start + 1, range.end)
         };
+        let loaded_label = format!("{} loaded", data.rows.len());
+        let columns_label = format!(
+            "{} {}",
+            data.columns.len(),
+            if data.columns.len() == 1 {
+                "column"
+            } else {
+                "columns"
+            }
+        );
+        let count = format!("{range_label}, {loaded_label}, {columns_label}");
         let page_label = format!("Page {}", page + 1);
         results::selection_boundary(&tab.table)
             .size_full()
@@ -349,51 +348,80 @@ impl Qrow {
             .overflow_hidden()
             .child(
                 h_flex()
-                    .h_10()
+                    .id("query-footer")
+                    .test_support()
+                    .min_h_10()
+                    .flex_wrap()
                     .flex_shrink_0()
                     .px_3()
+                    .py_1()
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(self.panel_switcher(cx))
                     .child(
-                        div()
+                        h_flex()
                             .id("result-count")
                             .test_support()
                             .role(Role::Label)
+                            .flex_1()
+                            .min_w_48()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .gap_y_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .aria_label(count.clone())
-                            .child(count),
+                            .aria_label(count)
+                            .children(
+                                [
+                                    ("result-range", range_label),
+                                    ("result-loaded", loaded_label),
+                                    ("result-columns", columns_label),
+                                ]
+                                .into_iter()
+                                .map(|(id, text)| {
+                                    div()
+                                        .id(id)
+                                        .test_support()
+                                        .role(Role::Label)
+                                        .aria_label(text.clone())
+                                        .child(text)
+                                }),
+                            ),
                     )
-                    .child(div().flex_1())
                     .child(
-                        div()
-                            .id("page-label")
-                            .test_support()
-                            .role(Role::Label)
-                            .text_xs()
-                            .aria_label(page_label.clone())
-                            .child(page_label),
-                    )
-                    .child(button_pair::button_pair(
-                        "pagination-buttons",
-                        Button::new("previous-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Previous")
-                            .disabled(page == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                        Button::new("next-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Next")
-                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
-                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                        cx,
-                    )),
+                        h_flex()
+                            .gap_2()
+                            .flex_shrink_0()
+                            .ml_auto()
+                            .child(
+                                div()
+                                    .id("page-label")
+                                    .test_support()
+                                    .role(Role::Label)
+                                    .text_xs()
+                                    .aria_label(page_label.clone())
+                                    .child(page_label),
+                            )
+                            .child(button_pair::button_pair(
+                                "pagination-buttons",
+                                Button::new("previous-page")
+                                    .small()
+                                    .ghost()
+                                    .w_24()
+                                    .label("Previous")
+                                    .disabled(page == 0)
+                                    .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                                Button::new("next-page")
+                                    .small()
+                                    .ghost()
+                                    .w_24()
+                                    .label("Next")
+                                    .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                                    .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                                cx,
+                            )),
+                    ),
             )
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
@@ -480,7 +508,7 @@ impl Qrow {
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
-        let status_label = query_status_label(&tab.status, tab.elapsed);
+        let status_label = query_status_label(&tab.status_label(), tab.elapsed);
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
@@ -493,15 +521,47 @@ impl Qrow {
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
             .child(
-                div()
+                h_flex()
                     .id("query-status")
                     .test_support()
                     .role(Role::Status)
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .aria_label(status_label.clone())
-                    .child(status_label),
+                    .gap_3()
+                    .overflow_hidden()
+                    .aria_label(status_label)
+                    .child(
+                        div()
+                            .id("query-status-title")
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .aria_label(tab.status.clone())
+                            .text_color(cx.theme().foreground)
+                            .child(tab.status.clone()),
+                    )
+                    .when_some(tab.status_detail.clone(), |row, detail| {
+                        row.child(
+                            div()
+                                .id("query-status-detail")
+                                .test_support()
+                                .min_w_0()
+                                .truncate()
+                                .aria_label(detail.clone())
+                                .child(detail),
+                        )
+                    })
+                    .when_some(tab.elapsed, |row, elapsed| {
+                        let elapsed = format!("{:.2} s", elapsed.as_secs_f64());
+                        row.child(
+                            div()
+                                .id("query-elapsed")
+                                .test_support()
+                                .flex_shrink_0()
+                                .aria_label(format!("Elapsed: {elapsed}"))
+                                .child(elapsed),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -795,7 +855,7 @@ impl Qrow {
                         .pr(px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
+                        .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                 ),
             )
             // Activity covers the workspace and the assistant pane while it
@@ -977,28 +1037,14 @@ mod tests {
             connection_name(&[profile], Some(Uuid::new_v4())),
             "No connection"
         );
-        let tooltip_profile = Profile {
-            host: "kyuubi.example.com".into(),
-            username: "aviaservice".into(),
-            database: "initial_database".into(),
-            ..Profile::default()
-        };
-        assert_eq!(
-            connection_detail(&tooltip_profile),
-            "kyuubi.example.com · aviaservice"
-        );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(
-            query_status_label("Complete · demo data", Some(Duration::from_millis(842))),
-            "Complete · Demo data · 0.84 s"
-        );
-        assert_eq!(
-            query_status_label("Error · connection lost · retry later", None),
-            "Error · Connection lost · Retry later"
+            query_status_label("Complete: Demo data", Some(Duration::from_millis(842))),
+            "Complete: Demo data. Elapsed: 0.84 s"
         );
         assert_eq!(
             workspace_status(true, true, false),
-            "Demo · Nothing is saved"
+            "Demo changes are not saved"
         );
         assert_eq!(
             workspace_status(false, false, false),

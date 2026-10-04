@@ -16,6 +16,10 @@ Without a selection, Qrow submits the full editor contents. It does not select
 the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
+The status bar shows the query status, its detail, and elapsed time as separate
+labels. The detail and elapsed time use secondary text. Action tooltips show
+the command name and its keyboard shortcut on one line.
+
 A new accepted execution clears the previous preview and the unread outcome
 of that tab. The blue dot shows that the execution continues. Results appear
 as Qrow fetches them. Switching connections does not clear the preview or

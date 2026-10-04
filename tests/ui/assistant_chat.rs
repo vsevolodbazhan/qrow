@@ -79,10 +79,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
     }
     app.show_conversation(cx);
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "assistant-send").as_deref(),
-            Some("Send · Ask")
-        );
+        assert_eq!(label(window, "assistant-send").as_deref(), Some("Send"));
     });
 }
 

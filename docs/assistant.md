@@ -207,7 +207,9 @@ read-only. Select **Run automatically** only if you accept this risk.
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Each row shows the conversation title, its connection, the time of its last
-activity, and its [state](#conversation-state). Older saved conversations
+activity, and its [state](#conversation-state). The connection and age use
+separate labels. **Tab Closed** shows beside the connection when its tab is
+closed. Older saved conversations
 without an activity time show **Earlier**. On a narrow pane, select **Toggle
 Conversation List** to open the list. When you select a conversation there,
 Qrow selects its tab and connection, and the pane shows that conversation. On a
@@ -261,8 +263,8 @@ to Latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a
 new reply. New text in that reply follows the bottom while you stay near it.
 
-The Send button shows the current query mode, **Ask** or **Run**. Select **Ask
-before running** or **Run automatically** from its menu to change the mode.
+The SQL mode menu beside **Send** shows **Ask First** or **Auto Run**. Select
+**Ask before running** or **Run automatically** from this menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
 and service tier below the message field. Codex supplies
 the available choices. Qrow selects Codex's default model when the workspace

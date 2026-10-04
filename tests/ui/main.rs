@@ -12,5 +12,6 @@ mod assistant_transcript;
 mod catalog;
 mod connections;
 mod dialogs;
+mod metadata;
 mod queries;
 mod tabs;

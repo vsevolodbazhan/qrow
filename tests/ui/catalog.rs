@@ -1338,12 +1338,12 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
             Some("Closing")
         );
         assert_eq!(
-            label(window, "status-tooltip-detail").as_deref(),
-            Some("127.0.0.1 · synthetic")
+            label(window, "status-tooltip-Host").as_deref(),
+            Some("Host: 127.0.0.1")
         );
         let title = bounds_of(window, "status-tooltip-title");
         let status = bounds_of(window, "status-tooltip-status");
-        let detail = bounds_of(window, "status-tooltip-detail");
+        let detail = bounds_of(window, "status-tooltip-metadata");
         assert!(status.left() > title.right());
         assert!(status.top() < title.bottom());
         assert_eq!(title.left(), detail.left());

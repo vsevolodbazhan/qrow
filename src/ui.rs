@@ -213,6 +213,7 @@ struct Tab {
     more: bool,
     pending_page: Option<usize>,
     status: String,
+    status_detail: Option<String>,
     started: Option<Instant>,
     elapsed: Option<Duration>,
     output: LogHistory,
@@ -222,6 +223,23 @@ struct Tab {
     next_execution_id: u64,
 }
 impl Tab {
+    fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        self.status_detail = None;
+    }
+
+    fn set_status_detail(&mut self, status: &str, detail: impl Into<String>) {
+        self.set_status(status);
+        self.status_detail = Some(detail.into());
+    }
+
+    fn status_label(&self) -> String {
+        match &self.status_detail {
+            Some(detail) => format!("{}: {detail}", self.status),
+            None => self.status.clone(),
+        }
+    }
+
     fn status_tooltip(&self) -> Option<StatusTooltip> {
         self.dot_status().map(|status| {
             StatusTooltip::new(
@@ -754,6 +772,7 @@ impl Qrow {
             more: false,
             pending_page: None,
             status: "Not connected".into(),
+            status_detail: None,
             started: None,
             elapsed: None,
             output: LogHistory::default(),
@@ -1141,37 +1160,36 @@ impl Qrow {
             Event::Connecting => {
                 tab.connected = false;
                 tab.busy = true;
-                tab.status = "Connecting…".into();
+                tab.set_status("Connecting…");
             }
             Event::Connected => tab.connected = true,
             Event::Running => {
                 tab.busy = true;
-                tab.status = "Executing…".into();
+                tab.set_status("Executing…");
             }
             Event::KeepAliveStarted => {
                 tab.busy = true;
-                tab.status = "Sending keep-alive…".into();
+                tab.set_status("Sending keep-alive…");
             }
             Event::KeepAliveFinished => {
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.status = if profiles
+                if profiles
                     .iter()
                     .find(|profile| Some(profile.id) == tab.worker_profile)
                     .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
                 {
-                    "Connected · Keep-alive enabled"
+                    tab.set_status_detail("Connected", "Keep-alive enabled");
                 } else {
-                    "Connected"
+                    tab.set_status("Connected");
                 }
-                .into();
             }
             Event::Columns(columns) => {
                 tab.table.update(cx, |t, cx| {
                     t.delegate_mut().schema(columns);
                     t.refresh(cx);
                 });
-                tab.status = "Fetching preview…".into();
+                tab.set_status("Fetching preview…");
             }
             Event::Rows(rows) => {
                 tab.table.update(cx, |t, cx| {
@@ -1189,14 +1207,13 @@ impl Qrow {
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = if limited {
-                    "Preview · Limit reached"
+                if limited {
+                    tab.set_status_detail("Preview", "Limit reached");
                 } else if more {
-                    "Preview · More rows available"
+                    tab.set_status_detail("Preview", "More rows available");
                 } else {
-                    "Complete"
+                    tab.set_status("Complete");
                 }
-                .into();
                 if !was_cancelling {
                     tab.panel.success(active);
                 }
@@ -1207,7 +1224,7 @@ impl Qrow {
                 tab.more = false;
                 tab.pending_page = None;
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = "Cancelled · Partial preview retained".into();
+                tab.set_status_detail("Cancelled", "Partial preview retained");
             }
             Event::Error {
                 message: _,
@@ -1221,12 +1238,11 @@ impl Qrow {
                     tab.connected = false;
                 }
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = if disconnected {
-                    "Error · Connection lost"
+                if disconnected {
+                    tab.set_status_detail("Error", "Connection lost");
                 } else {
-                    "Error · Query failed"
+                    tab.set_status_detail("Error", "Query failed");
                 }
-                .into();
                 Self::record_failure(tab, active);
             }
             Event::CancelError(message) => {
@@ -1240,12 +1256,11 @@ impl Qrow {
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.status = if matches!(event, Event::IdleDisconnected) {
-                    "Disconnected · Idle timeout"
+                if matches!(event, Event::IdleDisconnected) {
+                    tab.set_status_detail("Disconnected", "Idle timeout");
                 } else {
-                    "Disconnected"
+                    tab.set_status("Disconnected");
                 }
-                .into();
             }
         }
     }
@@ -1344,7 +1359,7 @@ impl Qrow {
                         tab.cancelling = false;
                         tab.more = false;
                         tab.pending_page = None;
-                        tab.status = "Not connected".into();
+                        tab.set_status("Not connected");
                     }
                 } else if action == ProfileSaveAction::Update {
                     for tab in &mut self.tabs {
@@ -1353,9 +1368,10 @@ impl Qrow {
                                 let _ = worker.update_profile(profile.clone());
                             }
                             if profile.lifecycle.keep_alive_seconds == 0
-                                && tab.status == "Connected · Keep-alive enabled"
+                                && tab.status == "Connected"
+                                && tab.status_detail.as_deref() == Some("Keep-alive enabled")
                             {
-                                tab.status = "Connected".into();
+                                tab.set_status("Connected");
                             }
                         }
                     }
@@ -1610,7 +1626,7 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         }
@@ -1626,7 +1642,7 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         };
@@ -1637,7 +1653,7 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         }
@@ -1665,7 +1681,7 @@ impl Qrow {
         tab.panel.execution_started();
         tab.cancelling = false;
         tab.started = Some(Instant::now());
-        tab.status = "Preparing query…".into();
+        tab.set_status("Preparing query…");
         let execution_id = Self::allocate_execution_id(tab);
         tab.worker_profile = Some(profile.id);
         tab.worker
@@ -1707,8 +1723,8 @@ impl Qrow {
             tab.busy = true;
             tab.cancelling = false;
             tab.started = Some(Instant::now());
-            tab.status = "Fetching next page…".into();
             worker.more();
+            tab.set_status("Fetching next page…");
         }
         cx.notify();
     }
@@ -1734,7 +1750,7 @@ impl Qrow {
             );
             t.worker.as_ref().unwrap().cancel();
             t.cancelling = true;
-            t.status = "Cancelling…".into();
+            t.set_status("Cancelling…");
         }
         cx.notify();
     }
@@ -1755,7 +1771,7 @@ impl Qrow {
             Self::record_log(tab, event);
             tab.worker.as_ref().unwrap().disconnect();
             tab.busy = true;
-            tab.status = "Disconnecting…".into();
+            tab.set_status("Disconnecting…");
             if let (Some(connection), Some(entry)) = (connection, entry) {
                 self.record_activity(connection, entry, cx);
             }
@@ -2897,7 +2913,7 @@ impl Qrow {
                 .collect();
             t.refresh(cx);
         });
-        tab.status = "Complete · Demo data".into();
+        tab.set_status_detail("Complete", "Demo data");
         tab.elapsed = Some(Duration::from_millis(842));
         tab.panel.success(true);
     }

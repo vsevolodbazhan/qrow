@@ -387,7 +387,7 @@ impl AssistantPane {
         let conversation_width = width.as_f32() / qrow.settings.ui_scale
             - if show_threads && !narrow { 230. } else { 0. };
         let [show_model_label, show_reasoning_label, show_tier_label] = assistant_selector_labels(
-            (conversation_width - 196.).max(0.),
+            (conversation_width - 228.).max(0.),
             [model_width, reasoning_width, tier_width],
         );
         let displayed_title = displayed
@@ -531,7 +531,7 @@ impl AssistantPane {
                             .test_support()
                             .role(Role::Alert)
                             .aria_label(format!(
-                                "Run in {tab_title} · {connection}? {}",
+                                "Run in {tab_title} on {connection}? {}",
                                 pending.sql
                             ))
                             .p_3()
@@ -541,7 +541,7 @@ impl AssistantPane {
                             .child(
                                 div()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child(format!("Run in {tab_title} · {connection}?")),
+                                    .child(format!("Run in {tab_title} on {connection}?")),
                             )
                             .child(
                                 div()
@@ -696,42 +696,47 @@ impl AssistantPane {
                                     .on_click(on_qrow(&self.qrow, |this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(!disconnected && !active_turn, |row| row.child(
-                                DropdownButton::new("assistant-send-mode")
-                                    .primary()
-                                    .small()
-                                    .disabled(!controls_ready || first_message.is_some())
-                                    .button(
+                                h_flex().gap_2().flex_shrink_0()
+                                    .child(
+                                        Button::new("assistant-send-mode")
+                                            .ghost().small()
+                                            .label(if mode_is_run { "Auto Run" } else { "Ask First" })
+                                            .icon(AssetIconName::ChevronDown)
+                                            .accessibility_label(if mode_is_run { "SQL Mode: Auto Run" } else { "SQL Mode: Ask First" })
+                                            .tooltip(if mode_is_run { "Run assistant SQL automatically" } else { "Ask before running assistant SQL" })
+                                            .disabled(!controls_ready || first_message.is_some())
+                                            .dropdown_menu({
+                                                let ask = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
+                                                    if this.displayed_mode() == AssistantExecutionMode::RunAutomatically {
+                                                        this.toggle_assistant_mode(window, cx);
+                                                    }
+                                                }));
+                                                let run = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
+                                                    if this.displayed_mode() == AssistantExecutionMode::AskBeforeRunning {
+                                                        this.toggle_assistant_mode(window, cx);
+                                                    }
+                                                }));
+                                                move |menu, _, _| menu
+                                                    .item(PopupMenuItem::new("Ask before running")
+                                                        .checked(!mode_is_run)
+                                                        .on_click({ let ask = ask.clone(); move |event, window, cx| ask(event, window, cx) }))
+                                                    .item(PopupMenuItem::new("Run automatically")
+                                                        .checked(mode_is_run)
+                                                        .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
+                                            }),
+                                    )
+                                    .child(
                                         Button::new("assistant-send")
+                                            .primary().small()
                                             .icon(AssetIconName::Send)
-                                            .label(if mode_is_run { "Send · Run" } else { "Send · Ask" })
-                                            .tooltip(if mode_is_run {
-                                                "Send Message · Run automatically"
-                                            } else {
-                                                "Send Message · Ask before running"
-                                            })
+                                            .label("Send")
+                                            .disabled(!controls_ready || first_message.is_some())
+                                            .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Send Message", "")
+                                                .for_action_in(&SendAssistantMessage, self.composer.focus_handle(cx))); button })
                                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                                 this.send_assistant(window, cx)
                                             })),
                                     )
-                                    .dropdown_menu({
-                                        let ask = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
-                                            if this.displayed_mode() == AssistantExecutionMode::RunAutomatically {
-                                                this.toggle_assistant_mode(window, cx);
-                                            }
-                                        }));
-                                        let run = std::rc::Rc::new(on_qrow(&self.qrow, |this, _: &ClickEvent, window, cx| {
-                                            if this.displayed_mode() == AssistantExecutionMode::AskBeforeRunning {
-                                                this.toggle_assistant_mode(window, cx);
-                                            }
-                                        }));
-                                        move |menu, _, _| menu
-                                            .item(PopupMenuItem::new("Ask before running")
-                                                .checked(!mode_is_run)
-                                                .on_click({ let ask = ask.clone(); move |event, window, cx| ask(event, window, cx) }))
-                                            .item(PopupMenuItem::new("Run automatically")
-                                                .checked(mode_is_run)
-                                                .on_click({ let run = run.clone(); move |event, window, cx| run(event, window, cx) }))
-                                    }),
                             )),
                     ),
             )))

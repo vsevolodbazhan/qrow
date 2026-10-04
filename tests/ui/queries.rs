@@ -119,7 +119,7 @@ fn long_connection_tooltips_align_status_and_fit_at_each_scale_and_theme(cx: &mu
             for id in [
                 "status-tooltip-title",
                 "status-tooltip-status",
-                "status-tooltip-detail",
+                "status-tooltip-metadata",
             ] {
                 let bounds = bounds_of(window, id);
                 assert!(

@@ -86,7 +86,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     app.wait_cell(cx, 0, 1, "switch-a-0000");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "switch-a-1000");
-    app.wait_status(cx, "Preview · More rows available");
+    app.wait_status(cx, "Preview: More rows available");
     app.wait_status(cx, "Sending keep-alive");
 
     // The row of the hidden connection shows its running heartbeat.
@@ -98,7 +98,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
 
     app.select_connection(cx, alpha);
     app.wait_cell(cx, 0, 1, "switch-a-1000");
-    app.wait_status(cx, "Connected · Keep-alive enabled");
+    app.wait_status(cx, "Connected: Keep-alive enabled");
     app.wait_cell(cx, 0, 1, "switch-a-1000");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "switch-a-2000");
@@ -166,7 +166,7 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
     // Visible errors are read. Retrying still works with either panel selected.
     for (panel_click, milliseconds) in [(true, 3000), (false, 1000)] {
         app.run_sql(cx, "SELECT missing_column AS value FROM range(1)");
-        app.wait_status(cx, "Error · Query failed");
+        app.wait_status(cx, "Error: Query failed");
         if panel_click {
             app.update(cx, |window, _| {
                 assert_eq!(
@@ -304,7 +304,7 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     app.wait_for(cx, "cancel");
     // The backend suite checks that Spark interrupts the task in time.
     app.click(cx, "cancel");
-    app.wait_status(cx, "Cancelled · Partial preview retained");
+    app.wait_status(cx, "Cancelled: Partial preview retained");
 
     app.run_sql(cx, "SELECT 'after-cancel-works' AS result");
     app.wait_cell(cx, 0, 1, "after-cancel-works");

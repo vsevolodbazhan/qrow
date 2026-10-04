@@ -9,7 +9,10 @@ pub(super) struct StatusTooltip {
     title: SharedString,
     status: SharedString,
     detail: Option<SharedString>,
+    metadata: Vec<(SharedString, SharedString)>,
     error: Option<SharedString>,
+    key_context: Option<SharedString>,
+    shortcut_focus: Option<FocusHandle>,
 }
 
 impl FluentBuilder for StatusTooltip {}
@@ -20,7 +23,10 @@ impl StatusTooltip {
             title: title.into(),
             status: status.into(),
             detail: None,
+            metadata: Vec::new(),
             error: None,
+            key_context: None,
+            shortcut_focus: None,
         }
     }
 
@@ -34,6 +40,36 @@ impl StatusTooltip {
         self
     }
 
+    pub(super) fn metadata(
+        mut self,
+        label: impl Into<SharedString>,
+        value: impl Into<SharedString>,
+    ) -> Self {
+        self.metadata.push((label.into(), value.into()));
+        self
+    }
+
+    /// Resolve the shortcut from the command's binding, including dialog
+    /// contexts. Use the same aligned header as status tooltips.
+    pub(super) fn for_action(
+        mut self,
+        action: &dyn Action,
+        context: Option<&str>,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        self.key_context = context.map(SharedString::new);
+        let action = action.boxed_clone();
+        move |window, cx| self.build(Some(action.as_ref()), window, cx)
+    }
+
+    pub(super) fn for_action_in(
+        mut self,
+        action: &dyn Action,
+        focus: FocusHandle,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        self.shortcut_focus = Some(focus);
+        self.for_action(action, None)
+    }
+
     pub(super) fn build(
         &self,
         action: Option<&dyn Action>,
@@ -43,8 +79,16 @@ impl StatusTooltip {
         let content = self.clone();
         let shortcut = action
             .and_then(|action| {
-                window
-                    .highest_precedence_binding_for_action_in_context(action, KeyContext::default())
+                if let Some(focus) = &self.shortcut_focus {
+                    return window.highest_precedence_binding_for_action_in(action, focus);
+                }
+                window.highest_precedence_binding_for_action_in_context(
+                    action,
+                    self.key_context
+                        .as_deref()
+                        .and_then(|context| KeyContext::parse(context).ok())
+                        .unwrap_or_default(),
+                )
             })
             .and_then(|binding| {
                 binding
@@ -87,11 +131,13 @@ impl StatusTooltip {
                         .child(Kbd::new(shortcut).appearance(false));
                     (label, element)
                 })
-            } else {
+            } else if !content.status.is_empty() {
                 Some((
                     content.status.clone(),
                     secondary("status-tooltip-status", content.status.clone()).flex_shrink_0(),
                 ))
+            } else {
+                None
             };
             let (title, trailing) = match trailing {
                 Some((text, mut element)) => {
@@ -122,11 +168,37 @@ impl StatusTooltip {
                         .child(title)
                         .children(trailing),
                 )
-                .when(status_below, |tooltip| {
+                .when(status_below && !content.status.is_empty(), |tooltip| {
                     tooltip.child(secondary("status-tooltip-status", content.status.clone()))
                 })
                 .when_some(content.detail.clone(), |tooltip, detail| {
                     tooltip.child(secondary("status-tooltip-detail", detail))
+                })
+                .when(!content.metadata.is_empty(), |tooltip| {
+                    tooltip.child(
+                        v_flex()
+                            .id("status-tooltip-metadata")
+                            .test_support()
+                            .gap_1()
+                            .children(content.metadata.iter().map(|(label, value)| {
+                                h_flex()
+                                    .id(SharedString::from(format!("status-tooltip-{label}")))
+                                    .test_support()
+                                    .aria_label(format!("{label}: {value}"))
+                                    .items_start()
+                                    .gap_3()
+                                    .text_xs()
+                                    .font_weight(FontWeight::NORMAL)
+                                    .child(
+                                        div()
+                                            .w_12()
+                                            .flex_shrink_0()
+                                            .text_color(cx.theme().secondary_foreground)
+                                            .child(label.clone()),
+                                    )
+                                    .child(div().min_w_0().flex_1().child(value.clone()))
+                            })),
+                    )
                 })
                 .when_some(content.error.clone(), |tooltip, error| {
                     tooltip.child(

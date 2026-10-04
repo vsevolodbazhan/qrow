@@ -131,12 +131,14 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
         labelled_starting(window, &row(GENERATED)).len() == 2
     });
     app.update(cx, |window, _| {
-        assert!(
-            !labels(window)
-                .iter()
-                .any(|l| l.starts_with(&format!("{GENERATED} ·"))),
-            "The thread list showed a Codex thread ID"
-        );
+        for conversation in &app.saved().assistant.conversations {
+            assert!(
+                !labels(window)
+                    .iter()
+                    .any(|label| label.contains(&conversation.thread_id)),
+                "The thread list showed a Codex thread ID"
+            );
+        }
     });
     // A narrow pane replaces the list with the selected conversation.
     app.click_starting(cx, &row(GENERATED));

@@ -1284,7 +1284,8 @@ impl Qrow {
                                 None => "Disconnected",
                             },
                         )
-                        .detail(workspace_view::connection_detail(profile))
+                        .metadata("Host", profile.host.clone())
+                        .metadata("User", profile.username.clone())
                         .when_some(refresh_error, |tooltip, error| {
                             tooltip.error(error_summary(error))
                         });

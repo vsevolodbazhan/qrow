@@ -2,7 +2,7 @@
 //! area of the window. The status bar button, ⇧⌘U, and the connection menu
 //! open it.
 
-use super::{Qrow, button_pair::button_pair, panel_empty_state};
+use super::{Qrow, StatusTooltip, button_pair::button_pair, panel_empty_state};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
 use gpui_kit::base::SelectableText;
@@ -28,18 +28,69 @@ pub(super) const CONTEXT: &str = "Activity";
 #[derive(Clone)]
 struct ConnectionItem {
     id: Uuid,
-    label: SharedString,
+    name: SharedString,
+    unseen: usize,
 }
 
 impl SelectItem for ConnectionItem {
     type Value = Uuid;
 
     fn title(&self) -> SharedString {
-        self.label.clone()
+        match self.unseen {
+            0 => self.name.clone(),
+            1 => format!("{}: 1 unread error", self.name).into(),
+            count => format!("{}: {count} unread errors", self.name).into(),
+        }
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        Some(
+            ConnectionLabel {
+                name: self.name.clone(),
+                unseen: self.unseen,
+            }
+            .into_any_element(),
+        )
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        ConnectionLabel {
+            name: self.name.clone(),
+            unseen: self.unseen,
+        }
     }
 
     fn value(&self) -> &Uuid {
         &self.id
+    }
+}
+
+#[derive(IntoElement)]
+struct ConnectionLabel {
+    name: SharedString,
+    unseen: usize,
+}
+
+impl RenderOnce for ConnectionLabel {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        h_flex()
+            .min_w_0()
+            .w_full()
+            .gap_3()
+            .child(div().flex_1().min_w_0().truncate().child(self.name))
+            .when(self.unseen > 0, |row| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(format!(
+                            "{} {}",
+                            self.unseen,
+                            if self.unseen == 1 { "error" } else { "errors" }
+                        )),
+                )
+            })
     }
 }
 
@@ -263,14 +314,10 @@ impl ActivityView {
             .iter()
             .map(|(id, name)| {
                 let unseen = self.activity.unseen_errors_of(*id);
-                let label = match unseen {
-                    0 => name.clone(),
-                    1 => format!("{name} · 1 error"),
-                    count => format!("{name} · {count} errors"),
-                };
                 ConnectionItem {
                     id: *id,
-                    label: label.into(),
+                    name: name.clone().into(),
+                    unseen,
                 }
             })
             .collect();
@@ -435,7 +482,13 @@ impl ActivityView {
                     .ghost()
                     .small()
                     .icon(IconName::Close)
-                    .tooltip("Close · Esc")
+                    .map(|mut button| {
+                        button.interactivity().tooltip(
+                            StatusTooltip::new("Close Activity", "")
+                                .for_action(&CloseActivity, Some(CONTEXT)),
+                        );
+                        button
+                    })
                     .accessibility_label("Close Activity")
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )

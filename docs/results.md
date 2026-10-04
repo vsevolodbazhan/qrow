@@ -13,6 +13,9 @@ header. Column headers remain visible when a query returns columns but no rows.
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next** fetches another page when needed.
+The footer shows the visible row range, downloaded row count, and column count
+as separate labels. **Loaded** counts the rows in the preview. It does not
+give the total number of rows on the server.
 **Previous** and **Next** reuse downloaded pages without executing SQL again.
 You can browse downloaded pages while a fetch runs.
 

@@ -129,7 +129,7 @@ fn query_dots_keep_sql_state_while_their_conversation_works_or_waits(cx: &mut Te
         assert_tab_dot(window, tab, Some(cx.theme().danger))
     });
     app.click_labelled(cx, "First query, unread error");
-    app.wait_approval(cx, "Run in First query · Synthetic? SELECT 11");
+    app.wait_approval(cx, "Run in First query on Synthetic? SELECT 11");
     app.update(cx, |window, _| assert_tab_dot(window, tab, None));
     app.click(cx, "assistant-cancel-query");
     app.wait_reply(cx, "Finished Alpha: approval_cancelled");
@@ -176,7 +176,7 @@ fn a_conversation_keeps_its_tab_when_another_tab_is_renamed_and_selected(cx: &mu
         assert_eq!(approval(window), None, "The request showed in another tab")
     });
     app.click_labelled(cx, "Query 1");
-    app.wait_approval(cx, "Run in Query 1 · Synthetic? SELECT 1;");
+    app.wait_approval(cx, "Run in Query 1 on Synthetic? SELECT 1;");
     app.wait_editor(cx, "SELECT 1;");
     app.click(cx, "assistant-cancel-query");
     app.wait_gone(cx, "assistant-query-approval");
@@ -247,7 +247,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     // Each conversation changed only its own tab.
     app.wait_editor(cx, "SELECT 22");
-    app.wait_approval(cx, "Run in Query 1 · Beta? SELECT 22");
+    app.wait_approval(cx, "Run in Query 1 on Beta? SELECT 22");
     app.click(cx, "assistant-cancel-query");
     app.wait_gone(cx, "assistant-query-approval");
 
@@ -265,7 +265,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.click(cx, format!("assistant-thread-{alpha_thread}"));
     app.show_conversation(cx);
     app.wait_editor(cx, "SELECT 11");
-    app.wait_approval(cx, "Run in Query 1 · Alpha? SELECT 11");
+    app.wait_approval(cx, "Run in Query 1 on Alpha? SELECT 11");
     // The Beta turn ends only now, while another conversation is shown.
     codex.mark("finish-Beta");
     app.show_threads(cx);
@@ -460,7 +460,7 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
     app.update(cx, |window, cx| {
         let row = crate::support::labelled_starting(window, "")
             .into_iter()
-            .find(|e| e.label().is_some_and(|l| l.contains("Alpha · Tab closed")))
+            .find(|e| e.label().is_some_and(|l| l.contains("Alpha, Tab Closed")))
             .expect("A row names the closed tab");
         crate::support::click_element(window, &row, cx);
     });

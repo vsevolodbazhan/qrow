@@ -330,28 +330,11 @@ fn success(value: Value) -> ToolResult {
 /// Names the current step of a running query from the tab status, for example
 /// `Executing` for `Executing…`. The spinner already shows that work continues.
 fn running_step(status: &str) -> String {
-    let step = status
-        .split(" · ")
-        .next()
-        .unwrap_or(status)
-        .trim_end_matches('…');
+    let step = status.trim_end_matches('…');
     if step.is_empty() {
         "Running".into()
     } else {
         step.into()
-    }
-}
-
-/// Summarizes a finished query as its downloaded rows and duration.
-fn query_outcome(rows: usize, more: bool, elapsed: Option<Duration>) -> String {
-    let rows = match (rows, more) {
-        (1, false) => "1 row".to_owned(),
-        (rows, false) => format!("{rows} rows"),
-        (rows, true) => format!("{rows}+ rows"),
-    };
-    match elapsed {
-        Some(elapsed) => format!("{rows} · {:.2} s", elapsed.as_secs_f64()),
-        None => rows,
     }
 }
 
@@ -1043,7 +1026,7 @@ impl Qrow {
         let ok = !tab.status.starts_with("Error")
             && !tab.status.starts_with("Rejected")
             && !tab.status.starts_with("Cancelled");
-        let mut content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status,
+        let mut content = json!({"version": 1, "tab_id": tab.saved.id, "status": tab.status_label(),
             "columns": results.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
             "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
             "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
@@ -1060,17 +1043,17 @@ impl Qrow {
             }
         }
         let state = if ok {
-            ToolState::Done(Some(query_outcome(
-                results.rows.len(),
-                tab.more,
-                tab.elapsed,
-            )))
+            ToolState::QueryResult {
+                rows: results.rows.len(),
+                more: tab.more,
+                elapsed: tab.elapsed,
+            }
         } else if tab.status.starts_with("Cancelled") {
             ToolState::Cancelled
         } else {
             ToolState::Failed
         };
-        let status = (!ok).then(|| format!("Status: {}\n", tab.status));
+        let status = (!ok).then(|| format!("Status: {}\n", tab.status_label()));
         let pending = self.thread_run_mut(thread_id).pending_query.take().unwrap();
         let entry = TranscriptEntry::tool(
             self.assistant_query_tool(&pending, state),
@@ -1153,7 +1136,7 @@ impl Qrow {
         let data = tab.table.read(cx);
         let data = data.delegate();
         Ok(success(
-            json!({"version": 1, "tab_id": args.tab_id, "status": tab.status,
+            json!({"version": 1, "tab_id": args.tab_id, "status": tab.status_label(),
             "running": tab.busy, "cancelling": tab.cancelling,
             "columns": data.columns.iter().map(|column| column.name.as_str()).collect::<Vec<_>>(),
             "downloaded_rows": data.rows.len(), "more_rows_available": tab.more,
@@ -1254,7 +1237,7 @@ impl Qrow {
             tab.busy = true;
             tab.cancelling = false;
             tab.started = Some(Instant::now());
-            tab.status = "Fetching next batch…".into();
+            tab.set_status("Fetching next batch…");
             let pending = PendingQuery {
                 call: call.clone(),
                 tab_id: tab.saved.id,

@@ -1,8 +1,47 @@
 use crate::support::fixture::{Kyuubi, PASSWORD, QUERY_TIMEOUT};
-use crate::support::{TestApp, bounds_of, cell, header};
+use crate::support::{TestApp, bounds_of, cell, header, label};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::SavedTab;
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let (workspace, credentials) = kyuubi.workspace("SELECT missing_column", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Error: Query failed");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "query-status-title").as_deref(),
+            Some("Error")
+        );
+        assert_eq!(
+            label(window, "query-status-detail").as_deref(),
+            Some("Query failed")
+        );
+    });
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "query-status-title").as_deref(),
+            Some("Complete")
+        );
+        assert!(
+            window.try_find("query-status-detail").is_none(),
+            "The previous error detail survived a new run"
+        );
+        assert!(
+            label(window, "query-elapsed")
+                .unwrap()
+                .starts_with("Elapsed: ")
+        );
+        assert_eq!(label(window, "result-range").as_deref(), Some("Rows 1–1"));
+        assert_eq!(label(window, "result-loaded").as_deref(), Some("1 loaded"));
+        assert_eq!(label(window, "result-columns").as_deref(), Some("1 column"));
+    });
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]

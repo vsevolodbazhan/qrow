@@ -87,7 +87,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.wait_idle(cx);
 
     app.send(cx, "Run selected SQL with approval");
-    app.wait_approval(cx, "Run in SQL only · Spark? SELECT 1 AS value");
+    app.wait_approval(cx, "Run in SQL only on Spark? SELECT 1 AS value");
     app.update(cx, |window, cx| {
         assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
         window.click("assistant-approve-query", cx);
@@ -113,7 +113,7 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
 
     app.send(cx, "Run selected SQL with approval");
     app.wait_until(cx, "the approval", QUERY_TIMEOUT, |window, _| {
-        approval(window).is_some_and(|a| a.starts_with("Run in Query 1 · Alpha?"))
+        approval(window).is_some_and(|a| a.starts_with("Run in Query 1 on Alpha?"))
     });
     app.update(cx, |window, _| {
         assert!(
@@ -138,8 +138,8 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
 
     app.choose_send_mode(cx, "Run automatically");
     app.click(cx, "confirm-conversation-auto-run");
-    app.wait_until(cx, "Send · Run", QUERY_TIMEOUT, |window, _| {
-        label(window, "assistant-send").as_deref() == Some("Send · Run")
+    app.wait_until(cx, "SQL Mode: Auto Run", QUERY_TIMEOUT, |window, _| {
+        label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto Run")
     });
     app.type_sql(cx, "SELECT 2 AS assistant_value");
     app.send(cx, "Run selected SQL automatically");

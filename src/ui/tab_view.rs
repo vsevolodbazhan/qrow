@@ -30,7 +30,7 @@ pub(super) struct RenameDialog {
 pub(super) const TAB_RENAME: RenameDialog = RenameDialog {
     key: "tab",
     label: "Tab Name",
-    tooltip: "Rename Tab · ⌘Enter",
+    tooltip: "Rename Tab",
     form: |this| {
         this.tab_form
             .as_ref()
@@ -138,7 +138,13 @@ impl Qrow {
                         Button::new(SharedString::from(format!("rename-{}", spec.key)))
                             .primary()
                             .label("Rename")
-                            .tooltip(spec.tooltip)
+                            .map(|mut button| {
+                                button.interactivity().tooltip(
+                                    StatusTooltip::new(spec.tooltip, "")
+                                        .for_action(&SubmitRename, Some("RenameDialog")),
+                                );
+                                button
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 (spec.submit)(this, window, cx)
                             })),
