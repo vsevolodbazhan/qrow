@@ -1,4 +1,8 @@
-use crate::support::{MemoryCredentials, TestApp, bounds_of, connection_row, label, labelled};
+use crate::support::{
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot, bounds_of, connection_row,
+    label, labelled,
+};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px};
 use qrow::{
@@ -11,6 +15,77 @@ use std::{
     net::TcpListener,
     time::{Duration, SystemTime},
 };
+
+#[gpui_kit::test]
+fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppContext) {
+    // A loopback socket holds sign-in until the test closes it.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..crate::support::offline_profile("Connecting warehouse")
+    };
+    let connection = profile.id;
+    let mut tab = SavedTab::new(1, Some(connection));
+    tab.sql = "SELECT 1".into();
+    let query = tab.id;
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(connection, "synthetic-password")
+        .unwrap();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        credentials,
+    );
+    app.click(cx, "run");
+    app.wait_until(
+        cx,
+        "the connecting session",
+        Duration::from_secs(10),
+        |window, _| {
+            label(window, format!("query-status-{query}")).as_deref() == Some("Query 1, connecting")
+        },
+    );
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, query, Some(cx.theme().info.opacity(0.2)));
+        assert_connection_dot(window, connection, cx.theme().info.opacity(0.2));
+        assert_eq!(
+            label(window, format!("connection-status-{connection}")).as_deref(),
+            Some("Connecting warehouse, connecting")
+        );
+    });
+    let hover = |text, app: &TestApp, cx: &mut TestAppContext| {
+        app.hover_labelled(cx, text);
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            assert_eq!(
+                label(window, "status-tooltip-status").as_deref(),
+                Some("Connecting")
+            );
+        });
+    };
+    hover("Query 1, connecting", &app, cx);
+    // Keep the failure unread by showing a different tab.
+    app.click(cx, "new-tab");
+    hover("Connecting warehouse, connecting", &app, cx);
+    drop(listener);
+    app.wait_until(
+        cx,
+        "the failed session",
+        Duration::from_secs(10),
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread Error"),
+    );
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, query, Some(cx.theme().danger));
+        assert_connection_dot(window, connection, cx.theme().danger);
+    });
+}
 
 #[gpui_kit::test]
 fn long_connection_tooltips_keep_status_and_details_inside_at_large_scale(cx: &mut TestAppContext) {

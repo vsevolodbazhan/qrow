@@ -10,11 +10,13 @@ and Logs history in hidden tabs. A hidden tab can continue to run a query.
 ## Connection state
 
 Each connection row has one status dot. Dim blue means that at least one query
-tab has a live idle session. Blue means that query, assistant, or schema work
+tab has a live idle session. Faint blue at 20% opacity means that a query tab
+is connecting. Blue means that query, assistant, or schema work
 continues. Green means that a result or reply is unread. Red means that an
 error is unread. Yellow means that an assistant query needs approval.
 
-The priority is approval, error, work, unread success, then connected and idle.
+The priority is approval, error, running work, connecting, unread success,
+then connected and idle.
 The tooltip shows the connection name and a short status beside it. The status
 uses secondary text. The host and the user appear below the name. Refresh
 errors appear below these details. No dot means that no session, work, or

@@ -135,7 +135,7 @@ impl Qrow {
                     .aria_label(format!(
                         "{}{}{}{}{}",
                         tab.saved.title,
-                        if tab.busy { ", running" } else { "" },
+                        tab.work_suffix(),
                         if tab.panel.unread_error {
                             ", unread error"
                         } else {

@@ -228,6 +228,7 @@ impl Tab {
                 self.saved.title.clone(),
                 match status {
                     DotStatus::Connected => "Idle",
+                    DotStatus::Connecting => "Connecting",
                     DotStatus::Working => "Running",
                     DotStatus::Ready => "Unread Result",
                     DotStatus::Error => "Unread Error",
@@ -240,6 +241,8 @@ impl Tab {
     fn dot_status(&self) -> Option<DotStatus> {
         if self.panel.unread_error {
             Some(DotStatus::Error)
+        } else if self.busy && !self.connected {
+            Some(DotStatus::Connecting)
         } else if self.busy {
             Some(DotStatus::Working)
         } else if self.panel.has_unread_success() {
@@ -260,9 +263,7 @@ impl Tab {
                 ", connected, idle"
             });
         }
-        if self.busy {
-            label.push_str(", running");
-        }
+        label.push_str(self.work_suffix());
         if self.panel.unread_error {
             label.push_str(", unread error");
         }
@@ -270,6 +271,16 @@ impl Tab {
             label.push_str(", unread query result");
         }
         label
+    }
+
+    fn work_suffix(&self) -> &'static str {
+        if !self.busy {
+            ""
+        } else if self.connected {
+            ", running"
+        } else {
+            ", connecting"
+        }
     }
 
     fn can_disconnect(&self) -> bool {

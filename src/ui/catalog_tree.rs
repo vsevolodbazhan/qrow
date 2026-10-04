@@ -606,7 +606,8 @@ impl Builder<'_> {
 struct ConnectionRow {
     name: String,
     tooltip: StatusTooltip,
-    busy: bool,
+    running: bool,
+    connecting: bool,
     refreshing: bool,
     unread_error: bool,
     /// The error of the last connection refresh.
@@ -1274,6 +1275,7 @@ impl Qrow {
                             profile.name.clone(),
                             match status {
                                 Some(DotStatus::Connected) => "Idle",
+                                Some(DotStatus::Connecting) => "Connecting",
                                 Some(DotStatus::Working) => "In Use",
                                 Some(DotStatus::Ready) if unread_success => "Unread Result",
                                 Some(DotStatus::Ready) => "Unread Reply",
@@ -1296,7 +1298,12 @@ impl Qrow {
                                 status,
                                 assistant_states,
                                 refresh_error: refresh_error.is_some(),
-                                busy: self.profile_busy(id),
+                                running: self.tabs.iter().any(|tab| {
+                                    tab.worker_profile == Some(id) && tab.busy && tab.connected
+                                }),
+                                connecting: self.tabs.iter().any(|tab| {
+                                    tab.worker_profile == Some(id) && tab.busy && !tab.connected
+                                }),
                                 refreshing: self.catalog.is_refreshing(id),
                                 unread_error: self.tabs.iter().any(|tab| {
                                     tab.saved.profile == Some(id) && tab.panel.unread_error
@@ -1940,9 +1947,10 @@ fn connection_row(
     // goes away.
     context.record_tip(entry, row.tooltip.clone(), None);
     let accessibility_label = format!(
-        "{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}",
         row.name,
-        if row.busy { ", running" } else { "" },
+        if row.running { ", running" } else { "" },
+        if row.connecting { ", connecting" } else { "" },
         if row.refreshing {
             ", refreshing schemas"
         } else {
@@ -2056,7 +2064,7 @@ fn connection_row(
                         "{}{}{}",
                         accessibility_label,
                         if row.connected {
-                            if row.busy {
+                            if row.running || row.connecting {
                                 ", connected"
                             } else {
                                 ", connected, idle"

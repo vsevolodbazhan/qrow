@@ -55,7 +55,13 @@ fn query_dots_keep_unread_results_until_their_own_tabs_show(cx: &mut TestAppCont
         assert_eq!(idle_button.size.width, idle_button.size.height);
         window.click("run", cx);
         assert_eq!(bounds_of(window, "toggle-activity"), idle_button);
-        assert!(window.find(dot(first)).label().unwrap().contains("running"));
+        assert!(
+            window
+                .find(dot(first))
+                .label()
+                .unwrap()
+                .contains("connecting")
+        );
         assert!(
             window
                 .find("toggle-activity")
@@ -88,7 +94,7 @@ fn query_dots_keep_unread_results_until_their_own_tabs_show(cx: &mut TestAppCont
         let status = window.find(connection.clone());
         let label = status.label().unwrap();
         assert!(
-            label.contains("running") && label.contains("unread query result"),
+            label.contains("connecting") && label.contains("unread query result"),
             "{label}"
         );
         let first = crate::support::labelled(window, "Query 1, unread query result").unwrap();

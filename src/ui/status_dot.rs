@@ -6,6 +6,7 @@ use gpui_kit::{AnyElement, App, IntoElement, ParentElement, Styled, div};
 pub(super) enum DotStatus {
     Connected,
     Ready,
+    Connecting,
     Working,
     Error,
     Attention,
@@ -16,6 +17,7 @@ impl DotStatus {
         let theme = cx.theme();
         match self {
             Self::Connected => theme.info.opacity(0.4),
+            Self::Connecting => theme.info.opacity(0.2),
             Self::Working => theme.info,
             Self::Ready => theme.success,
             Self::Error => theme.danger,

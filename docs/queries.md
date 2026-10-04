@@ -63,6 +63,7 @@ Each query tab has one status dot before its close button:
 | Dot | State |
 | --- | --- |
 | Dim blue | The session is connected and idle. The dot uses 40% opacity. |
+| Faint blue | The session is connecting. The dot uses 20% opacity. |
 | Blue | Query or session work continues. |
 | Green | A query result is ready and unread. |
 | Red | A query or keep-alive error is unread. |
@@ -70,8 +71,9 @@ Each query tab has one status dot before its close button:
 
 Point to the dot to see the tab name and a short status beside it. The status
 uses secondary text. The accessible name also gives the states in words.
-The dot shows SQL execution and session state. The priority is error, work, unread success,
-then connected and idle. Assistant turns and approval requests use the
+The dot shows SQL execution and session state. The priority is error, running
+work, connecting, unread success, then connected and idle. Assistant turns and
+approval requests use the
 [conversation indicators](assistant.md#conversation-state). SQL that the
 assistant runs uses the same query dot.
 
