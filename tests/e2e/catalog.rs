@@ -6,6 +6,181 @@ use qrow::{
     model::{CatalogRefresh, CatalogSettings, SharedCatalog},
     storage,
 };
+use std::{
+    io::{Read, Write},
+    net::{Shutdown, TcpListener, TcpStream},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
+
+/// Delay authentication of the refresh session while query sessions use the
+/// real server normally. This makes the refresh cross the tab's idle deadline.
+struct SlowRefresh {
+    port: u16,
+    stopped: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
+    active: Arc<AtomicUsize>,
+    acceptor: Option<thread::JoinHandle<()>>,
+}
+
+impl SlowRefresh {
+    fn new(server_port: u16) -> Self {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let released = Arc::new(AtomicBool::new(false));
+        let active = Arc::new(AtomicUsize::new(0));
+        let stop = stopped.clone();
+        let release = released.clone();
+        let sessions = active.clone();
+        let acceptor = thread::spawn(move || {
+            let mut connections = 0;
+            while !stop.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut client, _)) => {
+                        client.set_nonblocking(false).unwrap();
+                        connections += 1;
+                        let delay = connections == 2;
+                        let release = release.clone();
+                        sessions.fetch_add(1, Ordering::SeqCst);
+                        let sessions = sessions.clone();
+                        let mut server = TcpStream::connect(("127.0.0.1", server_port)).unwrap();
+                        let mut upstream_client = client.try_clone().unwrap();
+                        let mut upstream_server = server.try_clone().unwrap();
+                        thread::spawn(move || {
+                            let _ = std::io::copy(&mut upstream_client, &mut upstream_server);
+                            let _ = upstream_server.shutdown(Shutdown::Both);
+                        });
+                        thread::spawn(move || {
+                            let mut first = [0; 4096];
+                            if let Ok(count) = server.read(&mut first) {
+                                if delay {
+                                    while !release.load(Ordering::SeqCst) {
+                                        thread::sleep(Duration::from_millis(10));
+                                    }
+                                }
+                                if client.write_all(&first[..count]).is_ok() {
+                                    let _ = std::io::copy(&mut server, &mut client);
+                                }
+                            }
+                            let _ = client.shutdown(Shutdown::Both);
+                            sessions.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("Refresh proxy failed: {error}"),
+                }
+            }
+        });
+        Self {
+            port,
+            stopped,
+            released,
+            active,
+            acceptor: Some(acceptor),
+        }
+    }
+}
+
+impl Drop for SlowRefresh {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        self.released.store(true, Ordering::SeqCst);
+        self.acceptor.take().unwrap().join().unwrap();
+    }
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    let proxy = SlowRefresh::new(workspace.profiles[0].port);
+    let profile = &mut workspace.profiles[0];
+    profile.port = proxy.port;
+    profile.lifecycle.idle_seconds = 1;
+    profile.catalog.refresh = CatalogRefresh::WhileConnected;
+    profile.catalog.include = vec!["default".into()];
+    let id = profile.id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    assert!(
+        !app.activity(cx, id)
+            .contains("Started an automatic schema refresh")
+    );
+    assert_eq!(proxy.active.load(Ordering::SeqCst), 0);
+    app.run_complete(cx, "SELECT 1");
+    app.wait_cell(cx, 0, 1, "1");
+    let started = Instant::now();
+    app.wait_until(
+        cx,
+        "the deferred idle deadline",
+        Duration::from_secs(3),
+        |window, _| {
+            assert!(
+                !crate::support::label(window, "query-status")
+                    .is_some_and(|status| status.starts_with("Disconnected"))
+            );
+            started.elapsed() >= Duration::from_millis(1200)
+        },
+    );
+    proxy.released.store(true, Ordering::SeqCst);
+    app.wait_status(cx, "Disconnected · Idle timeout");
+    app.wait_cell(cx, 0, 1, "1");
+    let activity = app.activity(cx, id);
+    assert!(activity.contains("Schema refresh completed"), "{activity}");
+    assert!(
+        activity.contains("Disconnected after idle timeout"),
+        "{activity}"
+    );
+    assert!(!activity.contains("Schema refresh stopped"), "{activity}");
+    assert_eq!(
+        activity
+            .matches("Started an automatic schema refresh")
+            .count(),
+        1,
+        "{activity}"
+    );
+    app.wait_until(
+        cx,
+        "both sessions to close",
+        Duration::from_secs(5),
+        |_, _| proxy.active.load(Ordering::SeqCst) == 0,
+    );
+
+    // Explicit Refresh can connect after the tab has disconnected. It leaves
+    // the query tab disconnected and closes its own temporary session.
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Refresh");
+    let deadline = Instant::now() + QUERY_TIMEOUT;
+    let mut activity = String::new();
+    while Instant::now() < deadline {
+        activity = app.activity(cx, id);
+        if activity.matches("Schema refresh completed").count() == 2 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        activity.matches("Schema refresh completed").count(),
+        2,
+        "{activity}"
+    );
+    app.wait_status(cx, "Disconnected · Idle timeout");
+    app.wait_until(
+        cx,
+        "the explicit refresh session to close",
+        Duration::from_secs(5),
+        |_, _| proxy.active.load(Ordering::SeqCst) == 0,
+    );
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]

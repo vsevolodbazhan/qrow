@@ -46,6 +46,8 @@ pub enum Event {
 
 type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
 pub type PasswordProvider = Arc<dyn Fn(&Profile) -> Result<Zeroizing<String>> + Send + Sync>;
+/// Reports the stable ID of active work that defers idle disconnection.
+pub type IdleGuard = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
 
 pub struct Worker {
     tx: mpsc::Sender<Command>,
@@ -59,6 +61,7 @@ pub struct Worker {
     next_execution: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
     done: mpsc::Receiver<()>,
+    idle_guard: Arc<Mutex<Option<IdleGuard>>>,
 }
 
 impl Worker {
@@ -82,6 +85,7 @@ impl Worker {
         let generation = Arc::new(AtomicU64::new(0));
         let (done_tx, done) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
+        let idle_guard = Arc::new(Mutex::new(None));
         let mut runner = Runner {
             session: None,
             profile: None,
@@ -97,14 +101,30 @@ impl Worker {
             passwords,
             stopped: stopped.clone(),
             execution: None,
+            idle_guard: idle_guard.clone(),
         };
         thread::spawn(move || {
+            let mut idle_started = Instant::now();
+            let mut idle_refresh = None;
             loop {
                 let command = match runner.idle_interval() {
-                    Some(interval) => match rx.recv_timeout(interval) {
+                    Some(interval) => match rx.recv_timeout({
+                        let remaining = interval.saturating_sub(idle_started.elapsed());
+                        if remaining.is_zero() && runner.idle_disconnect_deferred(&mut idle_refresh)
+                        {
+                            Duration::from_millis(100)
+                        } else {
+                            remaining
+                        }
+                    }) {
                         Ok(command) => command,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if runner.idle_disconnect_deferred(&mut idle_refresh) {
+                                continue;
+                            }
                             runner.maintain();
+                            idle_started = Instant::now();
+                            idle_refresh = None;
                             continue;
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -176,6 +196,8 @@ impl Worker {
                         disconnected,
                     });
                 }
+                idle_started = Instant::now();
+                idle_refresh = None;
             }
             runner.disconnect();
             let _ = done_tx.send(());
@@ -192,6 +214,7 @@ impl Worker {
             next_execution: Arc::new(AtomicU64::new(1)),
             stopped,
             done,
+            idle_guard,
         }
     }
 
@@ -221,6 +244,11 @@ impl Worker {
         profile.lifecycle.validate()?;
         let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
         Ok(())
+    }
+    /// Change idle protection without restarting the idle timer.
+    /// Explicit disconnection and keep-alive queries do not use this guard.
+    pub fn set_idle_guard(&self, guard: Option<IdleGuard>) {
+        *self.idle_guard.lock().unwrap() = guard;
     }
     pub fn disconnect(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -264,6 +292,7 @@ impl Drop for Worker {
 }
 
 struct Runner {
+    idle_guard: Arc<Mutex<Option<IdleGuard>>>,
     stopped: Arc<AtomicBool>,
     session: Option<Box<dyn Session>>,
     profile: Option<Profile>,
