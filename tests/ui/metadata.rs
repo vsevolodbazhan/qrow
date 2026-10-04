@@ -20,17 +20,10 @@ fn result_and_status_metadata_fit_at_small_window_sizes(cx: &mut TestAppContext)
         }
         cx.simulate_window_resize(app.window, size(px(850.), px(560.)));
         app.settle(cx);
+        assert_eq!(cx.update(|cx| app.status(cx)), "Complete: Demo data");
         app.update(cx, |window, _| {
-            assert_eq!(
-                label(window, "query-status-title").as_deref(),
-                Some("Complete")
-            );
-            assert_eq!(
-                label(window, "query-status-detail").as_deref(),
-                Some("Demo data")
-            );
             assert!(
-                label(window, "query-elapsed")
+                label(window, "result-elapsed")
                     .unwrap()
                     .starts_with("Elapsed: ")
             );
@@ -46,16 +39,15 @@ fn result_and_status_metadata_fit_at_small_window_sizes(cx: &mut TestAppContext)
                 label(window, "result-columns").as_deref(),
                 Some("141 columns")
             );
-            for (parent, children) in [
-                (
-                    "query-status",
-                    &["query-status-title", "query-status-detail", "query-elapsed"][..],
-                ),
-                (
-                    "result-count",
-                    &["result-range", "result-loaded", "result-columns"][..],
-                ),
-            ] {
+            for (parent, children) in [(
+                "result-count",
+                &[
+                    "result-range",
+                    "result-loaded",
+                    "result-columns",
+                    "result-elapsed",
+                ][..],
+            )] {
                 let parent = bounds_of(window, parent);
                 for id in children {
                     let child = bounds_of(window, id);

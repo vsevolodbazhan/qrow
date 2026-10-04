@@ -266,6 +266,8 @@ impl Tab {
         }
     }
 
+    /// The tooltip of the dot of the tab: the state of the dot, then the
+    /// status of the last work of the tab, like "Error: Connection failed".
     fn status_tooltip(&self) -> Option<StatusTooltip> {
         self.dot_status().map(|status| {
             StatusTooltip::new(
@@ -279,6 +281,7 @@ impl Tab {
                     DotStatus::Attention => unreachable!("SQL never needs approval"),
                 },
             )
+            .detail(self.status_label())
         })
     }
 

@@ -126,7 +126,7 @@ use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 When you run a query and its connection needs a new sign-in, Qrow opens the
 browser sign-in. This occurs when the sign-in is not signed in, when it has
 expired, or when the provider does not accept the refresh token. The status
-shows **Waiting for sign-in**, and Logs names the sign-in. After the sign-in,
+of the tab is **Waiting for sign-in**, and Logs names the sign-in. After the sign-in,
 the query runs. The query did not reach the server before, so this is not a
 second run. If the sign-in fails, the query ends with
 **Error: Sign-in required**. If you cancel it in the browser, the query ends
@@ -601,7 +601,7 @@ these steps while it starts a Spark engine. If Kyuubi does not answer within
 the response timeout, the error names the step and tells that the engine can
 still start. If the initial database does
 not exist, the error names the database and includes the message of Spark.
-The status bar shows **Error: Connection failed** when a session could not
+The status of the tab is **Error: Connection failed** when a session could not
 open, and **Error: Connection lost** when an open session failed.
 
 Qrow discards a failed connection and reports the error. This includes recognized

@@ -17,13 +17,6 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
-    match elapsed {
-        Some(elapsed) => format!("{status}. Elapsed: {:.2} s", elapsed.as_secs_f64()),
-        None => status.to_owned(),
-    }
-}
-
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
         "Demo changes are not saved"
@@ -263,7 +256,16 @@ impl Qrow {
                 "columns"
             }
         );
-        let count = format!("{range_label}, {loaded_label}, {columns_label}");
+        // The duration of the last query of the tab.
+        let elapsed_label = tab
+            .elapsed
+            .map(|elapsed| format!("{:.2} s", elapsed.as_secs_f64()));
+        let count = match &elapsed_label {
+            Some(elapsed) => {
+                format!("{range_label}, {loaded_label}, {columns_label}, elapsed {elapsed}")
+            }
+            None => format!("{range_label}, {loaded_label}, {columns_label}"),
+        };
         let page_label = format!("Page {}", page + 1);
         results::selection_boundary(&tab.table)
             .size_full()
@@ -311,7 +313,17 @@ impl Qrow {
                                         .aria_label(text.clone())
                                         .child(text)
                                 }),
-                            ),
+                            )
+                            .when_some(elapsed_label, |row, elapsed| {
+                                row.child(
+                                    div()
+                                        .id("result-elapsed")
+                                        .test_support()
+                                        .role(Role::Label)
+                                        .aria_label(format!("Elapsed: {elapsed}"))
+                                        .child(elapsed),
+                                )
+                            }),
                     )
                     .child(
                         h_flex()
@@ -549,10 +561,15 @@ impl Qrow {
             .child(DotStatus::on_button(status, button, cx))
     }
 
+    /// The status of the last work of the active tab, like "Complete" or
+    /// "Error: Connection failed". The dot tooltip of the tab shows it.
+    pub fn active_tab_status(&self) -> String {
+        self.tabs[self.active].status_label()
+    }
+
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
-        let status_label = query_status_label(&tab.status_label(), tab.elapsed);
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
@@ -564,56 +581,7 @@ impl Qrow {
             // The default padding is a quarter rem, 3.5 pixels, which rounds
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
-            .child(
-                h_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_2()
-                    .child(self.sidebar_buttons(cx))
-                    .child(
-                        h_flex()
-                            .id("query-status")
-                            .test_support()
-                            .role(Role::Status)
-                            .flex_1()
-                            .min_w_0()
-                            .gap_3()
-                            .overflow_hidden()
-                            .aria_label(status_label)
-                            .child(
-                                div()
-                                    .id("query-status-title")
-                                    .test_support()
-                                    .min_w_0()
-                                    .truncate()
-                                    .aria_label(tab.status.clone())
-                                    .text_color(cx.theme().foreground)
-                                    .child(tab.status.clone()),
-                            )
-                            .when_some(tab.status_detail.clone(), |row, detail| {
-                                row.child(
-                                    div()
-                                        .id("query-status-detail")
-                                        .test_support()
-                                        .min_w_0()
-                                        .truncate()
-                                        .aria_label(detail.clone())
-                                        .child(detail),
-                                )
-                            })
-                            .when_some(tab.elapsed, |row, elapsed| {
-                                let elapsed = format!("{:.2} s", elapsed.as_secs_f64());
-                                row.child(
-                                    div()
-                                        .id("query-elapsed")
-                                        .test_support()
-                                        .flex_shrink_0()
-                                        .aria_label(format!("Elapsed: {elapsed}"))
-                                        .child(elapsed),
-                                )
-                            }),
-                    ),
-            )
+            .child(h_flex().flex_1().min_w_0().child(self.sidebar_buttons(cx)))
             .child(
                 div()
                     .id("current-connection")
@@ -1100,11 +1068,6 @@ mod tests {
         assert_eq!(
             connection_name(&[profile], Some(Uuid::new_v4())),
             "No connection"
-        );
-        assert_eq!(query_status_label("Executing…", None), "Executing…");
-        assert_eq!(
-            query_status_label("Complete: Demo data", Some(Duration::from_millis(842))),
-            "Complete: Demo data. Elapsed: 0.84 s"
         );
         assert_eq!(
             workspace_status(true, true, false),

@@ -12,28 +12,13 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "run");
     app.wait_status(cx, "Error: Query failed");
-    app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "query-status-title").as_deref(),
-            Some("Error")
-        );
-        assert_eq!(
-            label(window, "query-status-detail").as_deref(),
-            Some("Query failed")
-        );
-    });
+    assert_eq!(cx.update(|cx| app.status(cx)), "Error: Query failed");
     app.run_complete(cx, "SELECT 42 AS value");
+    // The status of the new run has no detail of the previous error.
+    assert_eq!(cx.update(|cx| app.status(cx)), "Complete");
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "query-status-title").as_deref(),
-            Some("Complete")
-        );
         assert!(
-            window.try_find("query-status-detail").is_none(),
-            "The previous error detail survived a new run"
-        );
-        assert!(
-            label(window, "query-elapsed")
+            label(window, "result-elapsed")
                 .unwrap()
                 .starts_with("Elapsed: ")
         );

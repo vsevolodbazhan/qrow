@@ -16,8 +16,10 @@ Without a selection, Qrow submits the full editor contents. It does not select
 the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
-The status bar shows the query status, its detail, and elapsed time as separate
-labels. The detail and elapsed time use secondary text. Action tooltips show
+The dot of a tab shows the state of its work. Point to the dot to read the
+status of the last query, for example **Error: Connection failed**. The bar
+above Results shows the rows, the loaded rows, the columns, and the elapsed
+time of the last query as separate labels. Action tooltips show
 the command name and its keyboard shortcut on one line. The name and shortcut
 share a vertical center.
 

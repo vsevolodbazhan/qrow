@@ -76,6 +76,14 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
+    // The tab tooltip also gives the status of the query, which the status
+    // bar does not show.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-detail").as_deref(),
+            Some("Connecting…")
+        );
+    });
     // Keep the failure unread by showing a different tab.
     app.click(cx, "new-tab");
     hover(format!("connection-status-{connection}"), &app, cx);

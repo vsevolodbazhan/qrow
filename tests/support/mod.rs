@@ -908,6 +908,15 @@ impl TestApp {
 
     /// Polls `predicate` on fresh frames until it holds. Fails with the
     /// registered element paths after `timeout` of wall time.
+    /// The status of the active tab, like "Complete" or
+    /// "Error: Connection failed".
+    pub fn status(&self, cx: &App) -> String {
+        self.qrow
+            .upgrade()
+            .map(|qrow| qrow.read(cx).active_tab_status())
+            .unwrap_or_default()
+    }
+
     pub fn wait_until(
         &self,
         cx: &mut TestAppContext,

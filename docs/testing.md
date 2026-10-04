@@ -528,7 +528,7 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   table. Column 0 holds the row number.
 - `app.type_sql` replaces the SQL of the active tab through the editor.
   `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
-  status bar, and `app.wait_cell(row, column, text)` waits for a result.
+  status of the active tab, which its dot tooltip shows, and `app.wait_cell(row, column, text)` waits for a result.
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
   reads Logs through **Copy All Logs**.
 - `blocking(token, milliseconds)` makes a query that holds an executor

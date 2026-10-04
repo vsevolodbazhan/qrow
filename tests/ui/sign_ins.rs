@@ -436,9 +436,7 @@ fn unreachable_workspace(provider: &Provider) -> (Workspace, SignIn) {
 }
 
 fn wait_query_status(app: &TestApp, cx: &mut TestAppContext, prefix: &str) {
-    app.wait_until(cx, prefix, WAIT, |window, _| {
-        label(window, "query-status").is_some_and(|status| status.starts_with(prefix))
-    });
+    app.wait_until(cx, prefix, WAIT, |_, cx| app.status(cx).starts_with(prefix));
 }
 
 #[gpui_kit::test]
