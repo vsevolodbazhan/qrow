@@ -777,6 +777,16 @@ impl Qrow {
                 None => {}
             }
         }
+        for tab in &self.tabs {
+            if let Some(worker) = &tab.worker {
+                let guard = tab.worker_profile.and_then(|member| {
+                    self.catalog
+                        .worker(member)
+                        .map(|catalog| catalog.idle_guard(member))
+                });
+                worker.set_idle_guard(guard);
+            }
+        }
     }
 
     /// The demo shows the tree of its first connection open to one table.

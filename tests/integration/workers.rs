@@ -8,7 +8,7 @@ use qrow::{
 use std::{
     sync::{
         Arc, Barrier, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -575,6 +575,136 @@ fn active_queries_are_not_interrupted_by_idle_timeout_or_heartbeat() {
         worker.cancel();
         assert!(matches!(next(&worker), Event::Cancelled));
     }
+}
+
+#[test]
+fn a_refresh_defers_idle_disconnect_without_restarting_the_timer() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let refreshing = Arc::new(AtomicBool::new(true));
+    let active = refreshing.clone();
+    worker.set_idle_guard(Some(Arc::new(move || {
+        active.load(Ordering::SeqCst).then_some(1)
+    })));
+    let mut profile = Profile::default();
+    profile.lifecycle.idle_seconds = 1;
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(1200))
+            .is_err()
+    );
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 0);
+
+    refreshing.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap(),
+        Event::IdleDisconnected
+    ));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn ending_a_refresh_before_the_idle_deadline_preserves_the_remaining_time() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture);
+    let refreshing = Arc::new(AtomicBool::new(true));
+    let active = refreshing;
+    worker.set_idle_guard(Some(Arc::new(move || {
+        active.load(Ordering::SeqCst).then_some(1)
+    })));
+    let mut profile = Profile::default();
+    profile.lifecycle.idle_seconds = 1;
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(600))
+            .is_err()
+    );
+    // Rebinding protection, as the UI does, must not restart the timer either.
+    worker.set_idle_guard(None);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(100))
+            .is_err()
+    );
+    assert!(matches!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(550))
+            .unwrap(),
+        Event::IdleDisconnected
+    ));
+}
+
+#[test]
+fn explicit_disconnect_and_shutdown_do_not_wait_for_a_refresh() {
+    for shutdown in [false, true] {
+        let fixture = Arc::new(Fixture::default());
+        let worker = worker(fixture.clone());
+        worker.set_idle_guard(Some(Arc::new(|| Some(1))));
+        worker.run(Profile::default(), "select".into());
+        ready(&worker);
+        if shutdown {
+            worker.shutdown();
+            worker.wait_for_shutdown(Duration::from_secs(1));
+        } else {
+            worker.disconnect();
+            assert!(matches!(next(&worker), Event::Disconnected));
+        }
+        assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[test]
+fn a_refresh_does_not_defer_keep_alive_queries() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture);
+    worker.set_idle_guard(Some(Arc::new(|| Some(1))));
+    let mut profile = Profile::default();
+    profile.lifecycle.keep_alive_seconds = 1;
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(matches!(next(&worker), Event::KeepAliveStarted));
+    assert!(matches!(next(&worker), Event::KeepAliveFinished));
+}
+
+#[test]
+fn a_later_refresh_does_not_extend_an_overdue_idle_session() {
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let batch = Arc::new(AtomicU64::new(1));
+    let active = batch.clone();
+    worker.set_idle_guard(Some(Arc::new(move || Some(active.load(Ordering::SeqCst)))));
+    let mut profile = Profile::default();
+    profile.lifecycle.idle_seconds = 1;
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(1200))
+            .is_err()
+    );
+    // An overlong automatic refresh can finish after its next period is due.
+    // The next batch then starts without a gap in refresh activity.
+    batch.store(2, Ordering::SeqCst);
+    assert!(matches!(
+        worker
+            .events
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap(),
+        Event::IdleDisconnected
+    ));
+    assert_eq!(fixture.closes.load(Ordering::SeqCst), 1);
 }
 
 #[test]
