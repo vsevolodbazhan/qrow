@@ -244,6 +244,9 @@ struct Tab {
     /// The query runs after an automatic sign-in, so a second sign-in
     /// error stays an error.
     signed_in_for_run: bool,
+    /// A sign-out or another account released the session while the tab was
+    /// busy. The next query closes it first.
+    release_pending: bool,
 }
 impl Tab {
     fn set_status(&mut self, status: impl Into<String>) {
@@ -831,6 +834,7 @@ impl Qrow {
             submitted_sql: None,
             sign_in_wait: None,
             signed_in_for_run: false,
+            release_pending: false,
             next_execution_id: 1,
         }
     }
@@ -1763,12 +1767,13 @@ impl Qrow {
             cx.notify();
             return false;
         }
-        // An open session of the connection continues without a new token.
-        let live = tab.connected && tab.worker_profile == Some(profile.id);
+        // An open session of the connection continues without a new token,
+        // but not while a browser sign-in or a sign-out can change the
+        // account of the sign-in.
+        let live = tab.connected && tab.worker_profile == Some(profile.id) && !tab.release_pending;
         if !after_sign_in
-            && !live
             && let Some(sign_in) = profile.authentication.sign_in()
-            && self.sign_in_needs_browser(sign_in)
+            && (self.sign_in_changing(sign_in) || !live && self.sign_in_needs_browser(sign_in))
         {
             self.wait_for_sign_in(index, sign_in, query, cx);
             return true;
@@ -1776,6 +1781,16 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
+        // A session that a sign-out or another account released while the
+        // tab was busy closes now, so the query opens a new one.
+        if tab.release_pending {
+            tab.release_pending = false;
+            if let Some(worker) = tab.worker.take() {
+                worker.shutdown();
+            }
+            tab.worker_profile = None;
+            tab.connected = false;
+        }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
             let credentials = self.credential_provider();

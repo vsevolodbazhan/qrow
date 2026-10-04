@@ -529,6 +529,12 @@ impl Qrow {
         }
     }
 
+    /// Whether a browser sign-in or a sign-out of the sign-in `id` runs,
+    /// which can change or remove its account.
+    pub(super) fn sign_in_changing(&self, id: Uuid) -> bool {
+        self.sign_in_ui.pending.contains_key(&id) || self.sign_in_ui.signing_out.contains(&id)
+    }
+
     /// Whether the sign-in `id` needs the browser before a new session can
     /// open: it is not signed in, it has expired, or a browser sign-in runs.
     pub(super) fn sign_in_needs_browser(&self, id: Uuid) -> bool {
@@ -590,6 +596,8 @@ impl Qrow {
             }
             let detail = if self.sign_in_ui.pending.contains_key(&id) {
                 "Finish it in the browser"
+            } else if self.sign_in_ui.signing_out.contains(&id) {
+                "The sign-in is signing out"
             } else {
                 "Another query uses this sign-in"
             };
@@ -1402,8 +1410,12 @@ impl Qrow {
 /// Stops the worker of a tab. Its SQL, results, and Logs history stay.
 pub(super) fn release_session(tab: &mut Tab) {
     if tab.busy {
+        // The work of the tab can end later. Its next query releases the
+        // session, so it never runs as the old account.
+        tab.release_pending = true;
         return;
     }
+    tab.release_pending = false;
     if let Some(worker) = tab.worker.take() {
         worker.shutdown();
     }

@@ -133,7 +133,11 @@ second run. If the sign-in fails, the query ends with
 with **Cancelled: Sign-in not finished**. Click **Cancel** to stop the query
 while it waits. The browser sign-in then continues in the Sign-ins sidebar.
 Qrow opens the browser only once for each query. An open session continues
-without a new token, so a query in it does not open the browser.
+without a new token, so a query in it does not open the browser. While a
+browser sign-in or a sign-out of the sign-in runs, each new query of its
+connections waits, also in an open session, because the account can change.
+After a change of account, Qrow closes the sessions of the old account before
+their next query.
 
 If Kyuubi does not accept the token, the error names the database username. SASL PLAIN does not tell why the server
 rejected a token, so Qrow cannot show if the token expired or if the account
