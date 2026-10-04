@@ -123,10 +123,19 @@ use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 | **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
 | **The last action failed** | Open Sign-in Settings to read the error, then try again. |
 
-A query that needs a sign-in fails with **Error: Sign-in required**, and Logs
-names the sign-in. Qrow does not open the browser by itself, and it does not
-run the SQL again after a sign-in. If Kyuubi does not accept the token, the
-error names the database username. SASL PLAIN does not tell why the server
+When you run a query and its connection needs a new sign-in, Qrow opens the
+browser sign-in. This occurs when the sign-in is not signed in, when it has
+expired, or when the provider does not accept the refresh token. The status
+shows **Waiting for sign-in**, and Logs names the sign-in. After the sign-in,
+the query runs. The query did not reach the server before, so this is not a
+second run. If the sign-in fails, the query ends with
+**Error: Sign-in required**. If you cancel it in the browser, the query ends
+with **Cancelled: Sign-in not finished**. Click **Cancel** to stop the query
+while it waits. The browser sign-in then continues in the Sign-ins sidebar.
+Qrow opens the browser only once for each query. An open session continues
+without a new token, so a query in it does not open the browser.
+
+If Kyuubi does not accept the token, the error names the database username. SASL PLAIN does not tell why the server
 rejected a token, so Qrow cannot show if the token expired or if the account
 is not available to the identity.
 

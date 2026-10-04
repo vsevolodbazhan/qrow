@@ -134,6 +134,27 @@ impl SignInState {
     }
 }
 
+/// A query that waits for a browser sign-in. It has not reached the server.
+pub(super) struct SignInWait {
+    sign_in: Uuid,
+    sql: String,
+}
+
+/// The sign-in to open in the browser after a sign-in error of `tab`, and the
+/// SQL to run after it. A query that already ran after an automatic sign-in
+/// gets none, so a sign-in that does not help ends in an error.
+pub(super) fn automatic_sign_in(tab: &Tab, profiles: &[Profile]) -> Option<(Uuid, String)> {
+    if tab.signed_in_for_run {
+        return None;
+    }
+    let sign_in = profiles
+        .iter()
+        .find(|profile| Some(profile.id) == tab.worker_profile)?
+        .authentication
+        .sign_in()?;
+    Some((sign_in, tab.submitted_sql.clone()?))
+}
+
 /// What the Sign-ins sidebar and the Sign-in Settings dialog show about the
 /// account of a sign-in.
 struct Account {
@@ -220,9 +241,9 @@ impl Qrow {
 
     /// Whether a session that uses the sign-in runs work now.
     pub(super) fn sign_in_busy(&self, id: Uuid) -> bool {
-        self.tabs
-            .iter()
-            .any(|tab| tab.busy && self.uses_sign_in(tab.worker_profile, id))
+        self.tabs.iter().any(|tab| {
+            tab.busy && tab.sign_in_wait.is_none() && self.uses_sign_in(tab.worker_profile, id)
+        })
     }
 
     /// Releases the sessions of a sign-in after a sign-out or a change of
@@ -354,6 +375,11 @@ impl Qrow {
             match outcome {
                 Outcome::SignedIn(id, result) => {
                     self.sign_in_ui.pending.remove(&id);
+                    let ended = match &result {
+                        Ok(_) => Ok(()),
+                        Err((Failure::Cancelled, _)) => Err(None),
+                        Err((_, message)) => Err(Some(message.clone())),
+                    };
                     match result {
                         Ok(identity) => {
                             let previous = self
@@ -377,6 +403,7 @@ impl Qrow {
                             self.sign_in_ui.errors.insert(id, message);
                         }
                     }
+                    self.end_sign_in_waits(id, ended, cx);
                 }
                 Outcome::SignedOut(id, result) => {
                     self.sign_in_ui.signing_out.remove(&id);
@@ -497,6 +524,120 @@ impl Qrow {
                 attention: true,
             },
         }
+    }
+
+    /// Whether the sign-in `id` needs the browser before a new session can
+    /// open: it is not signed in, it has expired, or a browser sign-in runs.
+    pub(super) fn sign_in_needs_browser(&self, id: Uuid) -> bool {
+        !self.demo
+            && (self.sign_in_ui.pending.contains_key(&id)
+                || matches!(
+                    self.oidc.status(id),
+                    Status::SignedOut | Status::SignInRequired(..)
+                ))
+    }
+
+    /// Holds the query `sql` of the tab `index` until the browser sign-in
+    /// `sign_in` ends, and starts that sign-in if it does not run.
+    pub(super) fn wait_for_sign_in(
+        &mut self,
+        index: usize,
+        sign_in: Uuid,
+        sql: String,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .sign_ins
+            .iter()
+            .find(|candidate| candidate.id == sign_in)
+            .map(|candidate| candidate.name.clone())
+            .unwrap_or_default();
+        let tab = &mut self.tabs[index];
+        tab.sign_in_wait = Some(SignInWait { sign_in, sql });
+        tab.busy = true;
+        tab.cancelling = false;
+        tab.more = false;
+        tab.pending_page = None;
+        tab.elapsed = None;
+        tab.started = Some(Instant::now());
+        tab.set_status_detail("Waiting for sign-in", "Finish it in the browser");
+        Self::record_local_log(
+            tab,
+            Severity::Info,
+            LogKind::SignIn,
+            format!("Sign in to \"{name}\" in the browser. The query runs after the sign-in."),
+        );
+        self.start_sign_in(sign_in, cx);
+        cx.notify();
+    }
+
+    /// Runs the queries that waited for the sign-in `id`, or ends them when
+    /// the sign-in failed (`Some` message) or was cancelled (`None`).
+    fn end_sign_in_waits(
+        &mut self,
+        id: Uuid,
+        ended: Result<(), Option<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting: Vec<usize> = (0..self.tabs.len())
+            .filter(|&index| {
+                self.tabs[index]
+                    .sign_in_wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.sign_in == id)
+            })
+            .collect();
+        for index in waiting {
+            let active = index == self.active && !self.activity.read(cx).is_open();
+            let tab = &mut self.tabs[index];
+            let Some(wait) = tab.sign_in_wait.take() else {
+                continue;
+            };
+            tab.busy = false;
+            match &ended {
+                Ok(()) => {
+                    self.run_tab_sql(index, wait.sql, true, cx);
+                }
+                Err(message) => {
+                    tab.started = None;
+                    let (text, status, detail) = match message {
+                        Some(message) => (
+                            format!("The sign-in failed, so the query did not run: {message}"),
+                            "Error",
+                            "Sign-in required",
+                        ),
+                        None => (
+                            "The sign-in was cancelled, so the query did not run.".to_owned(),
+                            "Cancelled",
+                            "Sign-in not finished",
+                        ),
+                    };
+                    Self::record_local_log(tab, Severity::Error, LogKind::SignIn, text);
+                    Self::record_failure(tab, active);
+                    tab.set_status_detail(status, detail);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Cancels the query of the tab `index`, which waits for a sign-in. The
+    /// browser sign-in continues, and the Sign-ins sidebar can cancel it.
+    pub(super) fn cancel_sign_in_wait(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
+        if tab.sign_in_wait.take().is_none() {
+            return;
+        }
+        tab.busy = false;
+        tab.started = None;
+        tab.set_status_detail("Cancelled", "Sign-in not finished");
+        Self::record_local_log(
+            tab,
+            Severity::Info,
+            LogKind::SignIn,
+            "Cancelled the query before the sign-in finished. The query did not run.",
+        );
+        cx.notify();
     }
 
     /// The number of sign-ins that need the user, for the status bar.

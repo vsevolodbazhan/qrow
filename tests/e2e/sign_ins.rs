@@ -1,8 +1,8 @@
 //! Browser sign-in in the real window, then SQL over TLS with the access
 //! token, against the fixture provider and Kyuubi.
-use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
+use crate::support::fixture::Kyuubi;
 use crate::support::oidc::FixtureProvider;
-use crate::support::{MemoryCredentials, SignIns, TestApp, label};
+use crate::support::{MemoryCredentials, SignIns, TestApp};
 use gpui_kit::TestAppContext;
 use qrow::model::{Authentication, SavedTab, Workspace};
 use std::sync::Arc;
@@ -24,7 +24,7 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     let workspace = Workspace {
         profiles: vec![profile],
         tabs: vec![tab],
-        sign_ins: vec![sign_in.clone()],
+        sign_ins: vec![sign_in],
         ..Workspace::default()
     };
     let browser = fixture.browser("alice", &[]);
@@ -35,20 +35,7 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
         SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
     );
 
-    // Before the sign-in, Run explains the recovery and opens no browser.
-    app.click(cx, "run");
-    app.wait_until(cx, "the sign-in error", QUERY_TIMEOUT, |window, _| {
-        label(window, "query-status")
-            .is_some_and(|status| status.starts_with("Error: Sign-in required"))
-    });
-
-    app.click(cx, "show-sign-ins");
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
-    let status = format!("sign-in-{}-account", sign_in.id);
-    app.wait_until(cx, "the signed-in account", QUERY_TIMEOUT, |window, _| {
-        label(window, status.clone()).as_deref() == Some("alice@qrow.test")
-    });
-
+    // Run opens the browser sign-in first, then runs the query.
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "qrow");

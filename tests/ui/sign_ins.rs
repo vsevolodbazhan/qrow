@@ -425,31 +425,106 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
     assert_eq!(app.credentials.count(), 0, "no password was saved");
 }
 
-#[gpui_kit::test]
-fn running_without_a_sign_in_explains_the_recovery_and_keeps_the_sql(cx: &mut TestAppContext) {
-    let provider = Provider::start();
-    let (mut workspace, _) = workspace(&provider, true);
+/// A workspace whose connection uses the sign-in and a server address
+/// without a server, so that a query that starts fails to connect.
+fn unreachable_workspace(provider: &Provider) -> (Workspace, SignIn) {
+    let (mut workspace, sign_in) = workspace(provider, true);
     workspace.tabs[0].sql = "SELECT 1".into();
     workspace.profiles[0].host = "127.0.0.1".into();
+    workspace.profiles[0].port = 1;
+    (workspace, sign_in)
+}
+
+fn wait_query_status(app: &TestApp, cx: &mut TestAppContext, prefix: &str) {
+    app.wait_until(cx, prefix, WAIT, |window, _| {
+        label(window, "query-status").is_some_and(|status| status.starts_with(prefix))
+    });
+}
+
+#[gpui_kit::test]
+fn running_without_a_sign_in_signs_in_with_the_browser_and_then_runs(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = unreachable_workspace(&provider);
     let app = launch(cx, &provider, workspace);
     app.click(cx, "run");
-    app.wait_until(cx, "the sign-in error", WAIT, |window, _| {
-        label(window, "query-status")
-            .is_some_and(|status| status.starts_with("Error: Sign-in required"))
+    // The browser sign-in runs first. The query then opens a session, which
+    // fails here because no server listens.
+    wait_query_status(&app, cx, "Error: Connection failed");
+    assert_eq!(provider.authorization_grants(), 1);
+    app.wait_until(cx, "the saved identity", WAIT, |_, _| {
+        app.saved().sign_ins[0]
+            .identity
+            .as_ref()
+            .is_some_and(|identity| identity.subject == subject("alice"))
     });
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    app.wait_until(cx, "the saved SQL", WAIT, |_, _| {
+        app.saved().tabs[0].sql == "SELECT 1"
+    });
+}
+
+#[gpui_kit::test]
+fn an_expired_sign_in_opens_the_browser_and_runs_the_query_after_it(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    // Each session needs a refreshed token.
+    provider.set_access_ttl(10);
+    let (workspace, sign_in) = unreachable_workspace(&provider);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    // The provider no longer accepts the refresh token, as after a long
+    // break. The sign-in looks valid until a query needs a token.
+    provider.revoke("alice");
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    assert_eq!(provider.authorization_grants(), 2);
+    // The sidebar still shows the Sign-ins panel.
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+}
+
+#[gpui_kit::test]
+fn a_denied_sign_in_ends_the_waiting_query_with_the_reason(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, _) = unreachable_workspace(&provider);
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(provider.denying_browser()))),
+    );
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Error: Sign-in required");
     app.click(cx, "output-copy-error");
     let copied = cx
         .read_from_clipboard()
         .and_then(|item| item.text())
         .unwrap();
     assert!(
-        copied.contains("Sign in to \"Company\" in the Sign-ins sidebar"),
+        copied.contains("The sign-in failed, so the query did not run"),
         "{copied}"
     );
-    app.wait_until(cx, "the saved SQL", WAIT, |_, _| {
-        app.saved().tabs[0].sql == "SELECT 1"
-    });
-    assert_eq!(provider.authorization_grants(), 0, "no browser opened");
+}
+
+#[gpui_kit::test]
+fn cancel_ends_a_query_that_waits_for_the_browser(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = unreachable_workspace(&provider);
+    // A browser in which nobody finishes the sign-in.
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(|_: &str| Ok(())))),
+    );
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Waiting for sign-in");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+    // The browser sign-in continues, and the sidebar can cancel it.
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "Waiting for the browser…");
 }
 
 #[gpui_kit::test]

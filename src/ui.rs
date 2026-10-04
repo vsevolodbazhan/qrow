@@ -237,6 +237,13 @@ struct Tab {
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     next_execution_id: u64,
+    /// The SQL of the last Run, for a run after a browser sign-in.
+    submitted_sql: Option<String>,
+    /// The query waits for this browser sign-in, and then runs.
+    sign_in_wait: Option<sign_in_view::SignInWait>,
+    /// The query runs after an automatic sign-in, so a second sign-in
+    /// error stays an error.
+    signed_in_for_run: bool,
 }
 impl Tab {
     fn set_status(&mut self, status: impl Into<String>) {
@@ -821,6 +828,9 @@ impl Qrow {
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
+            submitted_sql: None,
+            sign_in_wait: None,
+            signed_in_for_run: false,
             next_execution_id: 1,
         }
     }
@@ -1141,7 +1151,28 @@ impl Qrow {
         let mut changed = false;
         let mut activity = Vec::new();
         let workspace_visible = !self.activity.read(cx).is_open();
+        let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let events: Vec<_> = tab
+                .worker
+                .as_ref()
+                .map(|w| w.events.try_iter().collect())
+                .unwrap_or_default();
+            // A query that needs a new sign-in never reached the server. Its
+            // first such error opens the browser, and the query waits.
+            let wait = events
+                .iter()
+                .any(|event| {
+                    matches!(
+                        event,
+                        Event::Error {
+                            sign_in_required: true,
+                            ..
+                        }
+                    )
+                })
+                .then(|| sign_in_view::automatic_sign_in(tab, &self.profiles))
+                .flatten();
             let logs: Vec<_> = tab
                 .worker
                 .as_ref()
@@ -1159,19 +1190,19 @@ impl Qrow {
                 let Some(event) = crate::activity::tab_event(event) else {
                     continue;
                 };
-                let error = event.severity == Severity::Error;
+                // The sign-in error explains why the browser opens; the
+                // query has not failed yet.
+                let error = event.severity == Severity::Error && wait.is_none();
                 Self::record_log(tab, event);
                 if error {
                     Self::record_failure(tab, workspace_visible && index == self.active);
                 }
             }
-            let events: Vec<_> = tab
-                .worker
-                .as_ref()
-                .map(|w| w.events.try_iter().collect())
-                .unwrap_or_default();
             changed |= !events.is_empty();
             for event in events {
+                if wait.is_some() && matches!(event, Event::Error { .. }) {
+                    continue;
+                }
                 Self::apply_worker_event(
                     tab,
                     event,
@@ -1180,9 +1211,16 @@ impl Qrow {
                     cx,
                 );
             }
+            if let Some(wait) = wait {
+                waits.push((index, wait));
+            }
         }
         for (connection, entry) in activity {
             self.record_activity(connection, entry, cx);
+        }
+        for (index, (sign_in, sql)) in waits {
+            self.tabs[index].busy = false;
+            self.wait_for_sign_in(index, sign_in, sql, cx);
         }
         changed
     }
@@ -1662,7 +1700,6 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active && !self.activity.read(cx).is_open();
         let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
             let selected = s
@@ -1672,6 +1709,22 @@ impl Qrow {
                 .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
                 .unwrap_or_else(|| s.value().to_string())
         });
+        self.run_tab_sql(index, query, false, cx)
+    }
+    /// Runs `query` in the tab `index`. A connection whose sign-in needs the
+    /// browser waits for it first, unless the query runs `after_sign_in`.
+    fn run_tab_sql(
+        &mut self,
+        index: usize,
+        query: String,
+        after_sign_in: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tabs.get(index).is_none_or(|tab| tab.busy) {
+            return false;
+        }
+        let active = index == self.active && !self.activity.read(cx).is_open();
+        let tab = &mut self.tabs[index];
         if let Err(e) = sql::validate_single(&query) {
             let message = e.to_string();
             Self::record_log(
@@ -1710,6 +1763,19 @@ impl Qrow {
             cx.notify();
             return false;
         }
+        // An open session of the connection continues without a new token.
+        let live = tab.connected && tab.worker_profile == Some(profile.id);
+        if !after_sign_in
+            && !live
+            && let Some(sign_in) = profile.authentication.sign_in()
+            && self.sign_in_needs_browser(sign_in)
+        {
+            self.wait_for_sign_in(index, sign_in, query, cx);
+            return true;
+        }
+        let tab = &mut self.tabs[index];
+        tab.signed_in_for_run = after_sign_in;
+        tab.submitted_sql = Some(query.clone());
         if tab.worker.is_none() {
             let wake = self.wake.clone();
             let credentials = self.credential_provider();
@@ -1797,6 +1863,10 @@ impl Qrow {
         self.cancel_tab(self.active, cx);
     }
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.tabs[index].sign_in_wait.is_some() {
+            self.cancel_sign_in_wait(index, cx);
+            return;
+        }
         let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
             Self::record_local_log(
