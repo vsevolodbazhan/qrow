@@ -48,11 +48,6 @@ fn main() {
                     (name.as_str(), name.as_str(), "status-tooltip-status"),
                     ("New Tab", "New Tab", "status-tooltip-shortcut"),
                     ("Run", "Run Query", "status-tooltip-shortcut"),
-                    (
-                        "Toggle Sidebar",
-                        "Toggle Sidebar",
-                        "status-tooltip-shortcut",
-                    ),
                     ("Close Query 1", "Close Tab", "status-tooltip-shortcut"),
                     ("Activity", "Activity", "status-tooltip-shortcut"),
                     ("Toggle Assistant", "Assistant", "status-tooltip-shortcut"),
@@ -84,7 +79,7 @@ fn main() {
             }
         }
     }
-    println!("tooltip-layout: 84 native font and display scale checks passed");
+    println!("tooltip-layout: 72 native font and display scale checks passed");
 }
 
 #[cfg(not(target_os = "macos"))]

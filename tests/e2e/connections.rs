@@ -106,7 +106,8 @@ fn ldap_rejects_a_wrong_password(cx: &mut TestAppContext) {
     app.wait_until(cx, "the rejected sign-in", QUERY_TIMEOUT, |window, _| {
         window.find(row.clone()).label() == Some("Spark")
     });
-    app.wait_status(cx, "Error: Connection lost");
+    // The session never opened, so the connection failed; it was not lost.
+    app.wait_status(cx, "Error: Connection failed");
     app.update(cx, |window, _| assert_eq!(cell(window, 0, 1), None));
     assert_eq!(app.credentials.reads(), 1);
 }
