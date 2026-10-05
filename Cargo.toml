@@ -1,8 +1,8 @@
 [package]
 name = "qrow"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-description = "A native SQL workbench for Spark through Kyuubi"
+description = "An SQL workbench for macOS."
 license = "MIT"
 default-run = "qrow"
 
