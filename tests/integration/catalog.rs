@@ -9,7 +9,7 @@ use qrow::{
         Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
     },
     logs::LogKind,
-    model::{Batch, CatalogRefresh, CatalogSettings, Column, Profile, Row},
+    model::{Batch, CatalogColumnReads, CatalogRefresh, CatalogSettings, Column, Profile, Row},
     storage,
 };
 use std::{
@@ -483,7 +483,7 @@ fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
             .unwrap()
             .is_empty()
     );
-    // Columns are read one schema at a time, never for the whole connection.
+    // The default never requests all columns of a schema, including empty ones.
     let columns: Vec<_> = h
         .server
         .requests()
@@ -496,9 +496,9 @@ fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     assert_eq!(
         columns,
         [
-            ("empty".to_owned(), None),
-            ("sales".to_owned(), None),
-            ("salesx".to_owned(), None)
+            ("sales".to_owned(), Some("daily".to_owned())),
+            ("sales".to_owned(), Some("orders".to_owned())),
+            ("salesx".to_owned(), Some("other".to_owned()))
         ]
     );
     // One session for the whole pass, closed when the queue is empty.
@@ -544,13 +544,69 @@ fn a_connection_refresh_skips_schemas_hidden_while_it_runs() {
 }
 
 #[test]
-fn schema_refresh_reads_columns_and_falls_back_to_each_relation() {
+fn table_reads_keep_exact_names_when_server_patterns_match_other_tables() {
+    let server = Server::with(&[
+        ("my_db", "orders_eu", "TABLE", &["id"]),
+        ("my_db", "ordersxeu", "TABLE", &["a", "b"]),
+        ("myxdb", "orders_eu", "TABLE", &["other"]),
+    ]);
+    let mut profile = profile();
+    profile.catalog.include = vec!["my_db".into()];
+    let mut h = Harness::new(server, profile, None);
+    h.refresh(Scope::Connection);
+    assert_eq!(h.columns("my_db", "orders_eu").unwrap(), ["id"]);
+    assert_eq!(h.columns("my_db", "ordersxeu").unwrap(), ["a", "b"]);
+    assert!(h.catalog().schema("myxdb").is_none());
+}
+
+#[test]
+fn table_reads_skip_bulk_columns_and_keep_healthy_relations_after_an_error() {
     let server = warehouse();
     let mut h = Harness::new(server.clone(), profile(), None);
+    h.refresh(Scope::Connection);
+    server.requests.lock().unwrap().clear();
+    server.broken_schemas.lock().unwrap().push("sales".into());
+    server.broken_relations.lock().unwrap().push("daily".into());
+    server.set(&[
+        ("sales", "daily", "VIEW", &["day"]),
+        ("sales", "orders", "TABLE", &["id", "total", "currency"]),
+    ]);
+    h.refresh(Scope::Schema("sales".into()));
+    assert_eq!(
+        h.columns("sales", "orders").unwrap(),
+        ["id", "total", "currency"]
+    );
+    assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
+    assert_eq!(
+        h.catalog()
+            .relation("sales", "daily")
+            .unwrap()
+            .error
+            .as_deref(),
+        Some("View definition is invalid")
+    );
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| matches!(request, MetadataRequest::Columns { relation: None, .. }))
+    );
+}
+
+#[test]
+fn schema_refresh_reads_columns_and_falls_back_to_each_relation() {
+    let server = warehouse();
+    let mut profile = profile();
+    profile.catalog_column_reads = CatalogColumnReads::Schema;
+    let mut h = Harness::new(server.clone(), profile, None);
     h.refresh(Scope::Connection);
     h.refresh(Scope::Schema("sales".into()));
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
     assert_eq!(h.columns("sales", "daily").unwrap(), ["day"]);
+    assert!(server.requests().contains(&MetadataRequest::Columns {
+        schema: "sales".into(),
+        relation: None,
+    }));
 
     server.broken_schemas.lock().unwrap().push("sales".into());
     server.broken_relations.lock().unwrap().push("daily".into());
@@ -770,8 +826,6 @@ fn every_refresh_sends_its_entries() {
     );
 
     // A broken view fails its relation. The refresh reports it at its end.
-    // The failed request for the whole schema does not count, because the
-    // requests for each relation replace it.
     h.server.broken_schemas.lock().unwrap().push("sales".into());
     h.server
         .broken_relations
@@ -802,7 +856,8 @@ fn logs_entries_count_only_the_requested_names() {
         ("my_db", "orders", "TABLE", &["id"]),
         ("myxdb", "other", "TABLE", &["a", "b"]),
     ]);
-    let logged = profile();
+    let mut logged = profile();
+    logged.catalog_column_reads = CatalogColumnReads::Schema;
     let mut h = Harness::new(server, logged, None);
     h.refresh(Scope::Connection);
     let texts: Vec<_> = h
@@ -1390,13 +1445,27 @@ fn shared(preferred: Option<usize>) -> (CatalogConfig, Profile, Profile) {
 #[test]
 fn each_member_refreshes_with_its_own_session_and_all_see_the_data() {
     let server = warehouse();
-    let (config, small, large) = shared(None);
+    let (mut config, small, mut large) = shared(None);
+    large.catalog_column_reads = CatalogColumnReads::Schema;
+    config
+        .members
+        .iter_mut()
+        .find(|member| member.id == large.id)
+        .unwrap()
+        .catalog_column_reads = CatalogColumnReads::Schema;
     let mut h = Harness::with_config(server.clone(), config, None, MINUTE);
     assert_eq!(h.catalog().identity, None);
 
     h.worker.refresh(small.id, Scope::Connection);
     h.wait(|h| h.status.runner == Some(small.id));
     h.wait(|h| h.status.is_idle());
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| matches!(request, MetadataRequest::Columns { relation: None, .. }))
+    );
+    server.requests.lock().unwrap().clear();
     server.set(&[
         ("sales", "orders", "TABLE", &["id", "total"]),
         ("salesx", "other", "TABLE", &["y", "z"]),
@@ -1404,6 +1473,10 @@ fn each_member_refreshes_with_its_own_session_and_all_see_the_data() {
     h.worker.refresh(large.id, Scope::Schema("salesx".into()));
     h.wait(|h| h.status.runner == Some(large.id));
     h.wait(|h| h.status.is_idle());
+    assert!(server.requests().contains(&MetadataRequest::Columns {
+        schema: "salesx".into(),
+        relation: None,
+    }));
 
     assert_eq!(users(&server), ["user-small", "user-large"]);
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);

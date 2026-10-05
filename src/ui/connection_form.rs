@@ -1,4 +1,7 @@
-use crate::model::{CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile, SharedCatalog};
+use crate::model::{
+    CatalogColumnReads, CatalogRefresh, CatalogSettings, ConnectionLifecycle, Profile,
+    SharedCatalog,
+};
 use uuid::Uuid;
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
@@ -303,6 +306,13 @@ pub(super) fn choice_select<T: PartialEq>(
     let row = row_of(choices, selected);
     let rows = rows(choices);
     cx.new(|cx| SelectState::new(rows, Some(IndexPath::default().row(row)), window, cx))
+}
+
+pub(super) fn column_read_choices() -> [(CatalogColumnReads, String); 2] {
+    [
+        (CatalogColumnReads::Table, "One relation at a time".into()),
+        (CatalogColumnReads::Schema, "Whole schema".into()),
+    ]
 }
 
 /// The Schema catalog list, with `selected` chosen.
@@ -739,6 +749,16 @@ pub(super) fn render_schemas(
         })
         .when(mode != RefreshMode::Disabled, |el| {
             el.child(field(
+                "Column reads",
+                Some("Per-relation reads use less driver memory; schema reads send fewer requests."),
+                Select::new(&form.column_reads)
+                    .id("connection-column-reads")
+                    .w_full()
+                    .disabled(saving)
+                    .accessibility_label("Column reads")
+                    .into_any_element(),
+            ))
+            .child(field(
                 "Show schemas",
                 Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
                 input(10, "Show schemas"),
