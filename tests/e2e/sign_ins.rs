@@ -4,6 +4,7 @@ use crate::support::fixture::Kyuubi;
 use crate::support::oidc::FixtureProvider;
 use crate::support::{MemoryCredentials, SignIns, TestApp};
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt;
 use qrow::model::{Authentication, SavedTab, Workspace};
 use std::sync::Arc;
 
@@ -24,7 +25,7 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     let workspace = Workspace {
         profiles: vec![profile],
         tabs: vec![tab],
-        sign_ins: vec![sign_in],
+        sign_ins: vec![sign_in.clone()],
         ..Workspace::default()
     };
     let browser = fixture.browser("alice", &[]);
@@ -44,5 +45,27 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     assert!(
         !logs.contains("access_token") && !logs.contains("eyJ"),
         "{logs}"
+    );
+
+    app.click(cx, "show-sign-ins");
+    app.click(cx, format!("sign-in-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-account-sign-out");
+    app.update(cx, |window, _| {
+        let status = window.find("sign-in-account-status");
+        assert_eq!(status.label(), Some("Signed in as alice@qrow.test."));
+        let status = status.bounds();
+        let sign_out = window.find("sign-in-account-sign-out").bounds();
+        assert!(status.right() < sign_out.left());
+        assert!(f32::from(status.center().y - sign_out.center().y).abs() < 1.);
+    });
+    app.click(cx, "sign-in-account-sign-out");
+    app.wait_until(
+        cx,
+        "the signed-out account",
+        std::time::Duration::from_secs(20),
+        |window, _| {
+            crate::support::label(window, "sign-in-account-status").as_deref()
+                == Some("Not signed in.")
+        },
     );
 }

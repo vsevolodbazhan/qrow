@@ -1256,12 +1256,22 @@ impl Qrow {
                 .w_full()
                 .gap_2()
                 .child(
-                    div()
-                        .id("sign-in-account-status")
-                        .test_support()
-                        .role(Role::Status)
-                        .aria_label(account.detail.clone())
-                        .child(account.detail),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("sign-in-account-status")
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .role(Role::Status)
+                                .aria_label(account.detail.clone())
+                                .child(account.detail),
+                        )
+                        .when(!account.actions.is_empty(), |el| {
+                            el.child(h_flex().gap_2().flex_shrink_0().children(buttons))
+                        }),
                 )
                 .when_some(error, |el, error| {
                     el.child(
@@ -1274,9 +1284,6 @@ impl Qrow {
                             .text_color(cx.theme().danger)
                             .child(error),
                     )
-                })
-                .when(!account.actions.is_empty(), |el| {
-                    el.child(h_flex().gap_2().children(buttons))
                 }),
         );
         if signed_in {

@@ -106,7 +106,8 @@ Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
 stop. The row then shows the email or name of the account.
 
 Click a row to open **Sign-in Settings**. The **Account** field shows the
-status and the actions for the account. Right-click a row for **Sign In…**,
+status and the actions for the account on the same row. The actions are on
+the right. Right-click a row for **Sign In…**,
 **Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit** and
 **Delete**.
 

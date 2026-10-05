@@ -262,6 +262,26 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.wait_until(cx, "the account", WAIT, |window, _| {
         label(window, "sign-in-account-status").as_deref() == Some("Signed in as alice@qrow.test.")
     });
+    for width in [850., 1280.] {
+        cx.simulate_window_resize(
+            app.window,
+            gpui_kit::size(gpui_kit::px(width), gpui_kit::px(820.)),
+        );
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            let status = window.find("sign-in-account-status").bounds();
+            let sign_out = window.find("sign-in-account-sign-out").bounds();
+            assert!(
+                status.right() < sign_out.left(),
+                "Sign Out follows the status"
+            );
+            assert!(
+                f32::from(status.center().y - sign_out.center().y).abs() < 1.,
+                "the account status and Sign Out share a vertical center"
+            );
+            assert!(window.find("sign-in-account-sign-out").visible());
+        });
+    }
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(cx, "the signed-out account", WAIT, |window, _| {
         label(window, "sign-in-account-status").as_deref() == Some("Not signed in.")
