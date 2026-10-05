@@ -17,7 +17,7 @@ the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
 The dot of a tab shows the state of its work. Point to the dot to read the
-status of the last query, for example **Error: Connection failed**. The bar
+tab name and a short status. The tooltip has no query detail line. The bar
 above Results shows neutral tags for the visible rows, loaded rows, columns,
 and duration of the last query. At small widths, **Result Details** shows
 the values in a popover. See [Results](results.md#browse-and-copy) for the

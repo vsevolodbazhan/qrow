@@ -3,16 +3,41 @@ use crate::support::{TestApp, bounds_of, cell, header, label};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px, size};
 use qrow::model::SavedTab;
+use std::time::Duration;
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppContext) {
     let kyuubi = Kyuubi::get();
     let (workspace, credentials) = kyuubi.workspace("SELECT missing_column", PASSWORD);
+    let query = workspace.tabs[0].id;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    let assert_tooltip = |cx: &mut TestAppContext, expected| {
+        if expected == "Not Connected" {
+            app.hover_labelled(cx, "Query 1");
+        } else {
+            app.update(cx, |window, cx| {
+                window.hover(format!("query-status-{query}"), cx)
+            });
+        }
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            assert_eq!(
+                label(window, "status-tooltip-title").as_deref(),
+                Some("Query 1")
+            );
+            assert_eq!(
+                label(window, "status-tooltip-status").as_deref(),
+                Some(expected)
+            );
+            assert!(window.try_find("status-tooltip-detail").is_none());
+        });
+    };
     app.click(cx, "run");
     app.wait_status(cx, "Error: Query failed");
     assert_eq!(cx.update(|cx| app.status(cx)), "Error: Query failed");
+    assert_tooltip(cx, "Idle");
     app.run_complete(cx, "SELECT 42 AS value");
     // The status of the new run has no detail of the previous error.
     assert_eq!(cx.update(|cx| app.status(cx)), "Complete");
@@ -26,6 +51,10 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
         assert_eq!(label(window, "result-loaded").as_deref(), Some("1 loaded"));
         assert_eq!(label(window, "result-columns").as_deref(), Some("1 column"));
     });
+    assert_tooltip(cx, "Idle");
+    app.click(cx, "disconnect");
+    app.wait_status(cx, "Disconnected");
+    assert_tooltip(cx, "Not Connected");
 }
 
 #[gpui_kit::test]

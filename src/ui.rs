@@ -267,11 +267,10 @@ impl Tab {
         }
     }
 
-    /// The tooltip of the tab: the state of its dot, then the status of the
-    /// last work of the tab, like "Error: Connection failed". A tab without
-    /// a dot has the tooltip on the tab itself.
+    /// Show the tab name and dot state. A tab without a dot has the tooltip
+    /// on the tab itself.
     fn status_tooltip(&self) -> StatusTooltip {
-        let tooltip = StatusTooltip::new(
+        StatusTooltip::new(
             self.saved.title.clone(),
             match self.dot_status() {
                 Some(DotStatus::Connected) => "Idle",
@@ -282,13 +281,7 @@ impl Tab {
                 Some(DotStatus::Attention) => unreachable!("SQL never needs approval"),
                 None => "Not Connected",
             },
-        );
-        let status = self.status_label();
-        if status == "Not connected" {
-            tooltip
-        } else {
-            tooltip.detail(status)
-        }
+        )
     }
 
     fn dot_status(&self) -> Option<DotStatus> {
