@@ -12,6 +12,9 @@ mod assistant_threads;
 mod assistant_transcript;
 mod catalog;
 mod connections;
+mod dbt;
+#[path = "../support/dbt_manifest.rs"]
+mod dbt_manifest;
 mod dialogs;
 mod metadata;
 mod queries;

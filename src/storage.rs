@@ -126,6 +126,12 @@ pub fn catalog_path(workspace: &Path, profile: Uuid) -> PathBuf {
         .join(format!("{profile}.json"))
 }
 
+/// The folder of the saved dbt indexes, next to the workspace file. The
+/// workspace lock also protects this folder.
+pub fn dbt_directory(workspace: &Path) -> PathBuf {
+    workspace.parent().unwrap_or(Path::new(".")).join("dbt")
+}
+
 /// Read a schema cache. A missing, unreadable, or outdated file gives `None`,
 /// because Qrow can read the schemas from the server again.
 pub fn load_catalog(path: &Path) -> Option<Catalog> {

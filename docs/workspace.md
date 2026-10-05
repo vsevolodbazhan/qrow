@@ -77,6 +77,13 @@ parameters, and makes a new copy. A change to one of these settings does not
 clear a shared catalog. If Qrow cannot open the workspace, it does not write
 schema copies.
 
+Qrow keeps a compact copy of each [dbt manifest](connections.md#attach-a-dbt-project)
+in the `dbt` folder next to the workspace file. The copy has the names,
+descriptions, tests, and lineage of the manifest, and the positions of its SQL
+texts, but not the SQL. Qrow deletes a copy when no connection uses its
+manifest. If Qrow cannot open the workspace, it keeps the copies only in
+memory.
+
 Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords, tokens, and result sets are not written to the workspace file. The
 workspace keeps each [sign-in](connections.md#sign-in-with-openid-connect)

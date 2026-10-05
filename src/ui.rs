@@ -5,6 +5,7 @@ mod assistant_view;
 mod button_pair;
 mod catalog_tree;
 mod connection_form;
+mod dbt;
 mod environment;
 mod output;
 mod profile_view;
@@ -371,6 +372,8 @@ struct ProfileEditor {
     tls: bool,
     _authentication_subscription: Subscription,
     _sign_in_subscription: Subscription,
+    /// The dbt project fields.
+    dbt: dbt::DbtForm,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -540,6 +543,8 @@ pub struct Qrow {
     /// the window while it is open.
     activity: Entity<activity_view::ActivityView>,
     _activity_events: Subscription,
+    /// The indexes of the dbt manifests of the connections.
+    dbt: dbt::DbtProjects,
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
@@ -683,6 +688,13 @@ impl Qrow {
             }),
         ];
         let activity = cx.new(|cx| activity_view::ActivityView::new(window, cx));
+        // The saved dbt indexes are next to the workspace, which its lock
+        // protects. Without a saved workspace, they stay in memory.
+        let dbt_directory = environment
+            .workspace()
+            .filter(|_| saver.is_some() && !demo)
+            .map(|workspace| storage::dbt_directory(workspace));
+        let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
@@ -733,6 +745,7 @@ impl Qrow {
             _catalog_subscriptions: catalog_subscriptions,
             activity,
             _activity_events: activity_events,
+            dbt,
         };
         for tab in workspace.tabs {
             let tab = this.make_tab(tab, window, cx);
@@ -1143,6 +1156,8 @@ impl Qrow {
     fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = self.drain_workers(cx);
         changed |= self.drain_catalogs(cx);
+        self.sync_dbt();
+        changed |= self.drain_dbt(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
         changed |= self.tick_sign_ins(cx);
@@ -2270,6 +2285,8 @@ impl Qrow {
                 .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
         let disconnect =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
+        let has_dbt = profile.dbt.is_some();
+        let dbt_parsing = self.dbt_parsing(id);
         let edited = profile.clone();
         let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.edit_profile(edited.clone(), false, window, cx)
@@ -2295,6 +2312,11 @@ impl Qrow {
         let has_expanded = self.has_expanded_descendants(id, None, cx);
         let collapse =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.collapse_catalog(id, None, cx));
+
+        let refresh_dbt = cx.listener(move |this, _: &ClickEvent, _, cx| {
+            this.refresh_dbt(id);
+            cx.notify();
+        });
         let refreshing = self.catalog.is_refreshing(id);
         let refresh = cx.listener(move |this, _: &ClickEvent, _, cx| {
             if refreshing {
@@ -2337,6 +2359,13 @@ impl Qrow {
                                     .on_click(collapse)
                                     .disabled(!has_expanded),
                             )
+                    })
+                    .when(has_dbt, |menu| {
+                        menu.separator().item(menu_section("dbt")).item(
+                            PopupMenuItem::new("Refresh Manifest")
+                                .on_click(refresh_dbt)
+                                .disabled(dbt_parsing),
+                        )
                     })
             },
             window,
@@ -2657,7 +2686,13 @@ impl Qrow {
                 }
             });
         let sign_in_subscription = Self::subscribe_sign_in_list(&sign_in, window, cx);
+        let dbt = dbt::DbtForm::new(profile.dbt.as_ref(), window, cx);
+        // The match summary needs the saved schemas of the connection.
+        if !is_new && profile.dbt.is_some() {
+            self.ensure_catalog(profile.id);
+        }
         self.form = Some(ProfileEditor {
+            dbt,
             parameters,
             notes_counted: connection_form::counts_notes(profile.assistant_notes.len()),
             assistant_notes,
@@ -2898,6 +2933,7 @@ impl Qrow {
             )?;
             profile.tls = form.tls;
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
+            profile.dbt = form.dbt.project(cx)?;
             profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)

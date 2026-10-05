@@ -255,6 +255,12 @@ impl Qrow {
                     )
                     .child(connection_form::render_lifecycle(form, cx))
                     .child(connection_form::render_schemas(form, cx.weak_entity(), cx))
+                    .child(
+                        div()
+                            .pt_4()
+                            .child(connection_form::section_title("dbt Project", cx)),
+                    )
+                    .child(self.render_dbt(form, cx))
                     .when(self.settings.assistant.enabled, |el| {
                         el.child(connection_form::render_assistant(form, cx))
                     }),
