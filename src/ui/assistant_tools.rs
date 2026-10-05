@@ -525,7 +525,11 @@ impl Qrow {
             crate::assistant::notes::ContextNotes::Send(notes),
             cx,
         );
-        self.notes_read(&call.thread_id, record);
+        let result = success(context);
+        // Codex has the notes only when it gets the result.
+        if result.success {
+            self.notes_read(&call.thread_id, record);
+        }
         // This read binds later actions to the current state of the tab.
         let target = self
             .assistant_target(&call.thread_id, cx)
@@ -534,7 +538,7 @@ impl Qrow {
                 target
             });
         self.thread_run_mut(&call.thread_id).target = target;
-        Ok(success(context))
+        Ok(result)
     }
 
     fn tool_read_sql(&self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
