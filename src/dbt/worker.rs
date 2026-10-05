@@ -40,6 +40,14 @@ pub fn manifest_key(path: &Path) -> PathBuf {
         .collect()
 }
 
+/// The canonical path of the folder of a manifest, and its file name.
+fn link_path(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => canonical_path(parent).join(name),
+        _ => path.to_owned(),
+    }
+}
+
 /// The canonical path of a manifest, which FSEvents reports. For a manifest
 /// that does not exist yet, the canonical path of the closest folder above
 /// it that exists, and the rest of the path.
@@ -213,6 +221,9 @@ struct Slot {
     automatic: bool,
     /// The canonical path of the manifest, for the paths of FSEvents.
     canonical: PathBuf,
+    /// The canonical path of the manifest without its last link resolved:
+    /// a change of a symbolic link happens there.
+    link: PathBuf,
 }
 
 /// When a manifest is due, and whether a Refresh asked for it.
@@ -334,6 +345,7 @@ impl Runner {
                 state: state.clone(),
                 automatic,
                 canonical: canonical_path(&key),
+                link: link_path(&key),
             },
         );
         self.publish(state);
@@ -354,17 +366,15 @@ impl Runner {
         };
         for (key, slot) in &mut self.manifests {
             slot.canonical = canonical_path(key);
+            slot.link = link_path(key);
         }
+        // The folder of the file, and of a symbolic link to it.
         let wanted: HashSet<PathBuf> = self
             .manifests
             .values()
             .filter(|slot| slot.automatic)
-            .filter_map(|slot| {
-                slot.canonical
-                    .ancestors()
-                    .skip(1)
-                    .find(|folder| folder.is_dir())
-            })
+            .flat_map(|slot| [&slot.canonical, &slot.link])
+            .filter_map(|path| path.ancestors().skip(1).find(|folder| folder.is_dir()))
             .map(Path::to_owned)
             .collect();
         for folder in self.watched.difference(&wanted) {
@@ -409,24 +419,26 @@ impl Runner {
     /// A change in a watched folder. The manifest is due after it settles.
     fn changed(&mut self, paths: Vec<PathBuf>) {
         let at = Instant::now() + self.settle;
-        let mut folders_changed = false;
+        let mut touched_any = false;
         for (key, slot) in &self.manifests {
             if !slot.automatic {
                 continue;
             }
             // A change of a folder above the manifest, like a new `target`
-            // folder, can change the manifest too.
-            let above = |path: &PathBuf| slot.canonical.starts_with(path) || key.starts_with(path);
-            let touched = paths.iter().any(above);
-            folders_changed |= paths
-                .iter()
-                .any(|path| above(path) && *path != slot.canonical && path != key);
+            // folder, or of a link to it, can change the manifest too.
+            let touched = paths.iter().any(|path| {
+                slot.canonical.starts_with(path)
+                    || slot.link.starts_with(path)
+                    || key.starts_with(path)
+            });
             if touched {
+                touched_any = true;
                 let forced = self.due.get(key).is_some_and(|due| due.forced);
                 self.due.insert(key.clone(), Due { at, forced });
             }
         }
-        if folders_changed {
+        // A new folder or a new link target needs other watches.
+        if touched_any {
             self.sync_watches();
         }
     }

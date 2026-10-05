@@ -263,3 +263,21 @@ fn the_form_rejects_invalid_projects_and_shows_manifest_errors(cx: &mut TestAppC
         app.saved().profiles[0].dbt.is_none()
     });
 }
+
+#[gpui_kit::test]
+fn a_launch_reads_the_manifests_of_the_connections(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = project(&directory, &dbt_manifest::generate(&shape()));
+    let saved = directory.path().join("dbt");
+    let mut profile = offline_profile("Lake");
+    profile.dbt = Some(DbtProject {
+        manifest: manifest.to_string_lossy().into_owned(),
+        refresh: DbtRefresh::Automatic,
+        schema_mapping: vec![],
+    });
+    let app = launch(cx, directory, profile);
+    // No action wakes the window: the launch alone starts the worker.
+    app.wait_until(cx, "the saved index", TIMEOUT, |_, _| {
+        std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
+    });
+}

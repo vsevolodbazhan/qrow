@@ -376,3 +376,44 @@ fn a_parent_part_after_a_folder_link_names_the_parent_of_its_target() {
     }]);
     fixture.wait("the target", |state| models(state) == 6);
 }
+
+#[test]
+fn an_automatic_manifest_link_follows_a_new_target_in_another_folder() {
+    let mut fixture = Fixture::new();
+    let root = fixture
+        .manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    let (first, second) = (root.join("one"), root.join("two"));
+    for (folder, models) in [(&first, 5), (&second, 7)] {
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(
+            folder.join("manifest.json"),
+            dbt_manifest::generate(&shape(models)),
+        )
+        .unwrap();
+    }
+    let link = root.join("current.json");
+    std::os::unix::fs::symlink(first.join("manifest.json"), &link).unwrap();
+    fixture.worker.configure(vec![Use {
+        manifest: link.clone(),
+        automatic: true,
+    }]);
+    fixture.wait("the first target", |state| models(state) == 5);
+    fixture.settle();
+    let replacement = root.join("current.tmp");
+    std::os::unix::fs::symlink(second.join("manifest.json"), &replacement).unwrap();
+    std::fs::rename(&replacement, &link).unwrap();
+    fixture.wait("the second target", |state| models(state) == 7);
+    // A write to the new target refreshes too.
+    fixture.settle();
+    std::fs::write(
+        second.join("manifest.json"),
+        dbt_manifest::generate(&shape(9)),
+    )
+    .unwrap();
+    fixture.wait("the change of the new target", |state| models(state) == 9);
+}

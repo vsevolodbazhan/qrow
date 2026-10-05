@@ -761,6 +761,8 @@ impl Qrow {
         }
         this.active = this.active.min(this.tabs.len() - 1);
         this.sync_catalog_keys();
+        // The worker loads the saved dbt indexes and starts its watches.
+        this.sync_dbt();
         this.assistant_state.composer_target = this
             .tabs
             .get(this.active)
