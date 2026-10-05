@@ -347,3 +347,32 @@ fn a_manifest_link_reads_its_current_target() {
     fixture.worker.refresh(&link);
     fixture.wait("the second target", |state| models(state) == 7);
 }
+
+#[test]
+fn a_parent_part_after_a_folder_link_names_the_parent_of_its_target() {
+    let mut fixture = Fixture::new();
+    let root = fixture
+        .manifest
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_owned();
+    // current -> releases/v1, so current/../manifest.json is
+    // releases/manifest.json.
+    let releases = root.join("releases");
+    std::fs::create_dir_all(releases.join("v1")).unwrap();
+    std::fs::write(
+        releases.join("manifest.json"),
+        dbt_manifest::generate(&shape(6)),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(releases.join("v1"), root.join("current")).unwrap();
+    let path = root.join("current/./../manifest.json");
+    assert_eq!(manifest_key(&path), root.join("current/../manifest.json"));
+    fixture.worker.configure(vec![Use {
+        manifest: path,
+        automatic: false,
+    }]);
+    fixture.wait("the target", |state| models(state) == 6);
+}

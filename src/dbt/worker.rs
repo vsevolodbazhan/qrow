@@ -30,21 +30,14 @@ use std::{
 /// How long a manifest must stay unchanged before an automatic refresh.
 pub const SETTLE: Duration = Duration::from_secs(2);
 
-/// The key of a manifest: its absolute path without `.` and `..` parts.
-/// Connections with the same key share one index. The worker reads the
-/// manifest through this path, so a symbolic link can change its target.
+/// The key of a manifest: its path without `.` parts. Connections with the
+/// same key share one index. The worker reads the manifest through this
+/// path, so a symbolic link can change its target. A `..` part stays,
+/// because after a symbolic link it names the parent of the link target.
 pub fn manifest_key(path: &Path) -> PathBuf {
-    let mut key = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                key.pop();
-            }
-            component => key.push(component),
-        }
-    }
-    key
+    path.components()
+        .filter(|component| *component != std::path::Component::CurDir)
+        .collect()
 }
 
 /// The canonical path of a manifest, which FSEvents reports. For a manifest
