@@ -678,6 +678,14 @@ impl Builder {
         let mut tests = Vec::with_capacity(self.tests.len());
         for pending in self.tests {
             let mut test = pending.test;
+            let candidates = resolve(&pending.depends_on);
+            let symbols = &self.symbols.list;
+            let named = |text: Option<&str>| {
+                let reference = text.and_then(reference)?;
+                candidates.iter().copied().find(|&candidate| {
+                    reference.names(&self.entries[candidate as usize].entry, symbols)
+                })
+            };
             let attached = pending
                 .attached
                 .as_deref()
@@ -685,32 +693,19 @@ impl Builder {
                 .or_else(|| {
                     // Tests of sources have no attached node: the tested
                     // entry is the dependency that the model argument names.
-                    let candidates: Vec<u32> = resolve(&pending.depends_on);
-                    match candidates.as_slice() {
+                    named(pending.model_text.as_deref()).or(match candidates.as_slice() {
                         [only] => Some(*only),
-                        _ => candidates.into_iter().find(|&candidate| {
-                            let entry = &self.entries[candidate as usize].entry;
-                            pending
-                                .model_text
-                                .as_deref()
-                                .is_some_and(|text| text.contains(&format!("'{}'", entry.name)))
-                        }),
-                    }
+                        _ => None,
+                    })
                 });
             let Some(attached) = attached else {
                 continue;
             };
             test.entry = attached;
-            if test.to_text.is_some() {
-                // The other dependency, or the tested entry itself when the
-                // relationship refers to its own table.
-                let targets = resolve(&pending.depends_on);
-                test.to = targets
-                    .iter()
-                    .copied()
-                    .find(|&candidate| candidate != attached)
-                    .or_else(|| targets.contains(&attached).then_some(attached));
-            }
+            // The target of a relationship, when it is a `ref()` or a
+            // `source()` of the project. It is the tested entry itself when
+            // the relationship refers to its own table.
+            test.to = named(test.to_text.as_deref());
             tests.push(test);
         }
         tests.sort_by_key(|test| test.entry);
@@ -755,6 +750,66 @@ impl Builder {
             exposures,
         })
     }
+}
+
+/// A `ref()` or `source()` call in the text of a test argument.
+#[derive(Debug, PartialEq)]
+enum Reference<'a> {
+    Model(&'a str),
+    Source(&'a str, &'a str),
+}
+
+impl Reference<'_> {
+    fn names(&self, entry: &Entry, symbols: &[Box<str>]) -> bool {
+        match *self {
+            Self::Model(name) => entry.kind != Kind::Source && &*entry.name == name,
+            Self::Source(source, table) => {
+                entry.kind == Kind::Source
+                    && &*entry.name == table
+                    && entry
+                        .source_name
+                        .is_some_and(|name| &*symbols[name.0 as usize] == source)
+            }
+        }
+    }
+}
+
+/// The first `ref()` or `source()` call in `text`, for example in
+/// `{{ get_where_subquery(source('raw', 'orders')) }}`. `ref('package',
+/// 'model')` names the model. Other arguments, like `v=2`, do not count.
+fn reference(text: &str) -> Option<Reference<'_>> {
+    for (open, _) in text.match_indices('(') {
+        let head = text[..open].trim_end();
+        let function = &head[head
+            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .map_or(0, |end| end + 1)..];
+        if function != "ref" && function != "source" {
+            continue;
+        }
+        let mut arguments = Vec::new();
+        let mut rest = &text[open + 1..];
+        loop {
+            rest = rest.trim_start();
+            let Some(quote) = rest.chars().next().filter(|c| *c == '\'' || *c == '"') else {
+                break;
+            };
+            let Some(end) = rest[1..].find(quote) else {
+                break;
+            };
+            arguments.push(&rest[1..1 + end]);
+            rest = rest[2 + end..].trim_start();
+            match rest.strip_prefix(',') {
+                Some(next) => rest = next,
+                None => break,
+            }
+        }
+        return match (function, arguments.as_slice()) {
+            ("ref", [.., name]) => Some(Reference::Model(name)),
+            ("source", [source, table]) => Some(Reference::Source(source, table)),
+            _ => None,
+        };
+    }
+    None
 }
 
 struct ManifestSeed<'b> {
@@ -888,5 +943,36 @@ where
             visit(builder, value, base);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Reference, reference};
+
+    #[test]
+    fn references_name_a_model_or_a_source() {
+        let cases = [
+            ("ref('orders')", Some(Reference::Model("orders"))),
+            (
+                "ref(\"lake\", \"orders\", v=2)",
+                Some(Reference::Model("orders")),
+            ),
+            (
+                "{{ get_where_subquery(source('raw', 'orders')) }}",
+                Some(Reference::Source("raw", "orders")),
+            ),
+            (
+                "{{ get_where_subquery(ref( 'orders' )) }}",
+                Some(Reference::Model("orders")),
+            ),
+            ("raw.customers", None),
+            ("prefer(ref)", None),
+            ("source('raw')", None),
+            ("ref(", None),
+        ];
+        for (text, expected) in cases {
+            assert_eq!(reference(text), expected, "{text}");
+        }
     }
 }

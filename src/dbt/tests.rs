@@ -243,13 +243,53 @@ fn generic_tests_attach_to_their_entry_and_singular_tests_are_skipped() {
 }
 
 #[test]
-fn a_relationship_to_its_own_table_targets_the_tested_entry() {
+fn a_relationship_targets_the_entry_that_its_to_argument_names() {
+    let relationship = "test.tiny_lake.relationships_orders_customer_id.3";
+    // A relationship to its own table.
     let mut value = manifest();
-    value["nodes"]["test.tiny_lake.relationships_orders_customer_id.3"]["depends_on"]["nodes"] =
-        json!(["model.tiny_lake.orders"]);
+    let node = &mut value["nodes"][relationship];
+    node["depends_on"]["nodes"] = json!(["model.tiny_lake.orders"]);
+    node["test_metadata"]["kwargs"]["to"] = json!("ref('orders')");
     let index = parse_value(&value);
     let (orders_at, _) = entry(&index, "model.tiny_lake.orders");
     assert_eq!(index.tests(orders_at)[2].to, Some(orders_at));
+
+    // A literal relation is not an entry of the project.
+    let mut value = manifest();
+    let node = &mut value["nodes"][relationship];
+    node["depends_on"]["nodes"] = json!(["model.tiny_lake.orders"]);
+    node["test_metadata"]["kwargs"]["to"] = json!("raw.customers");
+    let index = parse_value(&value);
+    let test = &index.tests(orders_at)[2];
+    assert_eq!(test.to, None);
+    assert_eq!(test.to_text.as_deref(), Some("raw.customers"));
+}
+
+#[test]
+fn a_source_test_attaches_to_its_source_when_a_model_has_the_same_name() {
+    // A relationship from source('raw', 'orders') to ref('orders').
+    let mut value = manifest();
+    let mut orders = value["nodes"]["model.tiny_lake.orders"].clone();
+    orders["unique_id"] = json!("model.tiny_lake.a_orders");
+    value["nodes"]["model.tiny_lake.a_orders"] = orders;
+    value["nodes"]["model.tiny_lake.orders"]["name"] = json!("orders_v1");
+    value["nodes"]["model.tiny_lake.a_orders"]["name"] = json!("orders");
+    value["nodes"]["test.tiny_lake.source_relationships.6"] = json!({
+        "unique_id": "test.tiny_lake.source_relationships.6", "resource_type": "test",
+        "attached_node": null, "column_name": "id",
+        "depends_on": {"nodes": ["model.tiny_lake.a_orders", "source.tiny_lake.raw.orders"]},
+        "test_metadata": {"name": "relationships", "kwargs": {
+            "column_name": "id", "to": "ref('orders')", "field": "order_id",
+            "model": "{{ get_where_subquery(source('raw', 'orders')) }}"}},
+    });
+    let index = parse_value(&value);
+    let (source_at, _) = entry(&index, "source.tiny_lake.raw.orders");
+    let (model_at, _) = entry(&index, "model.tiny_lake.a_orders");
+    let tests = index.tests(source_at);
+    let names: Vec<&str> = tests.iter().map(|t| index.symbol(t.name)).collect();
+    assert_eq!(names, ["not_null", "relationships"]);
+    assert_eq!(tests[1].to, Some(model_at));
+    assert!(index.tests(model_at).is_empty());
 }
 
 #[test]
