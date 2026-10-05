@@ -52,7 +52,12 @@ fn main() {
             index.entries().len(),
             index.test_count()
         );
-        let saved = qrow::dbt::saved::encode(&qrow::dbt::saved::Saved { stamp, index });
+        let saved = qrow::dbt::saved::encode(&qrow::dbt::saved::Saved {
+            manifest: args[position + 1].clone().into(),
+            stamp,
+            refreshed: std::time::SystemTime::now(),
+            index,
+        });
         let started = Instant::now();
         black_box(qrow::dbt::saved::decode(black_box(&saved)).unwrap());
         println!(
@@ -85,6 +90,8 @@ fn main() {
         }
         let index = index.unwrap();
         let saved = qrow::dbt::saved::Saved {
+            manifest: "/synthetic/manifest.json".into(),
+            refreshed: std::time::UNIX_EPOCH,
             stamp: qrow::dbt::saved::Stamp {
                 len: bytes.len() as u64,
                 modified: None,

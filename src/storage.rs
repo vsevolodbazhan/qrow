@@ -91,7 +91,7 @@ impl WorkspaceFile {
 
 /// Replace `path` with `data` so that a crash leaves the old or the new file,
 /// never a partial one. Only the owner can read the file.
-fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path.parent().context("Invalid file path")?;
     let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
     let mut options = fs::OpenOptions::new();

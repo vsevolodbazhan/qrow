@@ -372,6 +372,158 @@ pub struct Profile {
     /// Qrow adds them to the workspace context of a conversation.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub assistant_notes: String,
+    /// The dbt project that describes the tables of the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbt: Option<DbtProject>,
+}
+
+/// The most schema mapping rules of a dbt project.
+pub const MAX_SCHEMA_RULES: usize = 50;
+
+/// The dbt project of a connection. Qrow reads its `manifest.json`. It does
+/// not run dbt or read the other files of the project.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DbtProject {
+    /// The absolute path of the manifest, usually
+    /// `<project>/target/manifest.json`.
+    pub manifest: String,
+    #[serde(default)]
+    pub refresh: DbtRefresh,
+    /// The rules that change a dbt schema into a catalog schema. The first
+    /// rule that matches applies. Without a match, the schema stays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schema_mapping: Vec<SchemaRule>,
+}
+
+/// When Qrow reads the manifest of a dbt project again.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DbtRefresh {
+    /// When the manifest changes.
+    #[default]
+    Automatic,
+    /// Only on Refresh, and at launch when the saved index does not agree
+    /// with the manifest.
+    Manual,
+}
+
+/// A rule of the schema mapping of a dbt project. Letter case does not
+/// matter, like in Spark.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SchemaRule {
+    pub kind: SchemaRuleKind,
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaRuleKind {
+    /// Replaces the start `from` of a schema with `to`.
+    Prefix,
+    /// Replaces the schema `from` with `to`.
+    Exact,
+}
+
+impl DbtProject {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            std::path::Path::new(&self.manifest).is_absolute(),
+            "Choose the manifest.json file of the dbt project."
+        );
+        anyhow::ensure!(
+            self.schema_mapping.len() <= MAX_SCHEMA_RULES,
+            "Schema mapping can have {MAX_SCHEMA_RULES} rules or fewer."
+        );
+        for rule in &self.schema_mapping {
+            anyhow::ensure!(
+                !rule.from.trim().is_empty()
+                    && (rule.kind == SchemaRuleKind::Prefix || !rule.to.trim().is_empty()),
+                "Each schema mapping rule needs a dbt schema and a catalog schema."
+            );
+        }
+        Ok(())
+    }
+
+    /// The catalog schema of the dbt schema `schema`.
+    pub fn map_schema<'a>(&self, schema: &'a str) -> std::borrow::Cow<'a, str> {
+        for rule in &self.schema_mapping {
+            match rule.kind {
+                SchemaRuleKind::Exact if schema.eq_ignore_ascii_case(&rule.from) => {
+                    return rule.to.clone().into();
+                }
+                SchemaRuleKind::Prefix
+                    if schema
+                        .get(..rule.from.len())
+                        .is_some_and(|start| start.eq_ignore_ascii_case(&rule.from)) =>
+                {
+                    return format!("{}{}", rule.to, &schema[rule.from.len()..]).into();
+                }
+                _ => {}
+            }
+        }
+        schema.into()
+    }
+}
+
+/// Read schema mapping rules from text with one rule on each line, like
+/// `dbt_dev_* = *` for a prefix or `analytics = prod_analytics` for one
+/// schema. Empty lines do not count.
+pub fn parse_schema_rules(text: &str) -> anyhow::Result<Vec<SchemaRule>> {
+    let mut rules = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let invalid = || {
+            anyhow::anyhow!(
+                "Schema mapping line {} must be like dbt_dev_* = * or analytics = prod.",
+                number + 1
+            )
+        };
+        let (from, to) = line.split_once('=').ok_or_else(invalid)?;
+        let (from, to) = (from.trim(), to.trim());
+        let rule = match (from.strip_suffix('*'), to.strip_suffix('*')) {
+            (Some(from), Some(to)) => SchemaRule {
+                kind: SchemaRuleKind::Prefix,
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+            (None, None) => SchemaRule {
+                kind: SchemaRuleKind::Exact,
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+            _ => return Err(invalid()),
+        };
+        let name = |text: &str| {
+            text.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        };
+        if rule.from.is_empty()
+            || (rule.kind == SchemaRuleKind::Exact && rule.to.is_empty())
+            || !name(&rule.from)
+            || !name(&rule.to)
+        {
+            return Err(invalid());
+        }
+        rules.push(rule);
+    }
+    Ok(rules)
+}
+
+/// The text of schema mapping rules, one rule on each line.
+pub fn format_schema_rules(rules: &[SchemaRule]) -> String {
+    rules
+        .iter()
+        .map(|rule| match rule.kind {
+            SchemaRuleKind::Prefix => format!("{}* = {}*", rule.from, rule.to),
+            SchemaRuleKind::Exact => format!("{} = {}", rule.from, rule.to),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// How a refresh reads columns. Table reads reduce the result held by the driver.
@@ -672,6 +824,7 @@ impl Default for Profile {
             tls: false,
             authentication: Authentication::Password,
             assistant_notes: String::new(),
+            dbt: None,
         }
     }
 }
@@ -716,12 +869,27 @@ impl Profile {
             MAX_ASSISTANT_NOTES_BYTES / 1024
         );
         self.lifecycle.validate()?;
+        if let Some(dbt) = &self.dbt {
+            dbt.validate()?;
+        }
         self.catalog.validate()
     }
 
     /// Repair a profile that an edited file made invalid: notes above the
-    /// limit lose their end.
+    /// limit lose their end, and the schema mapping loses its invalid rules.
     fn sanitize(&mut self) {
+        if let Some(dbt) = &mut self.dbt {
+            dbt.schema_mapping.retain(|rule| {
+                DbtProject {
+                    manifest: "/".into(),
+                    refresh: DbtRefresh::Manual,
+                    schema_mapping: vec![rule.clone()],
+                }
+                .validate()
+                .is_ok()
+            });
+            dbt.schema_mapping.truncate(MAX_SCHEMA_RULES);
+        }
         if self.assistant_notes.len() > MAX_ASSISTANT_NOTES_BYTES {
             let end = self
                 .assistant_notes
@@ -1507,6 +1675,116 @@ mod tests {
         let notes = &workspace.profiles[0].assistant_notes;
         assert_eq!(notes.len(), MAX_ASSISTANT_NOTES_BYTES - 1);
         assert!(workspace.profiles[0].validate().is_ok());
+    }
+
+    fn rule(kind: SchemaRuleKind, from: &str, to: &str) -> SchemaRule {
+        SchemaRule {
+            kind,
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    #[test]
+    fn a_dbt_project_is_optional_and_valid_with_an_absolute_manifest() {
+        let mut profile = Profile {
+            host: "localhost".into(),
+            username: "user".into(),
+            ..Profile::default()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert!(json.get("dbt").is_none(), "{json}");
+
+        profile.dbt = Some(DbtProject {
+            manifest: "/projects/lake/target/manifest.json".into(),
+            refresh: DbtRefresh::default(),
+            schema_mapping: vec![],
+        });
+        assert!(profile.validate().is_ok());
+        // A saved project without the optional fields loads with defaults.
+        let json = serde_json::json!({"manifest": "/projects/lake/target/manifest.json"});
+        let project: DbtProject = serde_json::from_value(json).unwrap();
+        assert_eq!(project.refresh, DbtRefresh::Automatic);
+        assert!(project.schema_mapping.is_empty());
+
+        profile.dbt.as_mut().unwrap().manifest = "target/manifest.json".into();
+        assert!(profile.validate().is_err());
+        let dbt = profile.dbt.as_mut().unwrap();
+        dbt.manifest = "/projects/lake/target/manifest.json".into();
+        dbt.schema_mapping = vec![rule(SchemaRuleKind::Exact, "analytics", "")];
+        assert!(profile.validate().is_err());
+
+        // An edited file keeps only the valid rules.
+        let dbt = profile.dbt.as_mut().unwrap();
+        dbt.schema_mapping = vec![
+            rule(SchemaRuleKind::Prefix, "", "x"),
+            rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+        ];
+        let mut workspace = Workspace {
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        let dbt = workspace.profiles[0].dbt.as_ref().unwrap();
+        assert_eq!(
+            dbt.schema_mapping,
+            [rule(SchemaRuleKind::Prefix, "dbt_dev_", "")]
+        );
+    }
+
+    #[test]
+    fn the_first_matching_rule_maps_a_dbt_schema() {
+        let project = DbtProject {
+            manifest: "/manifest.json".into(),
+            refresh: DbtRefresh::Manual,
+            schema_mapping: vec![
+                rule(SchemaRuleKind::Exact, "Analytics", "prod_analytics"),
+                rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+                rule(SchemaRuleKind::Prefix, "dbt_", "warehouse_"),
+            ],
+        };
+        assert_eq!(project.map_schema("analytics"), "prod_analytics");
+        assert_eq!(project.map_schema("DBT_DEV_core"), "core");
+        assert_eq!(project.map_schema("dbt_finance"), "warehouse_finance");
+        assert_eq!(project.map_schema("staging"), "staging");
+        // A prefix that ends inside a character does not match.
+        assert_eq!(project.map_schema("db"), "db");
+        assert_eq!(project.map_schema("dbé"), "dbé");
+    }
+
+    #[test]
+    fn schema_rules_are_lines_of_text() {
+        let rules = parse_schema_rules(
+            "dbt_dev_* = *\n\n  analytics = prod_analytics  \nstg_*=staging_*\n",
+        )
+        .unwrap();
+        assert_eq!(
+            rules,
+            [
+                rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+                rule(SchemaRuleKind::Exact, "analytics", "prod_analytics"),
+                rule(SchemaRuleKind::Prefix, "stg_", "staging_"),
+            ]
+        );
+        assert_eq!(
+            format_schema_rules(&rules),
+            "dbt_dev_* = *\nanalytics = prod_analytics\nstg_* = staging_*"
+        );
+        assert_eq!(
+            parse_schema_rules(&format_schema_rules(&rules)).unwrap(),
+            rules
+        );
+        assert!(parse_schema_rules("").unwrap().is_empty());
+        for invalid in [
+            "analytics",
+            "dbt_* = core",
+            "* = *",
+            "analytics = ",
+            "a b = c",
+        ] {
+            let error = parse_schema_rules(&format!("x = y\n{invalid}")).unwrap_err();
+            assert!(error.to_string().contains("line 2"), "{invalid}: {error}");
+        }
     }
 
     #[test]

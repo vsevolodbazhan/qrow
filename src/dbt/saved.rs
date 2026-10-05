@@ -9,13 +9,17 @@
 
 use super::Index;
 use serde::{Deserialize, Serialize};
-use std::{fmt, path::Path, time::SystemTime};
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 const MAGIC: &[u8; 8] = b"QROWDBT\0";
 
 /// The version of the saved form. Change it when a change to [`Index`] or
 /// [`Saved`] changes the payload.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 const HEADER_BYTES: usize = MAGIC.len() + 4 + DIGEST_BYTES;
 const DIGEST_BYTES: usize = 32;
@@ -38,10 +42,14 @@ impl Stamp {
     }
 }
 
-/// An index and the stamp of the manifest that it comes from.
+/// An index, and the manifest that it comes from.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Saved {
+    /// The canonical path of the manifest.
+    pub manifest: PathBuf,
     pub stamp: Stamp,
+    /// When Qrow made the index.
+    pub refreshed: SystemTime,
     pub index: Index,
 }
 
