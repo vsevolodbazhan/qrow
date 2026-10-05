@@ -167,6 +167,10 @@ impl Qrow {
             run.pending_query = None;
             run.loading_older = false;
             run.sent_messages.clear();
+            // The conversations keep unknown records, so their next
+            // messages send the notes.
+            run.pending_notes.clear();
+            run.notes_read_while_pending = false;
         }
         self.assistant_state.loaded_threads.clear();
         self.assistant_state.pending_titles.clear();

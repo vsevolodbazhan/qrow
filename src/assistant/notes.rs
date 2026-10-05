@@ -48,6 +48,16 @@ pub fn for_message(
     (context, record)
 }
 
+/// The record of a conversation that does not know which notes Codex has,
+/// for example while a message is pending. The next message sends the
+/// notes, also empty notes.
+pub fn unknown() -> SentNotes {
+    SentNotes {
+        connection: None,
+        digest: String::new(),
+    }
+}
+
 fn digest(notes: &str) -> String {
     ring::digest::digest(&ring::digest::SHA256, notes.as_bytes())
         .as_ref()
@@ -87,6 +97,15 @@ mod tests {
         assert_eq!(context, ContextNotes::Send(String::new()));
         let (context, _) = for_message(Some(&record), second, "");
         assert_eq!(context, ContextNotes::None);
+    }
+
+    #[test]
+    fn an_unknown_record_sends_the_notes_also_when_they_are_empty() {
+        let connection = Some(Uuid::new_v4());
+        let (context, _) = for_message(Some(&unknown()), connection, "");
+        assert_eq!(context, ContextNotes::Send(String::new()));
+        let (context, _) = for_message(Some(&unknown()), connection, "Dates are UTC.");
+        assert_eq!(context, ContextNotes::Send("Dates are UTC.".into()));
     }
 
     #[test]

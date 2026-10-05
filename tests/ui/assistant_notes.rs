@@ -79,6 +79,32 @@ fn a_message_sends_the_notes_only_when_they_are_new_to_the_conversation(cx: &mut
     );
     app.wait_idle(cx);
 
+    // A workspace read gives the notes too, so the next message does not
+    // repeat them. A change back to the notes of the first message sends
+    // them again.
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    edit_notes(&app, cx, alpha, "Dates are UTC.");
+    app.click(cx, "toggle-assistant");
+    app.show_conversation(cx);
+    app.send(cx, "Read workspace notes 1");
+    app.wait_reply(cx, r#"Read workspace notes 1: notes "Dates are UTC.""#);
+    app.wait_idle(cx);
+    app.send(cx, "Report notes 3b");
+    app.wait_reply(cx, "Report notes 3b: notes null, unchanged True");
+    app.wait_idle(cx);
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    edit_notes(&app, cx, alpha, "Dates are local.");
+    app.click(cx, "toggle-assistant");
+    app.show_conversation(cx);
+    app.send(cx, "Report notes 3c");
+    app.wait_reply(
+        cx,
+        r#"Report notes 3c: notes "Dates are local.", unchanged False"#,
+    );
+    app.wait_idle(cx);
+
     // The record survives a restart.
     let app = app.relaunch(cx);
     app.open_assistant(cx);
@@ -107,12 +133,18 @@ fn a_message_sends_the_notes_only_when_they_are_new_to_the_conversation(cx: &mut
 
 #[gpui_kit::test]
 fn a_rejected_message_sends_the_notes_again(cx: &mut TestAppContext) {
-    let (app, _codex, _, _) = launch(cx);
+    let (app, _codex, alpha, _) = launch(cx);
     app.open_assistant(cx);
     app.show_conversation(cx);
     app.send(cx, "Report notes first");
     app.wait_reply(cx, r#"Report notes first: notes "Dates are UTC.""#);
     app.wait_idle(cx);
+    // The cleared notes must reach Codex, also when it rejects the first
+    // message after the change.
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    edit_notes(&app, cx, alpha, "");
+    app.click(cx, "toggle-assistant");
     // Qrow puts the rejected text back in the message field.
     app.type_message(cx, "Reject this message");
     app.click(cx, "assistant-send");
@@ -121,8 +153,11 @@ fn a_rejected_message_sends_the_notes_again(cx: &mut TestAppContext) {
     app.send(cx, "Report notes after rejection");
     app.wait_reply(
         cx,
-        r#"Report notes after rejection: notes "Dates are UTC.", unchanged False"#,
+        r#"Report notes after rejection: notes "", unchanged False"#,
     );
+    app.wait_idle(cx);
+    app.send(cx, "Report notes later");
+    app.wait_reply(cx, "Report notes later: notes null, unchanged False");
 }
 
 #[gpui_kit::test]

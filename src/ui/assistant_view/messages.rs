@@ -155,6 +155,7 @@ impl Qrow {
         run.unread = None;
         run.pending_reply = true;
         run.sent_messages.push_back(text.clone());
+        run.pending_notes.push_back(sent_notes);
         let replaced = run
             .pending_query
             .as_ref()
@@ -171,7 +172,8 @@ impl Qrow {
         self.assistant_state.unstarted_threads.remove(thread_id);
         if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
             conversation.last_activity = unix_now_seconds();
-            conversation.sent_notes = Some(sent_notes);
+            // Codex has the notes only when it takes the message.
+            conversation.sent_notes = Some(crate::assistant::notes::unknown());
             self.changed(cx);
         }
         self.assistant_state
@@ -216,6 +218,41 @@ impl Qrow {
             .conversation(thread_id)
             .and_then(|conversation| conversation.sent_notes.as_ref());
         crate::assistant::notes::for_message(sent, connection, notes)
+    }
+
+    /// Keeps the notes record of the oldest pending message of a
+    /// conversation when Codex takes the message. The record stays unknown
+    /// while later messages are pending, or after a workspace read during
+    /// the wait.
+    pub(super) fn acknowledge_notes(
+        &mut self,
+        thread_id: &str,
+        taken: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let run = self.thread_run_mut(thread_id);
+        let Some(record) = run.pending_notes.pop_front() else {
+            return;
+        };
+        if !run.pending_notes.is_empty() {
+            return;
+        }
+        let known = taken && !run.notes_read_while_pending;
+        run.notes_read_while_pending = false;
+        if known && let Some(conversation) = self.assistant.conversation_mut(thread_id) {
+            conversation.sent_notes = Some(record);
+            self.changed(cx);
+        }
+    }
+
+    /// Keeps the notes that a workspace read gave to Codex.
+    pub(in crate::ui) fn notes_read(&mut self, thread_id: &str, record: crate::model::SentNotes) {
+        let run = self.thread_run_mut(thread_id);
+        if !run.pending_notes.is_empty() {
+            run.notes_read_while_pending = true;
+        } else if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
+            conversation.sent_notes = Some(record);
+        }
     }
 
     /// The connection of the query tab of a conversation, and its notes.

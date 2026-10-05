@@ -674,6 +674,12 @@ for line in sys.stdin:
             notes = json.dumps(context.get("connection_notes"))
             unchanged = context.get("connection_notes_unchanged", False)
             finish_turn(thread_id, turn_id, f"{message}: notes {notes}, unchanged {unchanged}")
+        elif message.startswith("Read workspace notes"):
+            def read_notes(success, result):
+                notes = json.dumps(result.get("connection_notes")) if success else f"failed {result}"
+                finish_turn(thread_id, turn_id, f"{message}: notes {notes}")
+
+            call_tool(thread_id, turn_id, "get_workspace_context", {"version": 1}, read_notes)
         elif message.startswith("Read the catalog"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             catalog = context.get("catalog") or {}

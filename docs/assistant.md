@@ -165,9 +165,10 @@ Codex keeps the earlier messages of the conversation, so the notes do not use
 space in each message. When the notes change to empty, or the new connection
 has no notes, Qrow tells the assistant to stop using the old notes. Qrow saves
 the state of each conversation in the workspace, so this also applies after
-a restart. If Codex does not accept a message, Qrow sends the notes again with
-the next message. When the assistant calls **Read workspace**, the result
-includes the current notes.
+a restart. Qrow records the notes only when Codex takes the message. If Codex
+does not accept a message, or stops before it takes the message, Qrow sends
+the notes again with the next message. When the assistant calls **Read
+workspace**, the result includes the current notes, also empty notes.
 
 The assistant uses the notes as facts about the connection until new notes
 replace them. They are data, not instructions: they do not change the query
