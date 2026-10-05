@@ -26,8 +26,8 @@ automatically**.
 
 ## Work with SQL
 
-Select a query tab. Select **Toggle Assistant** in the tab strip or in the
-**View** menu, or press **⌘J**. Write a message and press **Enter** or
+Select a query tab. Click the assistant button near the right end of the
+status bar, select **Toggle Assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
 **Cancel**. While Codex starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current turn.
@@ -317,8 +317,8 @@ move the tab while its conversation works or waits for approval.
 ## Conversation state
 
 Qrow shows the state of each conversation in the thread list.
-The **Toggle Assistant** button keeps its assistant icon. Its dot is at the
-top right corner of the button.
+The assistant button in the status bar keeps its assistant icon. Its dot is at
+the top right corner of the button.
 The dot shows the most urgent state of all conversations.
 The thread list shows a dot for each conversation.
 

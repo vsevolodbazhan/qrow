@@ -123,15 +123,14 @@ impl TestApp {
         self.click(cx, "run");
     }
 
-    /// Waits until the status bar starts with `prefix`, like "Complete".
+    /// Waits until the status of the active tab starts with `prefix`, like
+    /// "Complete".
     pub fn wait_status(&self, cx: &mut TestAppContext, prefix: &str) {
         self.wait_until(
             cx,
             &format!("the status {prefix}"),
             QUERY_TIMEOUT,
-            |window, _| {
-                label(window, "query-status").is_some_and(|status| status.starts_with(prefix))
-            },
+            |_, cx| self.status(cx).starts_with(prefix),
         );
     }
 

@@ -76,6 +76,14 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         });
     };
     hover(format!("query-status-{query}"), &app, cx);
+    // The tab tooltip also gives the status of the query, which the status
+    // bar does not show.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-detail").as_deref(),
+            Some("Connecting…")
+        );
+    });
     // Keep the failure unread by showing a different tab.
     app.click(cx, "new-tab");
     hover(format!("connection-status-{connection}"), &app, cx);
@@ -503,4 +511,42 @@ fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
     app.wait_label(cx, "Activity");
     assert_eq!(app.credentials.reads(), 0);
     assert!(app.logs(cx).contains("statement"));
+}
+
+#[gpui_kit::test]
+fn a_tab_without_a_dot_shows_its_last_status_in_its_tooltip(cx: &mut TestAppContext) {
+    // No password is stored, so the query fails before a session opens.
+    let mut profile = crate::support::offline_profile("Unreachable");
+    profile.host = "127.0.0.1".into();
+    profile.port = 1;
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1".into();
+    let app = TestApp::launch_with(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+    );
+    app.click(cx, "run");
+    app.wait_until(cx, "the failed run", Duration::from_secs(10), |_, cx| {
+        app.status(cx).starts_with("Error")
+    });
+    let status = cx.update(|cx| app.status(cx));
+    // The error is in sight, so the tab has no dot. The tab has the tooltip.
+    app.hover_labelled(cx, "Query 1");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Not Connected")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-detail").as_deref(),
+            Some(status.as_str())
+        );
+    });
 }

@@ -256,20 +256,111 @@ pub trait Credentials: Send + Sync {
     fn delete_password(&self, id: Uuid) -> Result<()>;
 }
 
-/// Connection passwords in the macOS Keychain.
+/// The tokens of reusable sign-ins, keyed by sign-in ID. Each record is one
+/// JSON document. The application uses [`Keychain`]; tests supply an
+/// in-memory store.
+pub trait TokenStore: Send + Sync {
+    /// `None` when no record exists.
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>>;
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()>;
+    /// Succeeds when no record exists.
+    fn delete_tokens(&self, id: Uuid) -> Result<()>;
+}
+
+/// Sign-in tokens in memory, for the demo and for tests. Nothing persists.
+#[derive(Default)]
+pub struct MemoryTokenStore(std::sync::Mutex<std::collections::HashMap<Uuid, Zeroizing<String>>>);
+
+impl TokenStore for MemoryTokenStore {
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        Ok(self.0.lock().unwrap().get(&id).cloned())
+    }
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(id, Zeroizing::new(record.to_owned()));
+        Ok(())
+    }
+    fn delete_tokens(&self, id: Uuid) -> Result<()> {
+        self.0.lock().unwrap().remove(&id);
+        Ok(())
+    }
+}
+
+/// Connection passwords and sign-in tokens in the macOS Keychain.
 pub struct Keychain;
+
+/// The Keychain service of connection passwords. Keep it stable: it gives
+/// access to the passwords of existing profiles.
+pub const PASSWORD_SERVICE: &str = "io.qrow.connection";
+/// The Keychain service of sign-in tokens.
+pub const TOKEN_SERVICE: &str = "io.qrow.sign-in";
+
+#[cfg(target_os = "macos")]
+const ITEM_NOT_FOUND: i32 = -25300;
+
+#[cfg(target_os = "macos")]
+impl TokenStore for Keychain {
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        match security_framework::passwords::get_generic_password(TOKEN_SERVICE, &id.to_string()) {
+            Ok(bytes) => {
+                let bytes = Zeroizing::new(bytes);
+                Ok(Some(Zeroizing::new(
+                    String::from_utf8(bytes.to_vec()).context("The stored sign-in is invalid")?,
+                )))
+            }
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
+            Err(error) => {
+                Err(error).context("Could not read the sign-in tokens from macOS Keychain")
+            }
+        }
+    }
+
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+        security_framework::passwords::set_generic_password(
+            TOKEN_SERVICE,
+            &id.to_string(),
+            record.as_bytes(),
+        )
+        .context("Could not save the sign-in tokens in macOS Keychain")
+    }
+
+    fn delete_tokens(&self, id: Uuid) -> Result<()> {
+        match security_framework::passwords::delete_generic_password(TOKEN_SERVICE, &id.to_string())
+        {
+            Err(error) if error.code() != ITEM_NOT_FOUND => {
+                Err(error).context("Could not delete the sign-in tokens from macOS Keychain")
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl TokenStore for Keychain {
+    fn load_tokens(&self, _: Uuid) -> Result<Option<Zeroizing<String>>> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn save_tokens(&self, _: Uuid, _: &str) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn delete_tokens(&self, _: Uuid) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+}
 
 #[cfg(target_os = "macos")]
 impl Credentials for Keychain {
     fn password(&self, id: Uuid) -> Result<Zeroizing<String>> {
-        let bytes = Zeroizing::new(security_framework::passwords::get_generic_password("io.qrow.connection", &id.to_string())
+        let bytes = Zeroizing::new(security_framework::passwords::get_generic_password(PASSWORD_SERVICE, &id.to_string())
             .context("Could not read the password from macOS Keychain. Edit the connection to save a password")?);
         Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
     }
 
     fn set_password(&self, id: Uuid, password: &str) -> Result<()> {
         security_framework::passwords::set_generic_password(
-            "io.qrow.connection",
+            PASSWORD_SERVICE,
             &id.to_string(),
             password.as_bytes(),
         )
@@ -277,11 +368,8 @@ impl Credentials for Keychain {
     }
 
     fn delete_password(&self, id: Uuid) -> Result<()> {
-        security_framework::passwords::delete_generic_password(
-            "io.qrow.connection",
-            &id.to_string(),
-        )
-        .context("Could not delete the password from macOS Keychain")
+        security_framework::passwords::delete_generic_password(PASSWORD_SERVICE, &id.to_string())
+            .context("Could not delete the password from macOS Keychain")
     }
 }
 

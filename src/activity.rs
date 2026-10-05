@@ -86,6 +86,7 @@ pub fn from_tab(event: &LogEvent, tab: Uuid, title: &str) -> Option<ActivityEntr
         | LogKind::KeepAliveCompleted
         | LogKind::KeepAliveFailed
         | LogKind::ExecutionCompleted
+        | LogKind::SignIn
         | LogKind::Cancelled => event.text.clone(),
         LogKind::Submitted => "Submitted a query".into(),
         // The tab has the full error of its query.

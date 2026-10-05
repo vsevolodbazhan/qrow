@@ -14,4 +14,5 @@ mod connections;
 mod dialogs;
 mod metadata;
 mod queries;
+mod sign_ins;
 mod tabs;

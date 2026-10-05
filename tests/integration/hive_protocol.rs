@@ -1,7 +1,7 @@
 //! Local wire-level fixture. No Java, Kyuubi installation, or real credentials required.
 use qrow::{
     connector::{
-        Connector, MetadataRequest, QueryState,
+        Connector, MetadataRequest, QueryState, Secret,
         hive::HiveConnector,
         sasl::{FrameReader, FrameWriter, MAX_FRAME},
         t_c_l_i_service::*,
@@ -16,7 +16,6 @@ use std::{
     time::Duration,
 };
 use thrift::protocol::*;
-use zeroize::Zeroizing;
 
 struct Peer {
     input: TBinaryInputProtocol<FrameReader<TcpStream>>,
@@ -228,8 +227,8 @@ fn ldap_session_parameters_async_query_exact_values_and_fetch_exhaustion() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute("SELECT amount FROM ledger").unwrap();
     assert_eq!(session.poll().unwrap(), QueryState::Running);
@@ -268,8 +267,8 @@ fn cancellation_uses_an_independent_authenticated_transport() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     let cancel = session.execute("SELECT long_running_query()").unwrap();
     cancel.cancel().unwrap();
@@ -289,8 +288,8 @@ fn dropped_transport_returns_error_without_resubmitting_statement() {
         assert_eq!(req.statement, "SELECT 1");
         // Close without acknowledging; execution outcome is intentionally unknown.
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     assert!(session.execute("SELECT 1").is_err());
     server.join().unwrap();
@@ -351,14 +350,15 @@ fn wrapped_engine_failure_reconnects_only_on_explicit_run() {
         });
         let worker = Worker::with_connector(
             Arc::new(|| {}),
-            Arc::new(HiveConnector),
-            Arc::new(|_| Ok(Zeroizing::new("test-password".into()))),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
         );
         worker.run(p.clone(), "SELECT original".into());
         loop {
             if let Event::Error {
                 disconnected,
                 message,
+                ..
             } = worker.events.recv_timeout(Duration::from_secs(3)).unwrap()
             {
                 assert!(disconnected);
@@ -421,8 +421,8 @@ fn heartbeat_closes_its_own_operation_and_preserves_the_preview_cursor() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute("SELECT data").unwrap();
     session.execute_keep_alive("SELECT 42").unwrap();
@@ -479,7 +479,7 @@ fn connector_rejects_aggregate_response_before_reading_oversized_string() {
             peer.socket.write_all(frame).unwrap();
         }
     });
-    let error = match HiveConnector.connect(&p, Zeroizing::new("test-password".into())) {
+    let error = match HiveConnector::default().connect(&p, Secret::password("test-password")) {
         Ok(_) => panic!("Oversized server response was accepted"),
         Err(error) => error,
     };
@@ -571,8 +571,8 @@ fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
         let _: TCloseSessionReq = peer.read("CloseSession");
         peer.reply(TCloseSessionResp::new(success()));
     });
-    let mut session = HiveConnector
-        .connect(&p, Zeroizing::new("test-password".into()))
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
         .unwrap();
     session.execute_metadata(&MetadataRequest::Schemas).unwrap();
     assert_eq!(
@@ -609,6 +609,66 @@ fn catalog_requests_send_exact_names_and_replace_the_current_operation() {
     server.join().unwrap();
 }
 
+/// Answers OpenSession and returns the request to select the database.
+fn open_session_then_use(peer: &mut Peer) -> TExecuteStatementReq {
+    let _: TOpenSessionReq = peer.read("OpenSession");
+    peer.reply(TOpenSessionResp::new(
+        success(),
+        TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
+        Some(TSessionHandle::new(THandleIdentifier::new(
+            vec![1; 16],
+            vec![2; 16],
+        ))),
+        None,
+    ));
+    peer.read("ExecuteStatement")
+}
+
+#[test]
+fn a_missing_initial_database_is_named_with_the_server_message() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut p = profile(listener.local_addr().unwrap().port());
+    p.database = "missing".into();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        let request = open_session_then_use(&mut peer);
+        assert_eq!(request.statement, "USE `missing`");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(TGetOperationStatusResp::new(
+            success(),
+            Some(TOperationState::ERROR_STATE),
+            Some("42000".to_owned()),
+            None,
+            Some(
+                "Error operating ExecuteStatement: [SCHEMA_NOT_FOUND] The schema `missing` cannot be found."
+                    .to_owned(),
+            ),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ));
+    });
+    let error = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .err()
+        .expect("the database does not exist");
+    let message = qrow::connector::error_message(&error);
+    assert!(
+        message.starts_with(
+            "Could not select the initial database \"missing\". Check that it exists on this server, or change Initial database in the connection: "
+        ),
+        "{message}"
+    );
+    assert!(message.contains("[SCHEMA_NOT_FOUND]"), "{message}");
+    server.join().unwrap();
+}
+
 #[test]
 fn a_silent_server_fails_after_the_response_timeout() {
     // The server accepts the connection and never answers.
@@ -621,21 +681,53 @@ fn a_silent_server_fails_after_the_response_timeout() {
         drop(socket);
     });
     let started = std::time::Instant::now();
-    let error = match qrow::connector::sasl::connect(
-        "127.0.0.1",
+    let endpoint = qrow::connector::sasl::Endpoint {
+        host: "127.0.0.1",
         port,
-        "synthetic-user",
-        "synthetic-password",
-        Duration::from_secs(1),
-    ) {
-        Ok(_) => panic!("A silent server must not authenticate"),
-        Err(error) => format!("{error:#}"),
+        tls: None,
+        read_timeout: Duration::from_secs(1),
     };
+    let error =
+        match qrow::connector::sasl::connect(&endpoint, "synthetic-user", "synthetic-password") {
+            Ok(_) => panic!("A silent server must not authenticate"),
+            Err(error) => format!("{error:#}"),
+        };
     assert!(started.elapsed() < Duration::from_secs(3));
     assert!(
         error.contains("Kyuubi did not answer within 1 seconds"),
         "{error}"
     );
+    done.send(()).unwrap();
+    server.join().unwrap();
+}
+
+#[test]
+fn a_setup_step_without_an_answer_explains_the_engine_start() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut p = profile(listener.local_addr().unwrap().port());
+    // The shortest response timeout that a connection accepts.
+    p.lifecycle.response_timeout_seconds = 10;
+    let (done, wait) = std::sync::mpsc::channel::<()>();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        open_session_then_use(&mut peer);
+        // Like Kyuubi while it starts an engine: no answer for a while.
+        let _ = wait.recv_timeout(Duration::from_secs(30));
+    });
+    let started = std::time::Instant::now();
+    let error = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .err()
+        .expect("the server did not answer");
+    let message = qrow::connector::error_message(&error);
+    assert!(
+        message.starts_with(
+            "Kyuubi did not answer within 10 seconds when Qrow tried to select the initial database \"avia\"."
+        ),
+        "{message}"
+    );
+    assert!(!message.contains("os error"), "{message}");
+    assert!(started.elapsed() < Duration::from_secs(20));
     done.send(()).unwrap();
     server.join().unwrap();
 }

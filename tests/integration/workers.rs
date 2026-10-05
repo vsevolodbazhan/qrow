@@ -1,6 +1,6 @@
 use anyhow::Result;
 use qrow::{
-    connector::{Cancellation, Connector, MetadataRequest, QueryState, Session},
+    connector::{Cancellation, Connector, MetadataRequest, QueryState, Secret, Session},
     logs::{LogKind, Severity},
     model::{Batch, Column, Profile},
     worker::{Event, Worker},
@@ -12,7 +12,6 @@ use std::{
     },
     time::Duration,
 };
-use zeroize::Zeroizing;
 
 #[derive(Default)]
 struct Fixture {
@@ -49,7 +48,7 @@ impl Cancellation for Cancel {
     }
 }
 impl Connector for Fixture {
-    fn connect(&self, _: &Profile, _: Zeroizing<String>) -> Result<Box<dyn Session>> {
+    fn connect(&self, _: &Profile, _: Secret) -> Result<Box<dyn Session>> {
         self.connects.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakeSession {
             fetches: self.fetches.clone(),
@@ -147,7 +146,7 @@ fn worker(fixture: Arc<Fixture>) -> Worker {
     Worker::with_connector(
         Arc::new(|| {}),
         fixture,
-        Arc::new(|_| Ok(Zeroizing::new(String::new()))),
+        Arc::new(|_| Ok(Secret::password(""))),
     )
 }
 fn next(worker: &Worker) -> Event {
@@ -527,6 +526,7 @@ fn failed_keep_alive_disconnects_without_background_retry() {
         Event::Error {
             disconnected,
             message,
+            ..
         } => {
             assert!(disconnected);
             assert!(message.starts_with("Keep-alive failed:"));
@@ -877,4 +877,57 @@ fn log_events_keep_execution_identity_and_page_measurements() {
             && event.duration.is_some()
     }));
     assert!(logs.iter().all(|event| event.severity == Severity::Info));
+}
+
+#[test]
+fn a_missing_sign_in_fails_before_connecting_and_never_submits_sql() {
+    use qrow::oidc::{Failure, SignInError};
+    let fixture = Arc::new(Fixture::default());
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        fixture.clone(),
+        Arc::new(|_| Err(SignInError::new(Failure::SignInRequired, "Sign in again").into())),
+    );
+    worker.run(Profile::default(), "select".into());
+    loop {
+        match next(&worker) {
+            Event::Error {
+                message,
+                disconnected,
+                sign_in_required,
+            } => {
+                assert_eq!(message, "Sign in again");
+                assert!(disconnected && sign_in_required);
+                break;
+            }
+            Event::Running | Event::Connected => panic!("SQL must not run"),
+            _ => {}
+        }
+    }
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn each_new_session_asks_for_credentials_and_receives_them() {
+    let fixture = Arc::new(Fixture::default());
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        fixture,
+        Arc::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            Ok(Secret::password("synthetic"))
+        }),
+    );
+    let profile = Profile::default();
+    worker.run(profile.clone(), "select".into());
+    ready(&worker);
+    worker.run(profile.clone(), "select".into());
+    ready(&worker);
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "a live session is reused");
+    worker.disconnect();
+    worker.run(profile, "select".into());
+    ready(&worker);
+    assert_eq!(asked.load(Ordering::SeqCst), 2);
 }

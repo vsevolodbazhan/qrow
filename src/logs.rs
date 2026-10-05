@@ -63,6 +63,8 @@ pub enum LogKind {
     Cancelled,
     Error,
     Disconnected,
+    /// A query waits for a browser sign-in, or the sign-in ended.
+    SignIn,
     HistoryTrimmed,
 }
 

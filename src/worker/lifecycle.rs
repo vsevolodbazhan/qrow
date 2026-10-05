@@ -80,6 +80,7 @@ impl Runner {
             self.emit(Event::Error {
                 message,
                 disconnected: true,
+                sign_in_required: false,
             });
         } else {
             let mut event = LogEvent::new(

@@ -15,12 +15,11 @@ use super::{
 use crate::{
     connector::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
-        hive::HiveConnector,
     },
     logs::{LogEvent, LogKind, Severity},
     model::{CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
-    storage::{self, Credentials},
-    worker::PasswordProvider,
+    storage,
+    worker::CredentialProvider,
 };
 use anyhow::Result;
 use std::{
@@ -178,16 +177,10 @@ impl CatalogWorker {
         config: CatalogConfig,
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
-        credentials: Arc<dyn Credentials>,
+        connector: Arc<dyn Connector>,
+        credentials: CredentialProvider,
     ) -> Self {
-        Self::with_connector(
-            config,
-            cache,
-            wake,
-            Arc::new(HiveConnector),
-            Arc::new(move |profile| credentials.password(profile.id)),
-            MINUTE,
-        )
+        Self::with_connector(config, cache, wake, connector, credentials, MINUTE)
     }
 
     /// `minute` is the length of one minute of the refresh period and
@@ -197,7 +190,7 @@ impl CatalogWorker {
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
-        passwords: PasswordProvider,
+        credentials: CredentialProvider,
         minute: Duration,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
@@ -220,7 +213,7 @@ impl CatalogWorker {
             dirty: false,
             published: None,
             connector,
-            passwords,
+            credentials,
             cancelled: cancelled.clone(),
             target: target.clone(),
             running: running.clone(),
@@ -402,7 +395,7 @@ struct Runner {
     /// The last snapshot that the UI received, and when.
     published: Option<(Arc<Catalog>, Instant)>,
     connector: Arc<dyn Connector>,
-    passwords: PasswordProvider,
+    credentials: CredentialProvider,
     cancelled: Arc<AtomicU64>,
     target: Target,
     running: Running,
@@ -1182,8 +1175,8 @@ impl Runner {
         }
         if self.session.is_none() {
             let started = Instant::now();
-            let password = (self.passwords)(&self.profile)?;
-            let session = self.connector.connect(&self.profile, password)?;
+            let secret = (self.credentials)(&self.profile)?;
+            let session = self.connector.connect(&self.profile, secret)?;
             self.session = Some((self.profile.id, session));
             let duration = started.elapsed();
             self.log(

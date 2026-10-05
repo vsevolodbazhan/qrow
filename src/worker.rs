@@ -1,11 +1,9 @@
 use crate::{
     connector::{
-        Cancellation, Completion, Connector, QueryError, Session, hive::HiveConnector,
-        wait_for_completion,
+        Cancellation, Completion, Connector, QueryError, Secret, Session, wait_for_completion,
     },
     logs::{ExecutionId, LogEvent, LogKind, Severity},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
-    storage::Credentials,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -17,7 +15,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
-use zeroize::Zeroizing;
 
 mod lifecycle;
 
@@ -34,9 +31,17 @@ pub enum Event {
     Running,
     Columns(Vec<Column>),
     Rows(Vec<Row>),
-    Ready { more: bool, limited: bool },
+    Ready {
+        more: bool,
+        limited: bool,
+    },
     Cancelled,
-    Error { message: String, disconnected: bool },
+    Error {
+        message: String,
+        disconnected: bool,
+        /// The connection needs a new browser sign-in.
+        sign_in_required: bool,
+    },
     CancelError(String),
     Disconnected,
     IdleDisconnected,
@@ -45,7 +50,9 @@ pub enum Event {
 }
 
 type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
-pub type PasswordProvider = Arc<dyn Fn(&Profile) -> Result<Zeroizing<String>> + Send + Sync>;
+/// Returns the password or the access tokens of a connection. It runs on the
+/// worker thread before each new session.
+pub type CredentialProvider = Arc<dyn Fn(&Profile) -> Result<Secret> + Send + Sync>;
 /// Reports the stable ID of active work that defers idle disconnection.
 pub type IdleGuard = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
 
@@ -65,17 +72,10 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(wake: Arc<dyn Fn() + Send + Sync>, credentials: Arc<dyn Credentials>) -> Self {
-        Self::with_connector(
-            wake,
-            Arc::new(HiveConnector),
-            Arc::new(move |profile| credentials.password(profile.id)),
-        )
-    }
     pub fn with_connector(
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
-        passwords: PasswordProvider,
+        credentials: CredentialProvider,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
@@ -98,7 +98,7 @@ impl Worker {
             log_tx,
             wake: wake.clone(),
             connector,
-            passwords,
+            credentials,
             stopped: stopped.clone(),
             execution: None,
             idle_guard: idle_guard.clone(),
@@ -191,9 +191,12 @@ impl Worker {
                             runner.execution_duration(),
                         );
                     }
+                    let sign_in_required =
+                        crate::oidc::failure(&error) == crate::oidc::Failure::SignInRequired;
                     runner.emit(Event::Error {
                         message,
                         disconnected,
+                        sign_in_required,
                     });
                 }
                 idle_started = Instant::now();
@@ -306,7 +309,7 @@ struct Runner {
     log_tx: mpsc::Sender<LogEvent>,
     wake: Arc<dyn Fn() + Send + Sync>,
     connector: Arc<dyn Connector>,
-    passwords: PasswordProvider,
+    credentials: CredentialProvider,
 }
 
 struct ExecutionTiming {
@@ -408,8 +411,8 @@ impl Runner {
             self.disconnect();
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
-            let password = (self.passwords)(&profile)?;
-            self.session = Some(self.connector.connect(&profile, password)?);
+            let secret = (self.credentials)(&profile)?;
+            self.session = Some(self.connector.connect(&profile, secret)?);
             self.profile = Some(profile);
             self.log(
                 Some(execution_id),
