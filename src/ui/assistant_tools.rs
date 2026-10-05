@@ -1387,10 +1387,13 @@ impl Qrow {
             return;
         };
         let used = serde_json::to_vec(&*value).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
+        // The keys and separators of the dbt object, and the envelope.
         let budget = MAX_TOOL_OUTPUT_BYTES
             .saturating_sub(used + 2 * 1024)
             .min(crate::assistant::dbt::MAX_DESCRIBE_BYTES);
-        value["dbt"] = project.describe(position, budget);
+        if let Some(dbt) = project.describe(position, budget) {
+            value["dbt"] = dbt;
+        }
     }
 
     /// Answer the catalog tool calls whose cache or refresh is ready, or whose

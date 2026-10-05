@@ -109,8 +109,10 @@ impl<'a> Project<'a> {
     }
 
     /// The details of the resource at `position`, in at most `budget`
-    /// bytes. Lists that do not fit are shorter and say so.
-    pub fn describe(&self, position: u32, budget: usize) -> Value {
+    /// bytes. Lists that do not fit are shorter and say so. Then the
+    /// description and tags are shorter, and at last only the unique ID
+    /// stays. `None` when not even the unique ID fits.
+    pub fn describe(&self, position: u32, budget: usize) -> Option<Value> {
         let index = self.index;
         let entry = index.entry(position);
         let columns: Vec<Value> = entry
@@ -136,7 +138,9 @@ impl<'a> Project<'a> {
             .iter()
             .map(|child| self.name(*child))
             .collect();
+        let tags: Vec<&str> = entry.tags.iter().map(|tag| index.symbol(*tag)).collect();
         let mut limit = MAX_ITEMS;
+        let mut description = MAX_DESCRIPTION_BYTES;
         loop {
             let take = |count: usize| count.min(limit);
             let value = json!({
@@ -144,8 +148,9 @@ impl<'a> Project<'a> {
                 "resource_type": entry.kind.name(),
                 "name": entry.name,
                 "materialized": entry.materialized.map(|m| index.symbol(m)),
-                "description": cut(&entry.description, MAX_DESCRIPTION_BYTES),
-                "tags": entry.tags.iter().map(|tag| index.symbol(*tag)).collect::<Vec<_>>(),
+                "description": cut(&entry.description, description),
+                "tags": &tags[..take(tags.len())],
+                "tags_truncated": take(tags.len()) < tags.len(),
                 "path": entry.path,
                 "source_name": entry.source_name.map(|name| index.symbol(name)),
                 "columns": &columns[..take(columns.len())],
@@ -158,10 +163,17 @@ impl<'a> Project<'a> {
                 "children_truncated": take(children.len()) < children.len(),
                 "manifest": self.manifest(),
             });
-            if size(&value) <= budget || limit == 0 {
-                return value;
+            if size(&value) <= budget {
+                return Some(value);
             }
-            limit /= 2;
+            if limit > 0 {
+                limit /= 2;
+            } else if description > 0 {
+                description /= 2;
+            } else {
+                let value = json!({"unique_id": entry.unique_id, "truncated": true});
+                return (size(&value) <= budget).then_some(value);
+            }
         }
     }
 
@@ -192,24 +204,29 @@ impl<'a> Project<'a> {
                 })
             })
             .collect();
-        let mut limit = relationships.len();
+        let (unique, not_null) = (columns_with("unique"), columns_with("not_null"));
+        let longest = relationships.len().max(unique.len()).max(not_null.len());
+        let mut limit = longest;
         let mut description = MAX_SUMMARY_DESCRIPTION_BYTES;
         loop {
+            let take = |count: usize| count.min(limit);
             let value = json!({
                 "unique_id": entry.unique_id,
                 "description": cut(&entry.description, description),
-                "unique": columns_with("unique"),
-                "not_null": columns_with("not_null"),
-                "relationships": &relationships[..limit],
-                "relationships_truncated": limit < relationships.len(),
+                "unique": &unique[..take(unique.len())],
+                "not_null": &not_null[..take(not_null.len())],
+                "relationships": &relationships[..take(relationships.len())],
+                "truncated": limit < longest,
             });
-            if size(&value) <= MAX_SUMMARY_BYTES || (limit == 0 && description == 0) {
+            if size(&value) <= MAX_SUMMARY_BYTES {
                 return value;
             }
-            if limit > 0 {
+            if description > 0 {
+                description /= 2;
+            } else if limit > 0 {
                 limit /= 2;
             } else {
-                description /= 2;
+                return json!({"unique_id": cut(&entry.unique_id, MAX_SUMMARY_BYTES / 2), "truncated": true});
             }
         }
     }
@@ -435,7 +452,7 @@ mod tests {
         let (project, catalog) = (project(), catalog());
         let dbt = Project::new(&index, &project, Some(&catalog), None, false);
         let position = dbt.entry_for("CORE", "orders").unwrap();
-        let value = dbt.describe(position, MAX_DESCRIBE_BYTES);
+        let value = dbt.describe(position, MAX_DESCRIBE_BYTES).unwrap();
         assert_eq!(value["unique_id"], "model.lake.orders");
         assert_eq!(value["materialized"], "table");
         assert_eq!(value["description"], "One row for each order.");
@@ -466,9 +483,17 @@ mod tests {
         assert_eq!(value["manifest"]["changed"], false);
 
         // A small budget cuts the lists and tells so.
-        let small = dbt.describe(position, 600);
-        assert!(size(&small) <= 600 || small["tests"].as_array().unwrap().is_empty());
+        let budget = size(&value) - 50;
+        let small = dbt.describe(position, budget).unwrap();
+        assert!(size(&small) <= budget, "{small}");
         assert_eq!(small["tests_truncated"], true);
+        // At last only the unique ID stays, or nothing.
+        let tiny = dbt.describe(position, 60).unwrap();
+        assert_eq!(
+            tiny,
+            json!({"unique_id": "model.lake.orders", "truncated": true})
+        );
+        assert_eq!(dbt.describe(position, 10), None);
     }
 
     #[test]
@@ -486,6 +511,43 @@ mod tests {
             json!([{"column": "customer_id", "to": "model.lake.customers", "field": "id"}])
         );
         assert!(summary["description"].as_str().unwrap().ends_with('…'));
+
+        // Many keys are cut too.
+        let mut value: Value =
+            serde_json::from_slice(&serde_json::to_vec(&json!({})).unwrap()).unwrap();
+        value["metadata"] = json!({
+            "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+        });
+        let mut nodes = serde_json::Map::new();
+        nodes.insert(
+            "model.lake.wide".into(),
+            json!({
+                "unique_id": "model.lake.wide", "resource_type": "model", "name": "wide",
+                "schema": "core", "alias": "wide", "relation_name": "`core`.`wide`",
+            }),
+        );
+        for number in 0..100 {
+            let id = format!("test.lake.unique_{number}");
+            nodes.insert(
+                id.clone(),
+                json!({
+                    "unique_id": id, "resource_type": "test", "attached_node": "model.lake.wide",
+                    "column_name": format!("column_with_a_long_name_{number:03}"),
+                    "test_metadata": {"name": "unique", "kwargs": {}},
+                }),
+            );
+        }
+        value["nodes"] = Value::Object(nodes);
+        let wide = crate::dbt::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let unmapped = DbtProject {
+            schema_mapping: vec![],
+            ..project.clone()
+        };
+        let wide = Project::new(&wide, &unmapped, None, None, false);
+        let summary = wide.summary(wide.entry_for("core", "wide").unwrap());
+        assert!(size(&summary) <= MAX_SUMMARY_BYTES, "{summary}");
+        assert_eq!(summary["truncated"], true);
+        assert!(!summary["unique"].as_array().unwrap().is_empty());
 
         let context = dbt.context();
         assert_eq!(context.models, Some(2));
