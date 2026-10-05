@@ -535,7 +535,9 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   task. The fixture records the task in a file on the host, and
   `evidence(token, "started")` or `app.wait_evidence(...)` reads that file.
   Register the function first with `REGISTER_BLOCKING`.
-- `app.scroll_to(id)` scrolls a form to a field below its fold.
+- `app.scroll_to(id)` scrolls a form to a field above or below its fold.
+  It takes one more step after the field starts to show, so you can click
+  the field.
 - Tests run at the same time and share the Spark engine of `qrow`. Do not
   change shared state, like global tables. The fixture has two executor
   cores, so put a test that holds executors in the `blocking` module, where

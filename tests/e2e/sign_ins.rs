@@ -4,6 +4,7 @@ use crate::support::fixture::Kyuubi;
 use crate::support::oidc::FixtureProvider;
 use crate::support::{MemoryCredentials, SignIns, TestApp};
 use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt;
 use qrow::model::{Authentication, SavedTab, Workspace};
 use std::sync::Arc;
 
@@ -19,12 +20,17 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     profile.authentication = Authentication::Oidc {
         sign_in: sign_in.id,
     };
+    let profile_row = format!("sign-in-connection-{}", profile.id);
+    let mut second = profile.clone();
+    second.id = uuid::Uuid::new_v4();
+    second.name = "Analytics M".into();
+    let second_row = format!("sign-in-connection-{}", second.id);
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT current_user() AS account".into();
     let workspace = Workspace {
-        profiles: vec![profile],
+        profiles: vec![profile, second],
         tabs: vec![tab],
-        sign_ins: vec![sign_in],
+        sign_ins: vec![sign_in.clone()],
         ..Workspace::default()
     };
     let browser = fixture.browser("alice", &[]);
@@ -44,5 +50,42 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     assert!(
         !logs.contains("access_token") && !logs.contains("eyJ"),
         "{logs}"
+    );
+
+    app.click(cx, "show-sign-ins");
+    app.click(cx, format!("sign-in-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-account-sign-out");
+    app.update(cx, |window, _| {
+        let status = window.find("sign-in-account-status");
+        assert_eq!(status.label(), Some("Signed in as alice@qrow.test."));
+        let status = status.bounds();
+        let sign_out = window.find("sign-in-account-sign-out").bounds();
+        assert!(status.right() < sign_out.left());
+        assert!(f32::from(status.center().y - sign_out.center().y).abs() < 1.);
+    });
+    app.scroll_to(cx, "sign-in-connections");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::label(window, "sign-in-connections-count").as_deref(),
+            Some("2 connections")
+        );
+        assert_eq!(window.find(profile_row.clone()).label(), Some("Analytics"));
+        assert!(window.find(profile_row.clone()).visible());
+        assert_eq!(window.find(second_row.clone()).label(), Some("Analytics M"));
+        let first = window.find(profile_row.clone()).bounds();
+        let second = window.find(second_row.clone()).bounds();
+        assert_eq!(first.top(), second.top());
+        assert!(first.right() < second.left());
+    });
+    app.scroll_to(cx, "sign-in-account-sign-out");
+    app.click(cx, "sign-in-account-sign-out");
+    app.wait_until(
+        cx,
+        "the signed-out account",
+        std::time::Duration::from_secs(20),
+        |window, _| {
+            crate::support::label(window, "sign-in-account-status").as_deref()
+                == Some("Not signed in.")
+        },
     );
 }

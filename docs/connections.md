@@ -106,9 +106,14 @@ Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
 stop. The row then shows the email or name of the account.
 
 Click a row to open **Sign-in Settings**. The **Account** field shows the
-status and the actions for the account. Right-click a row for **Sign In…**,
+status and the actions for the account on the same row. The actions are on
+the right. Right-click a row for **Sign In…**,
 **Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit** and
 **Delete**.
+
+The **Connections** field shows the number of connections that use the
+sign-in. Neutral tags show the names below the heading. The tags wrap when
+they do not fit on one line.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
 **Authentication**, and select the sign-in in the **Sign-in** list. The host of the connection must be
@@ -173,6 +178,8 @@ tokens, it shows the error and the sign-in stays signed in.
 
 **Delete** is available only when no connection uses the sign-in. The
 **Connections** field of Sign-in Settings names the connections that use it.
+When **Delete** is disabled, its menu shows the reason below the command.
+Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
 sign-in.
 
