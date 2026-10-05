@@ -310,7 +310,7 @@ pub(super) fn choice_select<T: PartialEq>(
 
 pub(super) fn column_read_choices() -> [(CatalogColumnReads, String); 2] {
     [
-        (CatalogColumnReads::Table, "One table at a time".into()),
+        (CatalogColumnReads::Table, "One relation at a time".into()),
         (CatalogColumnReads::Schema, "Whole schema".into()),
     ]
 }
@@ -750,7 +750,7 @@ pub(super) fn render_schemas(
         .when(mode != RefreshMode::Disabled, |el| {
             el.child(field(
                 "Column reads",
-                Some("Table reads use less driver memory; schema reads send fewer requests."),
+                Some("Per-relation reads use less driver memory; schema reads send fewer requests."),
                 Select::new(&form.column_reads)
                     .id("connection-column-reads")
                     .w_full()

@@ -457,7 +457,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
     for (mode, label, added) in [
         (
             CatalogColumnReads::Table,
-            "One table at a time",
+            "One relation at a time",
             "table_read",
         ),
         (CatalogColumnReads::Schema, "Whole schema", "schema_read"),

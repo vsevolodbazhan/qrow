@@ -1321,7 +1321,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "connection-column-reads").as_deref(),
-            Some("One table at a time")
+            Some("One relation at a time")
         );
         assert_eq!(
             bounds_of(window, "connection-column-reads").left(),
