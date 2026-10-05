@@ -109,23 +109,20 @@ impl<'a> Project<'a> {
     }
 
     /// The details of the resource at `position`, in at most `budget`
-    /// bytes. Lists that do not fit are shorter and say so. Then the
-    /// description and tags are shorter, and at last only the unique ID
-    /// stays. `None` when not even the unique ID fits.
+    /// bytes. Each list gives its full count. When the details do not fit,
+    /// the largest part becomes shorter first: column descriptions before
+    /// columns, so that short lists like the children stay complete. At
+    /// last only the unique ID stays. `None` when not even the unique ID
+    /// fits.
     pub fn describe(&self, position: u32, budget: usize) -> Option<Value> {
         let index = self.index;
         let entry = index.entry(position);
-        let columns: Vec<Value> = entry
+        // Columns that dbt describes or types. The others add nothing to
+        // the catalog columns.
+        let columns: Vec<&crate::dbt::Column> = entry
             .columns
             .iter()
             .filter(|column| !column.description.is_empty() || column.data_type.is_some())
-            .map(|column| {
-                json!({
-                    "name": column.name,
-                    "description": cut(&column.description, MAX_DESCRIPTION_BYTES),
-                    "data_type": column.data_type.map(|data_type| index.symbol(data_type)),
-                })
-            })
             .collect();
         let tests: Vec<Value> = index
             .tests(position)
@@ -139,40 +136,98 @@ impl<'a> Project<'a> {
             .map(|child| self.name(*child))
             .collect();
         let tags: Vec<&str> = entry.tags.iter().map(|tag| index.symbol(*tag)).collect();
-        let mut limit = MAX_ITEMS;
+        let column_value = |column: &&crate::dbt::Column, description: usize| {
+            json!({
+                "name": column.name,
+                "description": cut(&column.description, description),
+                "data_type": column.data_type.map(|data_type| index.symbol(data_type)),
+            })
+        };
+        // The parts that can become shorter, and how long each one is now.
+        let mut shown = [
+            columns.len(),
+            tests.len(),
+            parents.len(),
+            children.len(),
+            tags.len(),
+        ]
+        .map(|count| count.min(MAX_ITEMS));
+        let mut column_description = MAX_DESCRIPTION_BYTES;
         let mut description = MAX_DESCRIPTION_BYTES;
         loop {
-            let take = |count: usize| count.min(limit);
+            let [
+                columns_shown,
+                tests_shown,
+                parents_shown,
+                children_shown,
+                tags_shown,
+            ] = shown;
+            let parts = [
+                json!(
+                    columns[..columns_shown]
+                        .iter()
+                        .map(|column| column_value(column, column_description))
+                        .collect::<Vec<_>>()
+                ),
+                json!(&tests[..tests_shown]),
+                json!(&parents[..parents_shown]),
+                json!(&children[..children_shown]),
+                json!(&tags[..tags_shown]),
+            ];
             let value = json!({
                 "unique_id": entry.unique_id,
                 "resource_type": entry.kind.name(),
                 "name": entry.name,
                 "materialized": entry.materialized.map(|m| index.symbol(m)),
                 "description": cut(&entry.description, description),
-                "tags": &tags[..take(tags.len())],
-                "tags_truncated": take(tags.len()) < tags.len(),
+                "tags": parts[4],
+                "tag_count": tags.len(),
+                "tags_truncated": tags_shown < tags.len(),
                 "path": entry.path,
                 "source_name": entry.source_name.map(|name| index.symbol(name)),
-                "columns": &columns[..take(columns.len())],
-                "columns_truncated": take(columns.len()) < columns.len(),
-                "tests": &tests[..take(tests.len())],
-                "tests_truncated": take(tests.len()) < tests.len(),
-                "parents": &parents[..take(parents.len())],
-                "parents_truncated": take(parents.len()) < parents.len(),
-                "children": &children[..take(children.len())],
-                "children_truncated": take(children.len()) < children.len(),
+                "columns": parts[0],
+                "column_count": columns.len(),
+                "columns_truncated": columns_shown < columns.len(),
+                "column_descriptions_cut": column_description < MAX_DESCRIPTION_BYTES,
+                "tests": parts[1],
+                "test_count": tests.len(),
+                "tests_truncated": tests_shown < tests.len(),
+                "parents": parts[2],
+                "parent_count": parents.len(),
+                "parents_truncated": parents_shown < parents.len(),
+                "children": parts[3],
+                "child_count": children.len(),
+                "children_truncated": children_shown < children.len(),
                 "manifest": self.manifest(),
             });
             if size(&value) <= budget {
                 return Some(value);
             }
-            if limit > 0 {
-                limit /= 2;
-            } else if description > 0 {
-                description /= 2;
-            } else {
-                let value = json!({"unique_id": entry.unique_id, "truncated": true});
-                return (size(&value) <= budget).then_some(value);
+            // Shorten the largest part that can become shorter. The
+            // description of the resource counts as one more part.
+            let largest = parts
+                .iter()
+                .enumerate()
+                .filter(|(part, _)| shown[*part] > 0)
+                .map(|(part, value)| (size(value), Some(part)))
+                .chain((description > 0).then_some((description, None)))
+                .max_by_key(|(bytes, _)| *bytes);
+            match largest {
+                Some((_, Some(0))) if column_description > 0 => {
+                    column_description = if column_description > 64 {
+                        column_description / 2
+                    } else {
+                        0
+                    };
+                }
+                Some((_, Some(part))) => shown[part] /= 2,
+                Some((_, None)) => {
+                    description = if description > 64 { description / 2 } else { 0 };
+                }
+                None => {
+                    let value = json!({"unique_id": entry.unique_id, "truncated": true});
+                    return (size(&value) <= budget).then_some(value);
+                }
             }
         }
     }
@@ -483,10 +538,18 @@ mod tests {
         assert_eq!(value["manifest"]["changed"], false);
 
         // A small budget cuts the lists and tells so.
+        assert_eq!(
+            (value["column_count"].clone(), value["test_count"].clone()),
+            (json!(2), json!(4))
+        );
+        assert_eq!(
+            (value["parent_count"].clone(), value["child_count"].clone()),
+            (json!(1), json!(1))
+        );
         let budget = size(&value) - 50;
         let small = dbt.describe(position, budget).unwrap();
         assert!(size(&small) <= budget, "{small}");
-        assert_eq!(small["tests_truncated"], true);
+        assert_eq!(small["test_count"], 4);
         // At last only the unique ID stays, or nothing.
         let tiny = dbt.describe(position, 60).unwrap();
         assert_eq!(
@@ -494,6 +557,62 @@ mod tests {
             json!({"unique_id": "model.lake.orders", "truncated": true})
         );
         assert_eq!(dbt.describe(position, 10), None);
+    }
+
+    /// A model with many long column descriptions and many children, like
+    /// a central fact table.
+    #[test]
+    fn long_columns_become_shorter_before_the_lineage() {
+        let mut nodes = serde_json::Map::new();
+        let columns: serde_json::Map<String, Value> = (0..141)
+            .map(|number| {
+                let name = format!("column_{number:03}");
+                (
+                    name.clone(),
+                    json!({"name": name, "description": "Text. ".repeat(200)}),
+                )
+            })
+            .collect();
+        nodes.insert(
+            "model.lake.clicks".into(),
+            json!({
+                "unique_id": "model.lake.clicks", "resource_type": "model", "name": "clicks",
+                "schema": "core", "alias": "clicks", "relation_name": "`core`.`clicks`",
+                "columns": columns,
+            }),
+        );
+        for number in 0..152 {
+            let id = format!("model.lake.child_{number:03}");
+            nodes.insert(
+                id.clone(),
+                json!({
+                    "unique_id": id, "resource_type": "model", "name": format!("child_{number:03}"),
+                    "schema": "core", "alias": format!("child_{number:03}"),
+                    "relation_name": format!("`core`.`child_{number:03}`"),
+                    "depends_on": {"nodes": ["model.lake.clicks"]},
+                }),
+            );
+        }
+        let value = json!({
+            "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json"},
+            "nodes": nodes,
+        });
+        let index = crate::dbt::parse(&serde_json::to_vec(&value).unwrap()).unwrap();
+        let project = DbtProject {
+            schema_mapping: vec![],
+            ..project()
+        };
+        let dbt = Project::new(&index, &project, None, None, false);
+        let position = dbt.entry_for("core", "clicks").unwrap();
+        let value = dbt.describe(position, MAX_DESCRIBE_BYTES).unwrap();
+        assert!(size(&value) <= MAX_DESCRIBE_BYTES);
+        assert_eq!(value["child_count"], 152);
+        assert_eq!(value["children"].as_array().unwrap().len(), 152);
+        assert_eq!(value["children_truncated"], false);
+        assert_eq!(value["column_count"], 141);
+        assert_eq!(value["column_descriptions_cut"], true);
+        // Columns keep their names as long as they can.
+        assert!(value["columns"].as_array().unwrap().len() > 50, "{value}");
     }
 
     #[test]

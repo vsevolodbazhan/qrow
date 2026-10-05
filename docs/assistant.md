@@ -228,7 +228,10 @@ descriptions of its columns, its tests, and its direct parents and children.
 A test of `accepted_values` gives its values, and a `relationships` test gives
 the table and column that it refers to. Lineage and test targets name a
 catalog table when one [matches](connections.md#match-models-with-tables),
-otherwise the dbt unique ID. A long list is cut, and the result tells so.
+otherwise the dbt unique ID. Each list gives its full count. When the data
+does not fit in a tool result, Qrow first shortens the largest part, usually
+the column descriptions and then the columns, so that short lists like the
+children stay complete. A cut list tells so.
 
 Each message then also tells the assistant when dbt wrote the manifest, the
 dbt version, the numbers of models, sources, and tests, and how many models
