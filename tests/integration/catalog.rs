@@ -1261,6 +1261,36 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
 }
 
 #[test]
+fn idle_protection_follows_only_the_member_of_an_active_refresh() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("sales".into());
+    let mut h = Harness::new(server.clone(), profile(), None);
+    let guard = h.worker.idle_guard(h.id);
+    let other = h.worker.idle_guard(Uuid::new_v4());
+    assert!(guard().is_none());
+    // An explicit refresh can open its session without a connected tab.
+    h.worker.refresh(h.id, Scope::Connection);
+    h.wait(|h| h.status.active.is_some());
+    assert!(guard().is_some());
+    assert!(other().is_none());
+    h.worker.stop(h.id);
+    h.wait(|h| h.status.is_idle());
+    assert!(guard().is_none());
+
+    // Failed and timed-out refreshes must also release idle protection.
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 1;
+    let mut timed = Harness::timed(server, profile, None, Duration::from_millis(100));
+    let guard = timed.worker.idle_guard(timed.id);
+    timed.worker.refresh(timed.id, Scope::Connection);
+    timed.wait(|h| h.status.active.is_some());
+    assert!(guard().is_some());
+    timed.wait(|h| h.status.is_idle());
+    assert!(guard().is_none());
+    assert!(timed.catalog().error.is_some());
+}
+
+#[test]
 fn a_timeout_cancels_a_call_that_blocks() {
     let server = warehouse();
     let mut profile = profile();

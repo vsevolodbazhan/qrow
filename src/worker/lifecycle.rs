@@ -7,6 +7,26 @@ use std::{
 };
 
 impl Runner {
+    pub(super) fn idle_disconnect_deferred(&self, refresh: &mut Option<Option<u64>>) -> bool {
+        if !self
+            .profile
+            .as_ref()
+            .is_some_and(|profile| profile.lifecycle.keep_alive_seconds == 0)
+        {
+            return false;
+        }
+        let active = self
+            .idle_guard
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|guard| guard());
+        // Capture once at the idle deadline. A later refresh must not extend
+        // an overdue session, even when there is no gap between refreshes.
+        let waiting = refresh.get_or_insert(active);
+        waiting.is_some() && *waiting == active
+    }
+
     pub(super) fn idle_interval(&self) -> Option<Duration> {
         self.session.as_ref()?;
         let policy = &self.profile.as_ref()?.lifecycle;

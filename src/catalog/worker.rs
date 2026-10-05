@@ -2,8 +2,9 @@
 //! that share one catalog.
 //!
 //! The worker opens its own session for the queued refreshes and closes it
-//! when the queue is empty, so it never changes the idle timer or the result
-//! cursor of a query tab. It runs one refresh at a time, with the profile of
+//! when the queue is empty. A refresh defers idle disconnection of its member's
+//! tabs without resetting their idle timers or changing their result cursors.
+//! It runs one refresh at a time, with the profile of
 //! the member that asked for it. While a tab of a member has a live session,
 //! the worker also refreshes the catalog when its refresh period passes.
 
@@ -250,6 +251,18 @@ impl CatalogWorker {
     /// Read `scope` again with the profile of `member`.
     pub fn refresh(&self, member: Uuid, scope: Scope) {
         let _ = self.tx.send(Command::Refresh(Request { member, scope }));
+    }
+
+    /// Protect only the tabs of the member that runs the active refresh.
+    pub fn idle_guard(&self, member: Uuid) -> crate::worker::IdleGuard {
+        let running = self.running.clone();
+        Arc::new(move || {
+            running
+                .lock()
+                .unwrap()
+                .filter(|(_, runner)| *runner == member)
+                .map(|(batch, _)| batch)
+        })
     }
 
     /// Refresh the catalog with `member` if Qrow has never read it. The
