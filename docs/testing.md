@@ -55,8 +55,8 @@ macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
 `perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
-The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi, and
-Spark servers. `desktop` also takes over the desktop. These suites, the
+The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
+Spark, and OpenID Connect servers. `desktop` also takes over the desktop. These suites, the
 `perf-*` probes, and `package` run only when you select them by name.
 `package` does not replace `dist/Qrow.app`. See [Run the servers](#run-the-servers) and
 [Run the desktop suite](#run-the-desktop-suite).
@@ -66,6 +66,14 @@ core library are modules of one test binary,
 [`tests/integration/`](../tests/integration/), so a change to the library
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
+
+The full `ui` suite also checks tooltip alignment with the native macOS font
+backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
+the vertical center of the first line. Checks cover system and Menlo fonts
+at 75%, 100%, and 150% UI scale. It runs this check on the process main
+thread because AppKit requires that thread. The other headless UI tests
+use GPUI's test text backend. Run `./qtest run ui` to include the native
+check. A test filter runs only the matching GPUI tests.
 
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server
@@ -233,9 +241,41 @@ the synthetic user `qrow`, and ZooKeeper. Let Docker use approximately 8 GB of m
 for them. They also run on an M1 Mac with 8 GB of memory. The first image download and build are much larger than Qrow. Java
 belongs only to the servers. Qrow itself does not use a JVM.
 
+The fixture also tests [sign-ins](connections.md#sign-in-with-openid-connect)
+and TLS:
+
+- A mock OpenID Connect provider serves HTTPS on a loopback port. It accepts
+  the public client `qrow-desktop`, loopback redirect URIs with any port, and
+  PKCE with `S256`. It signs tokens with RS256 and rotates refresh tokens.
+- A TLS proxy in front of the binary port of Kyuubi. The plain port stays
+  available for the other tests.
+- A custom Kyuubi authenticator. It accepts a valid access token for the
+  database usernames of its identity, and gives other passwords to LDAP.
+- A new certificate authority and server certificate for each start.
+
+| User | Database usernames |
+| --- | --- |
+| `alice` | `qrow` |
+| `bob` | `qrow` |
+| `mallory` | None |
+
+The tests get `QROW_E2E_TLS_PORT`, `QROW_E2E_OIDC_ISSUER`, and
+`QROW_E2E_TLS_CA` (the path of the CA certificate). Tests select the user and
+the token lifetime through the fixture parameters of the authorization URL.
+Tests that need no servers use a mock provider in the test process, with the
+synthetic certificates in
+[`tests/integration/testdata/tls/`](../tests/integration/testdata/tls/).
+The native runtime starts the provider and the proxy as Java processes too.
+
 The servers keep the Spark engine of a user for 10 minutes after its last
 session, so tests that follow each other do not wait for an engine start.
 The Spark worker has room for one engine and two executor cores.
+
+Catalog tests and assistant tests that read live columns run one at a time
+in the same test group. Each test uses a unique schema name. Spark lists all
+schemas before Qrow applies a connection's catalog filter. If another test
+drops a schema during that list, the catalog request can fail. Other E2E
+tests can run at the same time.
 
 The Docker runtime binds ports to loopback, and each run gets its own
 Compose project and network. The servers write the execution evidence to a
@@ -391,7 +431,7 @@ After you package the app, check its size:
 uv run --locked python scripts/core/size.py
 ```
 
-The [size check](../scripts/core/size.py) allows 24 MiB for the executable
+The [size check](../scripts/core/size.py) allows 30 MiB for the executable
 and 10 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
@@ -489,7 +529,7 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   table. Column 0 holds the row number.
 - `app.type_sql` replaces the SQL of the active tab through the editor.
   `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
-  status bar, and `app.wait_cell(row, column, text)` waits for a result.
+  status of the active tab, which its dot tooltip shows, and `app.wait_cell(row, column, text)` waits for a result.
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
   reads Logs through **Copy All Logs**.
 - `blocking(token, milliseconds)` makes a query that holds an executor
@@ -502,6 +542,10 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   cores, so put a test that holds executors in the `blocking` module, where
   tests run one at a time. A test that stops or restarts a server belongs in
   the `backend` suite.
+- Use a unique schema name for catalog tests. Put tests that create, drop,
+  or read fixture schemas in the catalog test group of the
+  [nextest profiles](../.config/nextest.toml). Update the group's filter when
+  you add a test outside the `catalog` module.
 - Check the result that a user can see. The `backend` suite checks the
   contract with the servers, for example that Spark stops a cancelled task
   in 10 seconds. Do not check it again in an E2E test.

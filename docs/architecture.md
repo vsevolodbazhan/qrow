@@ -10,7 +10,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | --- | --- |
 | [Application](../src/main.rs) | Select the user or demo environment and open the window. |
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
-| [UI environment](../src/ui/environment.rs) | Select the workspace file and the password store of a window. |
+| [UI environment](../src/ui/environment.rs) | Select the workspace file, the password and token stores, and the trusted certificate authorities of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
@@ -19,15 +19,18 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection or of a shared catalog, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
+| [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
+| [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
+| [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
 | [Response protocol](../src/connector/protocol.rs) | Bound response bytes and allocation before Thrift decoding. |
-| [Storage](../src/storage.rs) | Lock and save the workspace. Define the password store and its macOS Keychain implementation. |
+| [Storage](../src/storage.rs) | Lock and save the workspace. Define the password and token stores and their macOS Keychain implementation. |
 
 The [core library](../src/lib.rs) builds without the `ui` feature. The UI
 modules are in the same library behind the `ui` feature, and the application
 binary only opens the window. This separation permits headless core tests and
 keeps connector behavior independent of editor controls. UI integration tests
-use the library to open the real window with a temporary workspace and
-synthetic passwords.
+use the library to open the real window with a temporary workspace,
+synthetic passwords, and a mock sign-in provider.
 
 ## Query data flow
 
@@ -68,7 +71,8 @@ each with the profile of the connection that asked for it. See
 
 ## Responsiveness and state
 
-Network calls and Keychain access run on background threads. Workspace writes
+Network calls, browser sign-ins, token refreshes, and Keychain access run on
+background threads. Workspace writes
 use a background saver with exclusive workspace ownership. Quit and window
 close wait for a save acknowledgement. [Workspace](workspace.md) describes
 save recovery and the native termination limitation. Idle UI work waits for

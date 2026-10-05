@@ -11,24 +11,28 @@ mod profile_view;
 mod results;
 mod setting_row;
 mod settings_view;
+mod sign_in_view;
+mod status_dot;
+mod status_tooltip;
 mod tab_view;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
-pub use environment::Environment;
+pub use environment::{Browser, Environment};
 pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
+    connector::hive::HiveConnector,
     logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
-        AssistantWorkspace, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
+        AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
         MAX_EDITOR_FONT_SIZE, MAX_LINE_HEIGHT, MAX_TAB_TITLE, MAX_UI_SCALE, MIN_EDITOR_FONT_SIZE,
         MIN_LINE_HEIGHT, MIN_UI_SCALE, Profile, SYSTEM_FONT_FAMILY, SYSTEM_THEME, SavedTab,
         Settings, SharedCatalog, UI_SCALE_STEP, WORKSPACE_VERSION, Workspace,
         conversation_tab_title, copied_tab_title, unique_tab_title,
     },
-    sql,
+    oidc, sql,
     storage::{self, Saver},
     worker::{Event, Worker},
 };
@@ -39,12 +43,14 @@ use gpui_kit::component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{EditorState, Input, InputEvent, InputState, TabSize, TextareaState},
     menu::{PopupMenu, PopupMenuItem},
-    select::SelectEvent,
+    select::{SearchableVec, SelectEvent},
     table::TableState,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use results::Results;
+use status_dot::DotStatus;
+use status_tooltip::StatusTooltip;
 use std::{
     collections::BTreeMap,
     sync::{Arc, mpsc},
@@ -61,6 +67,8 @@ actions!(
         NewTab,
         CloseTab,
         ToggleSidebar,
+        ShowConnections,
+        ShowSignIns,
         ToggleAssistant,
         ToggleActivity,
         OpenAbout,
@@ -68,6 +76,7 @@ actions!(
         IncreaseUiScale,
         DecreaseUiScale,
         SaveConnection,
+        SaveSignIn,
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
@@ -101,7 +110,7 @@ pub fn init(cx: &mut App) {
         ),
         KeyBinding::new("cmd-t", NewTab, None),
         KeyBinding::new("cmd-w", CloseTab, None),
-        KeyBinding::new("cmd-b", ToggleSidebar, None),
+        KeyBinding::new("cmd-b", ShowConnections, None),
         KeyBinding::new("cmd-j", ToggleAssistant, None),
         KeyBinding::new("cmd-shift-u", ToggleActivity, None),
         KeyBinding::new(
@@ -114,6 +123,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd--", DecreaseUiScale, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-enter", SaveConnection, Some("ConnectionSettings")),
+        KeyBinding::new("cmd-enter", SaveSignIn, Some("SignInSettings")),
         KeyBinding::new("cmd-enter", SubmitRename, Some("RenameDialog")),
         KeyBinding::new(
             "cmd-c",
@@ -176,16 +186,19 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         Menu {
             disabled: false,
             name: "Query".into(),
-            items: vec![
-                MenuItem::action("Run Query", RunQuery),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            ],
+            items: vec![MenuItem::action("Run Query", RunQuery)],
         },
     ];
-    let mut view = vec![MenuItem::action("Activity", ToggleActivity)];
+    let mut view = vec![
+        MenuItem::action("Connections", ShowConnections),
+        MenuItem::action("Sign-ins", ShowSignIns),
+        MenuItem::action("Toggle Sidebar", ToggleSidebar),
+        MenuItem::separator(),
+    ];
     if assistant_enabled {
         view.push(MenuItem::action("Toggle Assistant", ToggleAssistant));
     }
+    view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
         disabled: false,
         name: "View".into(),
@@ -193,6 +206,13 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
     });
     cx.set_menus(menus);
 }
+/// The panel of the left sidebar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarPanel {
+    Connections,
+    SignIns,
+}
+
 struct Tab {
     saved: SavedTab,
     revision: u64,
@@ -209,6 +229,7 @@ struct Tab {
     more: bool,
     pending_page: Option<usize>,
     status: String,
+    status_detail: Option<String>,
     started: Option<Instant>,
     elapsed: Option<Duration>,
     output: LogHistory,
@@ -216,8 +237,104 @@ struct Tab {
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     next_execution_id: u64,
+    /// The SQL of the last Run, for a run after a browser sign-in.
+    submitted_sql: Option<String>,
+    /// The query waits for this browser sign-in, and then runs.
+    sign_in_wait: Option<sign_in_view::SignInWait>,
+    /// The query runs after an automatic sign-in, so a second sign-in
+    /// error stays an error.
+    signed_in_for_run: bool,
+    /// A sign-out or another account released the session while the tab was
+    /// busy. The next query closes it first.
+    release_pending: bool,
 }
 impl Tab {
+    fn set_status(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        self.status_detail = None;
+    }
+
+    fn set_status_detail(&mut self, status: &str, detail: impl Into<String>) {
+        self.set_status(status);
+        self.status_detail = Some(detail.into());
+    }
+
+    fn status_label(&self) -> String {
+        match &self.status_detail {
+            Some(detail) => format!("{}: {detail}", self.status),
+            None => self.status.clone(),
+        }
+    }
+
+    /// The tooltip of the tab: the state of its dot, then the status of the
+    /// last work of the tab, like "Error: Connection failed". A tab without
+    /// a dot has the tooltip on the tab itself.
+    fn status_tooltip(&self) -> StatusTooltip {
+        let tooltip = StatusTooltip::new(
+            self.saved.title.clone(),
+            match self.dot_status() {
+                Some(DotStatus::Connected) => "Idle",
+                Some(DotStatus::Connecting) => "Connecting",
+                Some(DotStatus::Working) => "Running",
+                Some(DotStatus::Ready) => "Unread Result",
+                Some(DotStatus::Error) => "Unread Error",
+                Some(DotStatus::Attention) => unreachable!("SQL never needs approval"),
+                None => "Not Connected",
+            },
+        );
+        let status = self.status_label();
+        if status == "Not connected" {
+            tooltip
+        } else {
+            tooltip.detail(status)
+        }
+    }
+
+    fn dot_status(&self) -> Option<DotStatus> {
+        if self.panel.unread_error {
+            Some(DotStatus::Error)
+        } else if self.busy && !self.connected {
+            Some(DotStatus::Connecting)
+        } else if self.busy {
+            Some(DotStatus::Working)
+        } else if self.panel.has_unread_success() {
+            Some(DotStatus::Ready)
+        } else if self.connected {
+            Some(DotStatus::Connected)
+        } else {
+            None
+        }
+    }
+
+    fn status_suffix(&self) -> String {
+        let mut label = String::new();
+        if self.connected {
+            label.push_str(if self.busy {
+                ", connected"
+            } else {
+                ", connected, idle"
+            });
+        }
+        label.push_str(self.work_suffix());
+        if self.panel.unread_error {
+            label.push_str(", unread error");
+        }
+        if self.panel.has_unread_success() {
+            label.push_str(", unread query result");
+        }
+        label
+    }
+
+    fn work_suffix(&self) -> &'static str {
+        if !self.busy {
+            ""
+        } else if self.connected {
+            ", running"
+        } else {
+            ", connecting"
+        }
+    }
+
     fn can_disconnect(&self) -> bool {
         !self.busy
             && self.connected
@@ -246,6 +363,13 @@ struct ProfileEditor {
     shared_name: Entity<InputState>,
     preferred_select: connection_form::RowSelect,
     preferred_choices: Vec<(Option<Uuid>, String)>,
+    authentication: connection_form::AuthenticationSelect,
+    /// The Sign-in list and its choices, in the order of the sign-ins.
+    sign_in: connection_form::RowCombobox,
+    sign_in_choices: Vec<(Uuid, String)>,
+    tls: bool,
+    _authentication_subscription: Subscription,
+    _sign_in_subscription: Subscription,
     is_new: bool,
     error: Option<String>,
     saving: Option<mpsc::Receiver<Result<ProfileSave, String>>>,
@@ -367,6 +491,7 @@ pub struct Qrow {
     assistant_pane: Entity<assistant_view::AssistantPane>,
     fonts: Vec<String>,
     settings_open: bool,
+    /// The page that Settings shows when it opens.
     about_open: bool,
     settings_form: Option<settings_view::SettingsForm>,
     profiles: Vec<Profile>,
@@ -385,8 +510,17 @@ pub struct Qrow {
     message: Option<String>,
     demo: bool,
     credentials: Arc<dyn storage::Credentials>,
+    /// Reusable sign-ins. The service owns their tokens and identities.
+    sign_ins: Vec<crate::model::SignIn>,
+    oidc: Arc<oidc::Service>,
+    sign_in_ui: sign_in_view::SignInState,
+    connector: Arc<HiveConnector>,
     sidebar: bool,
+    /// The panel that the sidebar shows, also while it is hidden.
+    sidebar_panel: SidebarPanel,
     sidebar_width: Pixels,
+    /// The focus inside the sidebar, which a hidden sidebar gives back.
+    sidebar_focus: FocusHandle,
     editor_height: Pixels,
     resize: Option<(bool, Point<Pixels>, Pixels)>,
     focus: FocusHandle,
@@ -520,6 +654,12 @@ impl Qrow {
                 }
             },
         );
+        let oidc = oidc::Service::new(environment.tokens(), environment.trust());
+        oidc.configure(&workspace.sign_ins);
+        let status_wake = wake.clone();
+        oidc.set_on_change(Arc::new(move || {
+            let _ = status_wake.try_send(());
+        }));
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             if this.settings.theme == SYSTEM_THEME {
                 themes::apply(SYSTEM_THEME, Some(window), cx);
@@ -568,8 +708,14 @@ impl Qrow {
             message,
             demo,
             credentials: environment.credentials(),
+            sign_ins: workspace.sign_ins,
+            oidc,
+            sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
+            connector: Arc::new(HiveConnector::new(environment.trust())),
             sidebar: true,
+            sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
+            sidebar_focus: cx.focus_handle(),
             editor_height: px(285. * scale),
             resize: None,
             focus: cx.focus_handle(),
@@ -689,12 +835,17 @@ impl Qrow {
             more: false,
             pending_page: None,
             status: "Not connected".into(),
+            status_detail: None,
             started: None,
             elapsed: None,
             output: LogHistory::default(),
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
+            submitted_sql: None,
+            sign_in_wait: None,
+            signed_in_for_run: false,
+            release_pending: false,
             next_execution_id: 1,
         }
     }
@@ -720,6 +871,7 @@ impl Qrow {
                 .collect(),
             active_tab: self.active,
             active_tabs: self.active_tabs.clone(),
+            sign_ins: self.sign_ins.clone(),
         }
     }
     fn finish(&mut self, cx: &App) {
@@ -727,6 +879,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        self.sign_in_ui.cancel_all();
         if self.demo {
             self.assistant_state.shutdown_demo(
                 self.assistant
@@ -990,6 +1143,7 @@ impl Qrow {
         changed |= self.drain_catalogs(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
+        changed |= self.tick_sign_ins(cx);
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1011,7 +1165,29 @@ impl Qrow {
     fn drain_workers(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let mut activity = Vec::new();
+        let workspace_visible = !self.activity.read(cx).is_open();
+        let mut waits = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
+            let events: Vec<_> = tab
+                .worker
+                .as_ref()
+                .map(|w| w.events.try_iter().collect())
+                .unwrap_or_default();
+            // A query that needs a new sign-in never reached the server. Its
+            // first such error opens the browser, and the query waits.
+            let wait = events
+                .iter()
+                .any(|event| {
+                    matches!(
+                        event,
+                        Event::Error {
+                            sign_in_required: true,
+                            ..
+                        }
+                    )
+                })
+                .then(|| sign_in_view::automatic_sign_in(tab, &self.profiles))
+                .flatten();
             let logs: Vec<_> = tab
                 .worker
                 .as_ref()
@@ -1029,24 +1205,49 @@ impl Qrow {
                 let Some(event) = crate::activity::tab_event(event) else {
                     continue;
                 };
-                let error = event.severity == Severity::Error;
+                // The sign-in error explains why the browser opens; the
+                // query has not failed yet.
+                let error = event.severity == Severity::Error && wait.is_none();
                 Self::record_log(tab, event);
                 if error {
-                    Self::record_failure(tab, index == self.active);
+                    Self::record_failure(tab, workspace_visible && index == self.active);
                 }
             }
-            let events: Vec<_> = tab
-                .worker
-                .as_ref()
-                .map(|w| w.events.try_iter().collect())
-                .unwrap_or_default();
             changed |= !events.is_empty();
+            // A query that waits for a sign-in keeps its tab busy and its
+            // status while the session of the tab sends keep-alives or
+            // closes.
+            let waiting = tab
+                .sign_in_wait
+                .is_some()
+                .then(|| (tab.status.clone(), tab.status_detail.clone()));
             for event in events {
-                Self::apply_worker_event(tab, event, index == self.active, &self.profiles, cx);
+                if wait.is_some() && matches!(event, Event::Error { .. }) {
+                    continue;
+                }
+                Self::apply_worker_event(
+                    tab,
+                    event,
+                    workspace_visible && index == self.active,
+                    &self.profiles,
+                    cx,
+                );
+                if let Some((status, detail)) = &waiting {
+                    tab.busy = true;
+                    tab.status = status.clone();
+                    tab.status_detail = detail.clone();
+                }
+            }
+            if let Some(wait) = wait {
+                waits.push((index, wait));
             }
         }
         for (connection, entry) in activity {
             self.record_activity(connection, entry, cx);
+        }
+        for (index, (sign_in, sql)) in waits {
+            self.tabs[index].busy = false;
+            self.wait_for_sign_in(index, sign_in, sql, cx);
         }
         changed
     }
@@ -1069,37 +1270,36 @@ impl Qrow {
             Event::Connecting => {
                 tab.connected = false;
                 tab.busy = true;
-                tab.status = "Connecting…".into();
+                tab.set_status("Connecting…");
             }
             Event::Connected => tab.connected = true,
             Event::Running => {
                 tab.busy = true;
-                tab.status = "Executing…".into();
+                tab.set_status("Executing…");
             }
             Event::KeepAliveStarted => {
                 tab.busy = true;
-                tab.status = "Sending keep-alive…".into();
+                tab.set_status("Sending keep-alive…");
             }
             Event::KeepAliveFinished => {
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.status = if profiles
+                if profiles
                     .iter()
                     .find(|profile| Some(profile.id) == tab.worker_profile)
                     .is_some_and(|profile| profile.lifecycle.keep_alive_seconds > 0)
                 {
-                    "Connected · Keep-alive enabled"
+                    tab.set_status_detail("Connected", "Keep-alive enabled");
                 } else {
-                    "Connected"
+                    tab.set_status("Connected");
                 }
-                .into();
             }
             Event::Columns(columns) => {
                 tab.table.update(cx, |t, cx| {
                     t.delegate_mut().schema(columns);
                     t.refresh(cx);
                 });
-                tab.status = "Fetching preview…".into();
+                tab.set_status("Fetching preview…");
             }
             Event::Rows(rows) => {
                 tab.table.update(cx, |t, cx| {
@@ -1117,16 +1317,15 @@ impl Qrow {
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = if limited {
-                    "Preview · Limit reached"
+                if limited {
+                    tab.set_status_detail("Preview", "Limit reached");
                 } else if more {
-                    "Preview · More rows available"
+                    tab.set_status_detail("Preview", "More rows available");
                 } else {
-                    "Complete"
+                    tab.set_status("Complete");
                 }
-                .into();
                 if !was_cancelling {
-                    tab.panel.success();
+                    tab.panel.success(active);
                 }
             }
             Event::Cancelled => {
@@ -1135,26 +1334,32 @@ impl Qrow {
                 tab.more = false;
                 tab.pending_page = None;
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = "Cancelled · Partial preview retained".into();
+                tab.set_status_detail("Cancelled", "Partial preview retained");
             }
             Event::Error {
                 message: _,
                 disconnected,
+                sign_in_required,
             } => {
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.more = false;
                 tab.pending_page = None;
+                // A session that never opened failed to connect; it was not lost.
+                let was_connected = tab.connected;
                 if disconnected {
                     tab.connected = false;
                 }
                 tab.elapsed = tab.started.take().map(|t| t.elapsed());
-                tab.status = if disconnected {
-                    "Error · Connection lost"
+                if sign_in_required {
+                    tab.set_status_detail("Error", "Sign-in required");
+                } else if disconnected && !was_connected {
+                    tab.set_status_detail("Error", "Connection failed");
+                } else if disconnected {
+                    tab.set_status_detail("Error", "Connection lost");
                 } else {
-                    "Error · Query failed"
+                    tab.set_status_detail("Error", "Query failed");
                 }
-                .into();
                 Self::record_failure(tab, active);
             }
             Event::CancelError(message) => {
@@ -1168,12 +1373,11 @@ impl Qrow {
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
-                tab.status = if matches!(event, Event::IdleDisconnected) {
-                    "Disconnected · Idle timeout"
+                if matches!(event, Event::IdleDisconnected) {
+                    tab.set_status_detail("Disconnected", "Idle timeout");
                 } else {
-                    "Disconnected"
+                    tab.set_status("Disconnected");
                 }
-                .into();
             }
         }
     }
@@ -1272,7 +1476,7 @@ impl Qrow {
                         tab.cancelling = false;
                         tab.more = false;
                         tab.pending_page = None;
-                        tab.status = "Not connected".into();
+                        tab.set_status("Not connected");
                     }
                 } else if action == ProfileSaveAction::Update {
                     for tab in &mut self.tabs {
@@ -1281,9 +1485,10 @@ impl Qrow {
                                 let _ = worker.update_profile(profile.clone());
                             }
                             if profile.lifecycle.keep_alive_seconds == 0
-                                && tab.status == "Connected · Keep-alive enabled"
+                                && tab.status == "Connected"
+                                && tab.status_detail.as_deref() == Some("Keep-alive enabled")
                             {
-                                tab.status = "Connected".into();
+                                tab.set_status("Connected");
                             }
                         }
                     }
@@ -1350,10 +1555,16 @@ impl Qrow {
         {
             self.tab_scroll.scroll_to_item(position);
         }
-        self.tabs[index].panel.output_visible();
-        self.tabs[index]
-            .input
-            .update(cx, |s, cx| s.focus(window, cx));
+        if !self.activity.read(cx).is_open() {
+            self.tabs[index].panel.content_visible();
+            self.tabs[index]
+                .input
+                .update(cx, |s, cx| s.focus(window, cx));
+        } else {
+            let focus = self.tabs[index].input.read(cx).focus_handle(cx);
+            self.activity
+                .update(cx, |view, _| view.return_focus_to(focus));
+        }
         self.show_tab_conversation(window, cx);
         self.changed(cx);
     }
@@ -1386,6 +1597,7 @@ impl Qrow {
             || self.about_open
             || self.tab_form.is_some()
             || self.assistant_state.rename_form.is_some()
+            || self.sign_in_ui.editor.is_some()
     }
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.dialog_open() {
@@ -1515,7 +1727,6 @@ impl Qrow {
             cx.notify();
             return true;
         }
-        let active = index == self.active;
         let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
             let selected = s
@@ -1525,6 +1736,22 @@ impl Qrow {
                 .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
                 .unwrap_or_else(|| s.value().to_string())
         });
+        self.run_tab_sql(index, query, false, cx)
+    }
+    /// Runs `query` in the tab `index`. A connection whose sign-in needs the
+    /// browser waits for it first, unless the query runs `after_sign_in`.
+    fn run_tab_sql(
+        &mut self,
+        index: usize,
+        query: String,
+        after_sign_in: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.tabs.get(index).is_none_or(|tab| tab.busy) {
+            return false;
+        }
+        let active = index == self.active && !self.activity.read(cx).is_open();
+        let tab = &mut self.tabs[index];
         if let Err(e) = sql::validate_single(&query) {
             let message = e.to_string();
             Self::record_log(
@@ -1532,7 +1759,7 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         }
@@ -1548,7 +1775,7 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         };
@@ -1559,19 +1786,47 @@ impl Qrow {
                 LogEvent::new(None, Severity::Error, LogKind::Error, message.clone()),
             );
             Self::record_failure(tab, active);
-            tab.status = format!("Rejected · {message}");
+            tab.set_status_detail("Rejected", message);
             cx.notify();
             return false;
         }
+        // An open session of the connection continues without a new token,
+        // but not while a browser sign-in or a sign-out can change the
+        // account of the sign-in.
+        let live = tab.connected && tab.worker_profile == Some(profile.id) && !tab.release_pending;
+        if !after_sign_in
+            && let Some(sign_in) = profile.authentication.sign_in()
+            && (self.sign_in_changing(sign_in) || !live && self.sign_in_needs_browser(sign_in))
+        {
+            self.wait_for_sign_in(index, sign_in, query, cx);
+            return true;
+        }
+        let tab = &mut self.tabs[index];
+        tab.signed_in_for_run = after_sign_in;
+        tab.submitted_sql = Some(query.clone());
+        // A session that a sign-out or another account released while the
+        // tab was busy closes now, so the query opens a new one.
+        if tab.release_pending {
+            tab.release_pending = false;
+            if let Some(worker) = tab.worker.take() {
+                worker.shutdown();
+            }
+            tab.worker_profile = None;
+            tab.connected = false;
+        }
         if tab.worker.is_none() {
             let wake = self.wake.clone();
-            tab.worker = Some(Worker::new(
+            let credentials = self.credential_provider();
+            let tab = &mut self.tabs[index];
+            tab.worker = Some(Worker::with_connector(
                 Arc::new(move || {
                     let _ = wake.try_send(());
                 }),
-                self.credentials.clone(),
+                self.connector.clone(),
+                credentials,
             ));
         }
+        let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
             t.delegate_mut().empty_message = Some("Waiting for query results…");
@@ -1587,7 +1842,7 @@ impl Qrow {
         tab.panel.execution_started();
         tab.cancelling = false;
         tab.started = Some(Instant::now());
-        tab.status = "Preparing query…".into();
+        tab.set_status("Preparing query…");
         let execution_id = Self::allocate_execution_id(tab);
         tab.worker_profile = Some(profile.id);
         tab.worker
@@ -1629,8 +1884,8 @@ impl Qrow {
             tab.busy = true;
             tab.cancelling = false;
             tab.started = Some(Instant::now());
-            tab.status = "Fetching next page…".into();
             worker.more();
+            tab.set_status("Fetching next page…");
         }
         cx.notify();
     }
@@ -1646,6 +1901,10 @@ impl Qrow {
         self.cancel_tab(self.active, cx);
     }
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.tabs[index].sign_in_wait.is_some() {
+            self.cancel_sign_in_wait(index, cx);
+            return;
+        }
         let t = &mut self.tabs[index];
         if t.busy && !t.cancelling && t.worker.is_some() {
             Self::record_local_log(
@@ -1656,12 +1915,25 @@ impl Qrow {
             );
             t.worker.as_ref().unwrap().cancel();
             t.cancelling = true;
-            t.status = "Cancelling…".into();
+            t.set_status("Cancelling…");
         }
         cx.notify();
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+        self.disconnect_tab(self.active, cx);
+    }
+    fn disconnect_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.profile_busy(id) || self.dialog_open() {
+            return;
+        }
+        for index in 0..self.tabs.len() {
+            if self.tabs[index].saved.profile == Some(id) {
+                self.disconnect_tab(index, cx);
+            }
+        }
+    }
+    fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
             return;
         }
@@ -1677,7 +1949,7 @@ impl Qrow {
             Self::record_log(tab, event);
             tab.worker.as_ref().unwrap().disconnect();
             tab.busy = true;
-            tab.status = "Disconnecting…".into();
+            tab.set_status("Disconnecting…");
             if let (Some(connection), Some(entry)) = (connection, entry) {
                 self.record_activity(connection, entry, cx);
             }
@@ -1966,6 +2238,13 @@ impl Qrow {
         };
         let busy = self.profile_busy(id);
         let in_use = self.profile_in_use(id);
+        let disconnect_enabled = !busy
+            && self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
+        let disconnect =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
         let edited = profile.clone();
         let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.edit_profile(edited.clone(), false, window, cx)
@@ -2004,6 +2283,11 @@ impl Qrow {
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
                 menu.item(menu_section("Connection"))
+                    .item(
+                        PopupMenuItem::new("Disconnect")
+                            .on_click(disconnect)
+                            .disabled(!disconnect_enabled),
+                    )
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
@@ -2304,6 +2588,25 @@ impl Qrow {
                     cx.notify();
                 }
             });
+        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
+        let authentication = connection_form::authentication_select(
+            profile.authentication.sign_in().is_some(),
+            window,
+            cx,
+        );
+        let sign_in = connection_form::sign_in_combobox(
+            &sign_in_choices,
+            profile.authentication.sign_in(),
+            window,
+            cx,
+        );
+        let authentication_subscription =
+            cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
+                if connection_form::uses_sign_in_from_event(event).is_some() {
+                    cx.notify();
+                }
+            });
+        let sign_in_subscription = Self::subscribe_sign_in_list(&sign_in, window, cx);
         self.form = Some(ProfileEditor {
             parameters,
             idle_behavior,
@@ -2317,6 +2620,12 @@ impl Qrow {
             shared_name,
             preferred_select,
             preferred_choices,
+            authentication,
+            sign_in,
+            sign_in_choices,
+            tls: profile.tls,
+            _authentication_subscription: authentication_subscription,
+            _sign_in_subscription: sign_in_subscription,
             profile,
             fields,
             is_new,
@@ -2528,6 +2837,24 @@ impl Qrow {
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
+            profile.tls = form.tls;
+            profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
+                let sign_in =
+                    connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                        .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                        .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
+                anyhow::ensure!(
+                    sign_in.allows_host(&profile.host),
+                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
+                    sign_in.name,
+                    profile.host
+                );
+                Authentication::Oidc {
+                    sign_in: sign_in.id,
+                }
+            } else {
+                Authentication::Password
+            };
             profile.validate()?;
             anyhow::ensure!(
                 !connection_form::profile_name_is_taken(&self.profiles, &profile),
@@ -2540,9 +2867,19 @@ impl Qrow {
             cx.notify();
             return;
         }
-        let password = Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string());
-        if form.is_new && password.is_empty() && !self.demo {
-            form.error = Some("Enter the LDAP password for this connection.".into());
+        let password = if profile.authentication == Authentication::Password {
+            Zeroizing::new(form.fields[4].read(cx).unmask_value().to_string())
+        } else {
+            Zeroizing::new(String::new())
+        };
+        // A profile that used a sign-in may have no stored password.
+        let needs_password = form.is_new || form.profile.authentication != Authentication::Password;
+        if profile.authentication == Authentication::Password
+            && needs_password
+            && password.is_empty()
+            && !self.demo
+        {
+            form.error = Some("Enter the password for this connection.".into());
             cx.notify();
             return;
         }
@@ -2819,9 +3156,9 @@ impl Qrow {
                 .collect();
             t.refresh(cx);
         });
-        tab.status = "Complete · Demo data".into();
+        tab.set_status_detail("Complete", "Demo data");
         tab.elapsed = Some(Duration::from_millis(842));
-        tab.panel.success();
+        tab.panel.success(true);
     }
 }
 /// The title of a section of a context menu. GPUI Kit draws its menu labels
@@ -2878,6 +3215,7 @@ fn demo_workspace() -> Workspace {
         active_tab: 0,
         active_tabs: BTreeMap::new(),
         shared_catalogs,
+        sign_ins: vec![],
     }
 }
 

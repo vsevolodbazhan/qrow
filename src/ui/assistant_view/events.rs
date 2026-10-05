@@ -250,7 +250,7 @@ impl Qrow {
                 turn,
                 error,
             }) => {
-                let viewed = self.assistant_state.open
+                let viewed = self.assistant_transcript_visible(window, cx)
                     && self.displayed_thread().as_deref() == Some(thread_id.as_str());
                 let run = self.thread_run_mut(&thread_id);
                 run.pending_reply = false;

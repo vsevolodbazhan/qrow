@@ -4,7 +4,7 @@ use crate::support::{
     MemoryCredentials, TestApp, bounds_of, label, labelled, labels, offline_profile, present,
 };
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{ElementId, ScrollDelta, TestAppContext, point, px};
+use gpui_kit::{ElementId, ScrollDelta, TestAppContext, point, px, size};
 use qrow::model::{SavedTab, Workspace};
 use qrow::ui::{Quit, ToggleAssistant};
 use std::time::Duration;
@@ -79,10 +79,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
     }
     app.show_conversation(cx);
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "assistant-send").as_deref(),
-            Some("Send · Ask")
-        );
+        assert_eq!(label(window, "assistant-send").as_deref(), Some("Send"));
     });
 }
 
@@ -126,6 +123,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
     let (app, codex) = launch(cx, Workspace::default());
+    let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-assistant"));
     app.open_assistant(cx);
     // The synthetic server holds this turn until the release.
     app.send(cx, "Return to the latest message while hidden");
@@ -143,13 +141,67 @@ fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
             label(window, "toggle-assistant").as_deref(),
             Some("Toggle Assistant, working")
         );
+        assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
     });
     codex.mark("latest-release");
     app.wait_until(cx, "the reply-ready toggle", REPLY_TIMEOUT, |window, _| {
         label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
     });
+    app.update(cx, |window, _| {
+        assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
+    });
     app.click(cx, "toggle-assistant");
     app.wait_reply(cx, "I can help with this query");
+}
+
+#[gpui_kit::test]
+fn the_narrow_thread_list_keeps_a_reply_unread_after_activity_closes(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let mut workspace = codex.workspace(with_connection());
+    let profile = workspace.profiles[0].id;
+    workspace.settings.assistant.panel_width = 536.;
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.send(cx, "Return to the latest message while listed");
+    app.wait_for(cx, "assistant-working");
+    app.show_threads(cx);
+    codex.mark("latest-release");
+    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find(format!("connection-status-{profile}"))
+                .label()
+                .unwrap()
+                .contains("assistant reply ready")
+        );
+    });
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_for(cx, "assistant-thread-list");
+    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.show_conversation(cx);
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_label(cx, "Toggle Assistant");
+}
+
+#[gpui_kit::test]
+fn widening_the_window_reads_the_revealed_assistant_reply(cx: &mut TestAppContext) {
+    let (app, codex) = launch(cx, with_connection());
+    app.open_assistant(cx);
+    app.send(cx, "Return to the latest message while listed");
+    app.wait_for(cx, "assistant-working");
+    cx.simulate_window_resize(app.window, size(px(1100.), px(820.)));
+    app.show_threads(cx);
+    codex.mark("latest-release");
+    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_gone(cx, "assistant-transcript");
+
+    cx.simulate_window_resize(app.window, size(px(1280.), px(820.)));
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_label(cx, "Toggle Assistant");
 }
 
 #[gpui_kit::test]

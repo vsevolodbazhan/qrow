@@ -16,12 +16,19 @@ Without a selection, Qrow submits the full editor contents. It does not select
 the statement under the cursor. Each execution must contain one SQL statement.
 Qrow rejects multiple statements before sending them to the server.
 
-A new accepted execution clears the previous preview and the previous Error
-badge. The badge stays clear while the execution runs unless that execution
-fails. Results appear as Qrow fetches them. Switching connections does not clear
-the preview or close the tab's session.
+The dot of a tab shows the state of its work. Point to the dot to read the
+status of the last query, for example **Error: Connection failed**. The bar
+above Results shows the rows, the loaded rows, the columns, and the elapsed
+time of the last query as separate labels. Action tooltips show
+the command name and its keyboard shortcut on one line. The name and shortcut
+share a vertical center.
+
+A new accepted execution clears the previous preview and the unread outcome
+of that tab. The blue dot shows that the execution continues. Results appear
+as Qrow fetches them. Switching connections does not clear the preview or
+close the tab's session.
 The Logs panel remains across executions in the tab. A successful execution
-also clears the badge, even if you selected Logs after the failure. See
+also clears the unread error, even if you selected Logs after the failure. See
 [Results](results.md) for paging and storage limits.
 
 ## Logs
@@ -53,8 +60,39 @@ Qrow selects Logs when a query fails. It selects Results when a query succeeds,
 after the first preview fetch or completion without a result set. This applies
 even if you selected Logs before completion. You can select either panel again
 after completion. Background queries update their own panel without changing
-the active query tab. A failed background query shows an unread error indicator
-on its tab.
+the active query tab. A failed background query shows a red dot on its tab.
+A successful background query shows a green dot until its Results show.
+
+## Query tab state
+
+Each query tab has one status dot before its close button:
+
+| Dot | State |
+| --- | --- |
+| Dim blue | The session is connected and idle. The dot uses 40% opacity. |
+| Faint blue | The session is connecting. The dot uses 20% opacity. |
+| Blue | Query or session work continues. |
+| Green | A query result is ready and unread. |
+| Red | A query or keep-alive error is unread. |
+| No dot | No live session, work, or unread result. |
+
+Point to the dot to see the tab name and a short status beside it. The status
+uses secondary text. The name and status share a vertical center. If the name
+wraps, the status stays beside its first line. The accessible name also gives
+the states in words.
+The dot shows SQL execution and session state. The priority is error, running
+work, connecting, unread success, then connected and idle. Assistant turns and
+approval requests use the
+[conversation indicators](assistant.md#conversation-state). SQL that the
+assistant runs uses the same query dot.
+
+Results and errors that finish behind [Activity](activity.md) stay unread.
+Show the Results to read a successful query. Show Logs to read an error.
+A new execution clears the unread outcome of that tab. Reading one tab does
+not read the other tabs of its connection. When you read the outcome, the
+dot returns to dim blue if the session stays open. Otherwise, it disappears.
+
+## Logs history
 
 Qrow puts Logs entries into history groups. One group holds all entries of
 one query execution. An entry without an execution has its own group. Examples

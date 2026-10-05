@@ -5,7 +5,9 @@ use qrow::{
         Catalog, CatalogConfig, CatalogWorker, Event, MINUTE, RelationKind, Request, Scope, Status,
         Unfinished, refresh_due,
     },
-    connector::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Session},
+    connector::{
+        Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
+    },
     logs::LogKind,
     model::{Batch, CatalogRefresh, CatalogSettings, Column, Profile, Row},
     storage,
@@ -19,7 +21,6 @@ use std::{
     time::{Duration, Instant, UNIX_EPOCH},
 };
 use uuid::Uuid;
-use zeroize::Zeroizing;
 
 type Tables = BTreeMap<String, BTreeMap<String, (&'static str, Vec<&'static str>)>>;
 
@@ -89,8 +90,8 @@ impl Server {
 
 struct Fake(Arc<Server>);
 impl Connector for Fake {
-    fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
-        assert_eq!(password.as_str(), "synthetic-password");
+    fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
+        assert_eq!(secret.value()?.as_str(), "synthetic-password");
         self.0.connects.fetch_add(1, Ordering::SeqCst);
         self.0.users.lock().unwrap().push(profile.username.clone());
         std::thread::sleep(*self.0.connect_delay.lock().unwrap());
@@ -365,7 +366,7 @@ impl Harness {
             cache,
             Arc::new(|| {}),
             Arc::new(Fake(server.clone())),
-            Arc::new(|_| Ok(Zeroizing::new("synthetic-password".into()))),
+            Arc::new(|_| Ok(Secret::password("synthetic-password"))),
             minute,
         );
         let mut harness = Self {
@@ -1257,6 +1258,36 @@ fn an_automatic_refresh_stops_when_the_connection_becomes_cold() {
     assert_eq!(resumed, ["sales", "sales_tmp", "salesx"]);
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
     assert_eq!(connects(&server), 2);
+}
+
+#[test]
+fn idle_protection_follows_only_the_member_of_an_active_refresh() {
+    let server = warehouse();
+    *server.block_schema.lock().unwrap() = Some("sales".into());
+    let mut h = Harness::new(server.clone(), profile(), None);
+    let guard = h.worker.idle_guard(h.id);
+    let other = h.worker.idle_guard(Uuid::new_v4());
+    assert!(guard().is_none());
+    // An explicit refresh can open its session without a connected tab.
+    h.worker.refresh(h.id, Scope::Connection);
+    h.wait(|h| h.status.active.is_some());
+    assert!(guard().is_some());
+    assert!(other().is_none());
+    h.worker.stop(h.id);
+    h.wait(|h| h.status.is_idle());
+    assert!(guard().is_none());
+
+    // Failed and timed-out refreshes must also release idle protection.
+    let mut profile = profile();
+    profile.catalog.timeout_minutes = 1;
+    let mut timed = Harness::timed(server, profile, None, Duration::from_millis(100));
+    let guard = timed.worker.idle_guard(timed.id);
+    timed.worker.refresh(timed.id, Scope::Connection);
+    timed.wait(|h| h.status.active.is_some());
+    assert!(guard().is_some());
+    timed.wait(|h| h.status.is_idle());
+    assert!(guard().is_none());
+    assert!(timed.catalog().error.is_some());
 }
 
 #[test]

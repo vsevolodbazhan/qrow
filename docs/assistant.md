@@ -26,8 +26,8 @@ automatically**.
 
 ## Work with SQL
 
-Select a query tab. Select **Toggle Assistant** in the tab strip or in the
-**View** menu, or press **⌘J**. Write a message and press **Enter** or
+Select a query tab. Click the assistant button near the right end of the
+status bar, select **Toggle Assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
 **Cancel**. While Codex starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current turn.
@@ -50,7 +50,7 @@ turn ends or fails. It also shows while Codex writes text or uses tools. It does
 not show while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
-list, the tabs, and the assistant toggle show.
+list and the assistant toggle show.
 
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
@@ -207,7 +207,9 @@ read-only. Select **Run automatically** only if you accept this risk.
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Each row shows the conversation title, its connection, the time of its last
-activity, and its [state](#conversation-state). Older saved conversations
+activity, and its [state](#conversation-state). The connection and age use
+separate labels. **Tab Closed** shows beside the connection when its tab is
+closed. Older saved conversations
 without an activity time show **Earlier**. On a narrow pane, select **Toggle
 Conversation List** to open the list. When you select a conversation there,
 Qrow selects its tab and connection, and the pane shows that conversation. On a
@@ -261,8 +263,8 @@ to Latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a
 new reply. New text in that reply follows the bottom while you stay near it.
 
-The Send button shows the current query mode, **Ask** or **Run**. Select **Ask
-before running** or **Run automatically** from its menu to change the mode.
+The SQL mode menu beside **Send** shows **Ask First** or **Auto Run**. Select
+**Ask before running** or **Run automatically** from this menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
 and service tier below the message field. Codex supplies
 the available choices. Qrow selects Codex's default model when the workspace
@@ -314,20 +316,31 @@ move the tab while its conversation works or waits for approval.
 
 ## Conversation state
 
-Qrow shows the state of each conversation in the thread list and on its tab.
-A tab shows its state before its close button. A tab with a conversation shows
-the assistant icon there. While the conversation works, the tab shows an
-accent-colored spinner, also while the assistant runs the query of the tab. A
-query that you start shows a gray spinner. The **Toggle Assistant** button
-shows the most urgent state of all conversations.
+Qrow shows the state of each conversation in the thread list.
+The assistant button in the status bar keeps its assistant icon. Its dot is at
+the top right corner of the button.
+The dot shows the most urgent state of all conversations.
+The thread list shows a dot for each conversation.
 
-- A spinner means that Codex works on a turn.
-- A warning-colored assistant icon means that a query waits for your approval.
-- A green assistant icon means that a reply is ready.
-- A red alert icon means that a turn ended with an error.
+- A blue dot means that Codex works on a turn.
+- A yellow dot means that a query waits for your approval.
+- A green dot means that an unread reply is ready.
+- A red dot means that a turn ended with an unread error.
+- An idle conversation has no dot.
 
-The toggle uses this order of priority: approval, error, reply, work. A ready
-reply or an error stays until you show its conversation with the pane open.
+The dots use this order of priority: approval, error, work, unread reply.
+A ready reply or an error stays until its transcript shows. The thread list
+and Activity do not read replies. Approval stays until you approve or cancel
+the request. Tooltips and accessible names give the state in words.
+Conversation tooltips show the title and a short status beside its first line.
+The title and status share a vertical center. The
+assistant toggle tooltip shows **Assistant** and its keyboard shortcut first.
+Its status appears below. The name and shortcut share a vertical center.
+Status text uses secondary styling.
+
+The [query tab dot](queries.md#query-tab-state) shows SQL execution and session
+state. Assistant turns and approval requests do not change that dot. When the
+assistant runs SQL, the query tab shows its execution state.
 
 ## Pane and connection state
 

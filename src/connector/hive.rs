@@ -1,13 +1,60 @@
 use super::{
-    Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Session, sasl,
-    t_c_l_i_service::*, wait_for_completion,
+    Cancellation, Completion, Connector, MetadataRequest, QueryError, QueryState, Secret, Session,
+    sasl, t_c_l_i_service::*, wait_for_completion,
 };
-use crate::model::{Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row};
+use crate::{
+    model::{Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
+    tls::Trust,
+};
 use anyhow::{Context, Result, ensure};
-use std::sync::Arc;
-use zeroize::Zeroizing;
+use std::{sync::Arc, time::Duration};
 
-pub struct HiveConnector;
+/// Opens HiveServer2 sessions. `trust` verifies the servers of TLS connections.
+#[derive(Clone, Debug, Default)]
+pub struct HiveConnector {
+    pub trust: Trust,
+}
+
+impl HiveConnector {
+    pub fn new(trust: Trust) -> Self {
+        Self { trust }
+    }
+}
+
+/// Whether an error is a read or write that did not finish in time.
+fn is_timeout(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<thrift::Error>(),
+            Some(thrift::Error::Transport(transport))
+                if transport.kind == thrift::TransportErrorKind::TimedOut
+        ) || cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == std::io::ErrorKind::TimedOut)
+    })
+}
+
+/// Names the setup step of a failure. A timeout during setup usually means
+/// that Kyuubi still starts the engine, so the message says that. `timeout`
+/// is the response timeout of the connection. `hint`
+/// follows the step when the server reported an error.
+fn setup_error(
+    error: anyhow::Error,
+    step: &str,
+    hint: Option<&str>,
+    timeout: Duration,
+) -> anyhow::Error {
+    if is_timeout(&error) {
+        return anyhow::anyhow!(
+            "Kyuubi did not answer within {} seconds when Qrow tried to {step}. A new Spark engine can take several minutes to start. Run the query again later, raise Response timeout in the connection, or ask the Kyuubi administrators to check the engine logs.",
+            timeout.as_secs()
+        );
+    }
+    match hint {
+        Some(hint) => error.context(format!("Could not {step}. {hint}")),
+        None => error.context(format!("Could not {step}")),
+    }
+}
 
 struct ConnectionFailure {
     message: String,
@@ -54,8 +101,44 @@ impl std::error::Error for ErrorDetails {}
 struct ErrorDetails(String);
 struct Credentials {
     profile: Profile,
-    password: Zeroizing<String>,
+    secret: Secret,
+    trust: Trust,
 }
+
+impl Credentials {
+    /// Authenticates a new transport. A sign-in supplies a token that is
+    /// valid now, for the identity that opened the session.
+    fn connect(&self) -> Result<sasl::Client> {
+        let profile = &self.profile;
+        let token = matches!(profile.authentication, Authentication::Oidc { .. });
+        ensure!(
+            matches!(self.secret, Secret::Token(_)) == token,
+            "The credentials do not match the authentication of the connection"
+        );
+        let secret = self.secret.value()?;
+        let endpoint = sasl::Endpoint {
+            host: &profile.host,
+            port: profile.port,
+            tls: profile.tls.then_some(&self.trust),
+            read_timeout: profile.lifecycle.response_timeout(),
+        };
+        sasl::connect(&endpoint, &profile.username, &secret).map_err(|error| {
+            if error.downcast_ref::<sasl::Rejected>().is_none() {
+                return error;
+            }
+            let advice = if token {
+                format!(
+                    "Kyuubi did not accept the access token for the database account \"{}\". The account may not be available to the signed-in identity, or the server may not accept access tokens.",
+                    profile.username
+                )
+            } else {
+                "Check the username, password, and server authentication mode.".to_owned()
+            };
+            error.context(advice)
+        })
+    }
+}
+
 struct Cancel {
     credentials: Arc<Credentials>,
     handle: TOperationHandle,
@@ -63,15 +146,8 @@ struct Cancel {
 
 impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
-        let p = &self.credentials.profile;
         // A separate authenticated transport keeps CancelOperation independent of blocked fetching/polling.
-        let mut client = sasl::connect(
-            &p.host,
-            p.port,
-            &p.username,
-            &self.credentials.password,
-            p.lifecycle.response_timeout(),
-        )?;
+        let mut client = self.credentials.connect()?;
         check(
             client
                 .cancel_operation(TCancelOperationReq::new(self.handle.clone()))?
@@ -90,31 +166,32 @@ pub struct HiveSession {
 }
 
 impl Connector for HiveConnector {
-    fn connect(&self, profile: &Profile, password: Zeroizing<String>) -> Result<Box<dyn Session>> {
+    fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
         profile.validate()?;
-        let mut client = sasl::connect(
-            &profile.host,
-            profile.port,
-            &profile.username,
-            &password,
-            profile.lifecycle.response_timeout(),
-        )?;
-        let opened = client.open_session(TOpenSessionReq::new(
-            TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
-            Some(profile.username.clone()),
-            None,
-            Some(profile.parameters.clone()),
-        ))?;
-        check(opened.status)?;
+        let credentials = Arc::new(Credentials {
+            profile: profile.clone(),
+            secret,
+            trust: self.trust.clone(),
+        });
+        let timeout = profile.lifecycle.response_timeout();
+        let mut client = credentials.connect()?;
+        let opened = (|| -> Result<_> {
+            let opened = client.open_session(TOpenSessionReq::new(
+                TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
+                Some(profile.username.clone()),
+                None,
+                Some(profile.parameters.clone()),
+            ))?;
+            check(opened.status.clone())?;
+            Ok(opened)
+        })()
+        .map_err(|error| setup_error(error, "open a session", None, timeout))?;
         let session = opened
             .session_handle
             .context("Kyuubi returned no session handle")?;
         let mut connection = HiveSession {
             client,
-            credentials: Arc::new(Credentials {
-                profile: profile.clone(),
-                password,
-            }),
+            credentials,
             session: Some(session),
             operation: None,
             preview_operation: None,
@@ -125,16 +202,23 @@ impl Connector for HiveConnector {
                 opened.server_protocol_version.0 >= 5,
                 "Kyuubi does not support columnar results (HiveServer2 protocol V6)"
             );
-            connection.execute(&format!("USE `{}`", profile.database.replace('`', "``")))?;
-            if wait_for_completion(&mut connection, None)? == Completion::Cancelled {
-                anyhow::bail!("Initial database selection was cancelled");
-            }
-            connection.close_operation()?;
+            let database = (|| -> Result<()> {
+                connection.execute(&format!("USE `{}`", profile.database.replace('`', "``")))?;
+                if wait_for_completion(&mut connection, None)? == Completion::Cancelled {
+                    anyhow::bail!("Initial database selection was cancelled");
+                }
+                connection.close_operation()
+            })();
+            database.map_err(|error| {
+                let step = format!("select the initial database \"{}\"", profile.database);
+                let hint = "Check that it exists on this server, or change Initial database in the connection";
+                setup_error(error, &step, Some(hint), timeout)
+            })?;
             Ok(())
         })();
         if let Err(error) = setup {
             let _ = connection.close();
-            return Err(error.context("Could not initialize the session"));
+            return Err(error);
         }
         Ok(Box::new(connection))
     }

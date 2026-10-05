@@ -45,7 +45,7 @@ fn next_page_of_a_long_result(cx: &mut TestAppContext) {
     let (workspace, credentials) = Kyuubi::get().connections(&["Alpha"], "");
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.run_sql(cx, "SELECT concat('page-', lpad(CAST(id AS STRING), 5, '0')) AS value FROM range(5001) ORDER BY id");
-    app.wait_status(cx, "Preview · More rows available");
+    app.wait_status(cx, "Preview: More rows available");
     let samples: Vec<_> = (1..=4)
         .map(|page| {
             let first = format!("page-{:05}", page * 1000);

@@ -2,8 +2,9 @@
 //! that share one catalog.
 //!
 //! The worker opens its own session for the queued refreshes and closes it
-//! when the queue is empty, so it never changes the idle timer or the result
-//! cursor of a query tab. It runs one refresh at a time, with the profile of
+//! when the queue is empty. A refresh defers idle disconnection of its member's
+//! tabs without resetting their idle timers or changing their result cursors.
+//! It runs one refresh at a time, with the profile of
 //! the member that asked for it. While a tab of a member has a live session,
 //! the worker also refreshes the catalog when its refresh period passes.
 
@@ -14,12 +15,11 @@ use super::{
 use crate::{
     connector::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
-        hive::HiveConnector,
     },
     logs::{LogEvent, LogKind, Severity},
     model::{CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
-    storage::{self, Credentials},
-    worker::PasswordProvider,
+    storage,
+    worker::CredentialProvider,
 };
 use anyhow::Result;
 use std::{
@@ -177,16 +177,10 @@ impl CatalogWorker {
         config: CatalogConfig,
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
-        credentials: Arc<dyn Credentials>,
+        connector: Arc<dyn Connector>,
+        credentials: CredentialProvider,
     ) -> Self {
-        Self::with_connector(
-            config,
-            cache,
-            wake,
-            Arc::new(HiveConnector),
-            Arc::new(move |profile| credentials.password(profile.id)),
-            MINUTE,
-        )
+        Self::with_connector(config, cache, wake, connector, credentials, MINUTE)
     }
 
     /// `minute` is the length of one minute of the refresh period and
@@ -196,7 +190,7 @@ impl CatalogWorker {
         cache: Option<PathBuf>,
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
-        passwords: PasswordProvider,
+        credentials: CredentialProvider,
         minute: Duration,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
@@ -219,7 +213,7 @@ impl CatalogWorker {
             dirty: false,
             published: None,
             connector,
-            passwords,
+            credentials,
             cancelled: cancelled.clone(),
             target: target.clone(),
             running: running.clone(),
@@ -257,6 +251,18 @@ impl CatalogWorker {
     /// Read `scope` again with the profile of `member`.
     pub fn refresh(&self, member: Uuid, scope: Scope) {
         let _ = self.tx.send(Command::Refresh(Request { member, scope }));
+    }
+
+    /// Protect only the tabs of the member that runs the active refresh.
+    pub fn idle_guard(&self, member: Uuid) -> crate::worker::IdleGuard {
+        let running = self.running.clone();
+        Arc::new(move || {
+            running
+                .lock()
+                .unwrap()
+                .filter(|(_, runner)| *runner == member)
+                .map(|(batch, _)| batch)
+        })
     }
 
     /// Refresh the catalog with `member` if Qrow has never read it. The
@@ -389,7 +395,7 @@ struct Runner {
     /// The last snapshot that the UI received, and when.
     published: Option<(Arc<Catalog>, Instant)>,
     connector: Arc<dyn Connector>,
-    passwords: PasswordProvider,
+    credentials: CredentialProvider,
     cancelled: Arc<AtomicU64>,
     target: Target,
     running: Running,
@@ -1169,8 +1175,8 @@ impl Runner {
         }
         if self.session.is_none() {
             let started = Instant::now();
-            let password = (self.passwords)(&self.profile)?;
-            let session = self.connector.connect(&self.profile, password)?;
+            let secret = (self.credentials)(&self.profile)?;
+            let session = self.connector.connect(&self.profile, secret)?;
             self.session = Some((self.profile.id, session));
             let duration = started.elapsed();
             self.log(

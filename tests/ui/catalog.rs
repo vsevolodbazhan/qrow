@@ -1,8 +1,8 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, bounds_of, connection_row, elements, label, labelled, menu_item,
-    offline_profile, press_at, shows, value,
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tooltip_header_center, bounds_of,
+    connection_row, elements, label, labelled, menu_item, offline_profile, press_at, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -228,7 +228,7 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             cx,
             &format!("s\u{1f}{}\u{1f}finance\u{1f}detail", profiles[2].id),
         );
-        // Scope-specific refreshes retain the same alignment with a spinner.
+        // Scope-specific refreshes retain the same status centerline.
         for (depth, parent) in parents.iter().enumerate() {
             let refresh = format!("{parent}\u{1f}notice\u{1f}refresh");
             app.click(cx, refresh.clone());
@@ -251,17 +251,33 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             );
             assert_notice_alignment(&app, cx, parent);
             let status = if depth == 0 {
-                format!("connection-busy-{}", profiles[0].id)
+                app.update(cx, |window, cx| {
+                    assert_connection_dot(window, profiles[0].id, cx.theme().info);
+                });
+                format!("connection-status-{}", profiles[0].id)
             } else {
                 format!("{parent}\u{1f}busy")
             };
             assert_status_alignment(&app, cx, &status);
         }
         drop(listener);
-        // Failed refreshes keep the same trailing lane for their warning icons.
+        // Failed refreshes keep the same centerline for their dot or icon.
         for (depth, parent) in parents.iter().enumerate() {
             let status = if depth == 0 {
-                format!("connection-error-{}", profiles[0].id)
+                let status = format!("connection-status-{}", profiles[0].id);
+                app.wait_until(
+                    cx,
+                    "the connection refresh error",
+                    Duration::from_secs(10),
+                    |window, _| {
+                        label(window, status.clone())
+                            .is_some_and(|text| text.contains("schema refresh error"))
+                    },
+                );
+                app.update(cx, |window, cx| {
+                    assert_connection_dot(window, profiles[0].id, cx.theme().danger);
+                });
+                status
             } else {
                 format!("{parent}\u{1f}error-icon")
             };
@@ -899,7 +915,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
 
     // The status bar opens the connection with the newest unseen error.
     // Showing its Activity marks its errors as seen.
-    app.click(cx, "toggle-activity");
+    app.click(cx, format!("connection-status-{}", profile.id));
     app.wait_for(cx, "activity");
     let activity = app.copy_activity(cx);
     assert!(
@@ -958,8 +974,16 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
                 == Some("Unreachable, schema refresh error")
         },
     );
-    // A click on the warning opens the Activity of the connection.
-    app.click(cx, format!("connection-error-{}", profile.id));
+    // The unread dot clears, while the last refresh error stays in the row.
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .try_find(format!("connection-status-{}", profile.id))
+                .is_none()
+        )
+    });
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Show Activity");
     app.wait_for(cx, "activity");
     assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
@@ -1277,7 +1301,7 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
 }
 
 #[gpui_kit::test]
-fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut TestAppContext) {
+fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAppContext) {
     // The server accepts the session, then closes it after a second, so the
     // refresh fails while the tooltip is open.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1299,7 +1323,7 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
         .unwrap();
     let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
     let tooltip = |app: &TestApp, cx: &mut TestAppContext| {
-        app.update(cx, |window, _| label(window, "catalog-tooltip"))
+        app.update(cx, |window, _| label(window, "status-tooltip-status"))
     };
 
     app.context_menu(cx, connection_row(profile.id));
@@ -1307,24 +1331,54 @@ fn an_open_connection_tooltip_shows_a_refresh_error_when_it_arrives(cx: &mut Tes
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    assert_eq!(tooltip(&app, cx).as_deref(), Some("127.0.0.1 · synthetic"));
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("In Use"));
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Closing")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-Host").as_deref(),
+            Some("Host: 127.0.0.1")
+        );
+        let title = bounds_of(window, "status-tooltip-title");
+        let status = bounds_of(window, "status-tooltip-status");
+        let detail = bounds_of(window, "status-tooltip-metadata");
+        assert!(status.left() > title.right());
+        assert!(status.top() < title.bottom());
+        assert_eq!(title.left(), detail.left());
+        assert!(detail.top() > title.bottom());
+        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+    });
 
-    // The pointer stays on the row. The open tooltip adds the error.
+    // The pointer stays on the row. The open tooltip changes only its status.
     app.wait_until(
         cx,
-        "the error in the tooltip",
+        "the unread error status in the tooltip",
         Duration::from_secs(20),
         |window, _| {
-            label(window, "catalog-tooltip")
-                .is_some_and(|text| text.starts_with("127.0.0.1 · synthetic\n"))
+            label(window, "status-tooltip-status").as_deref() == Some("Unread Error")
+                && label(window, connection_row(profile.id)).as_deref()
+                    == Some("Closing, schema refresh error")
         },
     );
     app.update(cx, |window, _| {
         assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Unread Error")
+        );
+        assert_eq!(
             label(window, connection_row(profile.id)).as_deref(),
             Some("Closing, schema refresh error")
         );
+        assert!(window.try_find("status-tooltip-error").is_none());
+        assert_eq!(
+            label(window, "status-tooltip-User").as_deref(),
+            Some("User: synthetic")
+        );
     });
+    app.click(cx, format!("connection-status-{}", profile.id));
+    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
 
 #[gpui_kit::test]

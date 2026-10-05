@@ -1,5 +1,6 @@
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, label, menu_item, offline_profile,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, connection_row, label, menu_item,
+    offline_profile,
 };
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{InputEvent as _, MouseMoveEvent, TestAppContext};
@@ -164,6 +165,13 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
     });
     cx.executor().advance_clock(Duration::from_millis(800));
     app.wait_for(cx, "tooltip");
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Save Connection")
+        );
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
 
     // The shortcut closes the form under the pointer, so the Save button
     // never gets a hover-out. The tooltip closes with the form.
@@ -200,6 +208,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
         };
         let order = [
             "Connection",
+            "Disconnect",
             "Edit",
             "Duplicate",
             "Delete",
@@ -218,6 +227,16 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
     // A dismissed menu is released; the leak detector fails the test otherwise.
     app.press(cx, "escape");
     app.wait_gone(cx, "popup-menu");
+
+    // With no live session, Disconnect cannot run. Keyboard navigation
+    // skips it and reaches Edit, the first enabled command.
+    app.context_menu(cx, connection_row(original));
+    app.choose(cx, "popup-menu", "Disconnect");
+    app.wait_for(cx, "popup-menu");
+    app.press(cx, "down");
+    app.press(cx, "enter");
+    app.wait_for(cx, "connection-name");
+    cancel_form(&app, cx);
 
     app.context_menu(cx, connection_row(original));
     app.choose(cx, "popup-menu", "Edit");

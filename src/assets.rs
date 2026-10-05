@@ -7,10 +7,16 @@ pub(crate) const APP_ICON: &str = "app-icons/qrow-256.png";
 #[cfg(test)]
 const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
-const ASSISTANT_ICONS: [&str; 2] = ["icons/bot.svg", "icons/panel-right.svg"];
+const STATUS_BAR_ICONS: [&str; 4] = [
+    "icons/bot.svg",
+    "icons/plug.svg",
+    "icons/key-round.svg",
+    "icons/activity.svg",
+];
 
 // Icons outside the GPUI Kit default set. The assistant tool call cards use
-// the icons after `Send`, and the status bar uses `Activity`.
+// the icons after `Send`. The status bar uses `Activity`, `Plug`, and
+// `KeyRound`, and the Sign-ins sidebar uses `KeyRound`.
 gpui_kit::assets::icon_assets!(
     QrowIconAssets,
     [
@@ -27,6 +33,8 @@ gpui_kit::assets::icon_assets!(
         ScrollText,
         Table2,
         Columns3,
+        KeyRound,
+        Plug,
     ]
 );
 
@@ -80,8 +88,8 @@ mod tests {
     }
 
     #[test]
-    fn assistant_icons_are_available() {
-        for icon in ASSISTANT_ICONS {
+    fn status_bar_icons_are_available() {
+        for icon in STATUS_BAR_ICONS {
             assert!(Assets.load(icon).unwrap().is_some(), "{icon} is missing");
         }
     }

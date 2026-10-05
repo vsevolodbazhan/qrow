@@ -14,7 +14,7 @@ fn main() {
         .run(move |cx| {
             ui::init(cx);
             let title = if environment.is_demo() {
-                "Qrow · Demo"
+                "Qrow (Demo)"
             } else {
                 "Qrow"
             };

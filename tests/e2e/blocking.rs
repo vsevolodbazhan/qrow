@@ -3,11 +3,14 @@
 use crate::support::fixture::{
     Kyuubi, QUERY_TIMEOUT, REGISTER_BLOCKING, blocking, evidence, token,
 };
-use crate::support::{TestApp, cell, connection_row, label, labelled, shows};
+use crate::support::{
+    TestApp, assert_connection_dot, assert_tab_dot, cell, connection_row, label, labelled, shows,
+};
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::Profile;
-use qrow::ui::Quit;
+use qrow::ui::{Quit, RunQuery};
 use std::time::Duration;
 
 fn launch(cx: &mut TestAppContext, names: &[&str]) -> (TestApp, Vec<Profile>) {
@@ -83,7 +86,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
     app.wait_cell(cx, 0, 1, "switch-a-0000");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "switch-a-1000");
-    app.wait_status(cx, "Preview · More rows available");
+    app.wait_status(cx, "Preview: More rows available");
     app.wait_status(cx, "Sending keep-alive");
 
     // The row of the hidden connection shows its running heartbeat.
@@ -95,7 +98,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
 
     app.select_connection(cx, alpha);
     app.wait_cell(cx, 0, 1, "switch-a-1000");
-    app.wait_status(cx, "Connected · Keep-alive enabled");
+    app.wait_status(cx, "Connected: Keep-alive enabled");
     app.wait_cell(cx, 0, 1, "switch-a-1000");
     app.click(cx, "next-page");
     app.wait_cell(cx, 0, 1, "switch-a-2000");
@@ -129,17 +132,43 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
     let alpha = &profiles[0];
     app.run_complete(cx, REGISTER_BLOCKING);
 
-    // Issue #40: selecting Results does not acknowledge an unread error, and a
-    // retry clears the badge before it finishes.
+    // A retry clears an unread error even when Activity covers the query.
+    let failed = token("badge-error");
+    app.type_sql(
+        cx,
+        &format!(
+            "SELECT raise_error(concat('Synthetic failure ', qrow_block(id, '{failed}', CAST(1000 AS BIGINT)))) FROM range(1)"
+        ),
+    );
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        window.click("toggle-activity", cx);
+    });
+    app.wait_until(cx, "the unread error", QUERY_TIMEOUT, |window, _| {
+        window.find("toggle-activity").label() == Some("Activity, 1 unseen error")
+    });
+    app.dispatch(cx, RunQuery);
+    app.wait_until(
+        cx,
+        "the retry without an unread error",
+        QUERY_TIMEOUT,
+        |window, _| window.find("toggle-activity").label() == Some("Activity, in use"),
+    );
+    app.wait_until(cx, "the retry error", QUERY_TIMEOUT, |window, _| {
+        window.find("toggle-activity").label() == Some("Activity, 1 unseen error")
+    });
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+
+    // Visible errors are read. Retrying still works with either panel selected.
     for (panel_click, milliseconds) in [(true, 3000), (false, 1000)] {
         app.run_sql(cx, "SELECT missing_column AS value FROM range(1)");
-        wait_tab(&app, cx, "Query 1, unread error");
+        app.wait_status(cx, "Error: Query failed");
         if panel_click {
-            app.wait_status(cx, "Error · Query failed");
             app.update(cx, |window, _| {
                 assert_eq!(
                     label(window, connection_row(alpha.id)).as_deref(),
-                    Some("Alpha, unread error")
+                    Some("Alpha")
                 );
                 assert_eq!(cell(window, 0, 1), None, "The failed query shows rows");
             });
@@ -147,8 +176,8 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
             app.settle(cx);
             app.update(cx, |window, _| {
                 assert!(
-                    labelled(window, "Query 1, unread error").is_some(),
-                    "Results acknowledged the error"
+                    labelled(window, "Query 1, unread error").is_none(),
+                    "A visible error stayed unread"
                 );
             });
         }
@@ -169,6 +198,66 @@ fn a_retry_clears_the_error_badge(cx: &mut TestAppContext) {
         // The session that reported the error runs the retry.
         app.wait_cell(cx, 0, 1, "0");
     }
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_connection_shows_one_dot_while_another_tab_runs_after_an_error(cx: &mut TestAppContext) {
+    let (app, profiles) = launch(cx, &["Alpha"]);
+    let profile = &profiles[0];
+    let failed = app.saved().tabs[0].id;
+    app.type_sql(cx, "SELECT missing_column AS value FROM range(1)");
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        window.click("toggle-activity", cx);
+    });
+    app.wait_label(cx, "Activity, 1 unseen error");
+    app.dispatch(cx, qrow::ui::NewTab);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_editor(cx, "");
+    app.wait_label(cx, "Query 1, unread error");
+    app.wait_until(cx, "the saved new tab", QUERY_TIMEOUT, |_, _| {
+        let workspace = app.saved();
+        workspace.tabs[workspace.active_tab].id != failed
+    });
+    let workspace = app.saved();
+    let running = workspace.tabs[workspace.active_tab].id;
+    app.run_complete(cx, REGISTER_BLOCKING);
+    let query = token("one-dot");
+    app.run_sql(cx, &blocking(&query, 15_000));
+    app.wait_evidence(cx, &query, "started", QUERY_TIMEOUT);
+    app.wait_label(cx, "Alpha, running, unread error");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().danger));
+        assert_tab_dot(window, running, Some(cx.theme().info));
+        assert_connection_dot(window, profile.id, cx.theme().danger);
+    });
+    app.click(cx, format!("close-tab-{running}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, running, Some(cx.theme().info))
+    });
+
+    // Reading the failed tab exposes the work on the same connection.
+    app.click_labelled(cx, "Query 1, unread error");
+    app.wait_label(cx, "Alpha, running");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
+        assert_connection_dot(window, profile.id, cx.theme().info);
+    });
+    app.click(cx, format!("connection-status-{}", profile.id));
+    app.wait_for(cx, "activity");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.click_labelled(cx, "Query 2, running");
+    app.wait_cell(cx, 0, 1, "0");
+    app.wait_label(cx, "Alpha");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, failed, Some(cx.theme().info.opacity(0.4)));
+        assert_tab_dot(window, running, Some(cx.theme().info.opacity(0.4)));
+        assert_connection_dot(window, profile.id, cx.theme().info.opacity(0.4));
+    });
 }
 
 #[gpui_kit::test]
@@ -207,12 +296,25 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     wait_tab(&app, cx, "Query 2");
     app.run_sql(cx, "SELECT 'other-tab-works' AS result");
     app.wait_cell(cx, 0, 1, "other-tab-works");
+    app.wait_status(cx, "Complete");
+
+    // The active tab is idle, but another tab keeps this connection busy.
+    app.context_menu(cx, connection_row(alpha.id));
+    app.choose(cx, "popup-menu", "Disconnect");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("popup-menu").is_some());
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("other-tab-works"));
+    });
+    app.wait_status(cx, "Complete");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
 
     app.click_labelled(cx, "Query 1, running");
     app.wait_for(cx, "cancel");
     // The backend suite checks that Spark interrupts the task in time.
     app.click(cx, "cancel");
-    app.wait_status(cx, "Cancelled · Partial preview retained");
+    app.wait_status(cx, "Cancelled: Partial preview retained");
 
     app.run_sql(cx, "SELECT 'after-cancel-works' AS result");
     app.wait_cell(cx, 0, 1, "after-cancel-works");

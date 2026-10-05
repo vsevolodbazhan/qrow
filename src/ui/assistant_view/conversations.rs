@@ -11,7 +11,7 @@ pub(in crate::ui) struct ConversationEditor {
 pub(super) const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
     label: "Conversation Name",
-    tooltip: "Rename Conversation · ⌘Enter",
+    tooltip: "Rename Conversation",
     form: |this| {
         this.assistant_state
             .rename_form
@@ -79,7 +79,7 @@ impl Qrow {
         let target = self.active_tab_id().map(ComposerTarget::Tab);
         self.show_assistant_composer(target, window, cx);
         if let Some(thread) = self.displayed_thread() {
-            if self.assistant_state.open {
+            if self.assistant_transcript_visible(window, cx) {
                 self.thread_run_mut(&thread).unread = None;
             }
             self.load_assistant_thread(&thread, cx);
@@ -551,13 +551,13 @@ impl Qrow {
         } else {
             self.assistant_state.browsed_thread = Some(id.to_owned());
             self.show_assistant_composer(Some(ComposerTarget::Detached(id.to_owned())), window, cx);
-            if self.assistant_state.open {
-                self.thread_run_mut(id).unread = None;
-            }
             self.load_assistant_thread(id, cx);
         }
         self.assistant_pane
             .update(cx, |pane, cx| pane.thread_selected(cx));
+        if self.assistant_transcript_visible(window, cx) {
+            self.thread_run_mut(id).unread = None;
+        }
         self.scroll_assistant_to_bottom(cx);
         self.focus_assistant_composer(window, cx);
         self.changed(cx);

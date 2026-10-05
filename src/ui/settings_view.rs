@@ -733,19 +733,19 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Interface")
                 .item(setting_item(
                     "Theme",
-                    "Sets the colors of the application. The system theme follows the light or dark appearance of macOS.",
+                    "Colors of the interface. System follows macOS.",
                     &["appearance", "colors", "dark", "light"],
                     theme_field(form),
                 ))
                 .item(setting_item(
                     "Scale",
-                    "Changes the size of all text and controls. You can also press ⌘+ or ⌘− at any time.",
+                    "Size of all text and controls. Also ⌘+ and ⌘−.",
                     &["zoom", "interface", "ui"],
                     number_field(form, NumberSetting::Scale),
                 ))
                 .item(setting_item(
                     "Font Family",
-                    "Sets the font of controls, labels, and result tables. The editor, logs, and assistant messages use their own fonts.",
+                    "Font of controls, labels, and result tables.",
                     &["interface", "ui", "typeface"],
                     font_field(form, FontSetting::Ui),
                 )),
@@ -755,19 +755,19 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Assistant")
                 .item(setting_item(
                     "Font Family",
-                    "Sets the font of messages in assistant conversations. The message field and tool cards keep their fonts.",
+                    "Font of messages in assistant conversations.",
                     &["assistant", "messages", "typeface"],
                     font_field(form, FontSetting::Assistant),
                 ))
                 .item(setting_item(
                     "Font Size",
-                    "Sets the size of message text, in pixels. The interface scale multiplies this size.",
+                    "Size of message text, in pixels.",
                     &["assistant", "messages"],
                     number_field(form, NumberSetting::AssistantFontSize),
                 ))
                 .item(setting_item(
                     "Line Height",
-                    "Sets the space between the lines of a message, as a multiple of the font size.",
+                    "Space between message lines, times the font size.",
                     &["assistant", "messages", "spacing"],
                     number_field(form, NumberSetting::AssistantLineHeight),
                 )),
@@ -777,32 +777,40 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Editor")
                 .item(setting_item(
                     "Font Family",
-                    "Sets the font of SQL in the editor. A monospace font keeps indents and columns aligned.",
+                    "Font of SQL in the editor. Use a monospace font.",
                     &["editor", "sql", "typeface"],
                     font_field(form, FontSetting::Editor),
                 ))
                 .item(setting_item(
                     "Font Size",
-                    "Sets the size of SQL text, in pixels. The interface scale multiplies this size.",
+                    "Size of SQL text, in pixels.",
                     &["editor", "sql"],
                     number_field(form, NumberSetting::EditorFontSize),
                 ))
                 .item(setting_item(
                     "Line Height",
-                    "Sets the space between the lines of SQL, as a multiple of the font size.",
+                    "Space between SQL lines, times the font size.",
                     &["editor", "sql", "spacing"],
                     number_field(form, NumberSetting::EditorLineHeight),
                 ))
                 .item(setting_item(
                     "Tab Size",
-                    "Sets the number of spaces for each indent level. The Tab key and SQL that Qrow formats both use this size.",
+                    "Spaces for each indent level.",
                     &["editor", "sql", "indent", "spaces", "format"],
                     number_field(form, NumberSetting::EditorTabSize),
                 ))
                 .item(setting_item(
                     "SQL Keyword Case",
-                    "Sets the case of SQL keywords, built-in functions, and type names. For now, this setting applies only to SQL that the assistant writes.",
-                    &["editor", "sql", "style", "format", "uppercase", "lowercase", "assistant"],
+                    "Keyword case of the SQL that the assistant writes.",
+                    &[
+                        "editor",
+                        "sql",
+                        "style",
+                        "format",
+                        "uppercase",
+                        "lowercase",
+                        "assistant",
+                    ],
                     select_field(&form.assistant_keyword_case, "SQL Keyword Case"),
                 )),
         )
@@ -811,19 +819,19 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
                 .title("Logs")
                 .item(setting_item(
                     "Font Family",
-                    "Sets the font of log entries.",
+                    "Font of log entries.",
                     &["logs", "typeface"],
                     font_field(form, FontSetting::Logs),
                 ))
                 .item(setting_item(
                     "Font Size",
-                    "Sets the size of log text, in pixels. The interface scale multiplies this size.",
+                    "Size of log text, in pixels.",
                     &["logs"],
                     number_field(form, NumberSetting::LogsFontSize),
                 ))
                 .item(setting_item(
                     "Line Height",
-                    "Sets the space between the lines of log entries, as a multiple of the font size.",
+                    "Space between log lines, times the font size.",
                     &["logs", "spacing"],
                     number_field(form, NumberSetting::LogsLineHeight),
                 )),
@@ -839,7 +847,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .title("General")
                 .item(setting_item(
                     "Enabled",
-                    "Shows the assistant button in the tab bar, and ⌘J opens the assistant pane.",
+                    "Shows the assistant button and turns on ⌘J.",
                     &["assistant", "enable", "codex", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
@@ -855,24 +863,22 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 ))
                 .item(setting_item(
                     "Query Execution",
-                    "Sets how new conversations run the queries that the assistant writes. Queries that run automatically can change or delete data and schema. To change one conversation, use the menu next to the send button.",
+                    "How new conversations run assistant queries.",
                     &["assistant", "run", "approval", "mode", "automatically"],
                     select_field(&form.assistant_mode, "Assistant Query Execution"),
                 )),
         )
-        .group(
-            SettingGroup::new().title("Codex").item(setting_item(
-                "Executable",
-                "Leave the field empty to search your PATH and the usual Homebrew folders. Qrow does not include Codex, so install it separately.",
-                &["assistant", "codex", "path", "binary"],
-                move |_: &mut Window, _: &mut App| {
-                    Input::new(&executable)
-                        .id(setting_id("Codex Executable"))
-                        .w_full()
-                        .aria_label("Codex Executable")
-                },
-            )),
-        )
+        .group(SettingGroup::new().title("Codex").item(setting_item(
+            "Executable",
+            "Empty searches your PATH and Homebrew folders.",
+            &["assistant", "codex", "path", "binary"],
+            move |_: &mut Window, _: &mut App| {
+                Input::new(&executable)
+                    .id(setting_id("Codex Executable"))
+                    .w_full()
+                    .aria_label("Codex Executable")
+            },
+        )))
 }
 
 fn keyword_case_label(case: KeywordCase) -> &'static str {

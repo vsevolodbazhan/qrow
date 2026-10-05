@@ -118,18 +118,38 @@ pub(in crate::ui) struct ThreadRun {
     pub catalog_calls: Vec<super::super::assistant_tools::PendingCatalogCall>,
 }
 
-/// The conversation state that the thread list, the tab strip, and the
-/// assistant toggle show. A higher state is more urgent.
+/// The conversation state that the thread list and the assistant toggle show.
+/// A higher state is more urgent.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(in crate::ui) enum ThreadStatus {
     Idle,
-    Working,
     Ready,
+    Working,
     Failed,
     Approval,
 }
 
 impl ThreadStatus {
+    pub(in crate::ui) fn tooltip_status(self) -> &'static str {
+        match self {
+            Self::Idle => "Idle",
+            Self::Ready => "Unread Reply",
+            Self::Working => "Working",
+            Self::Failed => "Unread Error",
+            Self::Approval => "Needs Approval",
+        }
+    }
+
+    pub(in crate::ui) fn dot_status(self) -> Option<DotStatus> {
+        match self {
+            Self::Idle => None,
+            Self::Working => Some(DotStatus::Working),
+            Self::Ready => Some(DotStatus::Ready),
+            Self::Failed => Some(DotStatus::Error),
+            Self::Approval => Some(DotStatus::Attention),
+        }
+    }
+
     pub(super) fn of(run: &ThreadRun) -> Self {
         if run
             .pending_query
@@ -635,7 +655,7 @@ mod tests {
         .into_iter()
         .fold(ThreadStatus::Idle, Ord::max);
         assert_eq!(urgent, ThreadStatus::Approval);
-        assert!(ThreadStatus::Failed > ThreadStatus::Ready);
-        assert!(ThreadStatus::Ready > ThreadStatus::Working);
+        assert!(ThreadStatus::Failed > ThreadStatus::Working);
+        assert!(ThreadStatus::Working > ThreadStatus::Ready);
     }
 }

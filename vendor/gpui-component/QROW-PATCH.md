@@ -16,6 +16,9 @@ Qrow changes these files:
   or closes. Before, a shortcut that closed a dialog under the pointer, for
   example ⌘Enter on a hovered Save button, left the tooltip of the button on
   the screen. The trigger was gone, so it did not get a hover-out.
+- `src/tab/tab_bar.rs`: the first tab of a tab bar without a prefix has no
+  left border. Before, the tab bar always assumed a prefix, so the border of
+  the first tab and the divider of a sidebar beside the bar made a double line.
 - `src/tooltip.rs`: with the `test-support` feature, a tooltip is the observed
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate

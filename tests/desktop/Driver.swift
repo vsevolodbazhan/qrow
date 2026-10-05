@@ -116,26 +116,30 @@ func setTestWindowFrame(_ app: AXUIElement) throws {
     )
     print("Set the Qrow test window: \(actualPosition) \(actualSize)")
 }
-/// Returns the point to click for an element. Query tabs scroll under the fixed
-/// Toggle Sidebar and New Tab controls of the tab strip. The middle of a partly
-/// hidden tab can then be over one of these controls, so for a tab the point is
-/// the middle of its visible part.
+/// Returns the point to click for an element. Query tabs scroll out of the tab
+/// strip at its start, and under the fixed New Tab control at its end. The
+/// middle of a partly hidden tab can then be outside the strip or over that
+/// control, so for a tab the point is the middle of its visible part.
 func clickTarget(_ element: AXUIElement, _ point: CGPoint, _ extent: CGSize) -> CGPoint {
     var target = CGPoint(x: point.x + extent.width / 2, y: point.y + extent.height / 2)
     guard attribute(element, kAXRoleAttribute) as? String == kAXRadioButtonRole,
           let window = attribute(element, kAXWindowAttribute) else { return target }
     var left = point.x
     var right = point.x + extent.width
+    // The strip clips its tabs, so a tab shows only inside its parent.
+    if let parent = attribute(element, kAXParentAttribute),
+       attribute(unsafeBitCast(parent, to: AXUIElement.self), kAXPositionAttribute) != nil,
+       let (stripPoint, stripExtent) = try? elementBounds(unsafeBitCast(parent, to: AXUIElement.self)),
+       stripExtent.width > 0 {
+        left = max(left, stripPoint.x)
+        right = min(right, stripPoint.x + stripExtent.width)
+    }
     for control in descendants(unsafeBitCast(window, to: AXUIElement.self)) {
         guard attribute(control, kAXRoleAttribute) as? String == kAXButtonRole,
-              let label = strings(control).first, ["Toggle Sidebar", "New Tab"].contains(label),
+              strings(control).first == "New Tab",
               let (controlPoint, controlExtent) = try? elementBounds(control),
               abs(controlPoint.y + controlExtent.height / 2 - target.y) < extent.height / 2 else { continue }
-        if label == "Toggle Sidebar" {
-            left = max(left, controlPoint.x + controlExtent.width)
-        } else {
-            right = min(right, controlPoint.x)
-        }
+        right = min(right, controlPoint.x)
     }
     if left < right { target.x = (left + right) / 2 }
     return target
@@ -907,7 +911,7 @@ final class Driver {
     /// the border above it to the status bar below it.
     func checkComposerPadding() throws {
         let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant Message"))
-        let (sendOrigin, sendSize) = try elementBounds(try waitAny(["Send · Ask", "Send · Run"]))
+        let (sendOrigin, sendSize) = try elementBounds(try wait("Send"))
         let top = Int(composerOrigin.y) - 24
         let height = Int(sendOrigin.y + sendSize.height) + 24 - top
         let path = "\(artifacts)/assistant-composer-padding.png"

@@ -1,8 +1,125 @@
 use crate::support::assistant::{FakeCodex, approval, editor_text};
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, bounds_of, label};
+use crate::support::{
+    TestApp, assert_tab_dot, assert_tooltip_header_center, assert_tooltip_metadata_rows, bounds_of,
+    label,
+};
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
+use std::time::Duration;
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let (mut workspace, credentials) =
+        Kyuubi::get().workspace("SELECT 1 AS value", crate::support::fixture::PASSWORD);
+    workspace.tabs[0].title = "SQL only".into();
+    let tab = workspace.tabs[0].id;
+    let connection = workspace.profiles[0].id;
+    let dot = format!("query-status-{tab}");
+    let app = TestApp::launch_in(cx, directory, codex.workspace(workspace), credentials);
+    app.run_complete(cx, "SELECT 1 AS value");
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        window.hover(format!("connection-status-{connection}"), cx);
+    });
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| assert_tooltip_metadata_rows(window));
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", QUERY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.wait_label(cx, "Toggle Assistant, working");
+    app.wait_label(cx, "Activity, in use");
+    app.hover_labelled(cx, "Activity, in use");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("In Use")
+        );
+    });
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
+        assert_eq!(
+            label(window, dot.clone()).as_deref(),
+            Some("SQL only, connected, idle")
+        );
+    });
+    // Tooltips keep SQL and conversation state separate, too.
+    app.hover_labelled(cx, "SQL only, connected, idle");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("SQL only")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Idle")
+        );
+        let title = bounds_of(window, "status-tooltip-title");
+        let status = bounds_of(window, "status-tooltip-status");
+        assert!(status.left() > title.right());
+        assert!(status.top() < title.bottom());
+        assert!(window.try_find("status-tooltip-shortcut").is_none());
+        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+    });
+    app.hover_labelled(cx, "Toggle Assistant, working");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Assistant")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Working")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-shortcut").as_deref(),
+            Some("⌘J")
+        );
+        let title = bounds_of(window, "status-tooltip-title");
+        let status = bounds_of(window, "status-tooltip-status");
+        assert_eq!(title.left(), status.left());
+        assert!(status.top() > title.bottom());
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+    });
+
+    // A reply completed while the pane is hidden stays on the assistant icon.
+    app.click(cx, "toggle-assistant");
+    app.wait_gone(cx, "assistant-composer");
+    codex.mark("first-reply-release");
+    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)))
+    });
+    app.click(cx, "toggle-assistant");
+    app.wait_reply(cx, "I can help with this query");
+    app.wait_idle(cx);
+
+    app.send(cx, "Run selected SQL with approval");
+    app.wait_approval(cx, "Run in SQL only on Spark? SELECT 1 AS value");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)));
+        window.click("assistant-approve-query", cx);
+        assert_tab_dot(window, tab, Some(cx.theme().info));
+    });
+    app.wait_reply(cx, "I ran the query.");
+    app.wait_idle(cx);
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)))
+    });
+}
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
@@ -16,7 +133,7 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
 
     app.send(cx, "Run selected SQL with approval");
     app.wait_until(cx, "the approval", QUERY_TIMEOUT, |window, _| {
-        approval(window).is_some_and(|a| a.starts_with("Run in Query 1 · Alpha?"))
+        approval(window).is_some_and(|a| a.starts_with("Run in Query 1 on Alpha?"))
     });
     app.update(cx, |window, _| {
         assert!(
@@ -41,8 +158,8 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
 
     app.choose_send_mode(cx, "Run automatically");
     app.click(cx, "confirm-conversation-auto-run");
-    app.wait_until(cx, "Send · Run", QUERY_TIMEOUT, |window, _| {
-        label(window, "assistant-send").as_deref() == Some("Send · Run")
+    app.wait_until(cx, "SQL Mode: Auto Run", QUERY_TIMEOUT, |window, _| {
+        label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto Run")
     });
     app.type_sql(cx, "SELECT 2 AS assistant_value");
     app.send(cx, "Run selected SQL automatically");
