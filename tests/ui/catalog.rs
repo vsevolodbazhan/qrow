@@ -1302,13 +1302,14 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
 
 #[gpui_kit::test]
 fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAppContext) {
-    // The server accepts the session, then closes it after a second, so the
-    // refresh fails while the tooltip is open.
+    // Close the server after the initial tooltip checks, so the refresh fails
+    // while the tooltip is open even when other tests delay this test.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (close_server, close_requested) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         if let Ok((stream, _)) = listener.accept() {
-            std::thread::sleep(Duration::from_secs(1));
+            let _ = close_requested.recv();
             drop(stream);
         }
     });
@@ -1352,6 +1353,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     });
 
     // The pointer stays on the row. The open tooltip changes only its status.
+    close_server.send(()).unwrap();
     app.wait_until(
         cx,
         "the unread error status in the tooltip",
