@@ -680,11 +680,26 @@ impl Builder {
             let mut test = pending.test;
             let candidates = resolve(&pending.depends_on);
             let symbols = &self.symbols.list;
-            let named = |text: Option<&str>| {
-                let reference = text.and_then(reference)?;
-                candidates.iter().copied().find(|&candidate| {
-                    reference.names(&self.entries[candidate as usize].entry, symbols)
-                })
+            // The dependencies that a reference names, other than `except`
+            // first. A dynamic reference names the only one other than
+            // `except`.
+            let named = |text: Option<&str>, except: Option<u32>| {
+                let others = candidates.iter().copied().filter(|&c| Some(c) != except);
+                match text.and_then(reference)? {
+                    Reference::Dynamic => {
+                        let others: Vec<u32> = others.collect();
+                        match others.as_slice() {
+                            [only] => Some(*only),
+                            _ => None,
+                        }
+                    }
+                    reference => {
+                        let names = |&candidate: &u32| {
+                            reference.names(&self.entries[candidate as usize].entry, symbols)
+                        };
+                        others.clone().find(names).or_else(|| except.filter(names))
+                    }
+                }
             };
             let attached = pending
                 .attached
@@ -693,7 +708,7 @@ impl Builder {
                 .or_else(|| {
                     // Tests of sources have no attached node: the tested
                     // entry is the dependency that the model argument names.
-                    named(pending.model_text.as_deref()).or(match candidates.as_slice() {
+                    named(pending.model_text.as_deref(), None).or(match candidates.as_slice() {
                         [only] => Some(*only),
                         _ => None,
                     })
@@ -705,7 +720,7 @@ impl Builder {
             // The target of a relationship, when it is a `ref()` or a
             // `source()` of the project. It is the tested entry itself when
             // the relationship refers to its own table.
-            test.to = named(test.to_text.as_deref());
+            test.to = named(test.to_text.as_deref(), Some(attached));
             tests.push(test);
         }
         tests.sort_by_key(|test| test.entry);
@@ -755,59 +770,111 @@ impl Builder {
 /// A `ref()` or `source()` call in the text of a test argument.
 #[derive(Debug, PartialEq)]
 enum Reference<'a> {
-    Model(&'a str),
+    Model {
+        package: Option<&'a str>,
+        name: &'a str,
+        version: Option<&'a str>,
+    },
     Source(&'a str, &'a str),
+    /// A call with arguments that are not literal text, like
+    /// `ref(var('model'))`.
+    Dynamic,
 }
 
 impl Reference<'_> {
     fn names(&self, entry: &Entry, symbols: &[Box<str>]) -> bool {
+        let symbol = |symbol: super::Symbol| &*symbols[symbol.0 as usize];
         match *self {
-            Self::Model(name) => entry.kind != Kind::Source && &*entry.name == name,
+            Self::Model {
+                package,
+                name,
+                version,
+            } => {
+                entry.kind != Kind::Source
+                    && &*entry.name == name
+                    && package.is_none_or(|package| symbol(entry.package) == package)
+                    && version.is_none_or(|version| {
+                        entry
+                            .unique_id
+                            .strip_suffix(version)
+                            .is_some_and(|id| id.ends_with(".v"))
+                    })
+            }
             Self::Source(source, table) => {
                 entry.kind == Kind::Source
                     && &*entry.name == table
-                    && entry
-                        .source_name
-                        .is_some_and(|name| &*symbols[name.0 as usize] == source)
+                    && entry.source_name.is_some_and(|name| symbol(name) == source)
             }
+            Self::Dynamic => false,
         }
     }
 }
 
 /// The first `ref()` or `source()` call in `text`, for example in
 /// `{{ get_where_subquery(source('raw', 'orders')) }}`. `ref('package',
-/// 'model')` names the model. Other arguments, like `v=2`, do not count.
+/// 'model', v=2)` names version 2 of the model in the package.
 fn reference(text: &str) -> Option<Reference<'_>> {
     for (open, _) in text.match_indices('(') {
         let head = text[..open].trim_end();
-        let function = &head[head
-            .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .map_or(0, |end| end + 1)..];
+        let start = head
+            .char_indices()
+            .rev()
+            .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+            .map_or(0, |(at, c)| at + c.len_utf8());
+        let function = &head[start..];
         if function != "ref" && function != "source" {
             continue;
         }
         let mut arguments = Vec::new();
-        let mut rest = &text[open + 1..];
+        let mut version = None;
+        let mut rest = text[open + 1..].trim_start();
         loop {
-            rest = rest.trim_start();
-            let Some(quote) = rest.chars().next().filter(|c| *c == '\'' || *c == '"') else {
-                break;
+            let keyword = ["v=", "version="]
+                .iter()
+                .find_map(|key| rest.strip_prefix(key));
+            let (value, after) = match keyword.unwrap_or(rest).trim_start() {
+                text if text.starts_with(['\'', '"']) => {
+                    let quote = &text[..1];
+                    let Some(end) = text[1..].find(quote) else {
+                        break;
+                    };
+                    (&text[1..1 + end], &text[2 + end..])
+                }
+                text if keyword.is_some() => {
+                    let end = text
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
+                        .unwrap_or(text.len());
+                    (&text[..end], &text[end..])
+                }
+                _ => break,
             };
-            let Some(end) = rest[1..].find(quote) else {
-                break;
-            };
-            arguments.push(&rest[1..1 + end]);
-            rest = rest[2 + end..].trim_start();
+            match keyword {
+                Some(_) => version = Some(value),
+                None => arguments.push(value),
+            }
+            rest = after.trim_start();
             match rest.strip_prefix(',') {
-                Some(next) => rest = next,
+                Some(next) => rest = next.trim_start(),
                 None => break,
             }
         }
-        return match (function, arguments.as_slice()) {
-            ("ref", [.., name]) => Some(Reference::Model(name)),
-            ("source", [source, table]) => Some(Reference::Source(source, table)),
-            _ => None,
-        };
+        if !rest.starts_with(')') {
+            return Some(Reference::Dynamic);
+        }
+        return Some(match (function, arguments.as_slice()) {
+            ("ref", [name]) => Reference::Model {
+                package: None,
+                name,
+                version,
+            },
+            ("ref", [package, name]) => Reference::Model {
+                package: Some(package),
+                name,
+                version,
+            },
+            ("source", [source, table]) => Reference::Source(source, table),
+            _ => Reference::Dynamic,
+        });
     }
     None
 }
@@ -952,11 +1019,22 @@ mod tests {
 
     #[test]
     fn references_name_a_model_or_a_source() {
+        let model = |package, name, version| {
+            Some(Reference::Model {
+                package,
+                name,
+                version,
+            })
+        };
         let cases = [
-            ("ref('orders')", Some(Reference::Model("orders"))),
+            ("ref('orders')", model(None, "orders", None)),
             (
                 "ref(\"lake\", \"orders\", v=2)",
-                Some(Reference::Model("orders")),
+                model(Some("lake"), "orders", Some("2")),
+            ),
+            (
+                "ref('orders', version='3')",
+                model(None, "orders", Some("3")),
             ),
             (
                 "{{ get_where_subquery(source('raw', 'orders')) }}",
@@ -964,12 +1042,14 @@ mod tests {
             ),
             (
                 "{{ get_where_subquery(ref( 'orders' )) }}",
-                Some(Reference::Model("orders")),
+                model(None, "orders", None),
             ),
+            ("filtré(ref('orders'))", model(None, "orders", None)),
+            ("ref(var('customers_model'))", Some(Reference::Dynamic)),
+            ("source('raw')", Some(Reference::Dynamic)),
+            ("ref(", Some(Reference::Dynamic)),
             ("raw.customers", None),
             ("prefer(ref)", None),
-            ("source('raw')", None),
-            ("ref(", None),
         ];
         for (text, expected) in cases {
             assert_eq!(reference(text), expected, "{text}");

@@ -266,6 +266,33 @@ fn a_relationship_targets_the_entry_that_its_to_argument_names() {
 }
 
 #[test]
+fn a_relationship_target_can_have_a_package_or_a_dynamic_name() {
+    let relationship = "test.tiny_lake.relationships_orders_customer_id.3";
+    // A model of the same name in another package.
+    let mut value = manifest();
+    let mut other = value["nodes"]["model.tiny_lake.orders"].clone();
+    other["unique_id"] = json!("model.beta.orders");
+    other["package_name"] = json!("beta");
+    value["nodes"]["model.beta.orders"] = other;
+    let node = &mut value["nodes"][relationship];
+    node["depends_on"]["nodes"] = json!(["model.beta.orders", "model.tiny_lake.orders"]);
+    node["test_metadata"]["kwargs"]["to"] = json!("ref('beta', 'orders')");
+    let index = parse_value(&value);
+    let (orders_at, _) = entry(&index, "model.tiny_lake.orders");
+    let (beta_at, _) = entry(&index, "model.beta.orders");
+    assert_eq!(index.tests(orders_at)[2].to, Some(beta_at));
+
+    // A name from a variable: the only other dependency is the target.
+    let mut value = manifest();
+    value["nodes"][relationship]["test_metadata"]["kwargs"]["to"] =
+        json!("ref(var('customers_model'))");
+    let index = parse_value(&value);
+    let (orders_at, _) = entry(&index, "model.tiny_lake.orders");
+    let (customers_at, _) = entry(&index, "model.tiny_lake.customers");
+    assert_eq!(index.tests(orders_at)[2].to, Some(customers_at));
+}
+
+#[test]
 fn a_source_test_attaches_to_its_source_when_a_model_has_the_same_name() {
     // A relationship from source('raw', 'orders') to ref('orders').
     let mut value = manifest();
