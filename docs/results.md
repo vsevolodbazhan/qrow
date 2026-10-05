@@ -16,8 +16,11 @@ Each page contains up to 1,000 rows. **Next** fetches another page when needed.
 The bar above the table shows neutral tags for the visible row range,
 downloaded row count, column count, and query duration. **Loaded** counts the
 rows in the preview. It does not give the total number of rows on the server.
+The tag tooltips use the same names as the rows in **Result Details**:
+**Visible rows**, **Loaded rows**, **Columns**, and **Query duration**.
 When the tags do not fit, the bar keeps the row range and shows an information
-button. Click **Result Details** to read all four values. At the smallest
+button. Click **Result Details** to read all four values as neutral tags.
+The heading uses semibold text. At the smallest
 widths, the row range also moves into **Result Details**. The page buttons
 show arrows at these widths. Their tooltips show **Previous Page** and
 **Next Page**.

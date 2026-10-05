@@ -118,6 +118,42 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn result_metadata_tooltips_match_detail_labels(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    let mut titles = Vec::new();
+    for (tag, detail) in [
+        ("result-range", "result-detail-range"),
+        ("result-loaded", "result-detail-loaded"),
+        ("result-columns", "result-detail-columns"),
+        ("result-elapsed", "result-detail-elapsed"),
+    ] {
+        app.update(cx, |window, cx| window.hover(tag, cx));
+        cx.executor().advance_clock(Duration::from_millis(800));
+        app.settle(cx);
+        let title = app.update(cx, |window, _| {
+            label(window, "status-tooltip-title").expect("metadata tag has a tooltip")
+        });
+        titles.push((detail, title));
+    }
+    assert_eq!(
+        titles
+            .iter()
+            .map(|(_, title)| title.as_str())
+            .collect::<Vec<_>>(),
+        ["Visible rows", "Loaded rows", "Columns", "Query duration"]
+    );
+    cx.simulate_window_resize(app.window, size(px(850.), px(650.)));
+    app.settle(cx);
+    app.click(cx, "result-details");
+    app.update(cx, |window, _| {
+        for (detail, title) in titles {
+            let row = label(window, detail).expect("detail row has an accessible label");
+            assert_eq!(row.split_once(": ").unwrap().0, title);
+        }
+    });
+}
+
+#[gpui_kit::test]
 fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppContext) {
     let app = TestApp::launch_demo(cx);
     cx.simulate_window_resize(app.window, size(px(850.), px(650.)));

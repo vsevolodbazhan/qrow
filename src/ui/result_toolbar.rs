@@ -1,6 +1,11 @@
 use super::*;
 use gpui_kit::component::{h_flex, popover::Popover, tag::Tag, v_flex};
 
+const VISIBLE_ROWS: &str = "Visible rows";
+const LOADED_ROWS: &str = "Loaded rows";
+const COLUMNS: &str = "Columns";
+const QUERY_DURATION: &str = "Query duration";
+
 struct ResultSummary {
     range: String,
     loaded: usize,
@@ -32,18 +37,26 @@ impl ResultSummary {
             .test_support()
             .flex_shrink_0()
             .gap_2()
-            .child(Self::tag("result-range", &self.range, &self.range, cx))
+            .child(Self::tag(
+                "result-range",
+                &self.range,
+                &self.range,
+                VISIBLE_ROWS,
+                cx,
+            ))
             .when(!range_only, |row| {
                 row.child(Self::tag(
                     "result-loaded",
                     &format!("{} loaded", self.loaded),
                     &format!("{} loaded", self.loaded),
+                    LOADED_ROWS,
                     cx,
                 ))
                 .child(Self::tag(
                     "result-columns",
                     &self.columns_label(),
                     &self.columns_label(),
+                    COLUMNS,
                     cx,
                 ))
                 .when_some(self.elapsed.as_ref(), |row, elapsed| {
@@ -51,6 +64,7 @@ impl ResultSummary {
                         "result-elapsed",
                         elapsed,
                         &format!("Elapsed: {elapsed}"),
+                        QUERY_DURATION,
                         cx,
                     ))
                 })
@@ -69,22 +83,28 @@ impl ResultSummary {
         )
     }
 
-    fn tag(id: &'static str, text: &str, name: &str, cx: &App) -> impl IntoElement {
-        Tag::secondary()
-            .small()
-            .border_color(cx.theme().secondary)
-            .child(
-                div()
-                    .id(id)
-                    .test_support()
-                    .role(Role::Label)
-                    .whitespace_nowrap()
-                    .aria_label(name.to_owned())
-                    .child(text.to_owned()),
-            )
+    fn tag(
+        id: &'static str,
+        text: &str,
+        name: &str,
+        title: &'static str,
+        cx: &App,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .test_support()
+            .role(Role::Label)
+            .whitespace_nowrap()
+            .aria_label(name.to_owned())
+            .tooltip(move |window, cx| StatusTooltip::new(title, "").build(None, window, cx))
+            .child(Self::neutral_tag(cx).child(text.to_owned()))
     }
 
-    fn details(&self) -> impl IntoElement {
+    fn neutral_tag(cx: &App) -> Tag {
+        Tag::secondary().small().border_color(cx.theme().secondary)
+    }
+
+    fn details(&self, cx: &App) -> impl IntoElement {
         v_flex()
             .id("result-details-content")
             .test_support()
@@ -94,45 +114,43 @@ impl ResultSummary {
             .text_sm()
             .child(
                 div()
-                    .font_weight(FontWeight::MEDIUM)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child("Result Details"),
             )
             .children(
                 [
                     (
                         "result-detail-range",
-                        "Visible rows",
+                        VISIBLE_ROWS,
                         self.range.strip_prefix("Rows ").unwrap_or("0").to_owned(),
                     ),
-                    (
-                        "result-detail-loaded",
-                        "Loaded rows",
-                        self.loaded.to_string(),
-                    ),
-                    ("result-detail-columns", "Columns", self.columns.to_string()),
+                    ("result-detail-loaded", LOADED_ROWS, self.loaded.to_string()),
+                    ("result-detail-columns", COLUMNS, self.columns.to_string()),
                 ]
                 .into_iter()
-                .map(|(id, label, value)| Self::detail(id, label, value)),
+                .map(|(id, label, value)| Self::detail(id, label, value, cx)),
             )
             .when_some(self.elapsed.clone(), |column, elapsed| {
                 column.child(Self::detail(
                     "result-detail-elapsed",
-                    "Query duration",
+                    QUERY_DURATION,
                     elapsed,
+                    cx,
                 ))
             })
     }
 
-    fn detail(id: &'static str, name: &'static str, value: String) -> impl IntoElement {
+    fn detail(id: &'static str, name: &'static str, value: String, cx: &App) -> impl IntoElement {
         h_flex()
             .id(id)
             .test_support()
             .role(Role::Label)
             .aria_label(format!("{name}: {value}"))
+            .items_center()
             .justify_between()
             .gap_6()
             .child(name)
-            .child(value)
+            .child(Self::neutral_tag(cx).child(value))
     }
 }
 
@@ -193,7 +211,7 @@ impl Qrow {
                         else {
                             return div().into_any_element();
                         };
-                        ResultSummary::new(tab, cx).details().into_any_element()
+                        ResultSummary::new(tab, cx).details(cx).into_any_element()
                     }),
                 )
             })
