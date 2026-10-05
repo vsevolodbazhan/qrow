@@ -634,7 +634,14 @@ suites share one set of servers. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
 cache belongs to one job, and only that job saves it. `e2e` also restores the
 cache of `ui`, because `ui` also builds the E2E test binary. Runs on `main`
-save the build caches. Other runs only restore them. CI keeps its artifacts
+save the build caches. Other runs only restore them. A change to
+`Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
+stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
+workflow deletes the old caches. For each job, it keeps the newest cache. A
+release of an older commit with another `Cargo.lock` saves a newer cache that
+`main` does not use, so the next run on `main` builds the dependencies again.
+To see the caches that it deletes, run
+`python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`. CI keeps its artifacts
 for one day. Runs on `main` also keep the measurements of the
 `package`, `e2e`, and `perf` jobs for 90 days, in the `performance-JOB`
 artifacts. See [Check performance](#check-performance). See

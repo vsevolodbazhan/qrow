@@ -146,6 +146,16 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(caches), checks.count("rust-cache@"))
         self.assertTrue(all(value in ("${{ github.ref == 'refs/heads/main' }}", "false") for value in caches))
 
+    def test_runs_that_save_rust_caches_delete_the_replaced_caches(self):
+        cleanup = job("cache-cleanup", TEST)
+        self.assertEqual(needs(cleanup), ["checks"])
+        # The same condition as save-if, also after a failed check.
+        self.assertIn("if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}", cleanup)
+        self.assertIn("actions: write", cleanup)
+        self.assertIn("run: python3 scripts/ci/rust_caches.py\n", cleanup)
+        # The checks run code from pull requests, so they must not delete caches.
+        self.assertNotIn("actions: write", read(CHECKS))
+
     def test_each_rust_cache_has_one_job_that_saves_it(self):
         caches = {}
         for name in catalog.CI_JOBS:
