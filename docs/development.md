@@ -85,7 +85,8 @@ manual dispatches, and pull requests into any branch with the `opened`,
 `reopened`, `synchronize`, `ready_for_review`, and `converted_to_draft`
 actions. Pull requests in a stack get checks before their base merges. The
 test workflow calls the [checks workflow](../.github/workflows/checks.yml),
-which has the jobs. For a non-draft pull request, the `plan` job selects the
+which has the check jobs. On `main`, the test workflow then deletes old Rust
+build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
 jobs from the changed paths and always selects `static`. Pushes and manual
 runs start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
 gives the paths that select each job. A draft pull request, including a
