@@ -50,7 +50,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
             }
         }
         // 75% is the lower limit; three decreases clamp the scale to it.
-        for width in [1900., 850., 700., 1900.] {
+        for width in [1900., 850., 700., 560., 1900.] {
             cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
             app.settle(cx);
             assert_toolbar_fits(&app, cx);
@@ -82,6 +82,9 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     assert!(window.try_find("result-loaded").is_none());
                     assert!(window.try_find("result-columns").is_none());
                     assert!(window.try_find("result-elapsed").is_none());
+                    if width == 560. {
+                        assert!(window.try_find("result-range").is_none());
+                    }
                 }
             });
             if width < 1900. {
