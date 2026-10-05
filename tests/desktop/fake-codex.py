@@ -175,7 +175,7 @@ def hold_turn(thread, turn, label, tab):
         }
         if label == "Beta":
             arguments["editor_revision"] = result["editor_revision"]
-        call_tool(thread, turn, "run_selected_tab_query", arguments, ran, replay=True)
+        call_tool(thread, turn, "query-run", arguments, ran, replay=True)
 
     def ran(success, result):
         outcome = "ran" if success else result.get("error", {}).get("code", "failed")
@@ -189,7 +189,7 @@ def hold_turn(thread, turn, label, tab):
         "editor_revision": tab["editor_revision"],
         "sql": sql,
     }
-    call_tool(thread, turn, "append_selected_tab_sql", arguments, appended)
+    call_tool(thread, turn, "tab-append-sql", arguments, appended)
 
 
 # A saved conversation named synthetic-history-* has six turns in three
@@ -415,13 +415,13 @@ for line in sys.stdin:
                 if not success:
                     finish_turn(thread_id, turn_id, f"Tool failed: {result}")
                     return
-                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                call_tool(thread_id, turn_id, "query-run", {
                     "version": 1,
                     "tab_id": result["tab_id"],
                     "connection_id": tab["connection_id"],
                 }, ran_append_query)
 
-            call_tool(thread_id, turn_id, "append_selected_tab_sql", {
+            call_tool(thread_id, turn_id, "tab-append-sql", {
                 "version": 1,
                 "tab_id": tab["id"],
                 "connection_id": tab["connection_id"],
@@ -458,7 +458,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
-                        "tool": "append_selected_tab_sql",
+                        "tool": "tab-append-sql",
                         "arguments": {
                             "version": 1,
                             "tab_id": other["id"],
@@ -491,7 +491,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
-                        "tool": "append_selected_tab_sql",
+                        "tool": "tab-append-sql",
                         "arguments": {
                             "version": 1,
                             "tab_id": tab["id"],
@@ -515,7 +515,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
-                        "tool": "edit_selected_tab_sql",
+                        "tool": "tab-edit-sql",
                         "arguments": {
                             "version": 1,
                             "tab_id": tab["id"],
@@ -542,7 +542,7 @@ for line in sys.stdin:
                 if success or result.get("error", {}).get("code") != "approval_cancelled":
                     finish_turn(thread_id, turn_id, f"Retarget failed: {result}")
                     return
-                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                call_tool(thread_id, turn_id, "query-run", {
                     "version": 1,
                     "tab_id": tab["id"],
                     "connection_id": tab["connection_id"],
@@ -552,7 +552,7 @@ for line in sys.stdin:
                 if not success:
                     finish_turn(thread_id, turn_id, f"Append failed: {result}")
                     return
-                call_tool(thread_id, turn_id, "run_selected_tab_query", {
+                call_tool(thread_id, turn_id, "query-run", {
                     "version": 1,
                     "tab_id": tab["id"],
                     "connection_id": tab["connection_id"],
@@ -560,7 +560,7 @@ for line in sys.stdin:
                     "statement_range": tab["statement_ranges"][0],
                 }, retargeted_run)
 
-            call_tool(thread_id, turn_id, "append_selected_tab_sql", {
+            call_tool(thread_id, turn_id, "tab-append-sql", {
                 "version": 1,
                 "tab_id": tab["id"],
                 "connection_id": tab["connection_id"],
@@ -582,7 +582,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"edit-{turn_number}",
-                        "tool": "edit_selected_tab_sql",
+                        "tool": "tab-edit-sql",
                         "arguments": {
                             "version": 1,
                             "tab_id": tab["id"],
@@ -612,7 +612,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"read-{turn_number}",
-                        "tool": "read_tab_sql",
+                        "tool": "tab-read-sql",
                         "arguments": {"version": 1, "tab_id": unknown_tab_id},
                     },
                 }
@@ -638,7 +638,7 @@ for line in sys.stdin:
                             f"Read {total} of {result['sql_bytes']} bytes in {len(pages)} pages.",
                         )
 
-                call_tool(thread_id, turn_id, "read_tab_sql", {"version": 1, "tab_id": tab["id"], "offset": offset}, received)
+                call_tool(thread_id, turn_id, "tab-read-sql", {"version": 1, "tab_id": tab["id"], "offset": offset}, received)
 
             read_sql(0)
         elif message == "List live schemas":
@@ -652,7 +652,7 @@ for line in sys.stdin:
                 names = ",".join(schema["name"] for schema in result["schemas"])
                 finish_turn(thread_id, turn_id, f"Live schemas: {names}")
 
-            call_tool(thread_id, turn_id, "list_schemas", {
+            call_tool(thread_id, turn_id, "catalog-list-schemas", {
                 "version": 1, "connection_id": connection,
             }, listed)
         elif message.startswith("Describe the live table "):
@@ -670,7 +670,7 @@ for line in sys.stdin:
                 columns = ",".join(f"{c['name']} {c['data_type']}" for c in result["columns"])
                 finish_turn(thread_id, turn_id, f"Live columns: {columns}")
 
-            call_tool(thread_id, turn_id, "describe_relation", {
+            call_tool(thread_id, turn_id, "catalog-describe-relation", {
                 "version": 1, "connection_id": connection,
                 "schema": schema, "relation": relation,
             }, described)
@@ -685,7 +685,7 @@ for line in sys.stdin:
                 notes = json.dumps(result.get("connection_notes")) if success else f"failed {result}"
                 finish_turn(thread_id, turn_id, f"{message}: notes {notes}")
 
-            call_tool(thread_id, turn_id, "get_workspace_context", {"version": 1}, read_notes)
+            call_tool(thread_id, turn_id, "workspace-read-context", {"version": 1}, read_notes)
         elif message.startswith("Read dbt"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             catalog = context.get("catalog") or {}
@@ -707,7 +707,7 @@ for line in sys.stdin:
             if not referenced:
                 finish_turn(thread_id, turn_id, f"No dbt summary: {json.dumps(catalog)[:2000]}")
             else:
-                call_tool(thread_id, turn_id, "describe_relation", {
+                call_tool(thread_id, turn_id, "catalog-describe-relation", {
                     "version": 1, "connection_id": catalog["connection_id"],
                     "schema": referenced[0]["schema"], "relation": referenced[0]["relation"],
                 }, described)
@@ -736,7 +736,7 @@ for line in sys.stdin:
                     finish_turn(thread_id, turn_id, f"Tool failed: {result}")
                     return
                 found["columns"] = ",".join(f"{c['name']} {c['data_type']}" for c in result["columns"])
-                call_tool(thread_id, turn_id, "describe_relation", {
+                call_tool(thread_id, turn_id, "catalog-describe-relation", {
                     "version": 1, "connection_id": connection, "schema": "avia", "relation": "daily",
                 }, described_missing)
 
@@ -745,7 +745,7 @@ for line in sys.stdin:
                     finish_turn(thread_id, turn_id, f"Tool failed: {result}")
                     return
                 found["relations"] = ",".join(r["name"] for r in result["relations"])
-                call_tool(thread_id, turn_id, "describe_relation", {
+                call_tool(thread_id, turn_id, "catalog-describe-relation", {
                     "version": 1, "connection_id": connection, "schema": "avia", "relation": "bookings",
                 }, described)
 
@@ -754,11 +754,11 @@ for line in sys.stdin:
                     finish_turn(thread_id, turn_id, f"Tool failed: {result}")
                     return
                 found["schemas"] = ",".join(s["name"] for s in result["schemas"])
-                call_tool(thread_id, turn_id, "list_relations", {
+                call_tool(thread_id, turn_id, "catalog-list-relations", {
                     "version": 1, "connection_id": connection, "schema": "avia", "pattern": "b*",
                 }, listed_relations)
 
-            call_tool(thread_id, turn_id, "list_schemas", {"version": 1, "connection_id": connection}, listed_schemas)
+            call_tool(thread_id, turn_id, "catalog-list-schemas", {"version": 1, "connection_id": connection}, listed_schemas)
         elif message.startswith("Read the latest execution logs"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
 
@@ -773,7 +773,7 @@ for line in sys.stdin:
                     f"Logs: query {'logged-query' in text}, rejected SQL {'one statement' in text}",
                 )
 
-            call_tool(thread_id, turn_id, "read_query_logs", {
+            call_tool(thread_id, turn_id, "query-read-logs", {
                 "version": 1, "tab_id": context["selected_tab"]["id"], "scope": "latest_execution",
             }, received)
         elif message.startswith("Run 170 rows and read results"):
@@ -800,7 +800,7 @@ for line in sys.stdin:
                     else:
                         finish_turn(thread_id, turn_id, f"Bad result paging: {next_offset}, {len(read_ids)}, {omitted}")
 
-                call_tool(thread_id, turn_id, "read_results", {
+                call_tool(thread_id, turn_id, "query-read-results", {
                     "version": 1, "tab_id": tab["id"], "offset": offset, "count": 100,
                 }, received)
 
@@ -812,7 +812,7 @@ for line in sys.stdin:
                 omitted.extend(result.get("omitted_row_offsets", []))
                 read_page(result["next_offset"])
 
-            call_tool(thread_id, turn_id, "run_selected_tab_query", {
+            call_tool(thread_id, turn_id, "query-run", {
                 "version": 1, "tab_id": tab["id"],
                 "connection_id": tab["connection_id"],
                 "editor_revision": tab["editor_revision"],
@@ -836,7 +836,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"run-{turn_number}",
-                        "tool": "run_selected_tab_query",
+                        "tool": "query-run",
                         "arguments": {
                             "version": 1,
                             "tab_id": tab["id"],
@@ -936,7 +936,7 @@ for line in sys.stdin:
                         "threadId": thread_id,
                         "turnId": turn_id,
                         "callId": f"workspace-{turn_number}",
-                        "tool": "get_workspace_context",
+                        "tool": "workspace-read-context",
                         "arguments": {"version": 1},
                     },
                 }
@@ -955,7 +955,7 @@ for line in sys.stdin:
                             "threadId": thread_id,
                             "turnId": turn_id,
                             "callId": f"run-{turn_number}",
-                            "tool": "run_selected_tab_query",
+                            "tool": "query-run",
                             "arguments": {
                                 "version": 1,
                                 "tab_id": unknown_tab_id,
@@ -969,7 +969,7 @@ for line in sys.stdin:
         if not request["result"]["success"]:
             message = f"Tool failed: {result}"
         elif pending_run:
-            # A finished query returns its first rows, so the model needs no read_results call.
+            # A finished query returns its first rows, so the model needs no query-read-results call.
             expected = {"with approval": [["1"]], "automatically": [["2"]]}
             rows = next((rows for key, rows in expected.items() if key in pending_message), None)
             if "next_offset" not in result or (rows is not None and result.get("rows") != rows):

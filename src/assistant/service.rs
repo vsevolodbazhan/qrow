@@ -563,7 +563,7 @@ mod tests {
             call_id: id.into(),
             thread_id: thread.into(),
             turn_id: turn.into(),
-            name: "read_tab_sql".into(),
+            name: "tab-read-sql".into(),
             arguments: serde_json::Value::Null,
         }
     }

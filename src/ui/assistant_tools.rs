@@ -191,11 +191,11 @@ impl CatalogRequest {
     fn parse(call: &ToolCall) -> Result<Self, ToolResult> {
         let arguments = call.arguments.clone();
         let (request, requested) = match call.name.as_str() {
-            "list_schemas" => {
+            "catalog-list-schemas" => {
                 let input: SchemasInput = parse(arguments)?;
                 (input.version, Self::Schemas(input))
             }
-            "list_relations" => {
+            "catalog-list-relations" => {
                 let input: RelationsInput = parse(arguments)?;
                 (input.version, Self::Relations(input))
             }
@@ -491,17 +491,17 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let result = match call.name.as_str() {
-            "get_workspace_context" => self.tool_workspace(call, cx),
-            "read_tab_sql" => self.tool_read_sql(call, cx),
-            "append_selected_tab_sql" => self.tool_append(call, window, cx),
-            "edit_selected_tab_sql" => self.tool_edit(call, window, cx),
-            "run_selected_tab_query" => return self.tool_run(call, window, cx),
-            "cancel_selected_tab_query" => self.tool_cancel(call, cx),
-            "get_query_status" => self.tool_status(call, cx),
-            "read_results" => self.tool_results(call, cx),
-            "fetch_more_results" => return self.tool_fetch(call, cx),
-            "read_query_logs" => self.tool_logs(call),
-            "list_schemas" | "list_relations" | "describe_relation" => {
+            "workspace-read-context" => self.tool_workspace(call, cx),
+            "tab-read-sql" => self.tool_read_sql(call, cx),
+            "tab-append-sql" => self.tool_append(call, window, cx),
+            "tab-edit-sql" => self.tool_edit(call, window, cx),
+            "query-run" => return self.tool_run(call, window, cx),
+            "query-cancel" => self.tool_cancel(call, cx),
+            "query-read-status" => self.tool_status(call, cx),
+            "query-read-results" => self.tool_results(call, cx),
+            "query-fetch-results" => return self.tool_fetch(call, cx),
+            "query-read-logs" => self.tool_logs(call),
+            "catalog-list-schemas" | "catalog-list-relations" | "catalog-describe-relation" => {
                 return self.tool_catalog(call, cx);
             }
             _ => Err(failure(
@@ -1041,7 +1041,7 @@ impl Qrow {
             "downloaded_rows": results.rows.len(), "more_rows_available": tab.more,
             "duration_seconds": tab.elapsed.map(|duration| duration.as_secs_f64())});
         if ok {
-            // Returning the first rows saves a read_results call and a model turn.
+            // Returning the first rows saves a query-read-results call and a model turn.
             let used =
                 serde_json::to_vec(&content).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
             let preview = preview_rows(&results.rows, pending.first_row, used);
@@ -1317,7 +1317,7 @@ impl Qrow {
         if !profile.catalog.browses() {
             return CatalogStep::Done(failure(
                 "schema_browsing_off",
-                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or run SHOW and DESCRIBE with run_selected_tab_query.",
+                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or run SHOW and DESCRIBE with query-run.",
             ));
         }
         let settings = crate::model::effective_catalog(profile, &self.shared_catalogs);
@@ -1432,7 +1432,7 @@ impl Qrow {
                     }
                     CatalogStep::Wait { .. } => failure(
                         "not_cached",
-                        "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with run_selected_tab_query.",
+                        "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with query-run.",
                     ),
                 };
                 self.finish_assistant_tool(pending.call, result, cx);

@@ -168,7 +168,8 @@ done
         panic!("expected the held tool call");
     };
     assert_eq!(call.request_id, json!(1));
-    assert_eq!(call.name, "read_tab_sql");
+    // A conversation from before the group prefixes calls the earlier name.
+    assert_eq!(call.name, "tab-read-sql");
 }
 
 #[test]
@@ -385,7 +386,7 @@ case "$line" in
     *'"method":"turn/start"'*)
         printf '{"id":%s,"result":{"turn":{"id":"turn-t","status":"inProgress","items":[]}}}\n' "$id"
         printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"title-1","turnId":"turn-t","delta":"{"}}'
-        printf '%s\n' '{"id":91,"method":"item/tool/call","params":{"arguments":{},"callId":"call-t","threadId":"title-1","turnId":"turn-t","tool":"get_workspace_context"}}'
+        printf '%s\n' '{"id":91,"method":"item/tool/call","params":{"arguments":{},"callId":"call-t","threadId":"title-1","turnId":"turn-t","tool":"workspace-read-context"}}'
         printf '%s\n' '{"method":"item/completed","params":{"threadId":"title-1","turnId":"turn-t","item":{"type":"agentMessage","text":"{\"title\":\"Recent orders.\"}"}}}'
         printf '%s\n' '{"method":"turn/completed","params":{"threadId":"title-1","turn":{"id":"turn-t","status":"completed","items":[]}}}'
         ;;
@@ -977,7 +978,7 @@ case "$line" in
     *'"method":"thread/delete"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
     *'"method":"turn/start"'*)
         printf '%s\n' '{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","delta":"Hello"}}'
-        printf '%s\n' '{"id":90,"method":"item/tool/call","params":{"arguments":{"version":1},"callId":"call-1","threadId":"thread-1","turnId":"turn-1","tool":"get_workspace_context"}}'
+        printf '%s\n' '{"id":90,"method":"item/tool/call","params":{"arguments":{"version":1},"callId":"call-1","threadId":"thread-1","turnId":"turn-1","tool":"workspace-read-context"}}'
         printf '{"id":%s,"result":{"turn":{"id":"turn-1","status":"inProgress","items":[]}}}\n' "$id"
         ;;
     *'"method":"turn/steer"'*) printf '{"id":%s,"result":{"turnId":"turn-1"}}\n' "$id" ;;
@@ -990,7 +991,7 @@ done
     let mut harness = CodexHarness::launch(&executable, directory.path()).unwrap();
     let conversation = harness
         .create_conversation(&[ToolDefinition {
-            name: "get_workspace_context".into(),
+            name: "workspace-read-context".into(),
             description: "Read the Qrow workspace".into(),
             input_schema: json!({ "type": "object" }),
         }])
@@ -1028,7 +1029,7 @@ done
     else {
         panic!("expected a tool call");
     };
-    assert_eq!(call.name, "get_workspace_context");
+    assert_eq!(call.name, "workspace-read-context");
     harness
         .answer_tool_call(
             &call,
@@ -1081,7 +1082,7 @@ done
         .unwrap();
     assert_eq!(
         start["params"]["dynamicTools"][0]["name"],
-        "get_workspace_context"
+        "workspace-read-context"
     );
     assert_eq!(start["params"]["sandbox"], "read-only");
     assert_eq!(start["params"]["baseInstructions"], BASE_INSTRUCTIONS);
