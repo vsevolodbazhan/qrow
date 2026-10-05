@@ -47,7 +47,10 @@ last selected tab. The other tabs keep their unread outcomes.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, set
    **Schema refresh** to **Manual** or **While connected**. Then you can enter
    [schema patterns](#show-or-hide-schemas).
-9. Click **Save**.
+9. Optional: When the [assistant](assistant.md) is on, enter **Assistant
+   notes**. See [Give the assistant facts about a
+   connection](#give-the-assistant-facts-about-a-connection).
+10. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
 form open and shows the error above the form actions.
@@ -103,9 +106,14 @@ Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
 stop. The row then shows the email or name of the account.
 
 Click a row to open **Sign-in Settings**. The **Account** field shows the
-status and the actions for the account. Right-click a row for **Sign In…**,
+status and the actions for the account on the same row. The actions are on
+the right. Right-click a row for **Sign In…**,
 **Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit** and
 **Delete**.
+
+The **Connections** field shows the number of connections that use the
+sign-in. Neutral tags show the names below the heading. The tags wrap when
+they do not fit on one line.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
 **Authentication**, and select the sign-in in the **Sign-in** list. The host of the connection must be
@@ -170,6 +178,8 @@ tokens, it shows the error and the sign-in stays signed in.
 
 **Delete** is available only when no connection uses the sign-in. The
 **Connections** field of Sign-in Settings names the connections that use it.
+When **Delete** is disabled, its menu shows the reason below the command.
+Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
 sign-in.
 
@@ -190,6 +200,21 @@ Limitations:
 - Only one Qrow process coordinates the refresh of a sign-in. `qrow-probe`
   supports only connections with password authentication.
 
+## Give the assistant facts about a connection
+
+Use **Assistant Notes** to tell the assistant facts about the data of a
+connection, for example "Dates in `avia` are in UTC" or "`bookings.status = 3`
+means cancelled". The field is at the end of
+Connection Settings. It shows only while the assistant is on.
+
+The notes can have up to 16 KB. Near the limit, the help text below the field
+shows the number of bytes. Qrow saves the notes as plain text in the
+workspace and sends them to Codex. Do not put passwords, tokens, or other
+secrets in them. [Assistant](assistant.md#connection-notes) tells when Qrow
+sends the notes.
+
+A duplicate keeps the notes of the source.
+
 ## Edit, duplicate, or delete a profile
 
 Right-click a profile and use the **Connection** section of the menu: **Edit**,
@@ -198,10 +223,11 @@ An empty password field during an edit keeps the stored password. When you
 change a connection from a sign-in to a password, enter the password. A
 duplicate has a new profile identifier and a unique name based on the source
 name. A duplicate with password authentication requires a password. A
-duplicate keeps the sign-in of the source.
+duplicate keeps the sign-in and the assistant notes of the source.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name, the Connection Lifecycle fields, or the Schemas fields. The worker applies the new lifecycle
+name, the Connection Lifecycle fields, the Schemas fields, or the
+assistant notes. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -220,8 +246,8 @@ so a failed deletion can leave the password in Keychain.
 The Connections sidebar is a tree. Each connection is a root row. Under a
 connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
-row shows the column name and its type. A schema row shows the number of its
-tables and views.
+row shows a minus icon, the column name, and its type. A schema row shows
+the number of its tables and views.
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema refresh**, the first field of the
@@ -240,7 +266,10 @@ Schemas section:
 To use the tree:
 
 - Click a connection to select it. This does not expand the connection.
+  The current query's connection stays highlighted.
 - Click the arrow before a connection to expand or collapse it.
+  This does not select the connection for the query. An outline shows
+  the keyboard position without a second connection highlight.
 - Click a schema, a table, or a view to expand or collapse it.
 - To collapse all rows below a connection or a schema, right-click it and
   select **Collapse**. The connection or the schema stays expanded. During
@@ -248,8 +277,10 @@ To use the tree:
   the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
-  connection puts the cursor in the SQL editor. The tree shows the selected
-  row only while it has the focus.
+  connection puts the cursor in the SQL editor. The tree highlights a selected
+  schema, table, view, or column only while the tree has the focus.
+  If you collapse a connection, the previous row highlight disappears.
+  If you hide the Connections panel, the tree clears its row selection.
 - Point to a row to see its full name when the sidebar cuts it. A tooltip
   also shows the comment of a table, a view, or a column, and the first line
   of the error of a failed refresh. A row whose name fits and that has no comment or error

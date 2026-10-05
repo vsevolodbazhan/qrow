@@ -1,7 +1,7 @@
 use crate::support::fixture::{Kyuubi, PASSWORD, QUERY_TIMEOUT};
 use crate::support::{TestApp, bounds_of, cell, header, label};
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
+use gpui_kit::{TestAppContext, px, size};
 use qrow::model::SavedTab;
 
 #[gpui_kit::test]
@@ -25,6 +25,83 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
         assert_eq!(label(window, "result-range").as_deref(), Some("Rows 1–1"));
         assert_eq!(label(window, "result-loaded").as_deref(), Some("1 loaded"));
         assert_eq!(label(window, "result-columns").as_deref(), Some("1 column"));
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let (workspace, credentials) = kyuubi.workspace("SELECT id FROM range(1001)", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.simulate_window_resize(app.window, size(px(600.), px(650.)));
+    app.settle(cx);
+    app.click(cx, "result-details");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 0")
+        );
+        assert_eq!(
+            label(window, "result-detail-loaded").as_deref(),
+            Some("Loaded rows: 0")
+        );
+        assert!(window.try_find("result-detail-elapsed").is_none());
+    });
+    app.press(cx, "escape");
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "result-details");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 1–1000")
+        );
+        assert_eq!(
+            label(window, "result-detail-loaded").as_deref(),
+            Some("Loaded rows: 1000")
+        );
+        assert_eq!(
+            label(window, "result-detail-columns").as_deref(),
+            Some("Columns: 1")
+        );
+    });
+    app.click(cx, "next-page");
+    app.click(cx, "result-details");
+    app.wait_until(
+        cx,
+        "the fetched page in Result Details",
+        QUERY_TIMEOUT,
+        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded rows: 1001"),
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 1001–1001")
+        );
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("1000"));
+    });
+    app.press(cx, "escape");
+    app.run_complete(cx, "SELECT 1 AS value WHERE false");
+    app.click(cx, "result-details");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 0")
+        );
+        assert_eq!(
+            label(window, "result-detail-loaded").as_deref(),
+            Some("Loaded rows: 0")
+        );
+        assert_eq!(
+            label(window, "result-detail-columns").as_deref(),
+            Some("Columns: 1")
+        );
+        assert!(
+            label(window, "result-detail-elapsed")
+                .unwrap()
+                .starts_with("Query duration: ")
+        );
     });
 }
 

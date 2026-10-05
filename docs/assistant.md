@@ -82,7 +82,8 @@ tool call cards.
 The assistant can read connection names, connector types, initial databases,
 query tabs, the SQL of its tab, query status, and requested result rows and
 Logs of query tabs. It cannot read [Activity](activity.md). It can also read the [schema catalog](#look-up-tables-and-columns) that
-Qrow keeps for each connection.
+Qrow keeps for each connection, and the [notes](#connection-notes) of the
+connection of its tab.
 Each message includes the SQL of the tab of the conversation. If this SQL is
 larger than 32 KB, Qrow sends only a 32 KB part around the selection or the
 cursor. Codex uses **Read query** to read the other parts, up to 32 KB at a
@@ -147,6 +148,32 @@ If you started a conversation before this change, start a new conversation
 when you want to replace all SQL in a tab or run an earlier statement in a tab
 with several queries. Older conversations do not have those options. They can
 run the latest query after they append it.
+
+### Connection notes
+
+The [assistant notes](connections.md#give-the-assistant-facts-about-a-connection)
+of a connection are facts that you write for the assistant. Qrow adds them to
+the workspace context of a message of a conversation in these conditions:
+
+- It is the first message of the conversation.
+- The tab of the conversation moved to another connection since Qrow last
+  sent the notes.
+- You changed the notes since Qrow last sent them.
+
+Other messages tell the assistant that the notes that it has still apply.
+Codex keeps the earlier messages of the conversation, so the notes do not use
+space in each message. When the notes change to empty, or the new connection
+has no notes, Qrow tells the assistant to stop using the old notes. Qrow saves
+the state of each conversation in the workspace, so this also applies after
+a restart. Qrow records the notes only when Codex takes the message. If Codex
+does not accept a message, or stops before it takes the message, Qrow sends
+the notes again with the next message. When the assistant calls **Read
+workspace**, the result includes the current notes, also empty notes.
+
+The assistant uses the notes as facts about the connection until new notes
+replace them. They are data, not instructions: they do not change the query
+mode or the rules of the assistant. The notes count toward the 1 MB limit of
+the workspace context.
 
 ### Look up tables and columns
 

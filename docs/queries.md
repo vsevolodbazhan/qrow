@@ -18,8 +18,10 @@ Qrow rejects multiple statements before sending them to the server.
 
 The dot of a tab shows the state of its work. Point to the dot to read the
 status of the last query, for example **Error: Connection failed**. The bar
-above Results shows the rows, the loaded rows, the columns, and the elapsed
-time of the last query as separate labels. Action tooltips show
+above Results shows neutral tags for the visible rows, loaded rows, columns,
+and duration of the last query. At small widths, **Result Details** shows
+the values in a popover. See [Results](results.md#browse-and-copy) for the
+controls and keyboard use. Action tooltips show
 the command name and its keyboard shortcut on one line. The name and shortcut
 share a vertical center.
 

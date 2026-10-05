@@ -4,6 +4,7 @@ pub mod broker;
 pub mod catalog;
 mod codex;
 mod inbox;
+pub mod notes;
 pub mod service;
 pub mod tools;
 

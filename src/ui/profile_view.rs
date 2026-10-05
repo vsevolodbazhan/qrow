@@ -121,13 +121,7 @@ impl Qrow {
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
             .w_full()
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Spark (HiveServer2)"),
-            )
+            .child(connection_form::section_title("Spark (HiveServer2)", cx))
             .child(
                 v_flex()
                     .pt_3()
@@ -260,7 +254,10 @@ impl Qrow {
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))
-                    .child(connection_form::render_schemas(form, cx.weak_entity(), cx)),
+                    .child(connection_form::render_schemas(form, cx.weak_entity(), cx))
+                    .when(self.settings.assistant.enabled, |el| {
+                        el.child(connection_form::render_assistant(form, cx))
+                    }),
             )
             .into_any_element()
     }

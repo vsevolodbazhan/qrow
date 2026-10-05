@@ -188,9 +188,11 @@ impl Qrow {
             }
             AssistantServiceEvent::Steered(thread_id) => {
                 self.thread_run_mut(&thread_id).sent_messages.pop_front();
+                self.acknowledge_notes(&thread_id, true, cx);
             }
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
                 self.thread_run_mut(&thread_id).sent_messages.pop_front();
+                self.acknowledge_notes(&thread_id, true, cx);
                 if let Some(entry) =
                     self.assistant_state
                         .transcripts
@@ -497,6 +499,9 @@ impl Qrow {
                     && matches!(operation, Operation::Start | Operation::Steer)
                 {
                     self.restore_sent_message(thread, window, cx);
+                    // The record stays unknown, so the next message sends
+                    // the notes again.
+                    self.acknowledge_notes(thread, false, cx);
                 }
                 if let Some(thread) = id.as_ref() {
                     let run = self.thread_run_mut(thread);

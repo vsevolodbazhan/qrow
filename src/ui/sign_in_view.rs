@@ -9,13 +9,14 @@ use crate::{
 };
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon,
+    ColorName, Icon,
     alert::Alert,
     button::ButtonCustomVariant,
     combobox::ComboboxEvent,
     form::{Field, Form},
     h_flex,
     spinner::Spinner,
+    tag::Tag,
     v_flex,
 };
 use std::{
@@ -223,12 +224,11 @@ impl Qrow {
         })
     }
 
-    /// The names of the connections that use a sign-in.
-    pub(super) fn connections_using(&self, id: Uuid) -> Vec<String> {
+    /// The connections that use a sign-in.
+    pub(super) fn connections_using(&self, id: Uuid) -> Vec<&Profile> {
         self.profiles
             .iter()
             .filter(|profile| profile.authentication.sign_in() == Some(id))
-            .map(|profile| profile.name.clone())
             .collect()
     }
 
@@ -994,6 +994,22 @@ impl Qrow {
                             .on_click(delete)
                             .disabled(working || in_use),
                     )
+                    .when(in_use, |menu| {
+                        menu.item(
+                            PopupMenuItem::element(|_, cx| {
+                                let reason = "Change authentication in the connections first.";
+                                div()
+                                    .id("sign-in-delete-reason")
+                                    .test_support()
+                                    .role(Role::Label)
+                                    .aria_label(reason)
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(reason)
+                            })
+                            .disabled(true),
+                        )
+                    })
             },
             window,
             cx,
@@ -1256,12 +1272,22 @@ impl Qrow {
                 .w_full()
                 .gap_2()
                 .child(
-                    div()
-                        .id("sign-in-account-status")
-                        .test_support()
-                        .role(Role::Status)
-                        .aria_label(account.detail.clone())
-                        .child(account.detail),
+                    h_flex()
+                        .w_full()
+                        .gap_2()
+                        .child(
+                            div()
+                                .id("sign-in-account-status")
+                                .test_support()
+                                .flex_1()
+                                .min_w_0()
+                                .role(Role::Status)
+                                .aria_label(account.detail.clone())
+                                .child(account.detail),
+                        )
+                        .when(!account.actions.is_empty(), |el| {
+                            el.child(h_flex().gap_2().flex_shrink_0().children(buttons))
+                        }),
                 )
                 .when_some(error, |el, error| {
                     el.child(
@@ -1274,9 +1300,6 @@ impl Qrow {
                             .text_color(cx.theme().danger)
                             .child(error),
                     )
-                })
-                .when(!account.actions.is_empty(), |el| {
-                    el.child(h_flex().gap_2().children(buttons))
                 }),
         );
         if signed_in {
@@ -1308,14 +1331,68 @@ impl Qrow {
                     .aria_label(label),
             )
         });
-        let connections = if users.is_empty() {
-            "No connection uses this sign-in.".to_owned()
-        } else {
-            format!(
-                "Used by {}. To delete the sign-in, choose another authentication for these connections first.",
-                users.join(", ")
-            )
-        };
+        let count = users.len();
+        let connections = Field::new()
+            .label_fn(move |_, cx| {
+                h_flex().gap_1().child("Connections").child(
+                    div()
+                        .id("sign-in-connections-count")
+                        .test_support()
+                        .role(Role::Label)
+                        .aria_label(format!(
+                            "{count} {}",
+                            if count == 1 {
+                                "connection"
+                            } else {
+                                "connections"
+                            }
+                        ))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(format!("({count})")),
+                )
+            })
+            .child(
+                h_flex()
+                    .id("sign-in-connections")
+                    .test_support()
+                    .w_full()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(cx.theme().foreground)
+                    .children(users.into_iter().map(|profile| {
+                        div()
+                            .id(SharedString::from(format!(
+                                "sign-in-connection-{}",
+                                profile.id
+                            )))
+                            .test_support()
+                            .flex_shrink_0()
+                            .max_w_full()
+                            .role(Role::Label)
+                            .aria_label(profile.name.clone())
+                            .child(
+                                Tag::color(ColorName::Neutral)
+                                    .outline()
+                                    .border_color(cx.theme().border)
+                                    .max_w_full()
+                                    .child(profile.name.clone()),
+                            )
+                    }))
+                    .when(count == 0, |el| {
+                        let message = "No connections use this sign-in.";
+                        el.child(
+                            div()
+                                .id("sign-in-connections-empty")
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(message)
+                                .text_color(cx.theme().muted_foreground)
+                                .child(message),
+                        )
+                    }),
+            );
         v_flex()
             .key_context("SignInSettings")
             .on_action(
@@ -1337,20 +1414,7 @@ impl Qrow {
                         .w_full()
                         .when_some(account, |form, account| form.child(account))
                         .children(fields)
-                        .when(existing.is_some(), |form| {
-                            form.child(
-                                Field::new().label("Connections").child(
-                                    div()
-                                        .id("sign-in-connections")
-                                        .test_support()
-                                        .role(Role::Label)
-                                        .aria_label(connections.clone())
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(connections),
-                                ),
-                            )
-                        }),
+                        .when(existing.is_some(), |form| form.child(connections)),
                 ),
             )
             .into_any_element()

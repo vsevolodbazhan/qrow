@@ -237,6 +237,87 @@ pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
         .bounds()
 }
 
+/// A catalog icon stays before the name and on the row's centerline.
+pub fn assert_catalog_icon(window: &Window, row: &str) {
+    let icon = window.find(format!("{row}\u{1f}icon"));
+    let name = bounds_of(window, &format!("{row}\u{1f}label"));
+    assert!(icon.visible(), "The catalog icon must be visible");
+    let icon = icon.bounds();
+    assert!(icon.size.width > px(0.) && icon.size.height > px(0.));
+    assert!(icon.right() < name.left(), "The icon must precede the name");
+    assert!(
+        (icon.center().y - name.center().y).abs() <= px(0.5),
+        "The icon must share the name's centerline"
+    );
+}
+
+/// Catalog keyboard selection, independent of whether the row paints a fill.
+pub fn selected_tree_rows(window: &Window) -> Vec<String> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            element.role() == Some(gpui_kit::Role::TreeItem) && element.selected() == Some(true)
+        })
+        .filter_map(|element| element.label().map(str::to_owned))
+        .collect()
+}
+
+/// Only the current query connection paints an active row background.
+pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, active: bool) {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = window
+        .find(connection_row(profile))
+        .bounds()
+        .scale(window.scale_factor())
+        .center();
+    let backgrounds: Vec<_> = window
+        .painted_quads()
+        .into_iter()
+        .filter(|quad| quad.bounds.contains(&center) && quad.content_mask.bounds.contains(&center))
+        .map(|quad| quad.background)
+        .collect();
+    assert_eq!(
+        backgrounds.contains(&gpui_kit::Background::from(cx.theme().sidebar_accent)),
+        active,
+        "Unexpected current-connection highlight: {backgrounds:?}"
+    );
+    if !active {
+        assert!(
+            !backgrounds.contains(&gpui_kit::Background::from(cx.theme().list_active)),
+            "An inactive connection has a tree-selection fill: {backgrounds:?}"
+        );
+    }
+}
+
+/// A keyboard root has a visible outline, even without a disclosure arrow.
+pub fn assert_connection_keyboard_position(
+    window: &Window,
+    cx: &App,
+    profile: Uuid,
+    expected: bool,
+) {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = window
+        .find(connection_row(profile))
+        .bounds()
+        .scale(window.scale_factor())
+        .center();
+    let outlined = window.painted_quads().into_iter().any(|quad| {
+        quad.bounds.contains(&center)
+            && quad.border_color == cx.theme().ring
+            && quad.border_widths.top > px(0.).scale(window.scale_factor())
+            // Transparent outlines paint only the border band, not the center.
+            && quad.content_mask.bounds.contains(&point(
+                center.x,
+                quad.bounds.top() + quad.border_widths.top / 2.,
+            ))
+    });
+    assert_eq!(
+        outlined, expected,
+        "Unexpected connection keyboard outline at {center:?}"
+    );
+}
+
 /// One painted dot in a region, in the expected theme color.
 fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
     let bounds = bounds.scale(window.scale_factor());
@@ -657,8 +738,8 @@ impl TestApp {
     /// visible, like a user who scrolls a form to a field below its fold or
     /// back to a field above it. The
     /// wheel turns over a visible element of the same container. A snapshot
-    /// is visible when any part of it shows, so a target in the lower half of
-    /// the window gets one more step, which shows all of it.
+    /// is visible when any part of it shows, so a target gets one more step
+    /// in either direction, which shows all of it.
     pub fn scroll_to(&self, cx: &mut TestAppContext, target: &str) {
         let mut positions = Vec::new();
         let mut extra_step = true;
@@ -666,7 +747,7 @@ impl TestApp {
             let position = self.update(cx, |window, _| {
                 let element = window.try_find(target.to_owned())?;
                 let low = element.bounds().center().y > window.viewport_size().height / 2.;
-                if element.visible() && !(low && extra_step) {
+                if element.visible() && !extra_step {
                     return None;
                 }
                 if element.visible() {

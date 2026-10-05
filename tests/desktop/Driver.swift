@@ -752,7 +752,7 @@ final class Driver {
             "ui_scale": uiScale,
             "assistant": [
                 "enabled": true,
-                "data_sharing_notice_version": 2,
+                "data_sharing_notice_version": 3,
                 "codex_executable": FileManager.default.currentDirectoryPath + "/tests/desktop/fake-codex.sh",
                 "panel_width": panelWidth,
             ],

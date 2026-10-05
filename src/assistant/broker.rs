@@ -101,6 +101,13 @@ pub struct WorkspaceContext {
     /// The schema catalog of the connection of `selected_tab`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog: Option<super::catalog::CatalogContext>,
+    /// The assistant notes of the connection of `selected_tab`, when they
+    /// are new to the conversation. An empty text removes earlier notes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_notes: Option<String>,
+    /// Whether the notes of an earlier message still apply.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub connection_notes_unchanged: bool,
 }
 
 /// Returns up to `MAX_CONTEXT_STATEMENTS` ranges of the statements that
@@ -165,11 +172,23 @@ impl WorkspaceContext {
             tabs,
             selected_tab,
             catalog: None,
+            connection_notes: None,
+            connection_notes_unchanged: false,
         }
     }
 
     pub fn with_catalog(mut self, catalog: Option<super::catalog::CatalogContext>) -> Self {
         self.catalog = catalog;
+        self
+    }
+
+    pub fn with_notes(mut self, notes: super::notes::ContextNotes) -> Self {
+        use super::notes::ContextNotes;
+        (self.connection_notes, self.connection_notes_unchanged) = match notes {
+            ContextNotes::None => (None, false),
+            ContextNotes::Send(text) => (Some(text), false),
+            ContextNotes::Unchanged => (None, true),
+        };
         self
     }
 }

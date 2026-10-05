@@ -5,6 +5,7 @@ mod support;
 mod assistant_chat;
 mod assistant_idle;
 mod assistant_layout;
+mod assistant_notes;
 mod assistant_sql;
 mod assistant_tabs;
 mod assistant_threads;

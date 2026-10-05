@@ -1707,7 +1707,7 @@ fn render_entry(
             comment,
             ..
         } => (
-            None,
+            Some(AssetIconName::Minus),
             name.clone().into(),
             Some(data_type.clone()),
             false,
@@ -1771,6 +1771,8 @@ fn render_entry(
         .child(disclosure)
         .child(
             div()
+                .id(child_id(&id, "icon"))
+                .test_support()
                 .w(ui_px(16.))
                 .flex_shrink_0()
                 .flex()
@@ -1946,7 +1948,7 @@ fn connection_row(
     entry: &SharedString,
     id: Uuid,
     row: &ConnectionRow,
-    selected: bool,
+    keyboard_position: bool,
     disclosure: impl IntoElement,
     context: &RowContext,
     cx: &App,
@@ -1989,8 +1991,9 @@ fn connection_row(
     } else {
         cx.theme().sidebar_foreground
     };
-    // The row draws the hover and the selection, so they also cover the
-    // disclosure. The button itself paints no background.
+    // Only the current query connection paints an active fill. An inset focus
+    // outline shows the keyboard position, also without schema browsing.
+    // The button itself paints no background.
     let button = Button::new(SharedString::from(format!("profile-{id}")))
         .custom(
             ButtonCustomVariant::new(cx)
@@ -2054,12 +2057,22 @@ fn connection_row(
         .w_full()
         .gap(px(context.scale * ROW_GAP))
         .rounded(cx.theme().radius)
+        .relative()
+        .when(keyboard_position, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().ring),
+            )
+        })
         .text_color(foreground)
         .map(|el| {
             if row.active {
                 el.bg(cx.theme().sidebar_accent)
-            } else if selected {
-                el.bg(cx.theme().list_active)
             } else {
                 el.hover(|el| el.bg(cx.theme().tokens.list_hover))
             }

@@ -28,8 +28,11 @@ pub fn extra_scopes(scopes: &[String]) -> Vec<&str> {
 pub const MAX_CALLBACK_PORTS: usize = 16;
 pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
-/// Version 2 adds schema, table, and column names and comments.
-pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 2;
+/// Version 2 adds schema, table, and column names and comments. Version 3
+/// adds the assistant notes of connections.
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 3;
+/// The largest assistant notes of one connection, in bytes.
+pub const MAX_ASSISTANT_NOTES_BYTES: usize = 16 * 1024;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
 pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
 pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
@@ -341,6 +344,10 @@ pub struct Profile {
     pub tls: bool,
     #[serde(default)]
     pub authentication: Authentication,
+    /// Facts about the connection that the user writes for the assistant.
+    /// Qrow adds them to the workspace context of a conversation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub assistant_notes: String,
 }
 
 /// How a connection proves the identity of its database user.
@@ -630,6 +637,7 @@ impl Default for Profile {
             shared_catalog: None,
             tls: false,
             authentication: Authentication::Password,
+            assistant_notes: String::new(),
         }
     }
 }
@@ -668,8 +676,24 @@ impl Profile {
             !self.database.trim().is_empty(),
             "Enter an initial database."
         );
+        anyhow::ensure!(
+            self.assistant_notes.len() <= MAX_ASSISTANT_NOTES_BYTES,
+            "Assistant notes must be {} KB or less.",
+            MAX_ASSISTANT_NOTES_BYTES / 1024
+        );
         self.lifecycle.validate()?;
         self.catalog.validate()
+    }
+
+    /// Repair a profile that an edited file made invalid: notes above the
+    /// limit lose their end.
+    fn sanitize(&mut self) {
+        if self.assistant_notes.len() > MAX_ASSISTANT_NOTES_BYTES {
+            let end = self
+                .assistant_notes
+                .floor_char_boundary(MAX_ASSISTANT_NOTES_BYTES);
+            self.assistant_notes.truncate(end);
+        }
     }
 }
 
@@ -889,6 +913,19 @@ pub struct AssistantConversation {
     /// The connection for the next tab of a conversation whose tab closed.
     #[serde(default)]
     pub detached_profile: Option<Uuid>,
+    /// The connection notes that the conversation has, so a message sends
+    /// them again only after a change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_notes: Option<SentNotes>,
+}
+
+/// The connection notes that Qrow last sent in a conversation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SentNotes {
+    /// The connection of the conversation tab when Qrow sent the notes.
+    pub connection: Option<Uuid>,
+    /// The SHA-256 digest of the notes, in lowercase hexadecimal.
+    pub digest: String,
 }
 
 impl AssistantConversation {
@@ -902,6 +939,7 @@ impl AssistantConversation {
             execution_mode,
             tab_id: None,
             detached_profile: None,
+            sent_notes: None,
         }
     }
 
@@ -1071,6 +1109,9 @@ impl Workspace {
     /// connection and each connection gets an active tab.
     pub fn normalize(&mut self) {
         let conversations_without_tabs = self.version < 4;
+        for profile in &mut self.profiles {
+            profile.sanitize();
+        }
         let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
         let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
         let fallback = fallback.or_else(|| self.profiles.first().map(|p| p.id));
@@ -1283,6 +1324,52 @@ mod tests {
             };
             assert_eq!(settings.validate().is_ok(), valid, "{minutes}");
         }
+    }
+
+    #[test]
+    fn assistant_notes_are_optional_bounded_and_repaired() {
+        let mut profile = Profile {
+            host: "localhost".into(),
+            username: "user".into(),
+            ..Profile::default()
+        };
+        // Profiles without notes do not save the field, and earlier files load.
+        let json = serde_json::to_value(&profile).unwrap();
+        assert!(json.get("assistant_notes").is_none(), "{json}");
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.assistant_notes, "");
+
+        profile.assistant_notes = "é".repeat(MAX_ASSISTANT_NOTES_BYTES / 2);
+        assert!(profile.validate().is_ok());
+        profile.assistant_notes.push('x');
+        assert!(profile.validate().is_err());
+
+        // An edited file with notes above the limit loses their end, on a
+        // character boundary.
+        profile.assistant_notes = format!("x{}", "é".repeat(MAX_ASSISTANT_NOTES_BYTES / 2));
+        let mut workspace = Workspace {
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        let notes = &workspace.profiles[0].assistant_notes;
+        assert_eq!(notes.len(), MAX_ASSISTANT_NOTES_BYTES - 1);
+        assert!(workspace.profiles[0].validate().is_ok());
+    }
+
+    #[test]
+    fn conversations_keep_the_record_of_sent_notes() {
+        let mut conversation =
+            AssistantConversation::new("thread", AssistantExecutionMode::AskBeforeRunning);
+        let json = serde_json::to_value(&conversation).unwrap();
+        assert!(json.get("sent_notes").is_none(), "{json}");
+        conversation.sent_notes = Some(SentNotes {
+            connection: Some(Uuid::new_v4()),
+            digest: "00".into(),
+        });
+        let restored: AssistantConversation =
+            serde_json::from_value(serde_json::to_value(&conversation).unwrap()).unwrap();
+        assert_eq!(restored, conversation);
     }
 
     #[test]

@@ -9,6 +9,36 @@ use std::time::Duration;
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn assistant_notes_save_in_connection_settings_without_interrupting_queries(
+    cx: &mut TestAppContext,
+) {
+    let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 42 AS value", PASSWORD);
+    let connection = workspace.profiles[0].id;
+    workspace.settings.assistant.enabled = true;
+    workspace.settings.assistant.data_sharing_notice_version =
+        qrow::model::ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.scroll_to(cx, "connection-assistant-notes");
+    app.update(cx, |window, cx| {
+        assert!(labels(window).iter().any(|text| text == "Assistant Notes"));
+        window.click("connection-assistant-notes", cx);
+        window.input("Dates are UTC.", cx);
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "the saved notes", QUERY_TIMEOUT, |_, _| {
+        app.saved().profiles[0].assistant_notes == "Dates are UTC."
+    });
+    app.run_complete(cx, "SELECT 43 AS value");
+    app.wait_cell(cx, 0, 1, "43");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mut TestAppContext) {
     let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 1", "not-the-password");
     let connection = workspace.profiles[0].id;

@@ -1,8 +1,10 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, assert_connection_dot, assert_tooltip_header_center, bounds_of,
-    connection_row, elements, label, labelled, menu_item, offline_profile, press_at, shows, value,
+    MemoryCredentials, TestApp, assert_catalog_icon, assert_connection_dot,
+    assert_connection_highlight, assert_connection_keyboard_position, assert_tooltip_header_center,
+    bounds_of, connection_row, elements, label, labelled, menu_item, offline_profile, press_at,
+    selected_tree_rows, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -346,6 +348,30 @@ fn scroll_tree(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
         );
     });
     app.settle(cx);
+}
+
+#[gpui_kit::test]
+fn column_icons_align_before_the_names_at_each_zoom(cx: &mut TestAppContext) {
+    for scale in [0.75, 1., 1.5] {
+        let profile = offline_profile("Warehouse");
+        let directory = tempfile::tempdir().unwrap();
+        avia(&directory, &profile);
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+        expand_connection(&app, cx, &profile);
+        wait_shows(&app, cx, "avia");
+        app.click_labelled(cx, "avia");
+        wait_shows(&app, cx, "bookings");
+        app.click_labelled(cx, "bookings");
+        wait_shows(&app, cx, "gate STRING");
+        app.update(cx, |window, _| {
+            let relation = format!("r\u{1f}{}\u{1f}avia\u{1f}bookings", profile.id);
+            for (index, name) in ["booking_id", "gate"].iter().enumerate() {
+                assert_catalog_icon(window, &format!("{relation}\u{1f}{index}\u{1f}{name}"));
+            }
+        });
+    }
 }
 
 #[gpui_kit::test]
@@ -882,6 +908,151 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut TestAppContext) {
+    let current = offline_profile("Current");
+    let profile = offline_profile("Other");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![current.clone(), profile.clone()]),
+        MemoryCredentials::default(),
+    );
+
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+    app.click_labelled(cx, "booking_id BIGINT");
+    app.update(cx, |window, _| {
+        assert_eq!(selected_tree_rows(window), ["booking_id BIGINT"]);
+    });
+
+    app.toggle_connection(cx, profile.id);
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert!(
+            !selected_tree_rows(window)
+                .iter()
+                .any(|row| row == "booking_id BIGINT")
+        );
+        assert_connection_highlight(window, cx, current.id, true);
+        assert_connection_highlight(window, cx, profile.id, false);
+    });
+
+    app.toggle_connection(cx, profile.id);
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert!(
+            !selected_tree_rows(window)
+                .iter()
+                .any(|row| row == "booking_id BIGINT")
+        );
+        assert_connection_highlight(window, cx, current.id, true);
+        assert_connection_highlight(window, cx, profile.id, false);
+    });
+    // The root remains the keyboard position, not a second active connection.
+    app.press(cx, "left");
+    app.wait_until(
+        cx,
+        "the collapsed catalog",
+        Duration::from_secs(10),
+        |window, _| !shows(window, "avia"),
+    );
+    app.press(cx, "right");
+    wait_shows(&app, cx, "avia");
+    app.update(cx, |window, cx| {
+        assert_connection_highlight(window, cx, current.id, true);
+        assert_connection_highlight(window, cx, profile.id, false);
+    });
+}
+
+#[gpui_kit::test]
+fn keyboard_navigation_reaches_connections_with_schema_browsing_disabled(cx: &mut TestAppContext) {
+    let profiles: Vec<_> = ["Current", "No catalog"]
+        .into_iter()
+        .map(|name| {
+            let mut profile = offline_profile(name);
+            profile.catalog.refresh = CatalogRefresh::Disabled;
+            profile
+        })
+        .collect();
+    let app = TestApp::launch_with(
+        cx,
+        workspace(profiles.clone()),
+        MemoryCredentials::default(),
+    );
+    // The empty disclosure lane still selects and focuses the root.
+    app.toggle_connection(cx, profiles[0].id);
+    app.press(cx, "down");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        let selected = selected_tree_rows(window);
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].contains("No catalog"));
+        assert_connection_highlight(window, cx, profiles[0].id, true);
+        assert_connection_highlight(window, cx, profiles[1].id, false);
+        assert_connection_keyboard_position(window, cx, profiles[0].id, false);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, true);
+    });
+    app.press(cx, "up");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        let selected = selected_tree_rows(window);
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].contains("Current"));
+        assert_connection_keyboard_position(window, cx, profiles[0].id, true);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, false);
+    });
+    app.click(cx, "sql-editor");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_connection_keyboard_position(window, cx, profiles[0].id, false);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, false);
+    });
+}
+
+#[gpui_kit::test]
+fn hiding_or_replacing_connections_clears_the_catalog_selection(cx: &mut TestAppContext) {
+    let profile = offline_profile("Warehouse");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![profile.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &profile);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate STRING");
+
+    for exit in ["cmd-b", "show-connections", "show-sign-ins"] {
+        app.click_labelled(cx, "booking_id BIGINT");
+        app.update(cx, |window, _| {
+            assert_eq!(selected_tree_rows(window), ["booking_id BIGINT"]);
+        });
+        if exit == "cmd-b" {
+            app.press(cx, exit);
+        } else {
+            // Selection must clear even when focus left the sidebar already.
+            app.click(cx, "sql-editor");
+            app.click(cx, exit);
+        }
+        app.wait_gone(cx, "add-connection");
+        app.click(cx, "show-connections");
+        app.wait_for(cx, "add-connection");
+        app.click(cx, "connections-list");
+        app.settle(cx);
+        app.update(cx, |window, _| {
+            assert!(selected_tree_rows(window).is_empty())
+        });
+    }
+}
+
+#[gpui_kit::test]
 fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) {
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -1302,13 +1473,14 @@ fn a_connection_without_schema_browsing_has_no_tree_and_no_refresh(cx: &mut Test
 
 #[gpui_kit::test]
 fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAppContext) {
-    // The server accepts the session, then closes it after a second, so the
-    // refresh fails while the tooltip is open.
+    // Close the server after the initial tooltip checks, so the refresh fails
+    // while the tooltip is open even when other tests delay this test.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (close_server, close_requested) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         if let Ok((stream, _)) = listener.accept() {
-            std::thread::sleep(Duration::from_secs(1));
+            let _ = close_requested.recv();
             drop(stream);
         }
     });
@@ -1352,6 +1524,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     });
 
     // The pointer stays on the row. The open tooltip changes only its status.
+    close_server.send(()).unwrap();
     app.wait_until(
         cx,
         "the unread error status in the tooltip",
