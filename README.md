@@ -159,7 +159,8 @@ Do not use `target-cpu=native` for a package that you share with older Macs.
 To build for another Mac architecture, install its Rust target and set
 `CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
 Packaging reads the executable from the target's subdirectory and checks its
-architecture. GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
+architecture. The package includes license notices for the selected target.
+GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
 Silicon and `Qrow-VERSION-x86_64.dmg` for Intel. Choose the file for your Mac.
 CI tests both builds on macOS 15. It does not test every macOS 12 driver.
 The file without an architecture suffix remains an ARM64 alias for older tap
