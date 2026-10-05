@@ -109,18 +109,18 @@ pub(super) fn parse_lifecycle(
 }
 
 use super::{ProfileEditor, Qrow};
-use crate::model::SignIn;
+use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn};
 use gpui_kit::component::{
-    IconName, IndexPath, Sizable as _,
+    ActiveTheme as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
     form::{Field, Form},
-    input::Input,
+    input::{Input, Textarea},
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, Role, SharedString, TestSupportExt as _,
-    WeakEntity, Window, div, prelude::*,
+    AnyElement, App, Context, Div, Entity, FontWeight, IntoElement, Role, SharedString,
+    TestSupportExt as _, WeakEntity, Window, div, prelude::*,
 };
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
@@ -512,6 +512,76 @@ fn field(label: &'static str, description: Option<&'static str>, control: AnyEle
         })
 }
 
+/// The title of a group of fields, like the connector above the first group.
+pub(super) fn section_title(title: &'static str, cx: &App) -> Div {
+    div()
+        .text_base()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(cx.theme().muted_foreground)
+        .child(title)
+}
+
+/// The notes length from which the form shows the byte count.
+const NOTES_COUNT_FROM: usize = MAX_ASSISTANT_NOTES_BYTES * 3 / 4;
+
+/// Whether the form shows the byte count of notes of `bytes`.
+pub(super) fn counts_notes(bytes: usize) -> bool {
+    bytes >= NOTES_COUNT_FROM
+}
+
+/// The help text below the notes: the byte count near the limit.
+fn notes_description(bytes: usize) -> String {
+    if counts_notes(bytes) {
+        format!(
+            "{} of {} bytes. Do not enter secrets.",
+            group_digits(bytes),
+            group_digits(MAX_ASSISTANT_NOTES_BYTES)
+        )
+    } else {
+        "Sent to Codex and saved as plain text. Do not enter secrets.".to_owned()
+    }
+}
+
+fn group_digits(value: usize) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
+pub(super) fn render_assistant(form: &ProfileEditor, cx: &App) -> impl IntoElement {
+    let bytes = form.assistant_notes.read(cx).value().len();
+    Form::vertical().w_full().child(field_with(
+        "Assistant Notes",
+        notes_description(bytes),
+        // The textarea has no element ID setter in GPUI Kit 0.6.6, so this
+        // element gives tests one.
+        div()
+            .id("connection-assistant-notes")
+            .test_support()
+            .w_full()
+            .child(
+                Textarea::new(&form.assistant_notes)
+                    .w_full()
+                    .disabled(form.saving.is_some())
+                    .aria_label("Assistant Notes"),
+            )
+            .into_any_element(),
+    ))
+}
+
+fn field_with(label: &'static str, description: String, control: AnyElement) -> Field {
+    Field::new()
+        .label(label)
+        .child(control)
+        .description(description)
+}
+
 pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
     let saving = form.saving.is_some();
     let keep = keeps_connected(&form.idle_behavior, cx);
@@ -691,6 +761,18 @@ pub(super) fn render_schemas(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_notes_help_counts_bytes_near_the_limit() {
+        assert!(notes_description(0).starts_with("Sent to Codex"));
+        assert!(notes_description(NOTES_COUNT_FROM - 1).starts_with("Sent to Codex"));
+        assert_eq!(
+            notes_description(NOTES_COUNT_FROM),
+            "12,288 of 16,384 bytes. Do not enter secrets."
+        );
+        assert_eq!(group_digits(7), "7");
+        assert_eq!(group_digits(1_234_567), "1,234,567");
+    }
 
     #[test]
     fn schema_patterns_are_split_at_commas_without_blanks() {

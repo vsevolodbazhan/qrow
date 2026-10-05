@@ -114,6 +114,12 @@ pub(in crate::ui) struct ThreadRun {
     /// The texts of the sent messages that Codex has not started or steered
     /// yet, oldest first. A failed send puts its text back in the message field.
     pub sent_messages: VecDeque<String>,
+    /// The notes record of each message in `sent_messages`. The
+    /// conversation keeps the record only when Codex takes the message.
+    pub pending_notes: VecDeque<crate::model::SentNotes>,
+    /// Whether a workspace read gave the notes while messages were pending.
+    /// Then the conversation does not know which notes Codex has last.
+    pub notes_read_while_pending: bool,
     /// Catalog tool calls that wait for the cache or for a refresh.
     pub catalog_calls: Vec<super::super::assistant_tools::PendingCatalogCall>,
 }

@@ -160,13 +160,24 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        for run in self.assistant_state.runs.values_mut() {
+        for (thread_id, run) in &mut self.assistant_state.runs {
+            // Codex may not have the tool results of an active turn, with
+            // their notes.
+            if run.active_turn.is_some()
+                && let Some(conversation) = self.assistant.conversation_mut(thread_id)
+            {
+                conversation.sent_notes = Some(crate::assistant::notes::unknown());
+            }
             run.active_turn = None;
             run.pending_reply = false;
             run.target = None;
             run.pending_query = None;
             run.loading_older = false;
             run.sent_messages.clear();
+            // The conversations keep unknown records, so their next
+            // messages send the notes.
+            run.pending_notes.clear();
+            run.notes_read_while_pending = false;
         }
         self.assistant_state.loaded_threads.clear();
         self.assistant_state.pending_titles.clear();

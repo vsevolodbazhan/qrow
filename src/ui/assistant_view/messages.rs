@@ -121,7 +121,8 @@ impl Qrow {
         {
             self.ensure_catalog(profile);
         }
-        let context = self.assistant_context(thread_id, cx);
+        let (notes, sent_notes) = self.assistant_notes(thread_id);
+        let context = self.assistant_context(thread_id, notes, cx);
         let active_turn = self
             .thread_run(thread_id)
             .and_then(|run| run.active_turn.clone());
@@ -154,6 +155,7 @@ impl Qrow {
         run.unread = None;
         run.pending_reply = true;
         run.sent_messages.push_back(text.clone());
+        run.pending_notes.push_back(sent_notes);
         let replaced = run
             .pending_query
             .as_ref()
@@ -170,6 +172,8 @@ impl Qrow {
         self.assistant_state.unstarted_threads.remove(thread_id);
         if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
             conversation.last_activity = unix_now_seconds();
+            // Codex has the notes only when it takes the message.
+            conversation.sent_notes = Some(crate::assistant::notes::unknown());
             self.changed(cx);
         }
         self.assistant_state
@@ -199,9 +203,80 @@ impl Qrow {
         })
     }
 
+    /// The notes of the connection of a conversation for its next message,
+    /// and the record to keep when Codex takes the message.
+    fn assistant_notes(
+        &self,
+        thread_id: &str,
+    ) -> (
+        crate::assistant::notes::ContextNotes,
+        crate::model::SentNotes,
+    ) {
+        let (connection, notes) = self.conversation_connection_notes(thread_id);
+        let sent = self
+            .assistant
+            .conversation(thread_id)
+            .and_then(|conversation| conversation.sent_notes.as_ref());
+        crate::assistant::notes::for_message(sent, connection, notes)
+    }
+
+    /// Keeps the notes record of the oldest pending message of a
+    /// conversation when Codex takes the message. The record stays unknown
+    /// while later messages are pending, or after a workspace read during
+    /// the wait.
+    pub(super) fn acknowledge_notes(
+        &mut self,
+        thread_id: &str,
+        taken: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let run = self.thread_run_mut(thread_id);
+        let Some(record) = run.pending_notes.pop_front() else {
+            return;
+        };
+        if !run.pending_notes.is_empty() {
+            return;
+        }
+        let known = taken && !run.notes_read_while_pending;
+        run.notes_read_while_pending = false;
+        if known && let Some(conversation) = self.assistant.conversation_mut(thread_id) {
+            conversation.sent_notes = Some(record);
+            self.changed(cx);
+        }
+    }
+
+    /// Keeps the notes that a workspace read gave to Codex.
+    pub(in crate::ui) fn notes_read(&mut self, thread_id: &str, record: crate::model::SentNotes) {
+        let run = self.thread_run_mut(thread_id);
+        if !run.pending_notes.is_empty() {
+            run.notes_read_while_pending = true;
+        } else if let Some(conversation) = self.assistant.conversation_mut(thread_id) {
+            conversation.sent_notes = Some(record);
+        }
+    }
+
+    /// The connection of the query tab of a conversation, and its notes.
+    pub(in crate::ui) fn conversation_connection_notes(
+        &self,
+        thread_id: &str,
+    ) -> (Option<Uuid>, &str) {
+        let connection = self
+            .thread_tab_index(thread_id)
+            .and_then(|index| self.tabs[index].saved.profile);
+        let notes = connection
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+            .map_or("", |profile| profile.assistant_notes.as_str());
+        (connection, notes)
+    }
+
     /// The workspace context of a conversation. `selected_tab` is the
     /// conversation's query tab, also when you work in another tab.
-    pub(in crate::ui) fn assistant_context(&self, thread_id: &str, cx: &App) -> Value {
+    pub(in crate::ui) fn assistant_context(
+        &self,
+        thread_id: &str,
+        notes: crate::assistant::notes::ContextNotes,
+        cx: &App,
+    ) -> Value {
         let connections = self
             .profiles
             .iter()
@@ -317,7 +392,8 @@ impl Qrow {
         });
         serde_json::to_value(
             WorkspaceContext::new(self.settings.sql_style(), connections, tabs, selected_tab)
-                .with_catalog(catalog),
+                .with_catalog(catalog)
+                .with_notes(notes),
         )
         .unwrap_or(json!({"version": 1}))
     }
