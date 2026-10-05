@@ -58,7 +58,7 @@ pub struct CatalogConfig {
     pub id: Uuid,
     pub shared: bool,
     /// The connections that browse the catalog, in sidebar order. Each has
-    /// the catalog settings, with its own Logs option.
+    /// the catalog settings, with its own column-read choice.
     pub members: Vec<Profile>,
     /// The settings that decide what a refresh reads.
     pub settings: CatalogSettings,

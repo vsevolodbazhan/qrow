@@ -3,10 +3,11 @@ use crate::support::{
     TestApp, assert_catalog_icon, assert_connection_highlight, bounds_of, connection_row, labelled,
     selected_tree_rows,
 };
-use gpui_kit::TestAppContext;
+use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind, Unfinished},
-    model::{CatalogRefresh, CatalogSettings, SharedCatalog},
+    model::{CatalogColumnReads, CatalogRefresh, CatalogSettings, SharedCatalog},
     storage,
 };
 use std::{
@@ -403,6 +404,130 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     });
 
     app.select_connection(cx, &profile);
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let schema = format!("qrow_columns_{}", uuid::Uuid::new_v4().simple());
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    workspace.profiles[0].catalog.include = vec![schema.clone()];
+    workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+    let profile = workspace.profiles[0].clone();
+    assert_eq!(profile.catalog_column_reads, CatalogColumnReads::Table);
+    let directory = tempfile::tempdir().unwrap();
+    let catalog_path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    let app = TestApp::launch_in(cx, directory, workspace, credentials);
+    let scroll_tree = |cx: &mut TestAppContext, pixels: f32| {
+        app.update(cx, |window, cx| {
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position: window.find("connections-list").bounds().center(),
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                        gpui_kit::px(0.),
+                        gpui_kit::px(pixels),
+                    )),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        app.settle(cx);
+    };
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    let fields = (0..32)
+        .map(|ix| format!("c{ix} INT"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    for table in ["first", "second", "third", "fourth"] {
+        app.run_complete(
+            cx,
+            &format!("CREATE TABLE {schema}.{table} ({fields}) USING parquet"),
+        );
+    }
+    app.run_complete(
+        cx,
+        &format!("CREATE VIEW {schema}.recent AS SELECT c0 AS view_id FROM {schema}.first"),
+    );
+
+    for (mode, label, added) in [
+        (
+            CatalogColumnReads::Table,
+            "One table at a time",
+            "table_read",
+        ),
+        (CatalogColumnReads::Schema, "Whole schema", "schema_read"),
+    ] {
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.scroll_to(cx, "connection-column-reads");
+        app.select(cx, "connection-column-reads", label);
+        app.click(cx, "save-profile");
+        app.wait_gone(cx, "connection-name");
+        app.wait_until(
+            cx,
+            "the column-read choice to save",
+            QUERY_TIMEOUT,
+            |_, _| app.saved().profiles[0].catalog_column_reads == mode,
+        );
+        app.run_complete(
+            cx,
+            &format!("ALTER TABLE {schema}.fourth ADD COLUMNS ({added} STRING)"),
+        );
+        app.context_menu(cx, connection_row(profile.id));
+        app.choose(cx, "popup-menu", "Refresh");
+        app.wait_until(
+            cx,
+            "all table and view columns to refresh",
+            QUERY_TIMEOUT,
+            |_, _| {
+                storage::load_catalog(&catalog_path).is_some_and(|catalog| {
+                    catalog.error.is_none()
+                        && ["first", "second", "third", "fourth", "recent"]
+                            .iter()
+                            .all(|name| {
+                                catalog.relation(&schema, name).is_some_and(|relation| {
+                                    relation.error.is_none()
+                                        && relation.columns.as_ref().is_some_and(|columns| {
+                                            if *name == "recent" {
+                                                columns.len() == 1 && columns[0].name == "view_id"
+                                            } else if *name == "fourth" {
+                                                columns.iter().any(|column| column.name == added)
+                                            } else {
+                                                columns.len() == 32
+                                            }
+                                        })
+                                })
+                            })
+                })
+            },
+        );
+        app.fill_labelled(cx, "Search Tables", &format!("{schema}.fourth"));
+        app.wait_until(cx, "the refreshed table", QUERY_TIMEOUT, |window, _| {
+            labelled(window, "fourth").is_some()
+        });
+        app.click_labelled(cx, "fourth");
+        app.wait_until(cx, "the table to expand", QUERY_TIMEOUT, |window, _| {
+            labelled(window, "c0 INT").is_some()
+        });
+        scroll_tree(cx, -20_000.);
+        app.wait_until(
+            cx,
+            "the refreshed column in the tree",
+            QUERY_TIMEOUT,
+            |window, _| labelled(window, &format!("{added} STRING")).is_some(),
+        );
+        scroll_tree(cx, 20_000.);
+        app.click_labelled(cx, "fourth");
+        app.wait_until(cx, "the table to collapse", QUERY_TIMEOUT, |window, _| {
+            labelled(window, "c0 INT").is_none()
+        });
+        app.fill_labelled(cx, "Search Tables", "");
+    }
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
 

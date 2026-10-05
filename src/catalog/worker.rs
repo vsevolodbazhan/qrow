@@ -17,7 +17,7 @@ use crate::{
         Cancellation, Connector, MetadataRequest, POLL_INTERVAL, QueryError, QueryState, Session,
     },
     logs::{LogEvent, LogKind, Severity},
-    model::{CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
+    model::{CatalogColumnReads, CatalogRefresh, CatalogSettings, MAX_RESULT_BYTES, Profile, Row},
     storage,
     worker::CredentialProvider,
 };
@@ -1005,6 +1005,9 @@ impl Runner {
             return Ok(());
         }
         self.checkpoint()?;
+        if self.profile.catalog_column_reads == CatalogColumnReads::Table {
+            return self.read_relation_columns(schema);
+        }
         let request = MetadataRequest::Columns {
             schema: schema.into(),
             relation: None,
@@ -1016,21 +1019,25 @@ impl Runner {
             }
             // One broken view can fail the request for the whole schema. The
             // requests for each relation decide which relations fail.
-            Err(_) => {
-                let relations: Vec<String> = self
-                    .catalog
-                    .schema(schema)
-                    .and_then(|node| node.relations.as_ref())
-                    .map(|relations| relations.keys().cloned().collect())
-                    .unwrap_or_default();
-                for relation in relations {
-                    self.checkpoint()?;
-                    self.read_columns(schema, &relation)?;
-                    self.publish(false);
-                }
-                Ok(())
-            }
+            Err(_) => self.read_relation_columns(schema),
         }
+    }
+
+    fn read_relation_columns(&mut self, schema: &str) -> Result<(), Interrupt> {
+        let relations: Vec<String> = self
+            .catalog
+            .schema(schema)
+            .and_then(|node| node.relations.as_ref())
+            .map(|relations| relations.keys().cloned().collect())
+            .unwrap_or_default();
+        // Close each operation before the next table. Fetch batches alone do
+        // not bound the metadata result that the Spark driver builds.
+        for relation in relations {
+            self.checkpoint()?;
+            self.read_columns(schema, &relation)?;
+            self.publish(false);
+        }
+        Ok(())
     }
 
     fn refresh_relation(&mut self, schema: &str, relation: &str) -> Result<(), Interrupt> {
