@@ -668,6 +668,12 @@ for line in sys.stdin:
                 "version": 1, "connection_id": connection,
                 "schema": schema, "relation": relation,
             }, described)
+        elif message.startswith("Report notes"):
+            # The reply names the message, so that each reply is unique.
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            notes = json.dumps(context.get("connection_notes"))
+            unchanged = context.get("connection_notes_unchanged", False)
+            finish_turn(thread_id, turn_id, f"{message}: notes {notes}, unchanged {unchanged}")
         elif message.startswith("Read the catalog"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             catalog = context.get("catalog") or {}

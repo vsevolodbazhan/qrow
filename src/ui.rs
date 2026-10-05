@@ -346,6 +346,11 @@ struct ProfileEditor {
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
+    /// The assistant notes. A change shows the byte count near the limit.
+    assistant_notes: Entity<TextareaState>,
+    /// Whether the form shows the byte count of the notes.
+    notes_counted: bool,
+    _assistant_notes_subscription: Subscription,
     idle_behavior: connection_form::ChoiceSelect,
     _idle_behavior_subscription: Subscription,
     /// Manual or automatic schema refresh.
@@ -2523,6 +2528,25 @@ impl Qrow {
                 .auto_grow(1, 8)
                 .default_value(serde_json::to_string_pretty(&profile.parameters).unwrap())
         });
+        let assistant_notes = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(3, 12)
+                .default_value(profile.assistant_notes.clone())
+        });
+        let assistant_notes_subscription = cx.subscribe_in(
+            &assistant_notes,
+            window,
+            |this, notes, event: &InputEvent, _, cx| {
+                // The form renders again only while it shows the byte count.
+                let counted = connection_form::counts_notes(notes.read(cx).value().len());
+                if let (InputEvent::Change, Some(form)) = (event, &mut this.form)
+                    && (counted || form.notes_counted)
+                {
+                    form.notes_counted = counted;
+                    cx.notify();
+                }
+            },
+        );
         let keep_connected = profile.lifecycle.keep_alive_seconds > 0;
         let idle_behavior = connection_form::idle_behavior_select(keep_connected, window, cx);
         let schema_refresh = connection_form::schema_refresh_select(
@@ -2584,6 +2608,9 @@ impl Qrow {
         let sign_in_subscription = Self::subscribe_sign_in_list(&sign_in, window, cx);
         self.form = Some(ProfileEditor {
             parameters,
+            notes_counted: connection_form::counts_notes(profile.assistant_notes.len()),
+            assistant_notes,
+            _assistant_notes_subscription: assistant_notes_subscription,
             idle_behavior,
             _idle_behavior_subscription: idle_behavior_subscription,
             schema_refresh,
@@ -2813,6 +2840,7 @@ impl Qrow {
                 &profile.lifecycle,
             )?;
             profile.tls = form.tls;
+            profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)

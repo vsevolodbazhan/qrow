@@ -121,13 +121,7 @@ impl Qrow {
             .key_context("ConnectionSettings")
             .on_action(cx.listener(|this, _: &SaveConnection, _, cx| this.save_profile(cx)))
             .w_full()
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Spark (HiveServer2)"),
-            )
+            .child(connection_form::section_title("Spark (HiveServer2)", cx))
             .child(
                 v_flex()
                     .pt_3()
@@ -262,6 +256,16 @@ impl Qrow {
                     .child(connection_form::render_lifecycle(form, cx))
                     .child(connection_form::render_schemas(form, cx.weak_entity(), cx)),
             )
+            // The notes reach only the assistant, so they show only while
+            // it is on.
+            .when(self.settings.assistant.enabled, |el| el.child(
+                v_flex()
+                    .pt_5()
+                    .w_full()
+                    .gap_3()
+                    .child(connection_form::section_title("Assistant", cx))
+                    .child(connection_form::render_assistant(form, cx)),
+            ))
             .into_any_element()
     }
 

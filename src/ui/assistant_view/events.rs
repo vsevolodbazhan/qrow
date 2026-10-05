@@ -497,6 +497,12 @@ impl Qrow {
                     && matches!(operation, Operation::Start | Operation::Steer)
                 {
                     self.restore_sent_message(thread, window, cx);
+                    // Codex may not have the notes of the message, so the
+                    // next message sends them again.
+                    if let Some(conversation) = self.assistant.conversation_mut(thread) {
+                        conversation.sent_notes = None;
+                        self.changed(cx);
+                    }
                 }
                 if let Some(thread) = id.as_ref() {
                     let run = self.thread_run_mut(thread);

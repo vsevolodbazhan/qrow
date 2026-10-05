@@ -515,7 +515,15 @@ impl Qrow {
     fn tool_workspace(&mut self, call: &ToolCall, cx: &App) -> Result<ToolResult, ToolResult> {
         let args: VersionInput = parse(call.arguments.clone())?;
         version(args.version)?;
-        let context = self.assistant_context(&call.thread_id, cx);
+        // An explicit read gives the current notes, also when the
+        // conversation has them.
+        let (_, notes) = self.conversation_connection_notes(&call.thread_id);
+        let notes = if notes.is_empty() {
+            crate::assistant::notes::ContextNotes::None
+        } else {
+            crate::assistant::notes::ContextNotes::Send(notes.to_owned())
+        };
+        let context = self.assistant_context(&call.thread_id, notes, cx);
         // This read binds later actions to the current state of the tab.
         let target = self
             .assistant_target(&call.thread_id, cx)
