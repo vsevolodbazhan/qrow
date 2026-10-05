@@ -325,17 +325,52 @@ fn a_failed_sign_in_shows_the_reason_and_can_be_retried(cx: &mut TestAppContext)
 #[gpui_kit::test]
 fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
     let provider = Provider::start();
-    let (workspace, sign_in) = workspace(&provider, true);
+    let (mut workspace, sign_in) = workspace(&provider, true);
+    workspace.profiles[0].name = "analytics-s (dev)".into();
+    let first = format!("sign-in-connection-{}", workspace.profiles[0].id);
+    let mut second = offline_profile("analytics-m (dev)");
+    second.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let second_id = format!("sign-in-connection-{}", second.id);
+    let unrelated = offline_profile("Password connection");
+    let unrelated_id = format!("sign-in-connection-{}", unrelated.id);
+    workspace.profiles.extend([second, unrelated]);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
     open_settings(&app, cx, &sign_in);
-    app.wait_until(cx, "the connections that use it", WAIT, |window, _| {
-        label(window, "sign-in-connections")
-            .is_some_and(|text| text.starts_with("Used by Analytics."))
+    app.scroll_to(cx, "sign-in-connections");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "sign-in-connections-count").as_deref(),
+            Some("2 connections")
+        );
+        assert_eq!(
+            label(window, first.clone()).as_deref(),
+            Some("analytics-s (dev)")
+        );
+        assert_eq!(
+            label(window, second_id.clone()).as_deref(),
+            Some("analytics-m (dev)")
+        );
+        let first = window.find(first.clone()).bounds();
+        let second = window.find(second_id.clone()).bounds();
+        assert_eq!(first.left(), second.left());
+        assert!(
+            first.bottom() < second.top(),
+            "connection names occupy separate rows"
+        );
+        assert!(window.find(second_id.clone()).visible());
+        assert!(window.try_find(unrelated_id.clone()).is_none());
+        assert!(window.try_find("sign-in-connections-empty").is_none());
     });
     app.click(cx, "cancel-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.wait_until(cx, "the deletion reason", WAIT, |window, _| {
+        label(window, "sign-in-delete-reason").as_deref()
+            == Some("Change authentication in the connections first.")
+    });
     app.choose(cx, "popup-menu", "Delete");
     app.settle(cx);
     assert!(!app.update(cx, |window, _| present(
@@ -351,7 +386,24 @@ fn an_unused_sign_in_can_be_deleted(cx: &mut TestAppContext) {
     let (workspace, sign_in) = workspace(&provider, false);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
+    open_settings(&app, cx, &sign_in);
+    app.scroll_to(cx, "sign-in-connections-empty");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "sign-in-connections-count").as_deref(),
+            Some("0 connections")
+        );
+        assert_eq!(
+            label(window, "sign-in-connections-empty").as_deref(),
+            Some("No connections use this sign-in.")
+        );
+    });
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.update(cx, |window, _| {
+        assert!(window.try_find("sign-in-delete-reason").is_none());
+    });
     app.choose(cx, "popup-menu", "Delete");
     // Delete asks first, and Cancel keeps the sign-in.
     app.click(cx, "cancel-delete-sign-in");

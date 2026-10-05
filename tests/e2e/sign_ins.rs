@@ -20,6 +20,7 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     profile.authentication = Authentication::Oidc {
         sign_in: sign_in.id,
     };
+    let profile_row = format!("sign-in-connection-{}", profile.id);
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT current_user() AS account".into();
     let workspace = Workspace {
@@ -58,6 +59,16 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
         assert!(status.right() < sign_out.left());
         assert!(f32::from(status.center().y - sign_out.center().y).abs() < 1.);
     });
+    app.scroll_to(cx, "sign-in-connections");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::label(window, "sign-in-connections-count").as_deref(),
+            Some("1 connection")
+        );
+        assert_eq!(window.find(profile_row.clone()).label(), Some("Analytics"));
+        assert!(window.find(profile_row.clone()).visible());
+    });
+    app.scroll_to(cx, "sign-in-account-sign-out");
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(
         cx,
