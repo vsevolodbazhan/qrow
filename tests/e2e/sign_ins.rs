@@ -21,10 +21,14 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
         sign_in: sign_in.id,
     };
     let profile_row = format!("sign-in-connection-{}", profile.id);
+    let mut second = profile.clone();
+    second.id = uuid::Uuid::new_v4();
+    second.name = "Analytics M".into();
+    let second_row = format!("sign-in-connection-{}", second.id);
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT current_user() AS account".into();
     let workspace = Workspace {
-        profiles: vec![profile],
+        profiles: vec![profile, second],
         tabs: vec![tab],
         sign_ins: vec![sign_in.clone()],
         ..Workspace::default()
@@ -63,10 +67,15 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             crate::support::label(window, "sign-in-connections-count").as_deref(),
-            Some("1 connection")
+            Some("2 connections")
         );
         assert_eq!(window.find(profile_row.clone()).label(), Some("Analytics"));
         assert!(window.find(profile_row.clone()).visible());
+        assert_eq!(window.find(second_row.clone()).label(), Some("Analytics M"));
+        let first = window.find(profile_row.clone()).bounds();
+        let second = window.find(second_row.clone()).bounds();
+        assert_eq!(first.top(), second.top());
+        assert!(first.right() < second.left());
     });
     app.scroll_to(cx, "sign-in-account-sign-out");
     app.click(cx, "sign-in-account-sign-out");

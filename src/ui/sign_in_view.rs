@@ -1351,23 +1351,32 @@ impl Qrow {
                 )
             })
             .child(
-                v_flex()
+                h_flex()
                     .id("sign-in-connections")
                     .test_support()
                     .w_full()
-                    .gap_1()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_x_1()
+                    .gap_y_1()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .children(users.into_iter().map(|profile| {
+                    .children(users.into_iter().enumerate().map(|(index, profile)| {
                         div()
                             .id(SharedString::from(format!(
                                 "sign-in-connection-{}",
                                 profile.id
                             )))
                             .test_support()
+                            .flex_shrink_0()
+                            .max_w_full()
                             .role(Role::Label)
                             .aria_label(profile.name.clone())
-                            .child(profile.name.clone())
+                            .child(if index + 1 < count {
+                                format!("{},", profile.name)
+                            } else {
+                                profile.name.clone()
+                            })
                     }))
                     .when(count == 0, |el| {
                         let message = "No connections use this sign-in.";

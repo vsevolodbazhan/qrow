@@ -355,10 +355,10 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
         );
         let first = window.find(first.clone()).bounds();
         let second = window.find(second_id.clone()).bounds();
-        assert_eq!(first.left(), second.left());
+        assert_eq!(first.top(), second.top());
         assert!(
-            first.bottom() < second.top(),
-            "connection names occupy separate rows"
+            first.right() < second.left(),
+            "short connection names share one line"
         );
         assert!(window.find(second_id.clone()).visible());
         assert!(window.try_find(unrelated_id.clone()).is_none());
@@ -378,6 +378,41 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
         &"confirm-delete-sign-in".into()
     )));
     assert_eq!(app.saved().sign_ins.len(), 1);
+}
+
+#[gpui_kit::test]
+fn connection_names_wrap_inside_the_sign_in_form(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (mut workspace, sign_in) = workspace(&provider, true);
+    workspace.profiles[0].name = "analytics-small (development, synthetic shared warehouse)".into();
+    let first_id = format!("sign-in-connection-{}", workspace.profiles[0].id);
+    let mut second = offline_profile("analytics-medium (development, synthetic shared warehouse)");
+    second.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let second_id = format!("sign-in-connection-{}", second.id);
+    workspace.profiles.push(second);
+    let app = launch(cx, &provider, workspace);
+    cx.simulate_window_resize(
+        app.window,
+        gpui_kit::size(gpui_kit::px(850.), gpui_kit::px(820.)),
+    );
+    open_sign_ins(&app, cx);
+    open_settings(&app, cx, &sign_in);
+    app.scroll_to(cx, "sign-in-connections");
+    app.update(cx, |window, _| {
+        let group = window.find("sign-in-connections").bounds();
+        let first = window.find(first_id.clone()).bounds();
+        let second = window.find(second_id.clone()).bounds();
+        assert!(
+            first.bottom() < second.top(),
+            "long names wrap to another line"
+        );
+        for bounds in [first, second] {
+            assert!(bounds.left() >= group.left() && bounds.right() <= group.right());
+        }
+        assert!(window.find(second_id.clone()).visible());
+    });
 }
 
 #[gpui_kit::test]
