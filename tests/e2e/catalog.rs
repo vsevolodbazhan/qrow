@@ -1,5 +1,5 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, bounds_of, connection_row, labelled};
+use crate::support::{TestApp, assert_catalog_icon, bounds_of, connection_row, labelled};
 use gpui_kit::TestAppContext;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind, Unfinished},
@@ -341,6 +341,12 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     app.wait_until(cx, "the columns", QUERY_TIMEOUT, |window, _| {
         labelled(window, "gate STRING").is_some()
     });
+    app.update(cx, |window, _| {
+        let relation = format!("r\u{1f}{}\u{1f}{schema}\u{1f}bookings", profile.id);
+        for (index, name) in ["id", "gate"].iter().enumerate() {
+            assert_catalog_icon(window, &format!("{relation}\u{1f}{index}\u{1f}{name}"));
+        }
+    });
 
     app.run_complete(
         cx,
@@ -350,6 +356,15 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the new column", QUERY_TIMEOUT, |window, _| {
         labelled(window, "fare DOUBLE").is_some()
+    });
+    app.update(cx, |window, _| {
+        assert_catalog_icon(
+            window,
+            &format!(
+                "r\u{1f}{}\u{1f}{schema}\u{1f}bookings\u{1f}2\u{1f}fare",
+                profile.id
+            ),
+        );
     });
 
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));

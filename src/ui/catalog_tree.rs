@@ -1707,7 +1707,7 @@ fn render_entry(
             comment,
             ..
         } => (
-            None,
+            Some(AssetIconName::Minus),
             name.clone().into(),
             Some(data_type.clone()),
             false,
@@ -1771,6 +1771,8 @@ fn render_entry(
         .child(disclosure)
         .child(
             div()
+                .id(child_id(&id, "icon"))
+                .test_support()
                 .w(ui_px(16.))
                 .flex_shrink_0()
                 .flex()

@@ -237,6 +237,20 @@ pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
         .bounds()
 }
 
+/// A catalog icon stays before the name and on the row's centerline.
+pub fn assert_catalog_icon(window: &Window, row: &str) {
+    let icon = window.find(format!("{row}\u{1f}icon"));
+    let name = bounds_of(window, &format!("{row}\u{1f}label"));
+    assert!(icon.visible(), "The catalog icon must be visible");
+    let icon = icon.bounds();
+    assert!(icon.size.width > px(0.) && icon.size.height > px(0.));
+    assert!(icon.right() < name.left(), "The icon must precede the name");
+    assert!(
+        (icon.center().y - name.center().y).abs() <= px(0.5),
+        "The icon must share the name's centerline"
+    );
+}
+
 /// One painted dot in a region, in the expected theme color.
 fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
     let bounds = bounds.scale(window.scale_factor());
