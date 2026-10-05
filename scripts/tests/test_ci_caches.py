@@ -9,8 +9,8 @@ rust_caches = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rust_caches)
 
 
-def cache(id, key, accessed, ref="refs/heads/main", created="2026-10-01T00:00:00Z"):
-    return {"id": id, "key": key, "ref": ref, "last_accessed_at": accessed, "created_at": created,
+def cache(id, key, created, ref="refs/heads/main", accessed="2026-10-05T23:00:00Z"):
+    return {"id": id, "key": key, "ref": ref, "created_at": created, "last_accessed_at": accessed,
             "size_in_bytes": 1}
 
 
@@ -19,7 +19,7 @@ def deleted(*caches):
 
 
 class SupersededTests(unittest.TestCase):
-    def test_keeps_the_last_used_cache_of_each_job(self):
+    def test_keeps_the_newest_cache_of_each_job(self):
         self.assertEqual(deleted(
             cache(1, "v0-rust-native-Darwin-arm64-31cc04a2-3e35e2ad", "2026-10-01T10:00:00Z"),
             cache(2, "v0-rust-native-Darwin-arm64-31cc04a2-577146a6", "2026-10-03T10:00:00Z"),
@@ -34,14 +34,14 @@ class SupersededTests(unittest.TestCase):
             cache(2, "v0-rust-static-Linux-x64-0badf00d-9377a56a", "2026-10-05T10:00:00Z"),
         ), [1])
 
-    def test_the_cache_that_main_uses_stays_over_a_newer_cache(self):
-        # A release of an older commit can save a cache after main saved its own.
+    def test_a_pull_request_that_restores_an_old_cache_does_not_keep_it(self):
+        # Pull requests restore the caches of main, which changes their time of last use.
         self.assertEqual(deleted(
-            cache(1, "v0-rust-package-Darwin-arm64-31cc04a2-9377a56a", "2026-10-05T12:00:00Z",
-                  created="2026-10-01T00:00:00Z"),
-            cache(2, "v0-rust-package-Darwin-arm64-31cc04a2-577146a6", "2026-10-04T10:00:00Z",
-                  created="2026-10-04T10:00:00Z"),
-        ), [2])
+            cache(1, "v0-rust-core-Linux-x64-c9181961-577146a6", "2026-10-03T10:00:00Z",
+                  accessed="2026-10-05T12:01:00Z"),
+            cache(2, "v0-rust-core-Linux-x64-c9181961-9377a56a", "2026-10-05T10:00:00Z",
+                  accessed="2026-10-05T12:00:00Z"),
+        ), [1])
 
     def test_jobs_on_other_architectures_are_separate(self):
         self.assertEqual(deleted(

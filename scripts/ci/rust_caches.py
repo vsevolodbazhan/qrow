@@ -5,7 +5,13 @@ Swatinem/rust-cache names a cache `v0-rust-SHARED-OS-ARCH-ENV-LOCK`. The two
 hashes change with the toolchain and with `Cargo.lock`, and each change saves
 a new cache next to the old one. The old caches fill the repository cache
 limit. Of the caches with the same name before the hashes, this script keeps
-the one that a run restored or saved last, and deletes the others.
+the newest and deletes the others.
+
+Only runs on `main` save the caches of `main`. Pull requests restore them too,
+so the time of last use does not show which cache `main` uses. A release of
+an older commit with another `Cargo.lock` saves a newer cache that `main` does
+not use. Then the next run on `main` builds the dependencies again and saves
+its cache again.
 """
 import argparse
 import datetime
@@ -24,7 +30,7 @@ def time(text):
 
 
 def superseded(caches):
-    """The caches to delete: all Rust caches of `main` except the last used of each group."""
+    """The caches to delete: all Rust caches of `main` except the newest of each group."""
     groups = {}
     for cache in caches:
         match = RUST_KEY.fullmatch(cache["key"])
@@ -32,7 +38,7 @@ def superseded(caches):
             groups.setdefault(match["group"], []).append(cache)
     stale = []
     for group in groups.values():
-        group.sort(key=lambda cache: (time(cache["last_accessed_at"]), time(cache["created_at"]), cache["id"]))
+        group.sort(key=lambda cache: (time(cache["created_at"]), cache["id"]))
         stale.extend(group[:-1])
     return sorted(stale, key=lambda cache: cache["key"])
 
@@ -58,7 +64,7 @@ def main():
     stale = superseded(list_caches(options.repository))
     for cache in stale:
         print(f"{'Would delete' if options.dry_run else 'Delete'} {cache['key']} "
-              f"({cache['size_in_bytes'] / 1e9:.2f} GB, last used {cache['last_accessed_at']})")
+              f"({cache['size_in_bytes'] / 1e9:.2f} GB, saved {cache['created_at']})")
         if not options.dry_run:
             gh("--method", "DELETE", f"repos/{options.repository}/actions/caches/{cache['id']}")
     total = sum(cache["size_in_bytes"] for cache in stale) / 1e9
