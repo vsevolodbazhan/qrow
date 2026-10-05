@@ -686,6 +686,31 @@ for line in sys.stdin:
                 finish_turn(thread_id, turn_id, f"{message}: notes {notes}")
 
             call_tool(thread_id, turn_id, "get_workspace_context", {"version": 1}, read_notes)
+        elif message.startswith("Read dbt"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            catalog = context.get("catalog") or {}
+            dbt = catalog.get("dbt") or {}
+            referenced = [r for r in catalog.get("referenced_relations", []) if r.get("dbt")]
+            summary = referenced[0]["dbt"] if referenced else {}
+
+            def described(success, result):
+                described_dbt = result.get("dbt", {}) if success else {}
+                finish_turn(
+                    thread_id,
+                    turn_id,
+                    f"dbt {dbt.get('dbt_version')}, models {dbt.get('models')}, matched {dbt.get('matched')}; "
+                    f"summary {summary.get('unique_id')} unique {','.join(summary.get('unique', []))}; "
+                    f"describe {described_dbt.get('materialized')}, "
+                    f"parents {len(described_dbt.get('parents', []))}, tests {len(described_dbt.get('tests', []))}",
+                )
+
+            if not referenced:
+                finish_turn(thread_id, turn_id, f"No dbt summary: {json.dumps(catalog)[:2000]}")
+            else:
+                call_tool(thread_id, turn_id, "describe_relation", {
+                    "version": 1, "connection_id": catalog["connection_id"],
+                    "schema": referenced[0]["schema"], "relation": referenced[0]["relation"],
+                }, described)
         elif message.startswith("Read the catalog"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             catalog = context.get("catalog") or {}

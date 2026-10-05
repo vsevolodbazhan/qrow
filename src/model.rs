@@ -29,8 +29,9 @@ pub const MAX_CALLBACK_PORTS: usize = 16;
 pub const MAX_TAB_TITLE: usize = 60;
 pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
 /// Version 2 adds schema, table, and column names and comments. Version 3
-/// adds the assistant notes of connections.
-pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 3;
+/// adds the assistant notes of connections. Version 4 adds the descriptions,
+/// tests, and lineage of dbt projects.
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 4;
 /// The largest assistant notes of one connection, in bytes.
 pub const MAX_ASSISTANT_NOTES_BYTES: usize = 16 * 1024;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;

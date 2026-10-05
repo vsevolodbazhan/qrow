@@ -281,3 +281,80 @@ fn a_launch_reads_the_manifests_of_the_connections(cx: &mut TestAppContext) {
         std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
     });
 }
+
+#[gpui_kit::test]
+fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestAppContext) {
+    use crate::support::assistant::FakeCodex;
+    let (directory, codex) = FakeCodex::new();
+    let bytes = dbt_manifest::generate(&shape());
+    let manifest = project(&directory, &bytes);
+    let index = qrow::dbt::parse(&bytes).unwrap();
+    let model = index
+        .entry(index.find(&dbt_manifest::model_id(1)).unwrap())
+        .clone();
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    let alias = dbt_manifest::model_alias(1);
+    let mut profile = offline_profile("Lake");
+    profile.dbt = Some(DbtProject {
+        manifest: manifest.to_string_lossy().into_owned(),
+        refresh: DbtRefresh::Manual,
+        schema_mapping: vec![SchemaRule {
+            kind: SchemaRuleKind::Prefix,
+            from: "analytics_".into(),
+            to: String::new(),
+        }],
+    });
+    let mut catalog = Catalog::new(&profile);
+    catalog.apply_schemas(vec![schema.clone()], &CatalogSettings::default(), 1);
+    let entry = RelationEntry {
+        name: alias.clone(),
+        kind: RelationKind::Table,
+        comment: None,
+    };
+    catalog.apply_relations(&schema, None, vec![entry], 1);
+    catalog.apply_columns(
+        &schema,
+        Some(&alias),
+        std::collections::BTreeMap::from([(
+            alias.clone(),
+            vec![qrow::catalog::CatalogColumn {
+                name: "id".into(),
+                data_type: "BIGINT".into(),
+                comment: None,
+            }],
+        )]),
+        1,
+    );
+    let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
+    storage::save_catalog(&path, &catalog).unwrap();
+    let saved = directory.path().join("dbt");
+    let id = profile.id;
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = format!("SELECT id FROM {schema}.{alias}");
+    let workspace = codex.workspace(Workspace {
+        profiles: vec![profile],
+        tabs: vec![tab],
+        ..Workspace::default()
+    });
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.wait_until(cx, "the dbt index", TIMEOUT, |_, _| {
+        std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
+    });
+    // The sidebar loads the saved catalog.
+    app.toggle_connection(cx, id);
+    app.wait_until(cx, "the schema", TIMEOUT, |window, _| {
+        crate::support::labelled(window, &schema).is_some()
+    });
+    app.open_assistant(cx);
+    app.send(cx, "Read dbt");
+    app.wait_reply(
+        cx,
+        &format!(
+            "dbt 1.12.5, models 12, matched 1; summary {} unique id; describe {}, parents {}, tests {}",
+            dbt_manifest::model_id(1),
+            index.symbol(model.materialized.unwrap()),
+            model.parents.len(),
+            dbt_manifest::test_names(1).len(),
+        ),
+    );
+}

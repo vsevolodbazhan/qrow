@@ -3,6 +3,7 @@
 pub mod broker;
 pub mod catalog;
 mod codex;
+pub mod dbt;
 mod inbox;
 pub mod notes;
 pub mod service;

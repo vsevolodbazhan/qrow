@@ -1342,6 +1342,9 @@ impl Qrow {
             CatalogRead::Ready(mut value) => {
                 value["version"] = json!(TOOL_SCHEMA_VERSION);
                 value["connection_id"] = json!(id);
+                if matches!(request, CatalogRequest::Relation(_)) {
+                    self.add_dbt(id, catalog, &mut value);
+                }
                 return CatalogStep::Done(success(value));
             }
             CatalogRead::Wait => return CatalogStep::Wait { refreshed: None },
@@ -1364,6 +1367,30 @@ impl Qrow {
         }
         let (code, message) = missing.error();
         CatalogStep::Done(failure(code, message))
+    }
+
+    /// Add the dbt resource of a described relation, in the space that the
+    /// tool result has left.
+    fn add_dbt(&self, id: Uuid, catalog: &crate::catalog::Catalog, value: &mut Value) {
+        let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
+            return;
+        };
+        let state = profile.dbt.as_ref().and(self.dbt.state(id));
+        let Some(project) = self.dbt_project(profile, state, Some(catalog)) else {
+            return;
+        };
+        let (Some(schema), Some(relation)) = (value["schema"].as_str(), value["relation"].as_str())
+        else {
+            return;
+        };
+        let Some(position) = project.entry_for(schema, relation) else {
+            return;
+        };
+        let used = serde_json::to_vec(&*value).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
+        let budget = MAX_TOOL_OUTPUT_BYTES
+            .saturating_sub(used + 2 * 1024)
+            .min(crate::assistant::dbt::MAX_DESCRIBE_BYTES);
+        value["dbt"] = project.describe(position, budget);
     }
 
     /// Answer the catalog tool calls whose cache or refresh is ready, or whose

@@ -379,16 +379,23 @@ impl Qrow {
                     .find(|catalog| catalog.id == id)
                     .map(|catalog| catalog.name.clone())
             });
-            Some(crate::assistant::catalog::CatalogContext::new(
+            let catalog = self.catalog.catalog(profile.id);
+            let state = profile.dbt.as_ref().and(self.dbt.state(profile.id));
+            let project = self.dbt_project(profile, state, catalog);
+            let mut context = crate::assistant::catalog::CatalogContext::new(
                 profile.id,
                 profile.catalog.browses(),
                 shared,
-                self.catalog.catalog(profile.id),
+                catalog,
                 &crate::model::effective_catalog(profile, &self.shared_catalogs),
                 &tab.input.read(cx).value(),
                 &profile.database,
                 crate::catalog::now(),
-            ))
+                project.as_ref(),
+            );
+            context.dbt =
+                state.map(|state| crate::assistant::dbt::context(state, project.as_ref()));
+            Some(context)
         });
         serde_json::to_value(
             WorkspaceContext::new(self.settings.sql_style(), connections, tabs, selected_tab)

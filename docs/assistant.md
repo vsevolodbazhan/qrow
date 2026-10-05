@@ -221,6 +221,22 @@ SQL with the catalog. A table name without a schema uses the **Initial
 database** of the connection. An alias or a column with the name of a table
 can also match.
 
+When the connection has a [dbt project](connections.md#attach-a-dbt-project),
+**Describe table** also gives the dbt data of a table that a model, seed,
+snapshot, or source builds: its description, materialization, tags, the
+descriptions of its columns, its tests, and its direct parents and children.
+A test of `accepted_values` gives its values, and a `relationships` test gives
+the table and column that it refers to. Lineage and test targets name a
+catalog table when one [matches](connections.md#match-models-with-tables),
+otherwise the dbt unique ID. A long list is cut, and the result tells so.
+
+Each message then also tells the assistant when dbt wrote the manifest, the
+dbt version, the numbers of models, sources, and tests, and how many models
+match tables. For each table of the tab SQL with a dbt resource, it adds a
+short summary: the description, the columns with `unique` and `not_null`
+tests, and the relationships. Each summary has at most 1 KB, and the summaries
+count toward the 16 KB of the cached columns.
+
 Conversations that started before the assistant had these tools do not have
 them. Start a new conversation to use them. An older conversation can run
 `SHOW` and `DESCRIBE` statements.
