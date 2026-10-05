@@ -490,6 +490,9 @@ the transcript, the editor, and the approval card. `codex.processes()` lists
 the server processes, and `FakeCodex::running(pid)` shows if a process still
 exists. `app.pass_time(duration)` moves the test clock of Qrow's timers
 forward, for example for the idle stop of Codex. Codex itself uses wall time.
+Idle-stop tests wait for Qrow to process the history response after a reply.
+Codex events restart the idle period, so process them before you advance the
+test clock.
 
 Follow these rules:
 

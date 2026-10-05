@@ -185,12 +185,23 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
     });
     assert_connected_on_open(&app, cx, &codex, pid);
 
-    // The idle period starts again when the turn ends.
+    // The turn ends, then Qrow reads its history. Wait for the notification
+    // after that response before advancing the idle period on the test clock.
+    codex.mark("notify-idle-history");
     codex.mark("first-reply-release");
     app.wait_until(cx, "the reply", REPLY_TIMEOUT, |window, _| {
         label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
     });
-    app.pass_time(cx, CODEX_IDLE_TIMEOUT);
+    app.wait_until(cx, "the history after the reply", REPLY_TIMEOUT, |_, _| {
+        app.saved()
+            .assistant
+            .conversations
+            .iter()
+            .any(|conversation| conversation.title == "Idle history loaded")
+    });
+    app.pass_time(cx, ALMOST_IDLE);
+    assert_eq!(running_codex(&codex), pid);
+    app.pass_time(cx, Duration::from_secs(1));
     wait_stopped(&app, cx, pid);
     // The unseen reply stays unseen after the stop.
     app.update(cx, |window, _| {
