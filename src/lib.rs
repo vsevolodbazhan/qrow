@@ -5,6 +5,7 @@ pub mod assistant;
 pub mod build_info;
 pub mod catalog;
 pub mod connector;
+pub mod dbt;
 pub mod logs;
 pub mod model;
 pub mod oidc;

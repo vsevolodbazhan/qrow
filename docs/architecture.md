@@ -17,6 +17,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |
 | [Worker](../src/worker.rs) | Own a tab's session and coordinate execution, cancellation, and fetching. |
 | [Catalog](../src/catalog.rs) | Cache the schemas, relations, and columns of a connection or of a shared catalog, and refresh them in a [catalog worker](../src/catalog/worker.rs). |
+| [dbt index](../src/dbt.rs) | Read a dbt `manifest.json` into a compact index of models, sources, tests, lineage, and metrics, and save the index in a [binary form](../src/dbt/saved.rs). The index keeps the position of each SQL text in the manifest, not the SQL. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |

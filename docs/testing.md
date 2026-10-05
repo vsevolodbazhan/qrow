@@ -38,7 +38,7 @@ accept a test filter.
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
-| `perf` | SQL validation benchmark with enforced budgets. | Rust |
+| `perf` | SQL validation and dbt manifest benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
 | `perf-e2e` * | Query and page latency of the real window against the real servers. | macOS, Docker or Java 17 |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
@@ -395,7 +395,7 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. |
 | `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. It builds with the `perf` Cargo profile, which optimizes like the release build. |
 | `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 12 seconds before the measurement, so the caret no longer blinks. The first launch after a build warms up, and the median of the next three counts. |
@@ -435,6 +435,21 @@ The [SQL benchmark](../benches/sql.rs) reports the median of 21 samples
 after a warm-up. Its budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms at
 1 MB. The release profile favors a small size, so run `perf` after you change
 it.
+
+The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
+[generator](../tests/support/dbt_manifest.rs) and reports the median of 7
+samples. Its budgets are about 10 times the values on an M3: for 70 MB, the
+parse must take less than 750 ms, the load of the saved index less than
+55 ms, and a search less than 11 ms. To measure the peak memory of a parse,
+write the manifests and parse one in a separate process:
+
+```sh
+cargo bench --locked --no-default-features --bench dbt -- --write /tmp/dbt
+/usr/bin/time -l target/release/deps/dbt-HASH --parse /tmp/dbt/70.json
+```
+
+The generated manifests use about 450 MB of disk space. Remove them after
+the measurement.
 
 After you package the app, check its size:
 

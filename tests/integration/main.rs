@@ -2,6 +2,9 @@
 //! change in the library links one binary instead of six.
 mod backend;
 mod catalog;
+mod dbt;
+#[path = "../support/dbt_manifest.rs"]
+mod dbt_manifest;
 mod hive_protocol;
 mod keychain;
 mod oidc;
