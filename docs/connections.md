@@ -266,7 +266,10 @@ Schemas section:
 To use the tree:
 
 - Click a connection to select it. This does not expand the connection.
+  The current query's connection stays highlighted.
 - Click the arrow before a connection to expand or collapse it.
+  This does not select the connection for the query. An outline shows
+  the keyboard position without a second connection highlight.
 - Click a schema, a table, or a view to expand or collapse it.
 - To collapse all rows below a connection or a schema, right-click it and
   select **Collapse**. The connection or the schema stays expanded. During
@@ -274,8 +277,10 @@ To use the tree:
   the search expanded.
 - After you click an arrow or a row below a connection, use the arrow keys to
   move through the tree, expand rows, and collapse rows. A click on a
-  connection puts the cursor in the SQL editor. The tree shows the selected
-  row only while it has the focus.
+  connection puts the cursor in the SQL editor. The tree highlights a selected
+  schema, table, view, or column only while the tree has the focus.
+  If you collapse a connection, the previous row highlight disappears.
+  If you hide the Connections panel, the tree clears its row selection.
 - Point to a row to see its full name when the sidebar cuts it. A tooltip
   also shows the comment of a table, a view, or a column, and the first line
   of the error of a failed refresh. A row whose name fits and that has no comment or error
