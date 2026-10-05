@@ -39,6 +39,7 @@ pub enum PopupMenuItem {
     Item {
         icon: Option<Icon>,
         label: SharedString,
+        tooltip: Option<SharedString>,
         disabled: bool,
         checked: bool,
         is_link: bool,
@@ -72,6 +73,7 @@ impl PopupMenuItem {
         PopupMenuItem::Item {
             icon: None,
             label: label.into(),
+            tooltip: None,
             disabled: false,
             checked: false,
             action: None,
@@ -174,6 +176,14 @@ impl PopupMenuItem {
         self
     }
 
+    /// Set the tooltip of a standard menu item, including a disabled item.
+    pub fn tooltip(mut self, text: impl Into<SharedString>) -> Self {
+        if let Self::Item { tooltip, .. } = &mut self {
+            *tooltip = Some(text.into());
+        }
+        self
+    }
+
     /// Set checked state for the menu item.
     ///
     /// NOTE: If `check_side` is [`Side::Left`], the icon will replace with a check icon.
@@ -216,6 +226,7 @@ impl PopupMenuItem {
         PopupMenuItem::Item {
             icon: None,
             label: label.into(),
+            tooltip: None,
             disabled: false,
             checked: false,
             action: None,
@@ -1053,6 +1064,9 @@ impl PopupMenu {
     ///
     /// The submenu is closed together with its parent, same as macOS menus.
     fn dismiss(&mut self, _: &Cancel, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(overlay) = crate::Root::tooltip_overlay(window, cx) {
+            overlay.update(cx, |overlay, cx| overlay.hide(cx));
+        }
         self.selected_index = None;
         cx.emit(DismissEvent);
 
@@ -1291,6 +1305,7 @@ impl PopupMenu {
             PopupMenuItem::Item {
                 icon,
                 label,
+                tooltip,
                 action,
                 disabled,
                 is_link,
@@ -1305,6 +1320,7 @@ impl PopupMenu {
                         cx.listener(move |this, _, window, cx| this.on_click(ix, window, cx)),
                     )
                 })
+                .when_some(tooltip.clone(), |this, text| this.tooltip(text))
                 .disabled(*disabled)
                 .h(item_height)
                 .gap_x_1()

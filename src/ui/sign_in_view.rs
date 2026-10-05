@@ -992,24 +992,11 @@ impl Qrow {
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
+                            .when(in_use, |item| {
+                                item.tooltip("Change authentication in the connections first.")
+                            })
                             .disabled(working || in_use),
                     )
-                    .when(in_use, |menu| {
-                        menu.item(
-                            PopupMenuItem::element(|_, cx| {
-                                let reason = "Change authentication in the connections first.";
-                                div()
-                                    .id("sign-in-delete-reason")
-                                    .test_support()
-                                    .role(Role::Label)
-                                    .aria_label(reason)
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(reason)
-                            })
-                            .disabled(true),
-                        )
-                    })
             },
             window,
             cx,

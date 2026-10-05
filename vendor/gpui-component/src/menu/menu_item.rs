@@ -1,3 +1,4 @@
+use crate::tooltip::{ManagedTooltipExt as _, Tooltip};
 use crate::{ActiveTheme, Disableable, StyledExt, h_flex};
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, MouseButton,
@@ -12,6 +13,7 @@ pub(crate) struct MenuItemElement {
     id: ElementId,
     group_name: SharedString,
     aria_label: Option<SharedString>,
+    tooltip: Option<SharedString>,
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
@@ -28,6 +30,7 @@ impl MenuItemElement {
             id: id.clone(),
             group_name: group_name.into(),
             aria_label: None,
+            tooltip: None,
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
@@ -52,6 +55,11 @@ impl MenuItemElement {
     /// Set the disabled state of the MenuItem.
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub(crate) fn tooltip(mut self, text: SharedString) -> Self {
+        self.tooltip = Some(text);
         self
     }
 
@@ -93,7 +101,8 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        h_flex()
+        let tooltip_id = (self.id.clone(), "tooltip");
+        let row = h_flex()
             .id(self.id)
             .test_support()
             .role(Role::MenuItem)
@@ -131,7 +140,28 @@ impl RenderOnce for MenuItemElement {
             .when(self.disabled, |this| {
                 this.text_color(cx.theme().muted_foreground)
             })
-            .children(self.children)
+            .children(self.children);
+        match self.tooltip {
+            Some(text) => gpui::div()
+                .id(tooltip_id)
+                .child(row)
+                .managed_tooltip(move |window, cx| {
+                    Tooltip::element({
+                        let text = text.clone();
+                        move |_, _| {
+                            gpui::div()
+                                .id("popup-menu-tooltip-text")
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(text.clone())
+                                .child(text.clone())
+                        }
+                    })
+                    .build(window, cx)
+                })
+                .into_any_element(),
+            None => row.into_any_element(),
+        }
     }
 }
 
