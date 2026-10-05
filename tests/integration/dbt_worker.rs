@@ -312,3 +312,38 @@ fn saved_indexes_that_no_connection_uses_are_deleted() {
     assert!(!file.exists());
     let _ = Stamp::of(&fixture.manifest).unwrap();
 }
+
+#[test]
+fn a_switch_to_manual_drops_a_waiting_automatic_refresh() {
+    let mut fixture = Fixture::new();
+    fixture.worker.configure(vec![fixture.use_manifest(true)]);
+    fixture.wait("the parse", |state| models(state) == 10);
+    fixture.settle();
+    fixture.write(12);
+    // The change waits for SETTLE. Manual refresh drops it.
+    std::thread::sleep(SETTLE / 3);
+    fixture.worker.configure(vec![fixture.use_manifest(false)]);
+    assert!(fixture.settle().is_empty());
+    assert_eq!(models(fixture.states.last().unwrap()), 10);
+}
+
+#[test]
+fn a_manifest_link_reads_its_current_target() {
+    let mut fixture = Fixture::new();
+    let folder = fixture.manifest.parent().unwrap().to_owned();
+    let (first, second) = (folder.join("first.json"), folder.join("second.json"));
+    std::fs::write(&first, dbt_manifest::generate(&shape(5))).unwrap();
+    std::fs::write(&second, dbt_manifest::generate(&shape(7))).unwrap();
+    let link = folder.join("current.json");
+    std::os::unix::fs::symlink(&first, &link).unwrap();
+    let uses = vec![Use {
+        manifest: link.clone(),
+        automatic: false,
+    }];
+    fixture.worker.configure(uses);
+    fixture.wait("the first target", |state| models(state) == 5);
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(&second, &link).unwrap();
+    fixture.worker.refresh(&link);
+    fixture.wait("the second target", |state| models(state) == 7);
+}

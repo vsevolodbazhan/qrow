@@ -30,10 +30,27 @@ use std::{
 /// How long a manifest must stay unchanged before an automatic refresh.
 pub const SETTLE: Duration = Duration::from_secs(2);
 
-/// The key of a manifest: its canonical path. For a manifest that does not
-/// exist yet, the canonical path of the closest folder above it that exists,
-/// and the rest of the path.
+/// The key of a manifest: its absolute path without `.` and `..` parts.
+/// Connections with the same key share one index. The worker reads the
+/// manifest through this path, so a symbolic link can change its target.
 pub fn manifest_key(path: &Path) -> PathBuf {
+    let mut key = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                key.pop();
+            }
+            component => key.push(component),
+        }
+    }
+    key
+}
+
+/// The canonical path of a manifest, which FSEvents reports. For a manifest
+/// that does not exist yet, the canonical path of the closest folder above
+/// it that exists, and the rest of the path.
+fn canonical_path(path: &Path) -> PathBuf {
     for ancestor in path.ancestors() {
         if let Ok(canonical) = fs::canonicalize(ancestor) {
             return match path.strip_prefix(ancestor) {
@@ -201,6 +218,8 @@ impl Drop for DbtWorker {
 struct Slot {
     state: Arc<ManifestState>,
     automatic: bool,
+    /// The canonical path of the manifest, for the paths of FSEvents.
+    canonical: PathBuf,
 }
 
 /// When a manifest is due, and whether a Refresh asked for it.
@@ -271,7 +290,8 @@ impl Runner {
             match self.manifests.get_mut(&key) {
                 Some(slot) => {
                     // A manifest that becomes automatic catches up with
-                    // changes that happened while it was manual.
+                    // changes that happened while it was manual. A manifest
+                    // that becomes manual keeps only a requested refresh.
                     if automatic && !slot.automatic && !slot.state.is_current() {
                         self.due.insert(
                             key.clone(),
@@ -280,6 +300,8 @@ impl Runner {
                                 forced: false,
                             },
                         );
+                    } else if !automatic && self.due.get(&key).is_some_and(|due| !due.forced) {
+                        self.due.remove(&key);
                     }
                     slot.automatic = automatic;
                 }
@@ -302,22 +324,23 @@ impl Runner {
             state.stamp = Some(saved.stamp);
             state.refreshed = Some(saved.refreshed);
         }
-        let current = state.is_current();
-        if !current {
+        // A launch parses also a manual manifest.
+        if !state.is_current() {
             self.due.insert(
                 key.clone(),
                 Due {
                     at: Instant::now(),
-                    forced: false,
+                    forced: true,
                 },
             );
         }
         let state = Arc::new(state);
         self.manifests.insert(
-            key,
+            key.clone(),
             Slot {
                 state: state.clone(),
                 automatic,
+                canonical: canonical_path(&key),
             },
         );
         self.publish(state);
@@ -336,11 +359,19 @@ impl Runner {
         let Some(watcher) = &mut self.watcher else {
             return;
         };
+        for (key, slot) in &mut self.manifests {
+            slot.canonical = canonical_path(key);
+        }
         let wanted: HashSet<PathBuf> = self
             .manifests
-            .iter()
-            .filter(|(_, slot)| slot.automatic)
-            .filter_map(|(key, _)| key.ancestors().skip(1).find(|folder| folder.is_dir()))
+            .values()
+            .filter(|slot| slot.automatic)
+            .filter_map(|slot| {
+                slot.canonical
+                    .ancestors()
+                    .skip(1)
+                    .find(|folder| folder.is_dir())
+            })
             .map(Path::to_owned)
             .collect();
         for folder in self.watched.difference(&wanted) {
@@ -392,10 +423,11 @@ impl Runner {
             }
             // A change of a folder above the manifest, like a new `target`
             // folder, can change the manifest too.
-            let touched = paths.iter().any(|path| key.starts_with(path));
+            let above = |path: &PathBuf| slot.canonical.starts_with(path) || key.starts_with(path);
+            let touched = paths.iter().any(above);
             folders_changed |= paths
                 .iter()
-                .any(|path| key.starts_with(path) && path != key);
+                .any(|path| above(path) && *path != slot.canonical && path != key);
             if touched {
                 let forced = self.due.get(key).is_some_and(|due| due.forced);
                 self.due.insert(key.clone(), Due { at, forced });
