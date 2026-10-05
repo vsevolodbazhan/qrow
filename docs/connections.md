@@ -543,6 +543,11 @@ To release the active tab's session, select its connection and click **Disconnec
 This action is disabled while a query or keep-alive runs. It is also disabled
 when the active tab has no live session for its owning connection.
 
+To release all tab sessions of a connection, right-click the connection and
+select **Disconnect**. This command acts on that connection, also when another
+connection is selected. It is disabled while one of its tab sessions is busy
+or when none of its tabs has a live session. The next **Run** opens a new session.
+
 Manual and idle disconnection preserve SQL and downloaded results. Unfetched
 rows and session state, such as temporary views or settings applied with SQL,
 are lost.

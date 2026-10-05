@@ -296,6 +296,19 @@ fn cancel_stops_spark_and_keeps_the_partial_preview(cx: &mut TestAppContext) {
     wait_tab(&app, cx, "Query 2");
     app.run_sql(cx, "SELECT 'other-tab-works' AS result");
     app.wait_cell(cx, 0, 1, "other-tab-works");
+    app.wait_status(cx, "Complete");
+
+    // The active tab is idle, but another tab keeps this connection busy.
+    app.context_menu(cx, connection_row(alpha.id));
+    app.choose(cx, "popup-menu", "Disconnect");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("popup-menu").is_some());
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("other-tab-works"));
+    });
+    app.wait_status(cx, "Complete");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
 
     app.click_labelled(cx, "Query 1, running");
     app.wait_for(cx, "cancel");

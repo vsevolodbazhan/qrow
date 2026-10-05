@@ -157,6 +157,55 @@ fn disconnect_and_connection_edits_act_on_their_own_session(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn connection_menu_disconnects_all_its_tabs_and_keeps_other_sessions(cx: &mut TestAppContext) {
+    let sql = "SELECT id AS value FROM range(1001) ORDER BY id";
+    let (app, profiles) = launch(cx, &["Alpha", "Beta"], "");
+    let (alpha, beta) = (&profiles[0], &profiles[1]);
+    app.run_sql(cx, sql);
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "new-tab");
+    app.wait_label(cx, "Query 2");
+    app.run_complete(cx, "SELECT 'second' AS value");
+
+    app.select_connection(cx, beta);
+    app.run_sql(cx, sql);
+    app.wait_status(cx, "Preview: More rows available");
+    // The row under the pointer owns the command, even with Beta active.
+    app.context_menu(cx, connection_row(alpha.id));
+    // GPUI Kit's first Down selects the section header; the next Down
+    // reaches the first enabled command.
+    app.press(cx, "down");
+    app.press(cx, "down");
+    app.press(cx, "enter");
+    app.wait_gone(cx, "popup-menu");
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "1000");
+
+    app.select_connection(cx, alpha);
+    app.wait_status(cx, "Disconnected");
+    app.wait_cell(cx, 0, 1, "second");
+    wait_tab_sql(&app, cx, alpha, "Query 2", "SELECT 'second' AS value");
+    app.click_labelled(cx, "Query 1");
+    app.wait_status(cx, "Disconnected");
+    app.wait_cell(cx, 0, 1, "0");
+    wait_tab_sql(&app, cx, alpha, "Query 1", sql);
+    // Unfetched rows are gone; the next Run opens a new session.
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "0");
+    app.run_complete(cx, "SELECT 'reconnected' AS value");
+    app.wait_cell(cx, 0, 1, "reconnected");
+
+    // Pointer activation uses the same connection scope.
+    app.context_menu(cx, connection_row(alpha.id));
+    app.choose(cx, "popup-menu", "Disconnect");
+    app.wait_gone(cx, "popup-menu");
+    app.wait_status(cx, "Disconnected");
+    app.click_labelled(cx, "Query 2");
+    app.wait_status(cx, "Disconnected");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn a_metadata_edit_keeps_the_sessions_of_its_tabs(cx: &mut TestAppContext) {
     let (app, profiles) = launch(cx, &["Alpha"], "");
     let alpha = &profiles[0];
