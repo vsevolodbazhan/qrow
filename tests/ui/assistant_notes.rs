@@ -32,6 +32,11 @@ fn edit_notes(app: &TestApp, cx: &mut TestAppContext, profile: Uuid, notes: &str
     app.wait_for(cx, "connection-name");
     app.scroll_to(cx, "connection-assistant-notes");
     app.update(cx, |window, cx| {
+        assert!(
+            crate::support::labels(window)
+                .iter()
+                .any(|text| text == "Assistant Notes")
+        );
         window.click("connection-assistant-notes", cx);
         window.press("cmd-a", cx);
         if notes.is_empty() {

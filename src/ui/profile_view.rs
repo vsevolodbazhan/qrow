@@ -254,18 +254,11 @@ impl Qrow {
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))
-                    .child(connection_form::render_schemas(form, cx.weak_entity(), cx)),
+                    .child(connection_form::render_schemas(form, cx.weak_entity(), cx))
+                    .when(self.settings.assistant.enabled, |el| {
+                        el.child(connection_form::render_assistant(form, cx))
+                    }),
             )
-            // The notes reach only the assistant, so they show only while
-            // it is on.
-            .when(self.settings.assistant.enabled, |el| el.child(
-                v_flex()
-                    .pt_5()
-                    .w_full()
-                    .gap_3()
-                    .child(connection_form::section_title("Assistant", cx))
-                    .child(connection_form::render_assistant(form, cx)),
-            ))
             .into_any_element()
     }
 

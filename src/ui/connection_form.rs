@@ -557,7 +557,7 @@ fn group_digits(value: usize) -> String {
 pub(super) fn render_assistant(form: &ProfileEditor, cx: &App) -> impl IntoElement {
     let bytes = form.assistant_notes.read(cx).value().len();
     Form::vertical().w_full().child(field_with(
-        "Assistant notes",
+        "Assistant Notes",
         notes_description(bytes),
         // The textarea has no element ID setter in GPUI Kit 0.6.6, so this
         // element gives tests one.
@@ -569,7 +569,7 @@ pub(super) fn render_assistant(form: &ProfileEditor, cx: &App) -> impl IntoEleme
                 Textarea::new(&form.assistant_notes)
                     .w_full()
                     .disabled(form.saving.is_some())
-                    .aria_label("Assistant notes"),
+                    .aria_label("Assistant Notes"),
             )
             .into_any_element(),
     ))

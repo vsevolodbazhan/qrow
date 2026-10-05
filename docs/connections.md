@@ -195,9 +195,9 @@ Limitations:
 
 ## Give the assistant facts about a connection
 
-Use **Assistant notes** to tell the assistant facts about the data of a
+Use **Assistant Notes** to tell the assistant facts about the data of a
 connection, for example "Dates in `avia` are in UTC" or "`bookings.status = 3`
-means cancelled". The field is in the **Assistant** group at the end of
+means cancelled". The field is at the end of
 Connection Settings. It shows only while the assistant is on.
 
 The notes can have up to 16 KB. Near the limit, the help text below the field
