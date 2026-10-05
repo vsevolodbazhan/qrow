@@ -1,5 +1,8 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
-use crate::support::{TestApp, assert_catalog_icon, bounds_of, connection_row, labelled};
+use crate::support::{
+    TestApp, assert_catalog_icon, assert_connection_highlight, bounds_of, connection_row, labelled,
+    selected_tree_rows,
+};
 use gpui_kit::TestAppContext;
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind, Unfinished},
@@ -313,13 +316,14 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
 fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestAppContext) {
     let kyuubi = Kyuubi::get();
     let schema = format!("qrow_tree_{}", uuid::Uuid::new_v4().simple());
-    let (mut workspace, credentials) =
-        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    let (mut workspace, credentials) = kyuubi.connections(&["Writer", "Reader"], "SELECT 1");
     // Other tests make schemas too. The filter keeps the tree to this one.
     workspace.profiles[0].catalog.include = vec![schema.clone()];
     // An automatic refresh would read the catalog before the schema exists.
     workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
     let profile = workspace.profiles[0].clone();
+    workspace.profiles[1].catalog.refresh = CatalogRefresh::Manual;
+    let reader = workspace.profiles[1].clone();
     let app = TestApp::launch_with(cx, workspace, credentials);
 
     app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
@@ -367,6 +371,38 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
         );
     });
 
+    // A different live query connection must remain the only highlighted root.
+    app.select_connection(cx, &reader);
+    app.run_complete(cx, "SELECT 1");
+    app.click_labelled(cx, "id BIGINT");
+    app.update(cx, |window, _| {
+        assert_eq!(selected_tree_rows(window), ["id BIGINT"]);
+    });
+    for _ in 0..2 {
+        app.toggle_connection(cx, profile.id);
+        app.settle(cx);
+        app.update(cx, |window, cx| {
+            assert!(
+                !selected_tree_rows(window)
+                    .iter()
+                    .any(|row| row == "id BIGINT")
+            );
+            assert_connection_highlight(window, cx, reader.id, true);
+            assert_connection_highlight(window, cx, profile.id, false);
+        });
+    }
+    app.click_labelled(cx, "id BIGINT");
+    app.press(cx, "cmd-b");
+    app.wait_gone(cx, "add-connection");
+    app.press(cx, "cmd-b");
+    app.wait_for(cx, "add-connection");
+    app.click(cx, "connections-list");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(selected_tree_rows(window).is_empty())
+    });
+
+    app.select_connection(cx, &profile);
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
 

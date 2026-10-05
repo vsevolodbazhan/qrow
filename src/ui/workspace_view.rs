@@ -509,6 +509,11 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         let shown = !(self.sidebar && self.sidebar_panel == panel);
+        if self.sidebar_panel != panel {
+            self.catalog
+                .state
+                .update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        }
         self.sidebar_panel = panel;
         self.set_sidebar(shown, window, cx);
     }
@@ -519,6 +524,11 @@ impl Qrow {
     pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
         let had_focus = self.sidebar && self.sidebar_focus.contains_focused(window, cx);
         self.sidebar = shown;
+        if !shown {
+            self.catalog
+                .state
+                .update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        }
         if !shown && had_focus {
             let editor = self.tabs[self.active].input.clone();
             editor.update(cx, |editor, cx| editor.focus(window, cx));

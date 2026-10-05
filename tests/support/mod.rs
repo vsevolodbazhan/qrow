@@ -251,6 +251,73 @@ pub fn assert_catalog_icon(window: &Window, row: &str) {
     );
 }
 
+/// Catalog keyboard selection, independent of whether the row paints a fill.
+pub fn selected_tree_rows(window: &Window) -> Vec<String> {
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            element.role() == Some(gpui_kit::Role::TreeItem) && element.selected() == Some(true)
+        })
+        .filter_map(|element| element.label().map(str::to_owned))
+        .collect()
+}
+
+/// Only the current query connection paints an active row background.
+pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, active: bool) {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = window
+        .find(connection_row(profile))
+        .bounds()
+        .scale(window.scale_factor())
+        .center();
+    let backgrounds: Vec<_> = window
+        .painted_quads()
+        .into_iter()
+        .filter(|quad| quad.bounds.contains(&center) && quad.content_mask.bounds.contains(&center))
+        .map(|quad| quad.background)
+        .collect();
+    assert_eq!(
+        backgrounds.contains(&gpui_kit::Background::from(cx.theme().sidebar_accent)),
+        active,
+        "Unexpected current-connection highlight: {backgrounds:?}"
+    );
+    if !active {
+        assert!(
+            !backgrounds.contains(&gpui_kit::Background::from(cx.theme().list_active)),
+            "An inactive connection has a tree-selection fill: {backgrounds:?}"
+        );
+    }
+}
+
+/// A keyboard root has a visible outline, even without a disclosure arrow.
+pub fn assert_connection_keyboard_position(
+    window: &Window,
+    cx: &App,
+    profile: Uuid,
+    expected: bool,
+) {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = window
+        .find(connection_row(profile))
+        .bounds()
+        .scale(window.scale_factor())
+        .center();
+    let outlined = window.painted_quads().into_iter().any(|quad| {
+        quad.bounds.contains(&center)
+            && quad.border_color == cx.theme().ring
+            && quad.border_widths.top > px(0.).scale(window.scale_factor())
+            // Transparent outlines paint only the border band, not the center.
+            && quad.content_mask.bounds.contains(&point(
+                center.x,
+                quad.bounds.top() + quad.border_widths.top / 2.,
+            ))
+    });
+    assert_eq!(
+        outlined, expected,
+        "Unexpected connection keyboard outline at {center:?}"
+    );
+}
+
 /// One painted dot in a region, in the expected theme color.
 fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
     let bounds = bounds.scale(window.scale_factor());
