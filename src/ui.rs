@@ -8,6 +8,7 @@ mod connection_form;
 mod environment;
 mod output;
 mod profile_view;
+mod result_toolbar;
 mod results;
 mod setting_row;
 mod settings_view;

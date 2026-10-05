@@ -6,60 +6,173 @@ use crate::support::{
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px, size};
 use qrow::model::{SavedTab, Workspace};
-use qrow::ui::IncreaseUiScale;
+use qrow::ui::{DecreaseUiScale, IncreaseUiScale};
 use std::time::Duration;
 
+fn assert_toolbar_fits(app: &TestApp, cx: &mut TestAppContext) {
+    app.update(cx, |window, _| {
+        let toolbar = bounds_of(window, "query-footer");
+        assert_eq!(
+            toolbar.size.height,
+            window.pixel_snap(window.rem_size() * 2.5)
+        );
+        let mut right = toolbar.left();
+        for id in [
+            "panel-switcher",
+            "result-count",
+            "result-details",
+            "page-label",
+            "pagination-buttons",
+        ] {
+            if window.try_find(id).is_none() {
+                continue;
+            }
+            let child = bounds_of(window, id);
+            assert!(
+                child.left() >= right && child.right() <= toolbar.right(),
+                "{id} overlaps or extends outside the toolbar: {child:?}, {toolbar:?}"
+            );
+            assert!(child.top() >= toolbar.top() && child.bottom() <= toolbar.bottom());
+            right = child.right();
+        }
+    });
+}
+
 #[gpui_kit::test]
-fn result_and_status_metadata_fit_at_small_window_sizes(cx: &mut TestAppContext) {
-    let app = TestApp::launch_demo(cx);
-    for scale in [1., 1.5] {
-        if scale > 1. {
-            for _ in 0..5 {
+fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
+    for (scale, action_count, increase) in [(0.75, 3, false), (1., 0, true), (1.5, 5, true)] {
+        let app = TestApp::launch_demo(cx);
+        for _ in 0..action_count {
+            if increase {
                 app.dispatch(cx, IncreaseUiScale);
+            } else {
+                app.dispatch(cx, DecreaseUiScale);
             }
         }
-        cx.simulate_window_resize(app.window, size(px(850.), px(560.)));
-        app.settle(cx);
-        assert_eq!(cx.update(|cx| app.status(cx)), "Complete: Demo data");
-        app.update(cx, |window, _| {
-            assert!(
-                label(window, "result-elapsed")
-                    .unwrap()
-                    .starts_with("Elapsed: ")
-            );
-            assert_eq!(
-                label(window, "result-range").as_deref(),
-                Some("Rows 1–1000")
-            );
-            assert_eq!(
-                label(window, "result-loaded").as_deref(),
-                Some("2250 loaded")
-            );
-            assert_eq!(
-                label(window, "result-columns").as_deref(),
-                Some("141 columns")
-            );
-            for (parent, children) in [(
-                "result-count",
-                &[
-                    "result-range",
-                    "result-loaded",
-                    "result-columns",
-                    "result-elapsed",
-                ][..],
-            )] {
-                let parent = bounds_of(window, parent);
-                for id in children {
-                    let child = bounds_of(window, id);
-                    assert!(
-                        child.left() >= parent.left() && child.right() <= parent.right(),
-                        "{id} extends beyond its metadata group at {scale}: {child:?}, {parent:?}"
+        // 75% is the lower limit; three decreases clamp the scale to it.
+        for width in [1900., 850., 700., 1900.] {
+            cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
+            app.settle(cx);
+            assert_toolbar_fits(&app, cx);
+            app.update(cx, |window, _| {
+                if width == 1900. {
+                    assert!(window.try_find("result-details").is_none());
+                    assert_eq!(
+                        label(window, "result-range").as_deref(),
+                        Some("Rows 1–1000")
                     );
-                    assert!(child.top() >= parent.top() && child.bottom() <= parent.bottom());
+                    assert_eq!(
+                        label(window, "result-loaded").as_deref(),
+                        Some("2250 loaded")
+                    );
+                    assert_eq!(
+                        label(window, "result-columns").as_deref(),
+                        Some("141 columns")
+                    );
+                    assert!(
+                        label(window, "result-elapsed")
+                            .unwrap()
+                            .starts_with("Elapsed: ")
+                    );
+                } else {
+                    assert_eq!(
+                        label(window, "result-details").as_deref(),
+                        Some("Result Details")
+                    );
+                    assert!(window.try_find("result-loaded").is_none());
+                    assert!(window.try_find("result-columns").is_none());
+                    assert!(window.try_find("result-elapsed").is_none());
                 }
+            });
+            if width < 1900. {
+                app.click(cx, "result-details");
+                app.update(cx, |window, _| {
+                    assert_eq!(
+                        label(window, "result-detail-loaded").as_deref(),
+                        Some("Loaded rows: 2250")
+                    );
+                    assert_eq!(
+                        label(window, "result-detail-columns").as_deref(),
+                        Some("Columns: 141")
+                    );
+                    assert!(
+                        label(window, "result-detail-elapsed")
+                            .unwrap()
+                            .starts_with("Query duration: ")
+                    );
+                    let content = bounds_of(window, "result-details-content");
+                    assert!(
+                        content.left() >= px(0.) && content.right() <= window.viewport_size().width
+                    );
+                });
+                app.press(cx, "escape");
+                app.update(cx, |window, _| {
+                    assert!(window.try_find("result-details-content").is_none())
+                });
             }
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    cx.simulate_window_resize(app.window, size(px(850.), px(650.)));
+    app.settle(cx);
+    for _ in 0..40 {
+        if app.update(cx, |window, _| {
+            window.find("result-details").focused() == Some(true)
+        }) {
+            break;
+        }
+        // The SQL editor uses Tab for indentation. Enter the native control
+        // focus traversal before testing the popover's keyboard commands.
+        app.update(cx, |window, cx| {
+            window.focus_next(cx);
+            window.render_frame(cx);
         });
     }
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("result-details").focused(), Some(true))
+    });
+    app.press(cx, "enter");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 1–1000")
+        );
+    });
+    app.press(cx, "escape");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-details-content").is_none());
+        assert_eq!(window.find("result-details").focused(), Some(true));
+    });
+    app.press(cx, "space");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-details-content").is_some());
+    });
+    app.press(cx, "escape");
+    app.click(cx, "previous-page");
+    app.update(cx, |window, _| {
+        assert_eq!(label(window, "page-label").as_deref(), Some("Page 1"))
+    });
+    app.click(cx, "next-page");
+    app.update(cx, |window, _| {
+        assert_eq!(label(window, "page-label").as_deref(), Some("Page 2"))
+    });
+    app.click(cx, "result-details");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "result-detail-range").as_deref(),
+            Some("Visible rows: 1001–2000")
+        )
+    });
+    // Outside clicks dismiss without consuming the target command.
+    app.click(cx, "next-page");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("result-details-content").is_none());
+        assert_eq!(label(window, "page-label").as_deref(), Some("Page 3"));
+    });
 }
 
 #[gpui_kit::test]

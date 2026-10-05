@@ -13,9 +13,20 @@ header. Column headers remain visible when a query returns columns but no rows.
 ## Browse and copy
 
 Each page contains up to 1,000 rows. **Next** fetches another page when needed.
-The footer shows the visible row range, downloaded row count, and column count
-as separate labels. **Loaded** counts the rows in the preview. It does not
-give the total number of rows on the server.
+The bar above the table shows neutral tags for the visible row range,
+downloaded row count, column count, and query duration. **Loaded** counts the
+rows in the preview. It does not give the total number of rows on the server.
+When the tags do not fit, the bar keeps the row range and shows an information
+button. Click **Result Details** to read all four values. At the smallest
+widths, the row range also moves into **Result Details**. The page buttons
+show arrows at these widths. Their tooltips show **Previous Page** and
+**Next Page**.
+
+With focus in the toolbar, use Tab to focus **Result Details**.
+Press Enter or Space to open it.
+Press Escape or click outside to close it. Escape returns focus to the button.
+The values update as rows arrive. The query duration is absent before the
+first query.
 **Previous** and **Next** reuse downloaded pages without executing SQL again.
 You can browse downloaded pages while a fetch runs.
 
