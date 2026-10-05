@@ -34,7 +34,7 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     let kyuubi = Kyuubi::get();
     let (workspace, credentials) = kyuubi.workspace("SELECT id FROM range(1001)", PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
-    cx.simulate_window_resize(app.window, size(px(750.), px(650.)));
+    cx.simulate_window_resize(app.window, size(px(600.), px(650.)));
     app.settle(cx);
     app.click(cx, "result-details");
     app.update(cx, |window, _| {

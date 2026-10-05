@@ -235,20 +235,16 @@ impl Qrow {
                         Button::new("previous-page")
                             .small()
                             .ghost()
-                            .when(compact, |button| {
-                                button.icon(IconName::ChevronLeft).tooltip("Previous Page")
-                            })
-                            .when(!compact, |button| button.w_24().label("Previous"))
+                            .icon(IconName::ChevronLeft)
+                            .tooltip("Previous Page")
                             .accessibility_label("Previous Page")
                             .disabled(page == 0)
                             .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
                         Button::new("next-page")
                             .small()
                             .ghost()
-                            .when(compact, |button| {
-                                button.icon(IconName::ChevronRight).tooltip("Next Page")
-                            })
-                            .when(!compact, |button| button.w_24().label("Next"))
+                            .icon(IconName::ChevronRight)
+                            .tooltip("Next Page")
                             .accessibility_label("Next Page")
                             .disabled(page + 1 >= pages && (!tab.more || tab.busy))
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),

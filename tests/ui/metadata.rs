@@ -22,7 +22,8 @@ fn assert_toolbar_fits(app: &TestApp, cx: &mut TestAppContext) {
             "result-count",
             "result-details",
             "page-label",
-            "pagination-buttons",
+            "previous-page",
+            "next-page",
         ] {
             if window.try_find(id).is_none() {
                 continue;
@@ -49,13 +50,27 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 app.dispatch(cx, DecreaseUiScale);
             }
         }
+        let mut pagination_width = None;
         // 75% is the lower limit; three decreases clamp the scale to it.
         for width in [1900., 850., 700., 560., 1900.] {
             cx.simulate_window_resize(app.window, size(px(width * scale), px(650. * scale)));
             app.settle(cx);
             assert_toolbar_fits(&app, cx);
             app.update(cx, |window, _| {
-                if width == 1900. {
+                let current_width = bounds_of(window, "next-page").right()
+                    - bounds_of(window, "previous-page").left();
+                let expected_width = *pagination_width.get_or_insert(current_width);
+                assert_eq!(
+                    current_width, expected_width,
+                    "pagination keeps its icon width"
+                );
+                for (id, name) in [
+                    ("previous-page", "Previous Page"),
+                    ("next-page", "Next Page"),
+                ] {
+                    assert_eq!(label(window, id).as_deref(), Some(name));
+                }
+                if width >= 850. {
                     assert!(window.try_find("result-details").is_none());
                     assert_eq!(
                         label(window, "result-range").as_deref(),
@@ -87,7 +102,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     }
                 }
             });
-            if width < 1900. {
+            if width < 850. {
                 app.click(cx, "result-details");
                 app.update(cx, |window, _| {
                     assert_eq!(
@@ -142,7 +157,7 @@ fn result_metadata_tooltips_match_detail_labels(cx: &mut TestAppContext) {
             .collect::<Vec<_>>(),
         ["Visible rows", "Loaded rows", "Columns", "Query duration"]
     );
-    cx.simulate_window_resize(app.window, size(px(850.), px(650.)));
+    cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
     app.settle(cx);
     app.click(cx, "result-details");
     app.update(cx, |window, _| {
@@ -156,7 +171,7 @@ fn result_metadata_tooltips_match_detail_labels(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppContext) {
     let app = TestApp::launch_demo(cx);
-    cx.simulate_window_resize(app.window, size(px(850.), px(650.)));
+    cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
     app.settle(cx);
     for _ in 0..40 {
         if app.update(cx, |window, _| {
