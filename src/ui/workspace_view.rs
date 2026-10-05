@@ -253,128 +253,12 @@ impl Qrow {
             return self.output_panel(cx);
         }
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
-        let page = data.pagination.page();
-        let pages = data.pagination.pages(data.rows.len());
-        let range = data.pagination.range(data.rows.len());
-        let range_label = if range.is_empty() {
-            "0 rows".to_owned()
-        } else {
-            format!("Rows {}–{}", range.start + 1, range.end)
-        };
-        let loaded_label = format!("{} loaded", data.rows.len());
-        let columns_label = format!(
-            "{} {}",
-            data.columns.len(),
-            if data.columns.len() == 1 {
-                "column"
-            } else {
-                "columns"
-            }
-        );
-        // The duration of the last query of the tab.
-        let elapsed_label = tab
-            .elapsed
-            .map(|elapsed| format!("{:.2} s", elapsed.as_secs_f64()));
-        let count = match &elapsed_label {
-            Some(elapsed) => {
-                format!("{range_label}, {loaded_label}, {columns_label}, elapsed {elapsed}")
-            }
-            None => format!("{range_label}, {loaded_label}, {columns_label}"),
-        };
-        let page_label = format!("Page {}", page + 1);
         results::selection_boundary(&tab.table)
             .size_full()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .id("query-footer")
-                    .test_support()
-                    .min_h_10()
-                    .flex_wrap()
-                    .flex_shrink_0()
-                    .px_3()
-                    .py_1()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(self.panel_switcher(cx))
-                    .child(
-                        h_flex()
-                            .id("result-count")
-                            .test_support()
-                            .role(Role::Label)
-                            .flex_1()
-                            .min_w_48()
-                            .flex_wrap()
-                            .gap_x_3()
-                            .gap_y_1()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .aria_label(count)
-                            .children(
-                                [
-                                    ("result-range", range_label),
-                                    ("result-loaded", loaded_label),
-                                    ("result-columns", columns_label),
-                                ]
-                                .into_iter()
-                                .map(|(id, text)| {
-                                    div()
-                                        .id(id)
-                                        .test_support()
-                                        .role(Role::Label)
-                                        .aria_label(text.clone())
-                                        .child(text)
-                                }),
-                            )
-                            .when_some(elapsed_label, |row, elapsed| {
-                                row.child(
-                                    div()
-                                        .id("result-elapsed")
-                                        .test_support()
-                                        .role(Role::Label)
-                                        .aria_label(format!("Elapsed: {elapsed}"))
-                                        .child(elapsed),
-                                )
-                            }),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .flex_shrink_0()
-                            .ml_auto()
-                            .child(
-                                div()
-                                    .id("page-label")
-                                    .test_support()
-                                    .role(Role::Label)
-                                    .text_xs()
-                                    .aria_label(page_label.clone())
-                                    .child(page_label),
-                            )
-                            .child(button_pair::button_pair(
-                                "pagination-buttons",
-                                Button::new("previous-page")
-                                    .small()
-                                    .ghost()
-                                    .w_24()
-                                    .label("Previous")
-                                    .disabled(page == 0)
-                                    .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                                Button::new("next-page")
-                                    .small()
-                                    .ghost()
-                                    .w_24()
-                                    .label("Next")
-                                    .disabled(page + 1 >= pages && (!tab.more || tab.busy))
-                                    .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                                cx,
-                            )),
-                    ),
-            )
+            .child(self.result_toolbar(cx))
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
                 self.dialog_open(),
