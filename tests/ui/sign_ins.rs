@@ -375,10 +375,26 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
     app.click(cx, "cancel-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
-    app.wait_until(cx, "the deletion reason", WAIT, |window, _| {
-        label(window, "sign-in-delete-reason").as_deref()
-            == Some("Change authentication in the connections first.")
+    app.update(cx, |window, _| {
+        assert!(window.try_find("sign-in-delete-reason").is_none());
     });
+    app.hover_labelled(cx, "Delete");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.wait_for(cx, "tooltip");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "popup-menu-tooltip-text").as_deref(),
+            Some("Change authentication in the connections first.")
+        );
+    });
+    app.press(cx, "enter");
+    app.wait_gone(cx, "popup-menu");
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    assert!(!app.update(cx, |window, _| present(
+        window,
+        &"confirm-delete-sign-in".into()
+    )));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
     app.choose(cx, "popup-menu", "Delete");
     app.settle(cx);
     assert!(!app.update(cx, |window, _| present(
@@ -386,6 +402,15 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
         &"confirm-delete-sign-in".into()
     )));
     assert_eq!(app.saved().sign_ins.len(), 1);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.hover_labelled(cx, "Delete");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.wait_for(cx, "tooltip");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
+    app.wait_gone(cx, "tooltip");
 }
 
 #[gpui_kit::test]
@@ -447,6 +472,10 @@ fn an_unused_sign_in_can_be_deleted(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(window.try_find("sign-in-delete-reason").is_none());
     });
+    app.hover_labelled(cx, "Delete");
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    assert!(!app.update(cx, |window, _| present(window, &"tooltip".into())));
     app.choose(cx, "popup-menu", "Delete");
     // Delete asks first, and Cancel keeps the sign-in.
     app.click(cx, "cancel-delete-sign-in");

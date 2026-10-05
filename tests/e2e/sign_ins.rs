@@ -88,4 +88,23 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
                 == Some("Not signed in.")
         },
     );
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.hover_labelled(cx, "Delete");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.wait_for(cx, "tooltip");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::label(window, "popup-menu-tooltip-text").as_deref(),
+            Some("Change authentication in the connections first.")
+        );
+    });
+    app.choose(cx, "popup-menu", "Delete");
+    app.settle(cx);
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
+    app.wait_gone(cx, "tooltip");
 }

@@ -178,7 +178,7 @@ tokens, it shows the error and the sign-in stays signed in.
 
 **Delete** is available only when no connection uses the sign-in. The
 **Connections** field of Sign-in Settings names the connections that use it.
-When **Delete** is disabled, its menu shows the reason below the command.
+When **Delete** is disabled, hover over the command to see the reason in a tooltip.
 Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
 sign-in.
