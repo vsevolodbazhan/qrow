@@ -282,6 +282,14 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
             assert!(window.find("sign-in-account-sign-out").visible());
         });
     }
+    // The account must accept a click after scrolling back from the tags.
+    cx.simulate_window_resize(
+        app.window,
+        gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(600.)),
+    );
+    app.settle(cx);
+    app.scroll_to(cx, "sign-in-connections");
+    app.scroll_to(cx, "sign-in-account-sign-out");
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(cx, "the signed-out account", WAIT, |window, _| {
         label(window, "sign-in-account-status").as_deref() == Some("Not signed in.")
@@ -358,7 +366,7 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
         assert_eq!(first.top(), second.top());
         assert!(
             first.right() < second.left(),
-            "short connection names share one line"
+            "short connection tags share one line"
         );
         assert!(window.find(second_id.clone()).visible());
         assert!(window.try_find(unrelated_id.clone()).is_none());
@@ -381,7 +389,7 @@ fn a_sign_in_that_connections_use_cannot_be_deleted(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn connection_names_wrap_inside_the_sign_in_form(cx: &mut TestAppContext) {
+fn connection_tags_wrap_inside_the_sign_in_form(cx: &mut TestAppContext) {
     let provider = Provider::start();
     let (mut workspace, sign_in) = workspace(&provider, true);
     workspace.profiles[0].name = "analytics-small (development, synthetic shared warehouse)".into();
@@ -406,7 +414,7 @@ fn connection_names_wrap_inside_the_sign_in_form(cx: &mut TestAppContext) {
         let second = window.find(second_id.clone()).bounds();
         assert!(
             first.bottom() < second.top(),
-            "long names wrap to another line"
+            "long connection tags wrap to another line"
         );
         for bounds in [first, second] {
             assert!(bounds.left() >= group.left() && bounds.right() <= group.right());

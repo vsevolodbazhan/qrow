@@ -112,8 +112,8 @@ the right. Right-click a row for **Sign In…**,
 **Delete**.
 
 The **Connections** field shows the number of connections that use the
-sign-in. The names form a compact list below the heading. The list wraps
-when the names do not fit on one line.
+sign-in. Neutral tags show the names below the heading. The tags wrap when
+they do not fit on one line.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
 **Authentication**, and select the sign-in in the **Sign-in** list. The host of the connection must be

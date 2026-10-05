@@ -9,13 +9,14 @@ use crate::{
 };
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon,
+    ColorName, Icon,
     alert::Alert,
     button::ButtonCustomVariant,
     combobox::ComboboxEvent,
     form::{Field, Form},
     h_flex,
     spinner::Spinner,
+    tag::Tag,
     v_flex,
 };
 use std::{
@@ -1357,11 +1358,10 @@ impl Qrow {
                     .w_full()
                     .flex_wrap()
                     .items_start()
-                    .gap_x_1()
-                    .gap_y_1()
+                    .gap_2()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .children(users.into_iter().enumerate().map(|(index, profile)| {
+                    .children(users.into_iter().map(|profile| {
                         div()
                             .id(SharedString::from(format!(
                                 "sign-in-connection-{}",
@@ -1372,11 +1372,13 @@ impl Qrow {
                             .max_w_full()
                             .role(Role::Label)
                             .aria_label(profile.name.clone())
-                            .child(if index + 1 < count {
-                                format!("{},", profile.name)
-                            } else {
-                                profile.name.clone()
-                            })
+                            .child(
+                                Tag::color(ColorName::Neutral)
+                                    .outline()
+                                    .border_color(cx.theme().border)
+                                    .max_w_full()
+                                    .child(profile.name.clone()),
+                            )
                     }))
                     .when(count == 0, |el| {
                         let message = "No connections use this sign-in.";
