@@ -208,6 +208,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
         };
         let order = [
             "Connection",
+            "Disconnect",
             "Edit",
             "Duplicate",
             "Delete",
@@ -226,6 +227,16 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
     // A dismissed menu is released; the leak detector fails the test otherwise.
     app.press(cx, "escape");
     app.wait_gone(cx, "popup-menu");
+
+    // With no live session, Disconnect cannot run. Keyboard navigation
+    // skips it and reaches Edit, the first enabled command.
+    app.context_menu(cx, connection_row(original));
+    app.choose(cx, "popup-menu", "Disconnect");
+    app.wait_for(cx, "popup-menu");
+    app.press(cx, "down");
+    app.press(cx, "enter");
+    app.wait_for(cx, "connection-name");
+    cancel_form(&app, cx);
 
     app.context_menu(cx, connection_row(original));
     app.choose(cx, "popup-menu", "Edit");

@@ -1920,7 +1920,20 @@ impl Qrow {
         cx.notify();
     }
     fn disconnect(&mut self, cx: &mut Context<Self>) {
-        let tab = &mut self.tabs[self.active];
+        self.disconnect_tab(self.active, cx);
+    }
+    fn disconnect_profile(&mut self, id: Uuid, cx: &mut Context<Self>) {
+        if self.profile_busy(id) || self.dialog_open() {
+            return;
+        }
+        for index in 0..self.tabs.len() {
+            if self.tabs[index].saved.profile == Some(id) {
+                self.disconnect_tab(index, cx);
+            }
+        }
+    }
+    fn disconnect_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        let tab = &mut self.tabs[index];
         if !tab.can_disconnect() || self.form.is_some() || self.settings_open {
             return;
         }
@@ -2225,6 +2238,13 @@ impl Qrow {
         };
         let busy = self.profile_busy(id);
         let in_use = self.profile_in_use(id);
+        let disconnect_enabled = !busy
+            && self
+                .tabs
+                .iter()
+                .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
+        let disconnect =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
         let edited = profile.clone();
         let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.edit_profile(edited.clone(), false, window, cx)
@@ -2263,6 +2283,11 @@ impl Qrow {
             move |menu, _, _| {
                 // Labeled sections: what the row is, then what it contains.
                 menu.item(menu_section("Connection"))
+                    .item(
+                        PopupMenuItem::new("Disconnect")
+                            .on_click(disconnect)
+                            .disabled(!disconnect_enabled),
+                    )
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
