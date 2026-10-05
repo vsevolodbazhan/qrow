@@ -1,8 +1,9 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, assert_connection_dot, assert_tooltip_header_center, bounds_of,
-    connection_row, elements, label, labelled, menu_item, offline_profile, press_at, shows, value,
+    MemoryCredentials, TestApp, assert_catalog_icon, assert_connection_dot,
+    assert_tooltip_header_center, bounds_of, connection_row, elements, label, labelled, menu_item,
+    offline_profile, press_at, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -346,6 +347,30 @@ fn scroll_tree(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
         );
     });
     app.settle(cx);
+}
+
+#[gpui_kit::test]
+fn column_icons_align_before_the_names_at_each_zoom(cx: &mut TestAppContext) {
+    for scale in [0.75, 1., 1.5] {
+        let profile = offline_profile("Warehouse");
+        let directory = tempfile::tempdir().unwrap();
+        avia(&directory, &profile);
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+        expand_connection(&app, cx, &profile);
+        wait_shows(&app, cx, "avia");
+        app.click_labelled(cx, "avia");
+        wait_shows(&app, cx, "bookings");
+        app.click_labelled(cx, "bookings");
+        wait_shows(&app, cx, "gate STRING");
+        app.update(cx, |window, _| {
+            let relation = format!("r\u{1f}{}\u{1f}avia\u{1f}bookings", profile.id);
+            for (index, name) in ["booking_id", "gate"].iter().enumerate() {
+                assert_catalog_icon(window, &format!("{relation}\u{1f}{index}\u{1f}{name}"));
+            }
+        });
+    }
 }
 
 #[gpui_kit::test]
