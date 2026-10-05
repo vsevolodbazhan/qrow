@@ -12,7 +12,7 @@ fn copy_actions_include_timestamps_on_server_errors(cx: &mut TestAppContext) {
     let connection = workspace.profiles[0].id;
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "run");
-    app.wait_status(cx, "Error · Query failed");
+    app.wait_status(cx, "Error: Query failed");
 
     let logs = app.logs(cx);
     let submitted = logs

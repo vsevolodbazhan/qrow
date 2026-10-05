@@ -1,5 +1,7 @@
 //! The messages and tool cards of a conversation.
 use super::*;
+use std::borrow::Cow;
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::ui) enum Speaker {
@@ -94,18 +96,36 @@ pub(in crate::ui) enum ToolState {
     Running(String),
     /// The call succeeded. The optional text is a short outcome.
     Done(Option<String>),
+    /// A successful SQL call keeps its row count and duration separate.
+    QueryResult {
+        rows: usize,
+        more: bool,
+        elapsed: Option<Duration>,
+    },
     Failed,
     /// Qrow did not run the call, for example because the user declined it.
     Cancelled,
 }
 
 impl ToolState {
-    pub(super) fn label(&self) -> Option<&str> {
+    pub(super) fn label(&self) -> Option<Cow<'_, str>> {
         match self {
-            Self::Running(step) => Some(step),
-            Self::Done(outcome) => outcome.as_deref(),
-            Self::Failed => Some("Failed"),
-            Self::Cancelled => Some("Cancelled"),
+            Self::Running(step) => Some(step.as_str().into()),
+            Self::Done(outcome) => outcome.as_deref().map(Cow::Borrowed),
+            Self::QueryResult { rows, more, .. } => Some(match (*rows, *more) {
+                (1, false) => "1 row".into(),
+                (rows, false) => format!("{rows} rows").into(),
+                (rows, true) => format!("{rows}+ rows").into(),
+            }),
+            Self::Failed => Some("Failed".into()),
+            Self::Cancelled => Some("Cancelled".into()),
+        }
+    }
+
+    pub(super) fn elapsed(&self) -> Option<Duration> {
+        match self {
+            Self::QueryResult { elapsed, .. } => *elapsed,
+            _ => None,
         }
     }
 }
@@ -121,9 +141,14 @@ pub(in crate::ui) struct ToolActivity {
 impl ToolActivity {
     /// Matches the collapsed card header: the tool name and its state.
     pub(super) fn label(&self) -> String {
-        match self.state.label() {
-            Some(state) => format!("{} · {state}", self.kind.title()),
-            None => self.kind.title().to_owned(),
+        match (self.state.label(), self.state.elapsed()) {
+            (Some(state), Some(elapsed)) => format!(
+                "{}: {state} in {:.2} s",
+                self.kind.title(),
+                elapsed.as_secs_f64()
+            ),
+            (Some(state), None) => format!("{}: {state}", self.kind.title()),
+            (None, _) => self.kind.title().to_owned(),
         }
     }
 }
@@ -396,11 +421,15 @@ mod tests {
             "turn-1".into(),
         );
         assert!(!entry.expanded());
-        assert_eq!(entry.text, "Run query · Preparing");
-        entry.set_tool_state(ToolState::Done(Some("3 rows · 0.20 s".into())));
-        assert_eq!(entry.text, "Run query · 3 rows · 0.20 s");
+        assert_eq!(entry.text, "Run query: Preparing");
+        entry.set_tool_state(ToolState::QueryResult {
+            rows: 3,
+            more: false,
+            elapsed: Some(Duration::from_millis(200)),
+        });
+        assert_eq!(entry.text, "Run query: 3 rows in 0.20 s");
         entry.set_tool_state(ToolState::Failed);
-        assert_eq!(entry.text, "Run query · Failed");
+        assert_eq!(entry.text, "Run query: Failed");
         let edit = TranscriptEntry::tool(
             tool(
                 ToolKind::from_name("edit_selected_tab_sql"),

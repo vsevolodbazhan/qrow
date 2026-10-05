@@ -1,7 +1,8 @@
 //! Conversation titles, the thread list, sign-in, and restarts.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT};
 use crate::support::{
-    MemoryCredentials, TestApp, bounds_of, label, labelled_starting, labels, value,
+    MemoryCredentials, TestApp, assert_tooltip_header_center, bounds_of, label, labelled_starting,
+    labels, value,
 };
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
@@ -39,6 +40,54 @@ fn rename_to(app: &TestApp, cx: &mut TestAppContext, name: &str) {
 /// The thread list row of a title: "<title>, <place>…".
 fn row(title: &str) -> String {
     format!("{title}, ")
+}
+
+#[gpui_kit::test]
+fn an_open_conversation_tooltip_follows_its_title_and_reply_state(cx: &mut TestAppContext) {
+    let (app, codex) = launch(cx, |workspace, _| {
+        workspace.settings.assistant.panel_width = 536.;
+    });
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply Hold title generation");
+    app.wait_until(cx, "the held reply and title", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending") && codex.marked("title-generation-pending")
+    });
+    app.show_threads(cx);
+    let row_label = app.update(cx, |window, _| {
+        label(window, "assistant-thread-synthetic-thread-1").unwrap()
+    });
+    app.hover_labelled(cx, &row_label);
+    cx.executor().advance_clock(Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-status").as_deref(),
+            Some("Working")
+        );
+        assert_ne!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Title: Title before first")
+        );
+        assert_tooltip_header_center(window, cx, "status-tooltip-status");
+    });
+
+    // The pointer remains on the same row through both changes.
+    codex.mark("title-generation-release");
+    app.wait_until(
+        cx,
+        "the generated tooltip title",
+        REPLY_TIMEOUT,
+        |window, _| {
+            label(window, "status-tooltip-title").as_deref() == Some("Title: Title before first")
+        },
+    );
+    codex.mark("first-reply-release");
+    app.wait_until(
+        cx,
+        "the unread reply in the open tooltip",
+        REPLY_TIMEOUT,
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread Reply"),
+    );
 }
 
 #[gpui_kit::test]
@@ -82,12 +131,14 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
         labelled_starting(window, &row(GENERATED)).len() == 2
     });
     app.update(cx, |window, _| {
-        assert!(
-            !labels(window)
-                .iter()
-                .any(|l| l.starts_with(&format!("{GENERATED} ·"))),
-            "The thread list showed a Codex thread ID"
-        );
+        for conversation in &app.saved().assistant.conversations {
+            assert!(
+                !labels(window)
+                    .iter()
+                    .any(|label| label.contains(&conversation.thread_id)),
+                "The thread list showed a Codex thread ID"
+            );
+        }
     });
     // A narrow pane replaces the list with the selected conversation.
     app.click_starting(cx, &row(GENERATED));

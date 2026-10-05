@@ -26,7 +26,7 @@ use gpui_kit::component::{
     Icon, Selectable,
     alert::Alert,
     bubble::{Bubble, BubbleContent, BubbleVariant},
-    button::{ButtonRounded, DropdownButton},
+    button::ButtonRounded,
     collapsible::Collapsible,
     empty::{
         Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant,

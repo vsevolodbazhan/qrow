@@ -96,6 +96,68 @@ pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
 }
 
+/// Compare the visual centers of the first line's capital letters.
+pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &str) {
+    use gpui_kit::component::ActiveTheme;
+    use gpui_kit::{FontWeight, Styled, div};
+
+    let mut title = div().text_sm().font_weight(FontWeight::MEDIUM);
+    let mut secondary_style = div().text_xs();
+    let center = |id: &str, font_size, weight, window: &mut Window| {
+        let mut style = window.text_style();
+        style.font_family = cx.theme().font_family.clone();
+        style.font_size = font_size;
+        style.font_weight = weight;
+        let text = label(window, id.to_owned()).unwrap();
+        let first = text.lines().next().unwrap_or_default().to_owned();
+        let size = style.font_size.to_pixels(window.rem_size());
+        let line = window.text_system().shape_line(
+            first.clone().into(),
+            size,
+            &[style.to_run(first.len())],
+            None,
+        );
+        let line_height =
+            window.pixel_snap(style.line_height.to_pixels(size.into(), window.rem_size()));
+        let baseline = window.pixel_snap(
+            bounds_of(window, id).top()
+                + (line_height - line.ascent - line.descent) / 2.
+                + line.ascent,
+        );
+        let font = window.text_system().resolve_font(&style.font());
+        let cap_height = window.text_system().cap_height(font, size);
+        window.pixel_snap(baseline - cap_height / 2.)
+    };
+    let title_center = center(
+        "status-tooltip-title",
+        title.style().text.font_size.unwrap(),
+        FontWeight::MEDIUM,
+        window,
+    );
+    let secondary_center = center(
+        secondary,
+        secondary_style.style().text.font_size.unwrap(),
+        FontWeight::NORMAL,
+        window,
+    );
+    assert_eq!(
+        title_center, secondary_center,
+        "{secondary} visual center differs from the title's first line"
+    );
+}
+
+/// Connection fields stack without an extra blank spacer between rows.
+pub fn assert_tooltip_metadata_rows(window: &Window) {
+    let host = bounds_of(window, "status-tooltip-Host");
+    let user = bounds_of(window, "status-tooltip-User");
+    assert_eq!(host.left(), user.left());
+    assert_eq!(
+        host.bottom(),
+        user.top(),
+        "metadata rows have an extra spacer"
+    );
+}
+
 /// The labels of every observed element, for failure messages.
 pub fn labels(window: &Window) -> Vec<String> {
     let mut labels: Vec<_> = elements(window)
@@ -171,6 +233,54 @@ pub fn bounds_of(window: &Window, id: &str) -> Bounds<Pixels> {
         .or_else(|| labelled(window, id))
         .unwrap_or_else(|| panic!("No element {id}. Labels: {:?}", labels(window)))
         .bounds()
+}
+
+/// One painted dot in a region, in the expected theme color.
+fn assert_dot_in(window: &Window, bounds: Bounds<Pixels>, expected: Option<gpui_kit::Hsla>) {
+    let bounds = bounds.scale(window.scale_factor());
+    let dot_size = px(6.).scale(window.scale_factor());
+    let dots: Vec<_> = window
+        .painted_quads()
+        .into_iter()
+        .filter(|quad| {
+            quad.bounds.size.width == dot_size
+                && quad.bounds.size.height == dot_size
+                && bounds.contains(&quad.bounds.center())
+                && quad.content_mask.bounds.contains(&quad.bounds.center())
+        })
+        .collect();
+    assert_eq!(dots.len(), usize::from(expected.is_some()), "{dots:?}");
+    if let Some(color) = expected {
+        assert_eq!(dots[0].background, gpui_kit::Background::from(color));
+    }
+}
+
+/// A tab paints one status dot and keeps its Close control visible.
+pub fn assert_tab_dot(window: &Window, tab: Uuid, expected: Option<gpui_kit::Hsla>) {
+    let close = window.find(format!("close-tab-{tab}"));
+    assert!(close.visible(), "The Close control is hidden");
+    let tab = elements(window)
+        .into_iter()
+        .find(|element| {
+            element.role() == Some(gpui_kit::Role::Tab)
+                && element.bounds().contains(&close.bounds().center())
+        })
+        .expect("The Close control is inside a tab");
+    assert_dot_in(window, tab.bounds(), expected);
+}
+
+/// A connection row paints one dot in the expected theme color.
+pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit::Hsla) {
+    let dot = window.find(format!("connection-status-{profile}"));
+    assert!(dot.visible(), "The connection dot is hidden");
+    let row = elements(window)
+        .into_iter()
+        .find(|element| {
+            element.role() == Some(gpui_kit::Role::TreeItem)
+                && element.bounds().contains(&dot.bounds().center())
+        })
+        .expect("The connection dot is inside a tree row");
+    assert_dot_in(window, row.bounds(), Some(expected));
 }
 
 /// Clicks the center of an observed element, as `TestWindowExt::click` does

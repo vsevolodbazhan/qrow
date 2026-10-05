@@ -203,7 +203,13 @@ impl Qrow {
                         Button::new("save-profile")
                             .primary()
                             .label(if saving { "Saving" } else { "Save" })
-                            .tooltip("Save connection · ⌘Enter")
+                            .map(|mut button| {
+                                button.interactivity().tooltip(
+                                    StatusTooltip::new("Save Connection", "")
+                                        .for_action(&SaveConnection, Some("ConnectionSettings")),
+                                );
+                                button
+                            })
                             .disabled(saving)
                             .on_click(cx.listener(|this, _, _, cx| this.save_profile(cx))),
                     ),

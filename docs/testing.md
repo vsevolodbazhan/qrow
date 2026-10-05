@@ -67,6 +67,14 @@ core library are modules of one test binary,
 links one binary. The `backend` suite runs the `backend::` module of this
 binary.
 
+The full `ui` suite also checks tooltip alignment with the native macOS font
+backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
+the vertical center of the first line. Checks cover system and Menlo fonts
+at 75%, 100%, and 150% UI scale. It runs this check on the process main
+thread because AppKit requires that thread. The other headless UI tests
+use GPUI's test text backend. Run `./qtest run ui` to include the native
+check. A test filter runs only the matching GPUI tests.
+
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.
@@ -236,6 +244,12 @@ belongs only to the servers. Qrow itself does not use a JVM.
 The servers keep the Spark engine of a user for 10 minutes after its last
 session, so tests that follow each other do not wait for an engine start.
 The Spark worker has room for one engine and two executor cores.
+
+Catalog tests and assistant tests that read live columns run one at a time
+in the same test group. Each test uses a unique schema name. Spark lists all
+schemas before Qrow applies a connection's catalog filter. If another test
+drops a schema during that list, the catalog request can fail. Other E2E
+tests can run at the same time.
 
 The Docker runtime binds ports to loopback, and each run gets its own
 Compose project and network. The servers write the execution evidence to a
@@ -501,6 +515,10 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   cores, so put a test that holds executors in the `blocking` module, where
   tests run one at a time. A test that stops or restarts a server belongs in
   the `backend` suite.
+- Use a unique schema name for catalog tests. Put tests that create, drop,
+  or read fixture schemas in the catalog test group of the
+  [nextest profiles](../.config/nextest.toml). Update the group's filter when
+  you add a test outside the `catalog` module.
 - Check the result that a user can see. The `backend` suite checks the
   contract with the servers, for example that Spark stops a cancelled task
   in 10 seconds. Do not check it again in an E2E test.

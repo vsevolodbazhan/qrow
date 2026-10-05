@@ -903,7 +903,7 @@ final class Driver {
     /// the border above it to the status bar below it.
     func checkComposerPadding() throws {
         let (composerOrigin, composerSize) = try elementBounds(try waitInput("Assistant Message"))
-        let (sendOrigin, sendSize) = try elementBounds(try waitAny(["Send · Ask", "Send · Run"]))
+        let (sendOrigin, sendSize) = try elementBounds(try wait("Send"))
         let top = Int(composerOrigin.y) - 24
         let height = Int(sendOrigin.y + sendSize.height) + 24 - top
         let path = "\(artifacts)/assistant-composer-padding.png"

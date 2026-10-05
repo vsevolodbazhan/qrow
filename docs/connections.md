@@ -7,6 +7,29 @@ its tabs. Qrow restores the last tab selected for that connection.
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
 
+## Connection state
+
+Each connection row has one status dot. Dim blue means that at least one query
+tab has a live idle session. Faint blue at 20% opacity means that a query tab
+is connecting. Blue means that query, assistant, or schema work
+continues. Green means that a result or reply is unread. Red means that an
+error is unread. Yellow means that an assistant query needs approval.
+
+The priority is approval, error, running work, connecting, unread success,
+then connected and idle.
+The tooltip shows the connection name and a short status beside it. The status
+uses secondary text. The name and status share a vertical center. The status
+stays beside the first line when the name wraps.
+Host and User show on compact labeled rows below the name. **Unread Error**
+identifies an unread error. No dot means that no session, work, or
+unread outcome needs an indicator. A schema refresh uses its own temporary
+session. That session does not give the connection a dim blue dot.
+
+Click the dot to open [Activity](activity.md). Viewing Activity reads refresh
+errors. It does not read query results or tab errors. Show the Results or Logs
+of the affected tab to read those outcomes. Selecting a connection shows its
+last selected tab. The other tabs keep their unread outcomes.
+
 ## Create a profile
 
 1. Click **+** beside Connections.
@@ -154,18 +177,19 @@ Click **Refresh** in that row to read it. This opens a session.
 If a refresh fails or stops at its timeout, the tree keeps the data that it
 had before the refresh. The error shows on the row of the refreshed part:
 
-- A connection: the connection row shows a warning icon, also when the
-  connection is collapsed. Point to the row to read the first line of the
-  error below the host and the user. The first row under the expanded
-  connection shows the error with **Refresh**. The icon goes away when the
-  next connection refresh starts.
+- A connection: the connection row shows a red dot, also when the
+  connection is collapsed. Point to the row to see **Unread Error** beside
+  the connection name. The first row under the expanded
+  connection shows the error with **Refresh**. The dot goes away when you view
+  the Activity of the connection. The error text stays until the next refresh
+  starts.
 - A schema, a table, or a view: the row shows a warning icon. Point to the row
   to read the first line of the error. The first row under the expanded row
   shows the error with **Refresh**.
 
-[Activity](activity.md) shows the full error. Click the warning icon to open
-it. The connection row uses the same warning icon for an unread query error. Only a refresh error
-adds text to the tooltip of the row. If Qrow cannot connect, it stops the
+[Activity](activity.md) shows the full error. Click the status dot or select
+**Show Activity** from the connection menu to open it. The connection row uses
+the same red dot for an unread query error. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
 ### Refresh schemas automatically
@@ -299,9 +323,8 @@ some schemas or tables could not be read, the result tells how many. For a
 shared catalog, the entries go to the Activity of the connection that ran the
 refresh.
 
-Refreshes do not go to the Logs of the tabs. A refresh error does not mark the
-connection with an unread error, because the tree shows the error. A failed
-refresh counts as an unseen error in the status bar.
+Refreshes do not go to the Logs of the tabs. A failed refresh gives its
+connection a red dot and counts as an unseen error in the status bar.
 
 ### Show or hide schemas
 

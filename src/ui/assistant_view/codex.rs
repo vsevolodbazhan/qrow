@@ -195,7 +195,9 @@ impl Qrow {
         self.assistant_state.open = !self.assistant_state.open;
         if self.assistant_state.open {
             self.assistant_state.previous_focus = window.focused(cx);
-            if let Some(thread) = self.displayed_thread() {
+            if self.assistant_transcript_visible(window, cx)
+                && let Some(thread) = self.displayed_thread()
+            {
                 self.thread_run_mut(&thread).unread = None;
             }
             self.assistant_state.idle_stop = None;

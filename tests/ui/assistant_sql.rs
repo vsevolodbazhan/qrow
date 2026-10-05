@@ -1,6 +1,9 @@
 //! The assistant edits, formats, and requests SQL in its tab.
 use crate::support::assistant::{FakeCodex, approval};
-use crate::support::{MemoryCredentials, TestApp, label, offline_profile, present};
+use crate::support::{
+    MemoryCredentials, TestApp, assert_tab_dot, assert_tooltip_header_center, bounds_of, label,
+    offline_profile, present,
+};
 use gpui_kit::{ElementId, TestAppContext};
 use qrow::model::{AssistantTitleSource::Codex, SavedTab, Workspace};
 use qrow::sql::KeywordCase;
@@ -31,6 +34,29 @@ const LONG_QUERY: &str = "SELECT 1;\n\nSELECT 2;\n\n-- Bookings by state\nSELECT
 fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestAppContext) {
     let (app, _codex) = launch(cx, "", |_| {});
     app.open_assistant(cx);
+    app.hover_labelled(cx, "Send");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_eq!(
+            label(window, "status-tooltip-title").as_deref(),
+            Some("Send Message")
+        );
+        assert_eq!(
+            label(window, "status-tooltip-shortcut").as_deref(),
+            Some("⌘⏎")
+        );
+        assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
+        assert_eq!(
+            label(window, "assistant-send-mode").as_deref(),
+            Some("SQL Mode: Ask First")
+        );
+        assert!(
+            bounds_of(window, "assistant-send-mode").right()
+                < bounds_of(window, "assistant-send").left()
+        );
+    });
     app.send(cx, "Write SELECT 1 into this tab");
     app.wait_editor(cx, "SELECT 1");
     app.wait_idle(cx);
@@ -60,18 +86,15 @@ fn run_mode_needs_confirmation_and_reconnect_replaces_send(cx: &mut TestAppConte
     app.click(cx, "cancel-conversation-auto-run");
     app.wait_gone(cx, "cancel-conversation-auto-run");
     app.update(cx, |window, _| {
-        assert_eq!(
-            label(window, "assistant-send").as_deref(),
-            Some("Send · Ask")
-        )
+        assert_eq!(label(window, "assistant-send").as_deref(), Some("Send"))
     });
     app.choose_send_mode(cx, "Run automatically");
     app.click(cx, "confirm-conversation-auto-run");
     app.wait_until(
         cx,
-        "Send · Run",
+        "SQL Mode: Auto Run",
         std::time::Duration::from_secs(10),
-        |window, _| label(window, "assistant-send").as_deref() == Some("Send · Run"),
+        |window, _| label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto Run"),
     );
 
     // Reconnect replaces Send and Cancel while Codex is disconnected.
@@ -111,7 +134,7 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
         ("Run first SQL by range", "SELECT 0;"),
     ] {
         app.send(cx, message);
-        app.wait_approval(cx, &format!("Run in Query 1 · Synthetic? {sql}"));
+        app.wait_approval(cx, &format!("Run in Query 1 on Synthetic? {sql}"));
         app.click(cx, "assistant-cancel-query");
         app.wait_gone(cx, "assistant-query-approval");
         app.wait_idle(cx);
@@ -142,7 +165,7 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
 
     // A later selection cannot reuse the revision of the appended query.
     app.send(cx, "Append then retarget and run without revision");
-    app.wait_approval(cx, "Run in Query 1 · Synthetic? SELECT 0;");
+    app.wait_approval(cx, "Run in Query 1 on Synthetic? SELECT 0;");
     app.click(cx, "assistant-cancel-query");
     app.wait_reply(cx, "Implicit run rejected: invalid_arguments");
     app.update(cx, |window, _| {
@@ -226,6 +249,7 @@ fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppC
     qrow::storage::save_catalog(&cache, &catalog).unwrap();
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT gate FROM avia.bookings".into();
+    let tab_id = tab.id;
     let workspace = codex.workspace(Workspace {
         profiles: vec![profile],
         tabs: vec![tab],
@@ -237,11 +261,13 @@ fn the_catalog_tools_read_the_cached_schemas_without_a_session(cx: &mut TestAppC
     // The tools wait for the cache, and the connection has no session, so
     // missing columns are not read.
     app.send(cx, "Read the catalog");
+    app.update(cx, |window, _| assert_tab_dot(window, tab_id, None));
     app.wait_reply(
         cx,
         "schemas avia,finance; relations bookings; columns booking_id BIGINT,gate STRING; daily not_cached",
     );
     app.wait_idle(cx);
+    app.update(cx, |window, _| assert_tab_dot(window, tab_id, None));
     // The next message has the cached columns of the relation in the tab SQL.
     app.send(cx, "Read the catalog again");
     app.wait_reply(cx, "Catalog: loaded True, referenced bookings;");

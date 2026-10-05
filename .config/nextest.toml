@@ -18,6 +18,7 @@ path = "junit.xml"
 # They wait for real servers, which can take minutes after an engine restart.
 [test-groups]
 fixture-serial = { max-threads = 1 }
+fixture-catalog = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = "binary(integration) & test(/^backend::/)"
@@ -30,6 +31,13 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 filter = "binary(e2e) & test(/^blocking::/)"
 test-group = "fixture-serial"
 slow-timeout = { period = "60s", terminate-after = 5 }
+
+# GetSchemas lists every namespace before applying a connection's filter.
+# Creating or dropping another test's namespace during that listing can fail
+# the shared Spark catalog, even when every test uses a unique schema name.
+[[profile.default.overrides]]
+filter = "binary(e2e) & (test(/^catalog::/) | test(/^assistant::the_assistant_reads_columns_/))"
+test-group = "fixture-catalog"
 
 [[profile.default.overrides]]
 filter = "binary(e2e)"

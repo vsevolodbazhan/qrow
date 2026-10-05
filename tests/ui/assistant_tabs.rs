@@ -1,9 +1,11 @@
 //! Each conversation belongs to one query tab, also while other tabs change.
 use crate::support::assistant::{FakeCodex, REPLY_TIMEOUT, approval};
 use crate::support::{
-    MemoryCredentials, TestApp, connection_row, labelled, labels, offline_profile,
+    MemoryCredentials, TestApp, assert_connection_dot, assert_tab_dot, connection_row, labelled,
+    labels, offline_profile,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::{
     AssistantTitleSource::{Codex, Temporary},
@@ -58,6 +60,88 @@ fn tabs_of(app: &TestApp, profile: Uuid) -> Vec<SavedTab> {
 }
 
 #[gpui_kit::test]
+fn query_dots_keep_sql_state_while_their_conversation_works_or_waits(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Synthetic");
+    let connection = profile.id;
+    let mut first = SavedTab::new(1, Some(connection));
+    first.title = "First query".into();
+    first.sql = "SELECT 1;".into();
+    let tab = first.id;
+    let workspace = codex.workspace(Workspace {
+        profiles: vec![profile],
+        tabs: vec![first, SavedTab::new(2, Some(connection))],
+        ..Workspace::default()
+    });
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.wait_label(cx, "Toggle Assistant, working");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, None);
+        // The password is missing in the synthetic store. Hide the tab before
+        // its query fails so that its Logs do not read the error.
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
+    app.wait_label_containing(cx, ", unread error, assistant working");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger));
+        assert_connection_dot(window, connection, cx.theme().danger);
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
+    });
+
+    codex.mark("first-reply-release");
+    app.wait_label_containing(cx, ", unread error, assistant reply ready");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
+    });
+
+    app.click_labelled(cx, "First query, unread error");
+    app.wait_reply(cx, "I can help with this query");
+    // Showing the tab reads its query error too.
+    app.wait_gone(cx, format!("query-status-{tab}"));
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
+    app.send(cx, "Hold parallel Alpha");
+    app.update(cx, |window, cx| {
+        window.click("run", cx);
+        let second = labelled(window, "Query 2").unwrap();
+        crate::support::click_element(window, &second, cx);
+    });
+    app.wait_label_containing(cx, ", unread error, assistant working");
+    codex.mark("release-Alpha");
+    app.wait_label_containing(cx, ", unread error, assistant waiting for approval");
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger));
+        assert_connection_dot(window, connection, cx.theme().warning);
+    });
+    app.click(cx, format!("close-tab-{tab}"));
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_tab_dot(window, tab, Some(cx.theme().danger))
+    });
+    app.click_labelled(cx, "First query, unread error");
+    app.wait_approval(cx, "Run in First query on Synthetic? SELECT 11");
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(cx, "Finished Alpha: approval_cancelled");
+    app.wait_idle(cx);
+    app.update(cx, |window, _| assert_tab_dot(window, tab, None));
+    app.click(cx, format!("close-tab-{tab}"));
+    app.wait_until(cx, "the closed idle tab", REPLY_TIMEOUT, |_, _| {
+        app.saved().tabs.iter().all(|saved| saved.id != tab)
+    });
+}
+
+#[gpui_kit::test]
 fn a_conversation_keeps_its_tab_when_another_tab_is_renamed_and_selected(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let profile = offline_profile("Synthetic");
@@ -87,13 +171,12 @@ fn a_conversation_keeps_its_tab_when_another_tab_is_renamed_and_selected(cx: &mu
     codex.mark("retarget-ready");
 
     // The request waits in the conversation tab. The selected tab does not show it.
-    app.wait_label(cx, "Query 1, assistant waiting for approval");
     app.wait_label(cx, "Toggle Assistant, waiting for approval");
     app.update(cx, |window, _| {
         assert_eq!(approval(window), None, "The request showed in another tab")
     });
-    app.click_labelled(cx, "Query 1, assistant waiting for approval");
-    app.wait_approval(cx, "Run in Query 1 · Synthetic? SELECT 1;");
+    app.click_labelled(cx, "Query 1");
+    app.wait_approval(cx, "Run in Query 1 on Synthetic? SELECT 1;");
     app.wait_editor(cx, "SELECT 1;");
     app.click(cx, "assistant-cancel-query");
     app.wait_gone(cx, "assistant-query-approval");
@@ -143,7 +226,10 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     app.send(cx, "Hold parallel Alpha");
     app.wait_for(cx, "assistant-working");
-    app.wait_label(cx, "Query 1, assistant working");
+    app.wait_label(cx, "Toggle Assistant, working");
+    app.update(cx, |window, _| {
+        assert_tab_dot(window, tab_of(&app, alpha).unwrap().id, None)
+    });
     app.click(cx, connection_row(beta));
     // The Beta tab has no conversation, so its pane does not wait.
     app.wait_gone(cx, "assistant-working");
@@ -161,25 +247,25 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     // Each conversation changed only its own tab.
     app.wait_editor(cx, "SELECT 22");
-    app.wait_approval(cx, "Run in Query 1 · Beta? SELECT 22");
+    app.wait_approval(cx, "Run in Query 1 on Beta? SELECT 22");
     app.click(cx, "assistant-cancel-query");
     app.wait_gone(cx, "assistant-query-approval");
 
     // Selecting the other conversation selects its tab and connection.
     app.show_threads(cx);
-    app.update(cx, |window, cx| {
-        let row = crate::support::labelled_starting(window, "")
-            .into_iter()
-            .find(|e| {
-                e.label()
-                    .is_some_and(|l| l.contains("Alpha, assistant waiting for approval"))
-            })
-            .unwrap();
-        crate::support::click_element(window, &row, cx);
-    });
+    let alpha_tab = tab_of(&app, alpha).unwrap().id;
+    let alpha_thread = app
+        .saved()
+        .assistant
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.tab_id == Some(alpha_tab))
+        .unwrap()
+        .thread_id;
+    app.click(cx, format!("assistant-thread-{alpha_thread}"));
     app.show_conversation(cx);
     app.wait_editor(cx, "SELECT 11");
-    app.wait_approval(cx, "Run in Query 1 · Alpha? SELECT 11");
+    app.wait_approval(cx, "Run in Query 1 on Alpha? SELECT 11");
     // The Beta turn ends only now, while another conversation is shown.
     codex.mark("finish-Beta");
     app.show_threads(cx);
@@ -189,16 +275,16 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.wait_reply(cx, "Finished Alpha: approval_cancelled");
     app.wait_label(cx, "Toggle Assistant, reply ready");
     app.show_threads(cx);
-    app.update(cx, |window, cx| {
-        let row = crate::support::labelled_starting(window, "")
-            .into_iter()
-            .find(|e| {
-                e.label()
-                    .is_some_and(|l| l.contains("Beta, assistant reply ready"))
-            })
-            .unwrap();
-        crate::support::click_element(window, &row, cx);
-    });
+    let beta_tab = tab_of(&app, beta).unwrap().id;
+    let beta_thread = app
+        .saved()
+        .assistant
+        .conversations
+        .into_iter()
+        .find(|conversation| conversation.tab_id == Some(beta_tab))
+        .unwrap()
+        .thread_id;
+    app.click(cx, format!("assistant-thread-{beta_thread}"));
     app.show_conversation(cx);
     app.wait_reply(cx, "Finished Beta: approval_cancelled");
     app.wait_label(cx, "Toggle Assistant");
@@ -374,7 +460,7 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
     app.update(cx, |window, cx| {
         let row = crate::support::labelled_starting(window, "")
             .into_iter()
-            .find(|e| e.label().is_some_and(|l| l.contains("Alpha · Tab closed")))
+            .find(|e| e.label().is_some_and(|l| l.contains("Alpha, Tab Closed")))
             .expect("A row names the closed tab");
         crate::support::click_element(window, &row, cx);
     });

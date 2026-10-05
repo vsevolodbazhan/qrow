@@ -150,7 +150,7 @@ pub fn composer_text(window: &Window) -> Option<String> {
     text_in(window, "assistant-composer")
 }
 
-/// The accessibility label of the approval card: "Run in <tab> · <connection>? <SQL>".
+/// The accessibility label of the approval card: "Run in <tab> on <connection>? <SQL>".
 pub fn approval(window: &Window) -> Option<String> {
     label(window, "assistant-query-approval")
 }
@@ -293,11 +293,9 @@ impl TestApp {
         );
     }
 
-    /// Chooses `mode` in the menu of the send button.
+    /// Chooses `mode` in the SQL mode menu beside Send.
     pub fn choose_send_mode(&self, cx: &mut TestAppContext, mode: &str) {
-        self.update(cx, |window, cx| {
-            gpui_kit::test::TestWindowExt::within(window, "assistant-send-mode").click("popup", cx)
-        });
+        self.click(cx, "assistant-send-mode");
         self.choose(cx, "popup-menu", mode);
     }
 

@@ -132,7 +132,7 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
         },
     );
     proxy.released.store(true, Ordering::SeqCst);
-    app.wait_status(cx, "Disconnected · Idle timeout");
+    app.wait_status(cx, "Disconnected: Idle timeout");
     app.wait_cell(cx, 0, 1, "1");
     let activity = app.activity(cx, id);
     assert!(activity.contains("Schema refresh completed"), "{activity}");
@@ -173,7 +173,7 @@ fn an_automatic_refresh_finishes_before_an_overdue_idle_disconnect(cx: &mut Test
         2,
         "{activity}"
     );
-    app.wait_status(cx, "Disconnected · Idle timeout");
+    app.wait_status(cx, "Disconnected: Idle timeout");
     app.wait_until(
         cx,
         "the explicit refresh session to close",

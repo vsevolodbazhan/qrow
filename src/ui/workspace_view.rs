@@ -5,10 +5,8 @@ use gpui_kit::component::{
     Icon, Selectable as _, TitleBar, h_flex,
     input::Editor,
     shimmer::ShimmerText,
-    spinner::Spinner,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
-    tag::Tag,
     v_flex,
 };
 
@@ -19,48 +17,16 @@ fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-/// The tooltip of a connection row: its host and user, then the error of
-/// the last schema refresh of the connection.
-pub(super) fn connection_tooltip(profile: &Profile, refresh_error: Option<&str>) -> String {
-    let mut tooltip = format!("{} · {}", profile.host, profile.username);
-    if let Some(error) = refresh_error {
-        tooltip.push('\n');
-        tooltip.push_str(&super::catalog_tree::error_summary(error));
-    }
-    tooltip
-}
-
 fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
-    let status = capitalize_status_details(status);
     match elapsed {
-        Some(elapsed) => format!("{status} · {:.2} s", elapsed.as_secs_f64()),
-        None => status,
+        Some(elapsed) => format!("{status}. Elapsed: {:.2} s", elapsed.as_secs_f64()),
+        None => status.to_owned(),
     }
-}
-
-fn capitalize_status_details(status: &str) -> String {
-    let mut capitalized = false;
-    let mut label = String::with_capacity(status.len());
-
-    for character in status.chars() {
-        if capitalized && !character.is_whitespace() {
-            label.extend(character.to_uppercase());
-            capitalized = false;
-        } else {
-            label.push(character);
-        }
-
-        if character == '·' {
-            capitalized = true;
-        }
-    }
-
-    label
 }
 
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
-        "Demo · Nothing is saved"
+        "Demo changes are not saved"
     } else if !saving_enabled {
         "Workspace saving disabled"
     } else if dirty {
@@ -96,7 +62,13 @@ impl Qrow {
                         .flex_shrink_0()
                         .icon(IconName::PanelLeft)
                         .accessibility_label("Toggle Sidebar")
-                        .tooltip("Toggle Sidebar · ⌘B")
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("Toggle Sidebar", "")
+                                    .for_action(&ToggleSidebar, None),
+                            );
+                            button
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar = !this.sidebar;
                             cx.notify();
@@ -107,13 +79,7 @@ impl Qrow {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
-                let assistant = self
-                    .settings
-                    .assistant
-                    .enabled
-                    .then(|| self.tab_assistant_status(id))
-                    .flatten();
-                let assistant_busy = assistant.is_some_and(|status| status.busy());
+                let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
                 let title_generating =
                     self.assistant
                         .conversation_for_tab(id)
@@ -150,62 +116,49 @@ impl Qrow {
                     .aria_label(format!(
                         "{}{}{}{}{}",
                         tab.saved.title,
-                        if tab.busy { ", running" } else { "" },
+                        tab.work_suffix(),
                         if tab.panel.unread_error {
                             ", unread error"
                         } else {
                             ""
                         },
-                        assistant.map_or("", ThreadStatus::accessible_suffix),
+                        if tab.panel.has_unread_success() {
+                            ", unread query result"
+                        } else {
+                            ""
+                        },
                         if title_generating {
                             ", generating title"
                         } else {
                             ""
                         },
                     ))
-                    // The status area before the close button shows one
-                    // spinner. It uses the accent color while the tab's
-                    // conversation works, also when the assistant runs the
-                    // query of the tab.
                     .suffix(
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when(tab.busy || assistant == Some(ThreadStatus::Working), |el| {
-                                el.child(Spinner::new().xsmall().color(
-                                    if assistant == Some(ThreadStatus::Working) {
-                                        cx.theme().primary
-                                    } else {
-                                        cx.theme().muted_foreground
+                            .when_some(tab.dot_status(), |el, status| {
+                                let label = format!("{}{}", tab.saved.title, tab.status_suffix());
+                                let tooltip = StatusTooltip::live(
+                                    cx.entity().downgrade(),
+                                    None,
+                                    move |qrow, _| {
+                                        qrow.tabs
+                                            .iter()
+                                            .find(|tab| tab.saved.id == id)
+                                            .and_then(Tab::status_tooltip)
                                     },
-                                ))
+                                );
+                                el.child(
+                                    div()
+                                        .id(SharedString::from(format!("query-status-{id}")))
+                                        .test_support()
+                                        .role(Role::Status)
+                                        .aria_label(label)
+                                        .tooltip(tooltip)
+                                        .child(status.dot(cx)),
+                                )
                             })
-                            .when_some(
-                                assistant
-                                    .filter(|status| *status != ThreadStatus::Working)
-                                    .map(|status| {
-                                        self.assistant_status_icon(status, cx).unwrap_or_else(
-                                            || {
-                                                Icon::new(AssetIconName::Bot)
-                                                    .small()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .into_any_element()
-                                            },
-                                        )
-                                    })
-                                    .filter(|_| !tab.busy || assistant != Some(ThreadStatus::Idle)),
-                                |el, icon| el.child(icon),
-                            )
-                            .when(
-                                tab.panel.unread_error && assistant != Some(ThreadStatus::Failed),
-                                |el| {
-                                    el.child(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
-                                    )
-                                },
-                            )
                             .child(
                                 Button::new(SharedString::from(format!(
                                     "close-tab-{}",
@@ -215,7 +168,13 @@ impl Qrow {
                                 .small()
                                 .icon(IconName::Close)
                                 .accessibility_label(format!("Close {}", tab.saved.title))
-                                .tooltip("Close Tab · ⌘W")
+                                .map(|mut button| {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Close Tab", "")
+                                            .for_action(&CloseTab, None),
+                                    );
+                                    button
+                                })
                                 .disabled(tab.busy || assistant_busy)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
@@ -246,7 +205,12 @@ impl Qrow {
                             .icon(IconName::Plus)
                             .disabled(self.active_profile().is_none())
                             .accessibility_label("New Tab")
-                            .tooltip("New Tab · ⌘T")
+                            .map(|mut button| {
+                                button.interactivity().tooltip(
+                                    StatusTooltip::new("New Tab", "").for_action(&NewTab, None),
+                                );
+                                button
+                            })
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.new_tab(&NewTab, window, cx)
@@ -261,25 +225,16 @@ impl Qrow {
                         let failed = status == ThreadStatus::Failed;
                         let unread = failed || status == ThreadStatus::Ready;
                         let working = status == ThreadStatus::Working;
-                        let (accessibility_label, tooltip) = if failed {
-                            (
-                                "Toggle Assistant, reply failed",
-                                "Assistant reply failed · ⌘J",
-                            )
+                        let accessibility_label = if failed {
+                            "Toggle Assistant, reply failed"
                         } else if unread {
-                            (
-                                "Toggle Assistant, reply ready",
-                                "Assistant reply ready · ⌘J",
-                            )
+                            "Toggle Assistant, reply ready"
                         } else if waiting_for_approval {
-                            (
-                                "Toggle Assistant, waiting for approval",
-                                "Assistant waiting for approval · ⌘J",
-                            )
+                            "Toggle Assistant, waiting for approval"
                         } else if working {
-                            ("Toggle Assistant, working", "Assistant is working · ⌘J")
+                            "Toggle Assistant, working"
                         } else {
-                            ("Toggle Assistant", "Toggle Assistant · ⌘J")
+                            "Toggle Assistant"
                         };
                         let toggle =
                             Button::new("toggle-assistant")
@@ -288,42 +243,25 @@ impl Qrow {
                                 .w(self.ui_px(28.))
                                 .h(self.ui_px(28.))
                                 .accessibility_label(accessibility_label)
-                                .tooltip(tooltip)
-                                .when(working, |button| {
-                                    button.icon(Spinner::new().small().color(cx.theme().primary))
-                                })
-                                .when(!working && failed, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::TriangleAlert)
-                                            .small()
-                                            .text_color(cx.theme().danger),
-                                    )
-                                })
-                                .when(!working && !failed && unread, |button| {
-                                    button.icon(
-                                        Icon::new(AssetIconName::Bot)
-                                            .small()
-                                            .text_color(cx.theme().success),
-                                    )
-                                })
-                                .when(
-                                    !working && !failed && !unread && waiting_for_approval,
-                                    |button| {
-                                        button.icon(
-                                            Icon::new(AssetIconName::Bot)
-                                                .small()
-                                                .text_color(cx.theme().warning),
-                                        )
-                                    },
-                                )
-                                .when(
-                                    !working && !failed && !unread && !waiting_for_approval,
-                                    |button| button.icon(AssetIconName::PanelRight),
-                                )
+                                .icon(Icon::new(AssetIconName::Bot).small())
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_assistant(window, cx)
                                 }));
-                        bar.child(toggle)
+                        bar.child(
+                            div()
+                                .id("assistant-tooltip-trigger")
+                                .tooltip(StatusTooltip::live(
+                                    cx.entity().downgrade(),
+                                    Some(&ToggleAssistant),
+                                    |qrow, _| {
+                                        Some(StatusTooltip::new(
+                                            "Assistant",
+                                            qrow.assistant_status().tooltip_status(),
+                                        ))
+                                    },
+                                ))
+                                .child(DotStatus::on_button(status.dot_status(), toggle, cx)),
+                        )
                     }),
             )
     }
@@ -344,7 +282,9 @@ impl Qrow {
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .tooltip("Run SQL selection, or editor contents if nothing is selected. One statement only · ⌘Enter")
+                        .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Run Query", "")
+                            .detail("Run the selected SQL or the editor contents. One statement only.")
+                            .for_action(&RunQuery, None)); button })
                         .disabled(active.is_none() && !self.demo)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
@@ -384,17 +324,22 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let range = data.pagination.range(data.rows.len());
-        let count = if range.is_empty() {
-            format!("0 rows · {} columns", data.columns.len())
+        let range_label = if range.is_empty() {
+            "0 rows".to_owned()
         } else {
-            format!(
-                "Rows {}–{} · {} loaded · {} columns",
-                range.start + 1,
-                range.end,
-                data.rows.len(),
-                data.columns.len()
-            )
+            format!("Rows {}–{}", range.start + 1, range.end)
         };
+        let loaded_label = format!("{} loaded", data.rows.len());
+        let columns_label = format!(
+            "{} {}",
+            data.columns.len(),
+            if data.columns.len() == 1 {
+                "column"
+            } else {
+                "columns"
+            }
+        );
+        let count = format!("{range_label}, {loaded_label}, {columns_label}");
         let page_label = format!("Page {}", page + 1);
         results::selection_boundary(&tab.table)
             .size_full()
@@ -403,51 +348,80 @@ impl Qrow {
             .overflow_hidden()
             .child(
                 h_flex()
-                    .h_10()
+                    .id("query-footer")
+                    .test_support()
+                    .min_h_10()
+                    .flex_wrap()
                     .flex_shrink_0()
                     .px_3()
+                    .py_1()
                     .gap_2()
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .child(self.panel_switcher(cx))
                     .child(
-                        div()
+                        h_flex()
                             .id("result-count")
                             .test_support()
                             .role(Role::Label)
+                            .flex_1()
+                            .min_w_48()
+                            .flex_wrap()
+                            .gap_x_3()
+                            .gap_y_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .aria_label(count.clone())
-                            .child(count),
+                            .aria_label(count)
+                            .children(
+                                [
+                                    ("result-range", range_label),
+                                    ("result-loaded", loaded_label),
+                                    ("result-columns", columns_label),
+                                ]
+                                .into_iter()
+                                .map(|(id, text)| {
+                                    div()
+                                        .id(id)
+                                        .test_support()
+                                        .role(Role::Label)
+                                        .aria_label(text.clone())
+                                        .child(text)
+                                }),
+                            ),
                     )
-                    .child(div().flex_1())
                     .child(
-                        div()
-                            .id("page-label")
-                            .test_support()
-                            .role(Role::Label)
-                            .text_xs()
-                            .aria_label(page_label.clone())
-                            .child(page_label),
-                    )
-                    .child(button_pair::button_pair(
-                        "pagination-buttons",
-                        Button::new("previous-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Previous")
-                            .disabled(page == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                        Button::new("next-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Next")
-                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
-                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                        cx,
-                    )),
+                        h_flex()
+                            .gap_2()
+                            .flex_shrink_0()
+                            .ml_auto()
+                            .child(
+                                div()
+                                    .id("page-label")
+                                    .test_support()
+                                    .role(Role::Label)
+                                    .text_xs()
+                                    .aria_label(page_label.clone())
+                                    .child(page_label),
+                            )
+                            .child(button_pair::button_pair(
+                                "pagination-buttons",
+                                Button::new("previous-page")
+                                    .small()
+                                    .ghost()
+                                    .w_24()
+                                    .label("Previous")
+                                    .disabled(page == 0)
+                                    .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
+                                Button::new("next-page")
+                                    .small()
+                                    .ghost()
+                                    .w_24()
+                                    .label("Next")
+                                    .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                                    .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
+                                cx,
+                            )),
+                    ),
             )
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
@@ -458,52 +432,78 @@ impl Qrow {
             .into_any_element()
     }
 
-    /// The Activity button of the status bar. It shows a spinner while a
-    /// schema refresh runs and the count of unseen errors.
-    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Activity keeps its icon, with a dot for unread errors or current work.
+    fn activity_status(&self, cx: &App) -> (Option<DotStatus>, String, StatusTooltip) {
         let view = self.activity.read(cx);
-        let open = view.is_open();
         let unseen = view.activity().unseen_errors();
-        let refreshing = self
+        let in_use = self
             .profiles
             .iter()
-            .any(|profile| self.catalog.is_refreshing(profile.id));
+            .any(|profile| self.connection_dot_status(profile.id, cx) == Some(DotStatus::Working));
+        let unseen = unseen
+            + self
+                .tabs
+                .iter()
+                .filter(|tab| tab.panel.unread_error)
+                .count();
+        let status = if unseen > 0 {
+            Some(DotStatus::Error)
+        } else if in_use {
+            Some(DotStatus::Working)
+        } else {
+            None
+        };
         let mut label = String::from("Activity");
-        if refreshing {
-            label.push_str(", schema refresh running");
+        let mut statuses = Vec::new();
+        if unseen > 0 {
+            statuses.push(format!(
+                "{unseen} Unread {}",
+                if unseen == 1 { "Error" } else { "Errors" }
+            ));
+        }
+        if in_use {
+            label.push_str(", in use");
+            statuses.push("In Use".into());
         }
         match unseen {
             0 => {}
             1 => label.push_str(", 1 unseen error"),
             count => label.push_str(&format!(", {count} unseen errors")),
         }
-        Button::new("toggle-activity")
+        let tooltip = StatusTooltip::new(
+            "Activity",
+            if statuses.is_empty() {
+                "Idle".into()
+            } else {
+                statuses.join("\n")
+            },
+        );
+        (status, label, tooltip)
+    }
+
+    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (status, label, _) = self.activity_status(cx);
+        let button = Button::new("toggle-activity")
             .ghost()
             .small()
-            .selected(open)
-            .map(|button| {
-                if refreshing {
-                    button.icon(Spinner::new().small().color(cx.theme().muted_foreground))
-                } else {
-                    button.icon(Icon::new(AssetIconName::Activity).small())
-                }
-            })
-            .when(unseen > 0, |button| {
-                button.child(Tag::danger().xsmall().rounded_full().child(if unseen > 99 {
-                    "99+".to_owned()
-                } else {
-                    unseen.to_string()
-                }))
-            })
+            .selected(self.activity.read(cx).is_open())
+            .icon(Icon::new(AssetIconName::Activity).small())
             .accessibility_label(label)
-            .tooltip("Activity · ⇧⌘U")
-            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
+        div()
+            .id("activity-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                Some(&ToggleActivity),
+                |qrow, cx| Some(qrow.activity_status(cx).2),
+            ))
+            .child(DotStatus::on_button(status, button, cx))
     }
 
     fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let connection_name = connection_name(&self.profiles, tab.saved.profile);
-        let status_label = query_status_label(&tab.status, tab.elapsed);
+        let status_label = query_status_label(&tab.status_label(), tab.elapsed);
         let workspace_status =
             workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
 
@@ -516,15 +516,47 @@ impl Qrow {
             // to an uneven space above and below the Activity button.
             .py(self.ui_px(4.))
             .child(
-                div()
+                h_flex()
                     .id("query-status")
                     .test_support()
                     .role(Role::Status)
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .aria_label(status_label.clone())
-                    .child(status_label),
+                    .gap_3()
+                    .overflow_hidden()
+                    .aria_label(status_label)
+                    .child(
+                        div()
+                            .id("query-status-title")
+                            .test_support()
+                            .min_w_0()
+                            .truncate()
+                            .aria_label(tab.status.clone())
+                            .text_color(cx.theme().foreground)
+                            .child(tab.status.clone()),
+                    )
+                    .when_some(tab.status_detail.clone(), |row, detail| {
+                        row.child(
+                            div()
+                                .id("query-status-detail")
+                                .test_support()
+                                .min_w_0()
+                                .truncate()
+                                .aria_label(detail.clone())
+                                .child(detail),
+                        )
+                    })
+                    .when_some(tab.elapsed, |row, elapsed| {
+                        let elapsed = format!("{:.2} s", elapsed.as_secs_f64());
+                        row.child(
+                            div()
+                                .id("query-elapsed")
+                                .test_support()
+                                .flex_shrink_0()
+                                .aria_label(format!("Elapsed: {elapsed}"))
+                                .child(elapsed),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -818,7 +850,7 @@ impl Qrow {
                         .pr(px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
+                        .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                 ),
             )
             // Activity covers the workspace and the assistant pane while it
@@ -1000,32 +1032,14 @@ mod tests {
             connection_name(&[profile], Some(Uuid::new_v4())),
             "No connection"
         );
-        let tooltip_profile = Profile {
-            host: "kyuubi.example.com".into(),
-            username: "aviaservice".into(),
-            database: "initial_database".into(),
-            ..Profile::default()
-        };
-        assert_eq!(
-            connection_tooltip(&tooltip_profile, None),
-            "kyuubi.example.com · aviaservice"
-        );
-        assert_eq!(
-            connection_tooltip(&tooltip_profile, Some("Refresh stopped after 30 minutes")),
-            "kyuubi.example.com · aviaservice\nRefresh stopped after 30 minutes\nActivity shows the full error."
-        );
         assert_eq!(query_status_label("Executing…", None), "Executing…");
         assert_eq!(
-            query_status_label("Complete · demo data", Some(Duration::from_millis(842))),
-            "Complete · Demo data · 0.84 s"
-        );
-        assert_eq!(
-            query_status_label("Error · connection lost · retry later", None),
-            "Error · Connection lost · Retry later"
+            query_status_label("Complete: Demo data", Some(Duration::from_millis(842))),
+            "Complete: Demo data. Elapsed: 0.84 s"
         );
         assert_eq!(
             workspace_status(true, true, false),
-            "Demo · Nothing is saved"
+            "Demo changes are not saved"
         );
         assert_eq!(
             workspace_status(false, false, false),
