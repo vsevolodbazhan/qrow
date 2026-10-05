@@ -290,6 +290,12 @@ fn a_relationship_target_can_have_a_package_or_a_dynamic_name() {
     let (orders_at, _) = entry(&index, "model.tiny_lake.orders");
     let (customers_at, _) = entry(&index, "model.tiny_lake.customers");
     assert_eq!(index.tests(orders_at)[2].to, Some(customers_at));
+
+    // A dynamic name of its own table.
+    let node = &mut value["nodes"][relationship];
+    node["depends_on"]["nodes"] = json!(["model.tiny_lake.orders"]);
+    let index = parse_value(&value);
+    assert_eq!(index.tests(orders_at)[2].to, Some(orders_at));
 }
 
 #[test]

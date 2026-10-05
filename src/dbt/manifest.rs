@@ -680,9 +680,9 @@ impl Builder {
             let mut test = pending.test;
             let candidates = resolve(&pending.depends_on);
             let symbols = &self.symbols.list;
-            // The dependencies that a reference names, other than `except`
-            // first. A dynamic reference names the only one other than
-            // `except`.
+            // The dependency that a reference names, preferably not
+            // `except`. A dynamic reference names the only dependency other
+            // than `except`, or `except` when it is the only dependency.
             let named = |text: Option<&str>, except: Option<u32>| {
                 let others = candidates.iter().copied().filter(|&c| Some(c) != except);
                 match text.and_then(reference)? {
@@ -690,6 +690,7 @@ impl Builder {
                         let others: Vec<u32> = others.collect();
                         match others.as_slice() {
                             [only] => Some(*only),
+                            [] => except.filter(|except| candidates.contains(except)),
                             _ => None,
                         }
                     }
@@ -829,9 +830,12 @@ fn reference(text: &str) -> Option<Reference<'_>> {
         let mut version = None;
         let mut rest = text[open + 1..].trim_start();
         loop {
-            let keyword = ["v=", "version="]
-                .iter()
-                .find_map(|key| rest.strip_prefix(key));
+            let keyword = ["version", "v"].iter().find_map(|key| {
+                let after = rest.strip_prefix(key)?.trim_start();
+                after
+                    .strip_prefix('=')
+                    .filter(|after| !after.starts_with('='))
+            });
             let (value, after) = match keyword.unwrap_or(rest).trim_start() {
                 text if text.starts_with(['\'', '"']) => {
                     let quote = &text[..1];
@@ -840,10 +844,14 @@ fn reference(text: &str) -> Option<Reference<'_>> {
                     };
                     (&text[1..1 + end], &text[2 + end..])
                 }
+                // A number. A variable makes the call dynamic.
                 text if keyword.is_some() => {
                     let end = text
-                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
+                        .find(|c: char| !(c.is_ascii_digit() || c == '.'))
                         .unwrap_or(text.len());
+                    if end == 0 {
+                        break;
+                    }
                     (&text[..end], &text[end..])
                 }
                 _ => break,
@@ -1036,6 +1044,12 @@ mod tests {
                 "ref('orders', version='3')",
                 model(None, "orders", Some("3")),
             ),
+            ("ref('orders', v = 2)", model(None, "orders", Some("2"))),
+            (
+                "ref('orders', version= 1.5 )",
+                model(None, "orders", Some("1.5")),
+            ),
+            ("ref('orders', v=selected)", Some(Reference::Dynamic)),
             (
                 "{{ get_where_subquery(source('raw', 'orders')) }}",
                 Some(Reference::Source("raw", "orders")),
