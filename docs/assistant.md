@@ -337,6 +337,10 @@ session:
   and a `relationships` test gives the table and column that it refers to.
 - **Read dbt lineage**: the models upstream or downstream of a model, to a
   depth.
+- **Read dbt model SQL**: the compiled SQL of a model, in parts of 32 KB, or
+  its raw SQL with Jinja. A manifest from `dbt parse` has no compiled SQL;
+  then the assistant gets the raw SQL. When the manifest changed after Qrow
+  read it, Qrow reads it again first, and the assistant tries again.
 
 A model names its table by the [schema
 mapping](connections.md#map-dbt-schemas-to-catalog-schemas) of the connection.

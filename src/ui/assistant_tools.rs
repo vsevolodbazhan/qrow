@@ -215,6 +215,21 @@ struct DbtDescribeInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DbtSqlInput {
+    version: u32,
+    #[allow(dead_code)]
+    connection_id: Uuid,
+    model: String,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DbtLineageInput {
     version: u32,
     #[allow(dead_code)]
@@ -556,7 +571,9 @@ impl Qrow {
             "catalog-list-schemas" | "catalog-list-relations" | "catalog-describe-relation" => {
                 return self.tool_catalog(call, cx);
             }
-            "dbt-search-models" | "dbt-describe-model" | "dbt-read-lineage" => self.tool_dbt(call),
+            "dbt-search-models" | "dbt-describe-model" | "dbt-read-lineage" | "dbt-read-sql" => {
+                self.tool_dbt(call)
+            }
             _ => Err(failure(
                 "capability_missing",
                 "This assistant tool is not available.",
@@ -1499,6 +1516,30 @@ impl Qrow {
                     input.offset,
                     input.limit.unwrap_or(dbt::DEFAULT_PAGE),
                 )
+            }
+            "dbt-read-sql" => {
+                let input: DbtSqlInput = parse(arguments)?;
+                version(input.version)?;
+                let position = project.resolve(&input.model).map_err(fail)?;
+                let state = state.expect("a project has a state");
+                // The positions of the SQL in the file are wrong after a
+                // change. A refresh makes them right.
+                if !state.is_current() {
+                    self.dbt.refresh_path(&state.path);
+                    return Err(failure(
+                        "manifest_changed",
+                        "The dbt manifest changed after Qrow read it. Qrow reads it again now; try again in a few seconds.",
+                    ));
+                }
+                project
+                    .read_sql(
+                        position,
+                        &state.path,
+                        input.code.as_deref() != Some("raw"),
+                        input.offset,
+                        input.limit.unwrap_or(dbt::MAX_SQL_BYTES),
+                    )
+                    .map_err(fail)?
             }
             "dbt-describe-model" => {
                 let input: DbtDescribeInput = parse(arguments)?;

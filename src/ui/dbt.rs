@@ -72,6 +72,11 @@ impl DbtProjects {
         }
     }
 
+    /// Read the manifest with the key `path` again.
+    pub(super) fn refresh_path(&self, path: &Path) {
+        self.worker.refresh(path);
+    }
+
     /// The state of the manifest of `profile`.
     pub(super) fn state(&self, profile: Uuid) -> Option<&Arc<ManifestState>> {
         self.states.get(self.keys.get(&profile)?)

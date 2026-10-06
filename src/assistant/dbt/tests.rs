@@ -498,3 +498,60 @@ fn a_cut_counts_the_escapes_of_json() {
     let listed = dbt.listed(index.find("model.lake.orders").unwrap(), true);
     assert_eq!(listed["description_truncated"], true);
 }
+
+#[test]
+fn model_sql_is_read_from_the_manifest_in_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("manifest.json");
+    let raw = "select * from {{ ref('orders') }} -- заказы";
+    let value = json!({
+        "metadata": {"dbt_schema_version": V12},
+        "nodes": {
+            "model.lake.daily": {
+                "unique_id": "model.lake.daily", "resource_type": "model", "name": "daily",
+                "schema": "core", "relation_name": "`core`.`daily`",
+                "raw_code": raw, "compiled_code": "select * from `core`.`orders` -- заказы",
+            },
+            "model.lake.parsed": {
+                "unique_id": "model.lake.parsed", "resource_type": "model", "name": "parsed",
+                "schema": "core", "relation_name": "`core`.`parsed`", "raw_code": "select 1",
+            },
+        },
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    let index = crate::dbt::parse(&std::fs::read(&path).unwrap()).unwrap();
+    let project = DbtProject {
+        schema_mapping: vec![],
+        ..project()
+    };
+    let dbt = Project::new(&index, &project, None, false);
+    let daily = dbt.resolve("core.daily").unwrap();
+    let compiled = dbt.read_sql(daily, &path, true, 0, MAX_SQL_BYTES).unwrap();
+    assert_eq!(compiled["code"], "compiled");
+    assert_eq!(compiled["sql"], "select * from `core`.`orders` -- заказы");
+    assert_eq!(compiled["next_offset"], Value::Null);
+    let first = dbt.read_sql(daily, &path, false, 0, 40).unwrap();
+    assert_eq!(first["code"], "raw");
+    // The page ends before a character that does not fit.
+    let end = first["next_offset"].as_u64().unwrap() as usize;
+    assert!(end <= 40 && raw.is_char_boundary(end));
+    let rest = dbt.read_sql(daily, &path, false, end, 100).unwrap();
+    assert_eq!(
+        format!(
+            "{}{}",
+            first["sql"].as_str().unwrap(),
+            rest["sql"].as_str().unwrap()
+        ),
+        raw
+    );
+    assert_eq!(rest["sql_bytes"], raw.len());
+
+    // A manifest from dbt parse has only the raw SQL.
+    let parsed = dbt.resolve("core.parsed").unwrap();
+    let value = dbt.read_sql(parsed, &path, true, 0, 100).unwrap();
+    assert_eq!(
+        (value["code"].clone(), value["compiled_missing"].clone()),
+        (json!("raw"), json!(true))
+    );
+    assert_eq!(value["sql"], "select 1");
+}
