@@ -49,20 +49,41 @@ pub fn copied_profile_name<F>(name: &str, is_taken: F) -> String
 where
     F: Fn(&str) -> bool,
 {
+    copied_name(name, MAX_PROFILE_NAME, is_taken)
+}
+
+/// Keep the name of a pasted sign-in when it is available, otherwise append
+/// a copy suffix.
+pub fn unique_sign_in_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(name) {
+        name.to_owned()
+    } else {
+        copied_name(name, MAX_SIGN_IN_NAME, is_taken)
+    }
+}
+
+/// Return `name` with the first free copy suffix, within `max` characters.
+fn copied_name<F>(name: &str, max: usize, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
     for copy in 1.. {
         let suffix = if copy == 1 {
             " copy".to_owned()
         } else {
             format!(" copy {copy}")
         };
-        let available = MAX_PROFILE_NAME.saturating_sub(suffix.chars().count());
+        let available = max.saturating_sub(suffix.chars().count());
         let base: String = name.chars().take(available).collect();
         let candidate = format!("{base}{suffix}");
         if !is_taken(&candidate) {
             return candidate;
         }
     }
-    unreachable!("profile name search must find a bounded name")
+    unreachable!("copy name search must find a bounded name")
 }
 
 /// Return a copy title that is different from every title accepted by `is_taken`.
@@ -881,6 +902,89 @@ fn callback_ports<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<V
     })
 }
 
+/// The format version of shared sign-in settings.
+pub const SHARED_SIGN_IN_VERSION: u32 = 1;
+/// The longest text that Qrow reads as shared sign-in settings.
+const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
+
+/// The settings of a sign-in that one user gives to another as text. It has
+/// no identifier, account, or tokens.
+#[derive(Deserialize, Serialize)]
+struct SharedSignIn {
+    /// Marks the text as sign-in settings and gives the format version.
+    qrow_sign_in: u32,
+    name: String,
+    issuer: String,
+    client_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
+    database_hosts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    callback_ports: Vec<u16>,
+}
+
+impl SignIn {
+    /// The settings of this sign-in as text that another user can paste.
+    pub fn to_shared_text(&self) -> String {
+        let shared = SharedSignIn {
+            qrow_sign_in: SHARED_SIGN_IN_VERSION,
+            name: self.name.clone(),
+            issuer: self.issuer.clone(),
+            client_id: self.client_id.clone(),
+            scopes: extra_scopes(&self.scopes)
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            resource: self.resource.clone(),
+            database_hosts: self.allowed_hosts.clone(),
+            callback_ports: self.callback_ports.clone(),
+        };
+        serde_json::to_string_pretty(&shared).expect("sign-in settings serialize")
+    }
+
+    /// Reads settings from [`Self::to_shared_text`] into a new sign-in with
+    /// no account. Text around the settings, like the rest of a chat
+    /// message, and typographic quotes are accepted.
+    pub fn from_shared_text(text: &str) -> anyhow::Result<Self> {
+        const NOT_A_SIGN_IN: &str = "The clipboard does not contain sign-in settings. Use Copy Settings on a sign-in, then try again.";
+        anyhow::ensure!(text.len() <= MAX_SHARED_SIGN_IN_BYTES, NOT_A_SIGN_IN);
+        let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
+            anyhow::bail!(NOT_A_SIGN_IN);
+        };
+        anyhow::ensure!(start < end, NOT_A_SIGN_IN);
+        let json = &text[start..=end];
+        let value: serde_json::Value = serde_json::from_str(json)
+            .or_else(|_| serde_json::from_str(&json.replace(['\u{201C}', '\u{201D}'], "\"")))
+            .map_err(|_| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        let version = value
+            .get("qrow_sign_in")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        anyhow::ensure!(
+            version <= u64::from(SHARED_SIGN_IN_VERSION),
+            "These sign-in settings come from a newer version of Qrow. Update Qrow, then try again."
+        );
+        let shared: SharedSignIn = serde_json::from_value(value)
+            .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
+        let sign_in = Self {
+            name: shared.name.trim().to_owned(),
+            issuer: shared.issuer.trim().to_owned(),
+            client_id: shared.client_id.trim().to_owned(),
+            scopes: shared.scopes,
+            resource: shared
+                .resource
+                .filter(|resource| !resource.trim().is_empty()),
+            allowed_hosts: shared.database_hosts,
+            callback_ports: shared.callback_ports,
+            ..Self::default()
+        };
+        sign_in.validate()?;
+        Ok(sign_in)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedTab {
     pub id: Uuid,
@@ -1582,6 +1686,120 @@ mod tests {
             change(&mut value);
             assert!(value.validate().is_err(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn shared_sign_in_text_has_the_settings_only() {
+        let mut value = sign_in();
+        value.scopes.push("profile".into());
+        value.resource = Some("https://kyuubi.example.test".into());
+        value.callback_ports = vec![8765, 8766];
+        value.identity = Some(Identity {
+            issuer: value.issuer.clone(),
+            subject: "subject-1".into(),
+            name: Some("Alice".into()),
+            email: Some("alice@example.test".into()),
+        });
+        let text = value.to_shared_text();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "qrow_sign_in": SHARED_SIGN_IN_VERSION,
+                "name": "Company",
+                "issuer": "https://id.example.test/realms/data",
+                "client_id": "qrow-desktop",
+                "scopes": ["kyuubi", "offline_access"],
+                "resource": "https://kyuubi.example.test",
+                "database_hosts": ["kyuubi.example.test", "10.0.0.1", "::1"],
+                "callback_ports": [8765, 8766],
+            })
+        );
+        let pasted = SignIn::from_shared_text(&text).unwrap();
+        assert_ne!(pasted.id, value.id);
+        assert_eq!(pasted.identity, None);
+        assert_eq!(pasted.scopes, vec!["kyuubi", "offline_access"]);
+        assert_eq!(pasted.resource, value.resource);
+        assert_eq!(pasted.allowed_hosts, value.allowed_hosts);
+        assert_eq!(pasted.callback_ports, value.callback_ports);
+        // Empty optional settings stay out of the text.
+        let json: serde_json::Value = serde_json::from_str(
+            &SignIn {
+                scopes: vec![],
+                ..sign_in()
+            }
+            .to_shared_text(),
+        )
+        .unwrap();
+        for key in ["scopes", "resource", "callback_ports"] {
+            assert!(json.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn shared_sign_in_text_survives_a_chat_message() {
+        let text = sign_in().to_shared_text();
+        let message = format!("Our sign-in:\n```\n{text}\n```\nThanks!");
+        assert_eq!(SignIn::from_shared_text(&message).unwrap().name, "Company");
+        let typographic = text.replace('"', "\u{201C}");
+        assert_eq!(
+            SignIn::from_shared_text(&typographic).unwrap().client_id,
+            "qrow-desktop"
+        );
+        // Unknown fields from a later version of the same format are ignored.
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json["future"] = serde_json::json!(true);
+        assert!(SignIn::from_shared_text(&json.to_string()).is_ok());
+    }
+
+    #[test]
+    fn shared_sign_in_text_rejects_other_or_invalid_content() {
+        let not_a_sign_in = |text: &str| {
+            let error = SignIn::from_shared_text(text).unwrap_err().to_string();
+            assert!(
+                error.contains("does not contain sign-in settings"),
+                "{text}: {error}"
+            );
+        };
+        not_a_sign_in("");
+        not_a_sign_in("SELECT 1");
+        not_a_sign_in("} {");
+        not_a_sign_in(r#"{"name": "Company"}"#);
+        not_a_sign_in(&format!(
+            "{{\"qrow_sign_in\": 1, \"x\": \"{}\"}}",
+            "x".repeat(70_000)
+        ));
+        let mut json: serde_json::Value =
+            serde_json::from_str(&sign_in().to_shared_text()).unwrap();
+        json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION + 1);
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("newer version"), "{error}");
+        json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION);
+        json.as_object_mut().unwrap().remove("client_id");
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("client_id"), "{error}");
+        // The settings pass the same checks as Sign-in Settings.
+        json["client_id"] = serde_json::json!("qrow-desktop");
+        json["issuer"] = serde_json::json!("http://id.example.test");
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("HTTPS"), "{error}");
+    }
+
+    #[test]
+    fn pasted_sign_in_names_stay_unique_and_within_limit() {
+        let used = ["Company", "Company copy"];
+        assert_eq!(
+            unique_sign_in_name("Other", |name| used.contains(&name)),
+            "Other"
+        );
+        assert_eq!(
+            unique_sign_in_name("Company", |name| used.contains(&name)),
+            "Company copy 2"
+        );
+        let long = "x".repeat(MAX_SIGN_IN_NAME);
+        let copy = unique_sign_in_name(&long, |name| name == long);
+        assert!(copy.ends_with(" copy"));
+        assert_eq!(copy.chars().count(), MAX_SIGN_IN_NAME);
     }
 
     #[test]
