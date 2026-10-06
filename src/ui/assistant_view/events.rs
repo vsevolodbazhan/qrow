@@ -235,13 +235,14 @@ impl Qrow {
                     last.push_text(&text);
                     false
                 } else {
-                    entries.push(TranscriptEntry::new(
+                    entries.push(TranscriptEntry::streamed(
                         Speaker::Assistant,
-                        text,
+                        &text,
                         Some(turn_id),
                     ));
                     true
                 };
+                self.reveal_assistant_replies(cx);
                 // The transcript follows a growing reply while you stay at its end.
                 if selected && new_message {
                     self.scroll_assistant_to_bottom(cx);

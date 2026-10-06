@@ -823,6 +823,19 @@ for line in sys.stdin:
                     },
                 }
             )
+        elif message.startswith("Stream a reply in bursts"):
+            # Three parts of 20 words with pauses, like a model that sends a
+            # reply in large parts at irregular times.
+            def send_bursts(thread=thread_id, turn=turn_id, message=message):
+                for burst in range(3):
+                    if burst:
+                        time.sleep(0.3)
+                    delta = "".join(f"burst{burst}word{index} " for index in range(20))
+                    send({"method": "item/agentMessage/delta",
+                          "params": {"threadId": thread, "turnId": turn, "delta": delta}})
+                finish_turn(thread, turn, f"End of {message}")
+
+            threading.Thread(target=send_bursts, daemon=True).start()
         elif message.startswith("Stream a long reply"):
             # About 16 KB in 800 deltas, like a long streamed answer. Qrow
             # buffers at most 1,024 events and drops the deltas after that.
