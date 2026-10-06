@@ -721,7 +721,7 @@ impl Qrow {
 
     /// The Sign-ins sidebar: its header and one row for each sign-in.
     pub(super) fn sign_ins_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(28.);
+        let group_action_size = self.ui_px(24.);
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
@@ -742,35 +742,39 @@ impl Qrow {
                             .font_weight(FontWeight::MEDIUM)
                             .child("Sign-ins"),
                     )
+                    // The header actions are compact and touch, so they read
+                    // as one group.
                     .child(
-                        Button::new("paste-sign-in")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
+                        h_flex()
                             .flex_shrink_0()
-                            .icon(AssetIconName::ClipboardPaste)
-                            .disabled(self.demo)
-                            .accessibility_label("Paste Sign-in")
-                            .tooltip("Paste Sign-in…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.paste_sign_in(window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("add-sign-in")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .disabled(self.demo)
-                            .accessibility_label("New Sign-in")
-                            .tooltip("New Sign-in…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_sign_in_editor(None, false, window, cx)
-                            })),
+                            .child(
+                                Button::new("paste-sign-in")
+                                    .ghost()
+                                    .small()
+                                    .w(group_action_size)
+                                    .h(group_action_size)
+                                    .icon(AssetIconName::ClipboardPaste)
+                                    .disabled(self.demo)
+                                    .accessibility_label("Paste Sign-in")
+                                    .tooltip("Paste Sign-in…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.paste_sign_in(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("add-sign-in")
+                                    .ghost()
+                                    .small()
+                                    .w(group_action_size)
+                                    .h(group_action_size)
+                                    .icon(IconName::Plus)
+                                    .disabled(self.demo)
+                                    .accessibility_label("New Sign-in")
+                                    .tooltip("New Sign-in…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_sign_in_editor(None, false, window, cx)
+                                    })),
+                            ),
                     ),
             )
             .when(self.sign_ins.is_empty(), |el| {
