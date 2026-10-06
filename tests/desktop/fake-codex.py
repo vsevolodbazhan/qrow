@@ -688,29 +688,51 @@ for line in sys.stdin:
             call_tool(thread_id, turn_id, "workspace-read-context", {"version": 1}, read_notes)
         elif message.startswith("Read dbt"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
-            catalog = context.get("catalog") or {}
-            dbt = catalog.get("dbt") or {}
-            referenced = [r for r in catalog.get("referenced_relations", []) if r.get("dbt")]
-            summary = referenced[0]["dbt"] if referenced else {}
+            dbt = context.get("dbt") or {}
+            referenced = dbt.get("referenced_models", [])
+            found = {}
 
-            def described(success, result):
-                described_dbt = result.get("dbt", {}) if success else {}
+            def failed(result):
+                return result.get("error", {}).get("code", "failed")
+
+            def traced(success, result):
+                lineage = result["resource_count"] if success else failed(result)
                 finish_turn(
                     thread_id,
                     turn_id,
-                    f"dbt {dbt.get('dbt_version')}, models {dbt.get('models')}, matched {dbt.get('matched')}; "
-                    f"summary {summary.get('unique_id')} unique {','.join(summary.get('unique', []))}; "
-                    f"describe {described_dbt.get('materialized')}, "
-                    f"parents {len(described_dbt.get('parents', []))}, tests {len(described_dbt.get('tests', []))}",
+                    f"dbt {dbt.get('dbt_version')}, models {dbt.get('models')}; "
+                    f"model {referenced[0]['unique_id']}, table points to {found['pointer']}; "
+                    f"{found['described']}; parents {lineage}",
                 )
 
-            if not referenced:
-                finish_turn(thread_id, turn_id, f"No dbt summary: {json.dumps(catalog)[:2000]}")
-            else:
-                call_tool(thread_id, turn_id, "catalog-describe-relation", {
-                    "version": 1, "connection_id": catalog["connection_id"],
-                    "schema": referenced[0]["schema"], "relation": referenced[0]["relation"],
+            def described(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Tool failed: {result}")
+                    return
+                columns = ",".join(f"{c['name']} {len(c['tests'])} tests" for c in result["columns"])
+                found["described"] = (
+                    f"{result['materialized']}, {result['test_count']} tests, columns {columns}"
+                )
+                call_tool(thread_id, turn_id, "dbt-read-lineage", {
+                    "version": 1, "connection_id": dbt["connection_id"],
+                    "model": referenced[0]["unique_id"], "direction": "upstream",
+                }, traced)
+
+            def pointed(success, result):
+                found["pointer"] = result.get("dbt_model") if success else failed(result)
+                call_tool(thread_id, turn_id, "dbt-describe-model", {
+                    "version": 1, "connection_id": dbt["connection_id"],
+                    "model": referenced[0]["relation"], "columns": ["id"],
                 }, described)
+
+            if not referenced:
+                finish_turn(thread_id, turn_id, f"No dbt models: {json.dumps(dbt)[:2000]}")
+            else:
+                schema, relation = referenced[0]["relation"].split(".")
+                call_tool(thread_id, turn_id, "catalog-describe-relation", {
+                    "version": 1, "connection_id": dbt["connection_id"],
+                    "schema": schema, "relation": relation,
+                }, pointed)
         elif message.startswith("Read the catalog"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             catalog = context.get("catalog") or {}

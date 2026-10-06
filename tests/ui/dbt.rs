@@ -328,7 +328,6 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
     let path = storage::catalog_path(&directory.path().join("workspace.json"), profile.id);
     storage::save_catalog(&path, &catalog).unwrap();
     let saved = directory.path().join("dbt");
-    let id = profile.id;
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = format!("SELECT id FROM {schema}.{alias}");
     let workspace = codex.workspace(Workspace {
@@ -340,21 +339,18 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
     app.wait_until(cx, "the dbt index", TIMEOUT, |_, _| {
         std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
     });
-    // The sidebar loads the saved catalog.
-    app.toggle_connection(cx, id);
-    app.wait_until(cx, "the schema", TIMEOUT, |window, _| {
-        crate::support::labelled(window, &schema).is_some()
-    });
     app.open_assistant(cx);
     app.send(cx, "Read dbt");
+    // The context needs no schema catalog. The catalog tool loads it and
+    // points to the model.
     app.wait_reply(
         cx,
         &format!(
-            "dbt 1.12.5, models 12, matched 1; summary {} unique id; describe {}, parents {}, tests {}",
-            dbt_manifest::model_id(1),
+            "dbt 1.12.5, models 12; model {id}, table points to {id}; {}, {} tests, columns id 2 tests; parents {}",
             index.symbol(model.materialized.unwrap()),
-            model.parents.len(),
             dbt_manifest::test_names(1).len(),
+            model.parents.len(),
+            id = dbt_manifest::model_id(1),
         ),
     );
 }

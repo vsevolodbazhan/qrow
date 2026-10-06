@@ -28,6 +28,9 @@ pub(in crate::ui) enum ToolKind {
     ListSchemas,
     ListRelations,
     DescribeRelation,
+    SearchModels,
+    DescribeModel,
+    ReadLineage,
     Other,
 }
 
@@ -48,6 +51,9 @@ impl ToolKind {
             "catalog-list-schemas" => Self::ListSchemas,
             "catalog-list-relations" => Self::ListRelations,
             "catalog-describe-relation" => Self::DescribeRelation,
+            "dbt-search-models" => Self::SearchModels,
+            "dbt-describe-model" => Self::DescribeModel,
+            "dbt-read-lineage" => Self::ReadLineage,
             _ => Self::Other,
         }
     }
@@ -67,6 +73,9 @@ impl ToolKind {
             Self::ListSchemas => "List schemas",
             Self::ListRelations => "List tables",
             Self::DescribeRelation => "Describe table",
+            Self::SearchModels => "Search dbt models",
+            Self::DescribeModel => "Describe dbt model",
+            Self::ReadLineage => "Read dbt lineage",
             Self::Other => "Use tool",
         }
     }
@@ -86,6 +95,9 @@ impl ToolKind {
             Self::ListSchemas => AssetIconName::Database,
             Self::ListRelations => AssetIconName::Table2,
             Self::DescribeRelation => AssetIconName::Columns3,
+            Self::SearchModels => AssetIconName::Search,
+            Self::DescribeModel => AssetIconName::BookOpen,
+            Self::ReadLineage => AssetIconName::Network,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }
@@ -458,6 +470,9 @@ mod tests {
             ToolKind::ListSchemas,
             ToolKind::ListRelations,
             ToolKind::DescribeRelation,
+            ToolKind::SearchModels,
+            ToolKind::DescribeModel,
+            ToolKind::ReadLineage,
             ToolKind::Other,
         ];
         for kind in kinds {
@@ -476,6 +491,9 @@ mod tests {
                 | ToolKind::ListSchemas
                 | ToolKind::ListRelations
                 | ToolKind::DescribeRelation
+                | ToolKind::SearchModels
+                | ToolKind::DescribeModel
+                | ToolKind::ReadLineage
                 | ToolKind::Other => {}
             }
             let path = kind.icon().path();

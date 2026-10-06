@@ -162,12 +162,11 @@ impl Qrow {
     }
 
     /// The dbt project of `profile` for the assistant, when Qrow has an
-    /// index of its manifest. `catalog` is the catalog of the connection.
+    /// index of its manifest.
     pub(super) fn dbt_project<'a>(
         &self,
         profile: &'a crate::model::Profile,
         state: Option<&'a Arc<ManifestState>>,
-        catalog: Option<&crate::catalog::Catalog>,
     ) -> Option<crate::assistant::dbt::Project<'a>> {
         let project = profile.dbt.as_ref()?;
         let state = state?;
@@ -175,7 +174,6 @@ impl Qrow {
         Some(crate::assistant::dbt::Project::new(
             index,
             project,
-            catalog.filter(|_| profile.catalog.browses()),
             state.refreshed,
             !state.is_current(),
         ))

@@ -221,24 +221,9 @@ SQL with the catalog. A table name without a schema uses the **Initial
 database** of the connection. An alias or a column with the name of a table
 can also match.
 
-When the connection has a [dbt project](connections.md#attach-a-dbt-project),
-**Describe table** also gives the dbt data of a table that a model, seed,
-snapshot, or source builds: its description, materialization, tags, the
-descriptions of its columns, its tests, and its direct parents and children.
-A test of `accepted_values` gives its values, and a `relationships` test gives
-the table and column that it refers to. Lineage and test targets name a
-catalog table when one [matches](connections.md#match-models-with-tables),
-otherwise the dbt unique ID. Each list gives its full count. When the data
-does not fit in a tool result, Qrow first shortens the largest part, usually
-the column descriptions and then the columns, so that short lists like the
-children stay complete. A cut list tells so.
-
-Each message then also tells the assistant when dbt wrote the manifest, the
-dbt version, the numbers of models, sources, and tests, and how many models
-match tables. For each table of the tab SQL with a dbt resource, it adds a
-short summary: the description, the columns with `unique` and `not_null`
-tests, and the relationships. Each summary has at most 1 KB, and the summaries
-count toward the 16 KB of the cached columns.
+When a [dbt project](connections.md#attach-a-dbt-project) builds the table,
+**Describe table** also gives the unique ID of its dbt model. See [Read the dbt
+project](#read-the-dbt-project).
 
 Conversations that started before the assistant had these tools do not have
 them. Start a new conversation to use them. An older conversation can run
@@ -331,6 +316,38 @@ Codex thinks before each step, for example before each tool call and before the
 reply. A higher reasoning level makes each step slower. A turn that edits and
 runs a query has several steps. If assistant turns are slow, select a lower
 reasoning level.
+
+### Read the dbt project
+
+When the connection has a [dbt project](connections.md#attach-a-dbt-project),
+the assistant reads the meaning of tables and columns from the manifest that
+Qrow keeps on your computer. These tools do not need the schema catalog or a
+session:
+
+- **Search dbt models**: the models, seeds, snapshots, and sources whose name,
+  table, or unique ID matches a pattern, for example `*orders*`, or whose
+  description contains a text. A tag or a resource type can narrow the
+  search. Each result gives the first line of the description.
+- **Describe dbt model**: one model, by its unique ID, its table like
+  `core.orders`, or its name. It gives the description, materialization, and
+  tags, the tests of the model, and the direct parents and children with
+  their counts. It lists the names of the documented columns. To get the
+  descriptions, types, and tests of columns, the assistant asks for them with
+  patterns, for example `*_id`. A test of `accepted_values` gives its values,
+  and a `relationships` test gives the table and column that it refers to.
+- **Read dbt lineage**: the models upstream or downstream of a model, to a
+  depth.
+
+A model names its table by the [schema
+mapping](connections.md#map-dbt-schemas-to-catalog-schemas) of the connection.
+Long lists come in pages, and the assistant can read the next page, so it does
+not lose data. A list in a description shows at most 100 parents or children;
+**Read dbt lineage** gives the others.
+
+Each message tells the assistant when dbt wrote the manifest, the dbt version,
+and the numbers of models, sources, and tests. It also lists the models of the
+tables that the tab SQL names, with the first line of their description, up to
+8 KB.
 
 ## Conversations and query tabs
 

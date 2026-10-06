@@ -101,6 +101,9 @@ pub struct WorkspaceContext {
     /// The schema catalog of the connection of `selected_tab`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog: Option<super::catalog::CatalogContext>,
+    /// The dbt project of the connection of `selected_tab`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dbt: Option<super::dbt::DbtContext>,
     /// The assistant notes of the connection of `selected_tab`, when they
     /// are new to the conversation. An empty text removes earlier notes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,6 +175,7 @@ impl WorkspaceContext {
             tabs,
             selected_tab,
             catalog: None,
+            dbt: None,
             connection_notes: None,
             connection_notes_unchanged: false,
         }
@@ -179,6 +183,11 @@ impl WorkspaceContext {
 
     pub fn with_catalog(mut self, catalog: Option<super::catalog::CatalogContext>) -> Self {
         self.catalog = catalog;
+        self
+    }
+
+    pub fn with_dbt(mut self, dbt: Option<super::dbt::DbtContext>) -> Self {
+        self.dbt = dbt;
         self
     }
 

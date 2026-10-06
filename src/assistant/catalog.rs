@@ -319,9 +319,6 @@ pub struct CatalogContext {
     /// The cached columns of the relations that the tab SQL names.
     pub referenced_relations: Vec<ReferencedRelation>,
     pub referenced_relations_truncated: bool,
-    /// The dbt project of the connection.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dbt: Option<super::dbt::DbtContext>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -330,9 +327,6 @@ pub struct ReferencedRelation {
     pub relation: String,
     pub kind: &'static str,
     pub columns: Vec<ReferencedColumn>,
-    /// A short dbt summary of the relation, when a dbt resource matches it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dbt: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -355,11 +349,10 @@ impl CatalogContext {
         sql: &str,
         default_schema: &str,
         now: u64,
-        dbt: Option<&super::dbt::Project>,
     ) -> Self {
         let catalog = catalog.filter(|_| browsing);
         let (referenced_relations, referenced_relations_truncated) = catalog
-            .map(|catalog| referenced_relations(catalog, sql, default_schema, dbt))
+            .map(|catalog| referenced_relations(catalog, sql, default_schema))
             .unwrap_or_default();
         Self {
             connection_id,
@@ -376,7 +369,6 @@ impl CatalogContext {
             relation_count: catalog.map_or(0, Catalog::relation_count),
             referenced_relations,
             referenced_relations_truncated,
-            dbt: None,
         }
     }
 }
@@ -384,7 +376,7 @@ impl CatalogContext {
 /// The names in `sql` that can be relations: `a.b`, `a.b.c` (the last two
 /// parts), and single names. Comments and string literals are skipped.
 /// Backticks quote a name.
-fn names(sql: &str) -> Vec<Vec<String>> {
+pub(super) fn names(sql: &str) -> Vec<Vec<String>> {
     let chars: Vec<char> = sql.chars().collect();
     let mut names: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();
@@ -477,15 +469,13 @@ fn names(sql: &str) -> Vec<Vec<String>> {
     names
 }
 
-/// The cached relations that `sql` names, with their columns and a short
-/// summary of their dbt resource, in at most `MAX_REFERENCED_BYTES`. Returns
-/// whether some did not fit. The match is best-effort: a name that is also a
-/// column or an alias can match a table.
+/// The cached relations that `sql` names, with their columns, in at most
+/// `MAX_REFERENCED_BYTES`. Returns whether some did not fit. The match is
+/// best-effort: a name that is also a column or an alias can match a table.
 pub fn referenced_relations(
     catalog: &Catalog,
     sql: &str,
     default_schema: &str,
-    dbt: Option<&super::dbt::Project>,
 ) -> (Vec<ReferencedRelation>, bool) {
     let mut found: Vec<ReferencedRelation> = Vec::new();
     let mut bytes = 0;
@@ -529,11 +519,6 @@ pub fn referenced_relations(
                     data_type: cut(&column.data_type, MAX_TYPE_BYTES),
                 })
                 .collect(),
-            dbt: dbt.and_then(|project| {
-                project
-                    .entry_for(schema, relation)
-                    .map(|position| project.summary(position))
-            }),
         };
         let size = serde_json::to_vec(&entry).map_or(usize::MAX, |encoded| encoded.len());
         if bytes + size > MAX_REFERENCED_BYTES {
@@ -834,7 +819,7 @@ mod tests {
     fn the_context_names_the_cached_relations_of_the_tab_sql() {
         let catalog = catalog();
         let sql = "-- orders from sales.daily\nSELECT o.id, 'sales.order_items' AS note\nFROM `sales`.Orders o JOIN daily d ON 1 = 1.5 /* hr.x */";
-        let (found, truncated) = referenced_relations(&catalog, sql, "sales", None);
+        let (found, truncated) = referenced_relations(&catalog, sql, "sales");
         assert!(!truncated);
         // `daily` has no cached columns, and comments and strings do not count.
         let names: Vec<_> = found.iter().map(|r| r.relation.as_str()).collect();
@@ -850,7 +835,6 @@ mod tests {
             sql,
             "sales",
             NOW,
-            None,
         );
         assert!(context.loaded);
         assert_eq!(context.schema_count, 3);
@@ -865,7 +849,6 @@ mod tests {
             sql,
             "sales",
             NOW,
-            None,
         );
         assert!(!off.loaded);
         assert!(off.referenced_relations.is_empty());

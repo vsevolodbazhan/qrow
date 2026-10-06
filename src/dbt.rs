@@ -314,7 +314,7 @@ impl Index {
 
 /// Whether `text` contains `query`, which is in lowercase, without regard to
 /// ASCII letter case. Other letters must match in their lowercase form.
-fn contains_folded(text: &str, query: &str) -> bool {
+pub(crate) fn contains_folded(text: &str, query: &str) -> bool {
     if query.is_empty() {
         return true;
     }

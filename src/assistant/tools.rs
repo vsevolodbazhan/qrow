@@ -110,11 +110,40 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "limit": {"type": "integer", "minimum": 1, "maximum": catalog::MAX_PAGE}},
             "required": ["version", "connection_id", "schema"], "additionalProperties": false
         })),
-        ("catalog-describe-relation", "Read the kind, comment, and columns with their types and comments of one table or view from the schema catalog of a connection. When Qrow has not read the columns and a tab of the connection is connected, Qrow reads them first. Otherwise the result is not_cached; then ask the user to refresh it, or run DESCRIBE with query-run.", json!({
+        ("catalog-describe-relation", "Read the kind, comment, and columns with their types and comments of one table or view from the schema catalog of a connection. When Qrow has not read the columns and a tab of the connection is connected, Qrow reads them first. Otherwise the result is not_cached; then ask the user to refresh it, or run DESCRIBE with query-run. When a dbt model, seed, snapshot, or source builds the table, dbt_model gives its unique ID for dbt-describe-model.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
                 "schema": {"type": "string"}, "relation": {"type": "string"}},
             "required": ["version", "connection_id", "schema", "relation"], "additionalProperties": false
+        })),
+        ("dbt-search-models", "Find the models, seeds, snapshots, and sources of the dbt project of a connection, from its manifest on this computer. It does not query the database and needs no schema catalog. patterns are globs that match the name, the table like core.orders, or the unique ID: * matches any text and ? one character, without regard to letter case. text matches words in the description. Each result gives the unique ID, the table, and the first line of the description. model_count is the total; use next_offset for the next page.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "patterns": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+                "text": {"type": "string"}, "tag": {"type": "string"},
+                "resource_type": {"enum": ["model", "seed", "snapshot", "source"]},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": crate::assistant::dbt::MAX_PAGE}},
+            "required": ["version", "connection_id"], "additionalProperties": false
+        })),
+        ("dbt-describe-model", "Read the meaning of one dbt model, seed, snapshot, or source: its description, materialization, tags, the tests of the model, and its direct parents and children with their counts. model is a unique ID, a table like core.orders, or a name. Without columns, it lists only the names of the columns that the project documents. For column descriptions, data types, and tests, pass glob patterns in columns, for example [\"*_id\", \"amount\"] or [\"*\"]; matched_column_count is the total, and next_column_offset gives the next page as column_offset. Use unique and not_null tests for keys, and relationships tests for join keys.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "model": {"type": "string"},
+                "columns": {"type": "array", "items": {"type": "string"}, "maxItems": 50},
+                "column_offset": {"type": "integer", "minimum": 0}},
+            "required": ["version", "connection_id", "model"], "additionalProperties": false
+        })),
+        ("dbt-read-lineage", "Read the resources upstream (parents) or downstream (children) of a dbt resource, to depth steps, from the dbt manifest. model is a unique ID, a table like core.orders, or a name. Each resource gives its unique ID, table, direction, and depth, and with descriptions the first line of its description. resource_count is the total; use next_offset for the next page.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "model": {"type": "string"},
+                "direction": {"enum": ["upstream", "downstream", "both"]},
+                "depth": {"type": "integer", "minimum": 1, "maximum": crate::assistant::dbt::MAX_DEPTH},
+                "descriptions": {"type": "boolean"},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": crate::assistant::dbt::MAX_PAGE}},
+            "required": ["version", "connection_id", "model"], "additionalProperties": false
         })),
     ]
     .into_iter()
@@ -167,7 +196,7 @@ mod tests {
     fn tool_surface_has_unique_names_and_closed_input_schemas() {
         let tools = definitions();
         let names: BTreeSet<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 16);
         assert_eq!(names.len(), tools.len());
         assert!(
             tools

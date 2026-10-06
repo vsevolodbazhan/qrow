@@ -180,6 +180,58 @@ struct DescribeInput {
     relation: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DbtSearchInput {
+    version: u32,
+    #[allow(dead_code)]
+    connection_id: Uuid,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    tag: Option<String>,
+    #[serde(default)]
+    resource_type: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DbtDescribeInput {
+    version: u32,
+    #[allow(dead_code)]
+    connection_id: Uuid,
+    model: String,
+    #[serde(default)]
+    columns: Vec<String>,
+    #[serde(default)]
+    column_offset: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DbtLineageInput {
+    version: u32,
+    #[allow(dead_code)]
+    connection_id: Uuid,
+    model: String,
+    #[serde(default)]
+    direction: crate::assistant::dbt::Direction,
+    #[serde(default)]
+    depth: Option<usize>,
+    #[serde(default)]
+    descriptions: bool,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
 /// What a catalog tool call reads.
 enum CatalogRequest {
     Schemas(SchemasInput),
@@ -504,6 +556,7 @@ impl Qrow {
             "catalog-list-schemas" | "catalog-list-relations" | "catalog-describe-relation" => {
                 return self.tool_catalog(call, cx);
             }
+            "dbt-search-models" | "dbt-describe-model" | "dbt-read-lineage" => self.tool_dbt(call),
             _ => Err(failure(
                 "capability_missing",
                 "This assistant tool is not available.",
@@ -1343,7 +1396,7 @@ impl Qrow {
                 value["version"] = json!(TOOL_SCHEMA_VERSION);
                 value["connection_id"] = json!(id);
                 if matches!(request, CatalogRequest::Relation(_)) {
-                    self.add_dbt(id, catalog, &mut value);
+                    self.add_dbt(id, &mut value);
                 }
                 return CatalogStep::Done(success(value));
             }
@@ -1369,31 +1422,110 @@ impl Qrow {
         CatalogStep::Done(failure(code, message))
     }
 
-    /// Add the dbt resource of a described relation, in the space that the
-    /// tool result has left.
-    fn add_dbt(&self, id: Uuid, catalog: &crate::catalog::Catalog, value: &mut Value) {
+    /// Add the unique ID of the dbt resource that builds a described table.
+    /// dbt-describe-model gives its details.
+    fn add_dbt(&self, id: Uuid, value: &mut Value) {
         let Some(profile) = self.profiles.iter().find(|profile| profile.id == id) else {
             return;
         };
         let state = profile.dbt.as_ref().and(self.dbt.state(id));
-        let Some(project) = self.dbt_project(profile, state, Some(catalog)) else {
+        let Some(project) = self.dbt_project(profile, state) else {
             return;
         };
         let (Some(schema), Some(relation)) = (value["schema"].as_str(), value["relation"].as_str())
         else {
             return;
         };
-        let Some(position) = project.entry_for(schema, relation) else {
-            return;
-        };
-        let used = serde_json::to_vec(&*value).map_or(MAX_TOOL_OUTPUT_BYTES, |bytes| bytes.len());
-        // The keys and separators of the dbt object, and the envelope.
-        let budget = MAX_TOOL_OUTPUT_BYTES
-            .saturating_sub(used + 2 * 1024)
-            .min(crate::assistant::dbt::MAX_DESCRIBE_BYTES);
-        if let Some(dbt) = project.describe(position, budget) {
-            value["dbt"] = dbt;
+        if let Some(position) = project.entry_for(schema, relation) {
+            value["dbt_model"] = json!(project.index.entry(position).unique_id);
         }
+    }
+
+    /// Answer a dbt tool call from the index of the manifest of the
+    /// connection.
+    fn tool_dbt(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
+        use crate::assistant::dbt;
+        let arguments = call.arguments.clone();
+        let connection = arguments
+            .get("connection_id")
+            .and_then(Value::as_str)
+            .and_then(|id| Uuid::parse_str(id).ok());
+        let profile = connection
+            .and_then(|id| self.profiles.iter().find(|profile| profile.id == id))
+            .ok_or_else(|| {
+                failure(
+                    "invalid_arguments",
+                    "The connection was not found. Use a connection ID from the workspace context.",
+                )
+            })?;
+        if profile.dbt.is_none() {
+            return Err(failure(
+                "no_dbt_project",
+                "This connection has no dbt project. The user can attach one in Connection Settings.",
+            ));
+        }
+        let state = self.dbt.state(profile.id);
+        let Some(project) = self.dbt_project(profile, state) else {
+            return Err(match state.and_then(|state| state.error.as_ref()) {
+                Some(error) => failure("manifest_unavailable", error.to_string()),
+                None => failure(
+                    "manifest_loading",
+                    "Qrow is reading the dbt manifest. Try again in a few seconds.",
+                ),
+            });
+        };
+        let fail = |error: dbt::Failure| failure(error.code, error.message);
+        let mut value = match call.name.as_str() {
+            "dbt-search-models" => {
+                let input: DbtSearchInput = parse(arguments)?;
+                version(input.version)?;
+                let resource_type = match input.resource_type.as_deref() {
+                    None => None,
+                    Some(name) => Some(dbt::kind(name).ok_or_else(|| {
+                        failure(
+                            "invalid_arguments",
+                            "resource_type must be model, seed, snapshot, or source.",
+                        )
+                    })?),
+                };
+                let filters = dbt::Search {
+                    patterns: &input.patterns,
+                    text: input.text.as_deref(),
+                    tag: input.tag.as_deref(),
+                    resource_type,
+                };
+                project.search(
+                    &filters,
+                    input.offset,
+                    input.limit.unwrap_or(dbt::DEFAULT_PAGE),
+                )
+            }
+            "dbt-describe-model" => {
+                let input: DbtDescribeInput = parse(arguments)?;
+                version(input.version)?;
+                let position = project.resolve(&input.model).map_err(fail)?;
+                project.describe(position, &input.columns, input.column_offset)
+            }
+            _ => {
+                let input: DbtLineageInput = parse(arguments)?;
+                version(input.version)?;
+                let position = project.resolve(&input.model).map_err(fail)?;
+                project.lineage(
+                    position,
+                    input.direction,
+                    input.depth.unwrap_or(1).clamp(1, dbt::MAX_DEPTH),
+                    input.descriptions,
+                    input.offset,
+                    input.limit.unwrap_or(dbt::DEFAULT_PAGE),
+                )
+            }
+        };
+        value["version"] = json!(TOOL_SCHEMA_VERSION);
+        value["connection_id"] = json!(profile.id);
+        if let Some(error) = state.and_then(|state| state.error.as_ref()) {
+            value["manifest"]["error"] = json!(error.to_string());
+        }
+        Ok(success(value))
     }
 
     /// Answer the catalog tool calls whose cache or refresh is ready, or whose

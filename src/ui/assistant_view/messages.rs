@@ -379,27 +379,37 @@ impl Qrow {
                     .find(|catalog| catalog.id == id)
                     .map(|catalog| catalog.name.clone())
             });
-            let catalog = self.catalog.catalog(profile.id);
-            let state = profile.dbt.as_ref().and(self.dbt.state(profile.id));
-            let project = self.dbt_project(profile, state, catalog);
-            let mut context = crate::assistant::catalog::CatalogContext::new(
+            Some(crate::assistant::catalog::CatalogContext::new(
                 profile.id,
                 profile.catalog.browses(),
                 shared,
-                catalog,
+                self.catalog.catalog(profile.id),
                 &crate::model::effective_catalog(profile, &self.shared_catalogs),
                 &tab.input.read(cx).value(),
                 &profile.database,
                 crate::catalog::now(),
+            ))
+        });
+        let dbt = conversation_tab.and_then(|index| {
+            let tab = &self.tabs[index];
+            let profile = self
+                .profiles
+                .iter()
+                .find(|profile| Some(profile.id) == tab.saved.profile)?;
+            let state = profile.dbt.as_ref().and(self.dbt.state(profile.id))?;
+            let project = self.dbt_project(profile, Some(state));
+            Some(crate::assistant::dbt::context(
+                profile.id,
+                state,
                 project.as_ref(),
-            );
-            context.dbt =
-                state.map(|state| crate::assistant::dbt::context(state, project.as_ref()));
-            Some(context)
+                &tab.input.read(cx).value(),
+                &profile.database,
+            ))
         });
         serde_json::to_value(
             WorkspaceContext::new(self.settings.sql_style(), connections, tabs, selected_tab)
                 .with_catalog(catalog)
+                .with_dbt(dbt)
                 .with_notes(notes),
         )
         .unwrap_or(json!({"version": 1}))
