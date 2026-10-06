@@ -30,6 +30,42 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
+    pub(super) fn sidebar_header(
+        &self,
+        title: &'static str,
+        cx: &App,
+    ) -> impl IntoElement + ParentElement {
+        h_flex()
+            .id("sidebar-header")
+            .test_support()
+            .relative()
+            .h(self.ui_px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .pl_3()
+            .pr_2()
+            .gap_1()
+            // Match TabBar's painted separator without reducing the content height.
+            .child(
+                div()
+                    .id("sidebar-header-border")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .border_b_1()
+                    .border_color(cx.theme().border),
+            )
+            .child(
+                div()
+                    .id("sidebar-title")
+                    .test_support()
+                    .flex_1()
+                    .text_base()
+                    .line_height(relative(1.25))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title),
+            )
+    }
+
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();

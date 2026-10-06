@@ -825,22 +825,7 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                h_flex()
-                    .h(self.ui_px(workspace_view::TAB_BAR_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl_3()
-                    .pr_2()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Sign-ins"),
-                    )
+                self.sidebar_header("Sign-ins", cx)
                     // The header actions are compact and touch, so they read
                     // as one group.
                     .child(

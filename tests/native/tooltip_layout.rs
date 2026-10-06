@@ -10,7 +10,7 @@ fn main() {
     use std::time::Duration;
     use support::{
         MemoryCredentials, TestApp, assert_tooltip_header_center, assert_tooltip_metadata_rows,
-        assistant::FakeCodex, bounds_of, label, offline_profile,
+        assert_workspace_header_alignment, assistant::FakeCodex, bounds_of, label, offline_profile,
     };
 
     let text_system = gpui_kit::platform::current_platform(true).text_system();
@@ -44,6 +44,14 @@ fn main() {
                     TestApp::launch_in(&mut cx, directory, workspace, MemoryCredentials::default());
                 cx.simulate_window_scale_factor_change(app.window, display_scale);
                 app.settle(&mut cx);
+                app.update(&mut cx, |window, _| {
+                    assert_workspace_header_alignment(window, "add-connection");
+                });
+                app.click(&mut cx, "show-sign-ins");
+                app.update(&mut cx, |window, _| {
+                    assert_workspace_header_alignment(window, "add-sign-in");
+                });
+                app.click(&mut cx, "show-connections");
                 for (target, title, secondary) in [
                     (name.as_str(), name.as_str(), "status-tooltip-status"),
                     ("New Tab", "New Tab", "status-tooltip-shortcut"),

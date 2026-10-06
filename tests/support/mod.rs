@@ -98,6 +98,38 @@ pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
 }
 
+/// Sidebar and query-tab actions share one horizontal center line.
+pub fn assert_workspace_header_alignment(window: &Window, sidebar_action: &str) {
+    let sidebar = bounds_of(window, sidebar_action);
+    let tabs = bounds_of(window, "new-tab");
+    assert_eq!(
+        sidebar.center().y,
+        tabs.center().y,
+        "Sidebar action {sidebar:?} must align with tab action {tabs:?}"
+    );
+    let header = bounds_of(window, "sidebar-header");
+    let border = bounds_of(window, "sidebar-header-border");
+    let title = bounds_of(window, "sidebar-title");
+    let tab = elements(window)
+        .into_iter()
+        .find(|element| element.role() == Some(gpui_kit::Role::Tab))
+        .expect("The workspace has a query tab")
+        .bounds();
+    assert_eq!(border, header, "The separator covers the header frame");
+    assert_eq!(header.top(), tab.top());
+    assert_eq!(header.bottom(), tab.bottom());
+    assert_eq!(
+        title.size.height,
+        window.pixel_snap(window.rem_size() * 1.25),
+        "The sidebar title must use the query tab's line height"
+    );
+    assert_eq!(
+        title.top(),
+        window.pixel_snap(tab.center().y - title.size.height / 2.),
+        "The sidebar title must use the tab's centered text layout"
+    );
+}
+
 /// Compare the visual centers of the first line's capital letters.
 pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &str) {
     use gpui_kit::component::ActiveTheme;

@@ -1346,36 +1346,20 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                h_flex()
-                    .h(self.ui_px(workspace_view::TAB_BAR_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl_3()
-                    .pr_2()
-                    .gap_1()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Connections"),
-                    )
-                    .child(
-                        Button::new("add-connection")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .accessibility_label("New Connection")
-                            .tooltip("New Connection…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.edit_profile(Profile::default(), true, window, cx)
-                            })),
-                    ),
+                self.sidebar_header("Connections", cx).child(
+                    Button::new("add-connection")
+                        .ghost()
+                        .small()
+                        .w(action_size)
+                        .h(action_size)
+                        .flex_shrink_0()
+                        .icon(IconName::Plus)
+                        .accessibility_label("New Connection")
+                        .tooltip("New Connection…")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.edit_profile(Profile::default(), true, window, cx)
+                        })),
+                ),
             )
             .when(!self.profiles.is_empty(), |el| {
                 el.child(

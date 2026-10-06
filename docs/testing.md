@@ -75,6 +75,12 @@ thread because AppKit requires that thread. The other headless UI tests
 use GPUI's test text backend. Run `./qtest run ui` to include the native
 check. A test filter runs only the matching GPUI tests.
 
+UI tests also compare the Connections and Sign-ins headers with query tabs.
+They check text height, control centers, and separator positions at different
+UI scales and window widths. The native check repeats these comparisons with
+system and Menlo fonts at 1× and 2× display scales. The query E2E test checks
+header alignment before and after a query completes.
+
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.

@@ -1,8 +1,37 @@
-use crate::support::{TestApp, offline_profile, value};
+use crate::support::{TestApp, assert_workspace_header_alignment, offline_profile, value};
 use gpui_kit::TestAppContext;
 use qrow::model::{SavedTab, Workspace};
 use std::time::Duration;
 use uuid::Uuid;
+
+#[gpui_kit::test]
+fn sidebar_headers_align_with_query_tabs_at_each_scale_and_width(cx: &mut TestAppContext) {
+    for scale in [0.75, 1., 1.1, 1.25, 1.5] {
+        let profile = offline_profile("Header alignment");
+        let mut workspace = Workspace {
+            tabs: vec![SavedTab::new(1, Some(profile.id))],
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch(cx, workspace);
+        for width in [850., 1280.] {
+            cx.simulate_window_resize(
+                app.window,
+                gpui_kit::size(gpui_kit::px(width), gpui_kit::px(720.)),
+            );
+            app.settle(cx);
+            app.update(cx, |window, _| {
+                assert_workspace_header_alignment(window, "add-connection");
+            });
+            app.click(cx, "show-sign-ins");
+            app.update(cx, |window, _| {
+                assert_workspace_header_alignment(window, "add-sign-in");
+            });
+            app.click(cx, "show-connections");
+        }
+    }
+}
 
 fn tab(profile: Uuid, title: &str, sql: &str) -> SavedTab {
     SavedTab {
