@@ -135,7 +135,10 @@ resolve-target -> checks -> dmg -> publish
 checks workflow with all jobs. Its `package` job builds the package with the
 release version, and its `e2e` job tests that package. `package-intel` and
 `e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
-with `arm64` or `x86_64` in its name. The publish job creates the release
+with `arm64` or `x86_64` in its name. It runs
+[`scripts/package/dmg.py`](../scripts/package/dmg.py), which opens a Finder
+window with the Qrow background, the app icon, and an Applications shortcut.
+The publish job creates the release
 tag, and then the GitHub Release with both DMGs as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
 workflow uses the latest non-draft release on the selected channel as the

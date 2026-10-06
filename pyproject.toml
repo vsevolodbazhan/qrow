@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Qrow automation: qtest, script checks and tests, E2E helpers, and packaging"
 requires-python = ">=3.11"
 dependencies = [
+    "ds-store==1.3.3",
     "pillow==12.3.0",
 ]
 

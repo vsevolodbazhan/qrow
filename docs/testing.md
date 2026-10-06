@@ -47,7 +47,7 @@ accept a test filter.
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
-| `package` | The release app package in `target/package/`, and its size budget. | macOS, Xcode tools |
+| `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 
 On Linux, `unit` and `clippy` use only the core library. These suites need

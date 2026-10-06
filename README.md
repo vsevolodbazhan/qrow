@@ -144,8 +144,9 @@ For normal use, build the optimized application bundle and launch it:
 sh scripts/package/macos.sh
 open dist/Qrow.app
 ```
-The script builds for the current Mac's architecture and produces `dist/Qrow.app`
-and `dist/Qrow-macos.zip`. 
+The script builds for the current Mac's architecture and produces `dist/Qrow.app`,
+`dist/Qrow-macos.zip`, and the installer image `dist/Qrow-VERSION-ARCH.dmg`.
+Open the DMG and drag the app to Applications.
 
 You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
 After changing the source, quit Qrow, rerun the packaging script, and reopen the
