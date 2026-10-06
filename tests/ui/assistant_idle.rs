@@ -62,7 +62,8 @@ fn assert_connected(app: &TestApp, cx: &mut TestAppContext, codex: &FakeCodex, p
 
 /// Opens the pane, checks that Codex did not stop, and closes the pane.
 fn assert_connected_on_open(app: &TestApp, cx: &mut TestAppContext, codex: &FakeCodex, pid: u32) {
-    app.dispatch(cx, ToggleAssistant);
+    app.click(cx, "toggle-assistant");
+    app.wait_for(cx, "assistant-model");
     assert_connected(app, cx, codex, pid);
     close_pane(app, cx);
 }
@@ -159,6 +160,7 @@ fn codex_keeps_running_while_the_pane_is_open(cx: &mut TestAppContext) {
 fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppContext) {
     let (app, codex) = launch(cx);
     app.open_assistant(cx);
+    app.click(cx, "assistant-new");
     let pid = running_codex(&codex);
 
     // Codex creates the conversation of the first message.
@@ -192,13 +194,9 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
     app.wait_until(cx, "the reply", REPLY_TIMEOUT, |window, _| {
         label(window, "toggle-assistant").as_deref() == Some("Toggle assistant, reply ready")
     });
-    app.wait_until(cx, "the history after the reply", REPLY_TIMEOUT, |_, _| {
-        app.saved()
-            .assistant
-            .conversations
-            .iter()
-            .any(|conversation| conversation.title == "Idle history loaded")
-    });
+    // The new tab follows the conversation title. Observe the notification
+    // there, because waiting for the disk save also advances the test clock.
+    app.wait_label_containing(cx, "Idle history loaded");
     app.pass_time(cx, ALMOST_IDLE);
     assert_eq!(running_codex(&codex), pid);
     app.pass_time(cx, Duration::from_secs(1));
@@ -210,6 +208,14 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
             Some("Toggle assistant, reply ready")
         );
     });
+    app.wait_until(cx, "the saved history title", REPLY_TIMEOUT, |_, _| {
+        app.saved()
+            .assistant
+            .conversations
+            .iter()
+            .any(|conversation| conversation.title == "Idle history loaded")
+    });
+    app.click(cx, "toggle-assistant");
     app.open_assistant(cx);
     app.wait_reply(cx, "I can help with this query");
 }
