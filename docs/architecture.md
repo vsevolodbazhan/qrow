@@ -1,7 +1,8 @@
 # Architecture
 
-The application connects directly to Kyuubi through HiveServer2 Thrift. It does
-not need a local JVM, webview, or separately installed database driver. Java in
+The application connects directly to Kyuubi through HiveServer2 Thrift, or to
+Postgres through its native protocol. It does not need a local JVM, webview,
+or separately installed database driver. Java in
 the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture.
 
 ## Main components
@@ -20,6 +21,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [dbt index](../src/dbt.rs) | Read a dbt `manifest.json` into a compact index of models, sources, tests, lineage, and metrics, and save the index in a [binary form](../src/dbt/saved.rs). The index keeps the position of each SQL text in the manifest, not the SQL. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
+| [Postgres connector](../src/connector/postgres.rs) | Implement password authentication, verified TLS, cancellation, and text results for Postgres. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
 | [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
@@ -38,8 +40,10 @@ synthetic passwords, and a mock sign-in provider.
 ```mermaid
 flowchart LR
     Editor[Editor and workspace] -->|Validated SQL| Worker[Per-tab worker]
-    Worker -->|Session operations| Connector[HiveServer2 connector]
+    Worker -->|Session operations| Connector[Database connector]
     Connector --> Kyuubi[Kyuubi and Spark]
+    Connector --> Postgres[Postgres]
+    Postgres -->|Status and rows| Connector
     Kyuubi -->|Status and rows| Connector
     Connector --> Worker
     Worker -->|Events and bounded batches| Results[Results UI]
@@ -128,12 +132,13 @@ out of the root render method.
 The connector interface covers session lifecycle, execution, catalog requests,
 status, cancellation, and batched results. A catalog request returns a result
 set with the JDBC `DatabaseMetaData` column names, so the catalog code does not
-depend on HiveServer2. Only HiveServer2 is implemented. Another connector should
-use this boundary without changing editor behavior. Qrow has no dynamic driver
+depend on HiveServer2. The database type selects the HiveServer2 or Postgres
+connector. Another connector should use this boundary without changing editor
+behavior. Qrow has no dynamic driver
 plugin system.
 
-Cancellation uses a separate authenticated transport because the query transport
-can block during fetching. SQL is never automatically retried after a transport
+HiveServer2 cancellation uses a separate authenticated transport. Postgres
+uses a separate connection with the cancellation key of the session. SQL is never automatically retried after a transport
 failure because the statement can already have changed data.
 
 GPUI Kit supplies a compatible framework, component, asset, and platform set.

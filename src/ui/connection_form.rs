@@ -116,7 +116,7 @@ use super::profile_view::{connection_row, form_input};
 use super::{ProfileEditor, Qrow};
 use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, IndexPath, Sizable as _,
+    IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
     input::{Input, Textarea},
@@ -764,6 +764,14 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
                 }),
         )
         .into_any_element()
+}
+
+pub(super) fn database_type_choices() -> Vec<(crate::model::DatabaseType, String)> {
+    use crate::model::DatabaseType;
+    [DatabaseType::Kyuubi, DatabaseType::Postgres]
+        .into_iter()
+        .map(|kind| (kind, kind.label().into()))
+        .collect()
 }
 
 #[cfg(test)]

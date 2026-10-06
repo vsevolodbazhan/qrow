@@ -1,7 +1,8 @@
 # Results
 
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
-The preview does not change the SQL sent to Spark.
+The preview does not change the SQL sent to the server. Postgres reads the
+result stream before the first page. See [Postgres limits](connections.md#postgres-limits).
 
 Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)
@@ -57,7 +58,7 @@ implemented.
 | Empty string | An empty cell |
 | Decimal or textual timestamp | The server's text representation |
 | Binary | Hexadecimal text |
-| Nested value | The text returned by HiveServer2 |
+| Nested value | The text returned by the server |
 
 Qrow preserves the distinction between null and an empty string. It does not
 convert exact decimal text to floating-point values for display.
@@ -65,14 +66,14 @@ convert exact decimal text to floating-point values for display.
 ## Preview limits
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
-If an incoming batch would exceed either limit, Qrow discards that batch and
+For Kyuubi, if an incoming batch would exceed either limit, Qrow discards that batch and
 closes the cursor. Previously downloaded rows remain available. The memory
 limit measures retained row storage, not the total application memory.
 
-Qrow asks for each page of 1,000 rows in one request. When the server sends
+For Kyuubi, Qrow asks for each page of 1,000 rows in one request. When the server sends
 fewer rows, Qrow asks for the remaining rows of the page. It does not add a
 SQL `LIMIT` clause.
-Client preview limits do not guarantee less server work. Each server response
+Client preview limits do not guarantee less server work. For Kyuubi, each server response
 has a 64 MiB byte limit across all transport frames. Each frame also has a
 64 MiB limit. Before the decoder allocates strings or containers, it checks
 the declared sizes against a separate 64 MiB allocation budget. Container

@@ -1,4 +1,5 @@
 pub mod hive;
+pub mod postgres;
 pub mod protocol;
 pub mod sasl;
 #[allow(clippy::all)]
@@ -67,6 +68,10 @@ pub trait Session: Send {
     fn poll(&mut self) -> Result<QueryState>;
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
+    /// Whether the connector stopped retaining rows at a result limit.
+    fn result_limited(&self) -> bool {
+        false
+    }
     fn close_operation(&mut self) -> Result<()>;
     /// Start maintenance SQL without replacing the user's result cursor.
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
@@ -166,6 +171,31 @@ pub fn error_message(error: &anyhow::Error) -> String {
         message
     } else {
         format!("{message}: {detail}")
+    }
+}
+
+/// Routes a profile to the connector for its database type.
+#[derive(Default)]
+pub struct DatabaseConnector {
+    hive: hive::HiveConnector,
+    postgres: postgres::PostgresConnector,
+}
+
+impl DatabaseConnector {
+    pub fn new(trust: crate::tls::Trust) -> Self {
+        Self {
+            hive: hive::HiveConnector::new(trust.clone()),
+            postgres: postgres::PostgresConnector::new(trust),
+        }
+    }
+}
+
+impl Connector for DatabaseConnector {
+    fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
+        match profile.database_type {
+            crate::model::DatabaseType::Kyuubi => self.hive.connect(profile, secret),
+            crate::model::DatabaseType::Postgres => self.postgres.connect(profile, secret),
+        }
     }
 }
 

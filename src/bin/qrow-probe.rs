@@ -1,7 +1,7 @@
 //! Read-only connectivity check using a profile already saved by the application.
 use anyhow::{Context, Result};
 use qrow::{
-    connector::{Completion, Connector, hive::HiveConnector, wait_for_completion},
+    connector::{Completion, Connector, DatabaseConnector, wait_for_completion},
     model::Authentication,
     storage::{self, Credentials, Keychain},
 };
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
         "qrow-probe supports only connections with password authentication"
     );
     let mut session =
-        HiveConnector::default().connect(profile, Keychain.password(profile.id)?.into())?;
+        DatabaseConnector::default().connect(profile, Keychain.password(profile.id)?.into())?;
     let result = (|| -> Result<()> {
         let cancel = session.execute("SELECT 1 AS qrow_connection_test")?;
         let deadline = Instant::now() + Duration::from_secs(60);

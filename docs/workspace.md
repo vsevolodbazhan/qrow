@@ -107,6 +107,11 @@ workspace.
 Qrow ignores the removed **Schema refresh logs** option of a connection, because
 [Activity](activity.md) always records refreshes. The next save removes the
 option from the file.
+
+Workspace version 7 adds the database type of each connection. Profiles from
+older workspaces use Kyuubi. Earlier versions of Qrow cannot open a version 7
+workspace.
+
 Workspace version 6 adds sign-ins, and the TLS and authentication choices of
 each connection. Earlier connections load with password authentication and
 without TLS. They keep their identifiers and stored passwords. An earlier

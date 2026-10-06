@@ -303,7 +303,7 @@ impl Qrow {
                     } else {
                         profile.name.clone()
                     },
-                    connector: "spark_kyuubi",
+                    connector: profile.database_type.connector_name(),
                     initial_database: profile.database.clone(),
                     state,
                 }
@@ -344,7 +344,11 @@ impl Qrow {
             // A long tab sends only the part around the selection.
             let part = sql_window(sql, &selection, MAX_CONTEXT_SQL_BYTES);
             let (statement_ranges, statement_ranges_truncated) =
-                context_statement_ranges(sql, &part);
+                crate::assistant::broker::context_statement_ranges_for(
+                    sql,
+                    &part,
+                    self.tab_database_type(tab.saved.profile),
+                );
             SelectedTabContext {
                 tab: tabs[index].clone(),
                 sql: sql[part.clone()].to_owned(),
@@ -386,8 +390,13 @@ impl Qrow {
                 self.catalog.catalog(profile.id),
                 &crate::model::effective_catalog(profile, &self.shared_catalogs),
                 &tab.input.read(cx).value(),
-                &profile.database,
+                if profile.database_type == crate::model::DatabaseType::Postgres {
+                    "public"
+                } else {
+                    &profile.database
+                },
                 crate::catalog::now(),
+                profile.database_type,
             ))
         });
         let dbt = conversation_tab.and_then(|index| {
@@ -404,6 +413,7 @@ impl Qrow {
                 project.as_ref(),
                 &tab.input.read(cx).value(),
                 &profile.database,
+                profile.database_type,
             ))
         });
         serde_json::to_value(

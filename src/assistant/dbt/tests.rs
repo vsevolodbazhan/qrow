@@ -362,6 +362,7 @@ fn the_context_names_the_models_of_the_tab_sql() {
         Some(&dbt),
         "SELECT * FROM core.orders o JOIN customers c ON 1 = 1 JOIN raw.unknown u",
         "core",
+        crate::model::DatabaseType::Kyuubi,
     );
     assert_eq!(found.models, Some(3));
     assert_eq!(found.sources, Some(1));
@@ -388,14 +389,28 @@ fn the_context_names_the_models_of_the_tab_sql() {
         parsing: true,
         ..ManifestState::default()
     };
-    let value = context(uuid::Uuid::nil(), &reading, None, "", "core");
+    let value = context(
+        uuid::Uuid::nil(),
+        &reading,
+        None,
+        "",
+        "core",
+        crate::model::DatabaseType::Kyuubi,
+    );
     assert!(value.reading && value.models.is_none());
     let failed = ManifestState {
         error: Some(ManifestError::NotFound),
         ..ManifestState::default()
     };
-    let value =
-        serde_json::to_value(context(uuid::Uuid::nil(), &failed, Some(&dbt), "", "core")).unwrap();
+    let value = serde_json::to_value(context(
+        uuid::Uuid::nil(),
+        &failed,
+        Some(&dbt),
+        "",
+        "core",
+        crate::model::DatabaseType::Kyuubi,
+    ))
+    .unwrap();
     assert_eq!(
         value["error"],
         "Manifest not found: run dbt parse in the project"

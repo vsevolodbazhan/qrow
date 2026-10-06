@@ -24,6 +24,10 @@ pub const CATALOG_VERSION: u32 = 1;
 /// The connection settings that select which schemas exist.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CatalogIdentity {
+    #[serde(default)]
+    pub database_type: crate::model::DatabaseType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -33,6 +37,9 @@ pub struct CatalogIdentity {
 impl CatalogIdentity {
     pub fn of(profile: &Profile) -> Self {
         Self {
+            database_type: profile.database_type,
+            database: (profile.database_type == crate::model::DatabaseType::Postgres)
+                .then(|| profile.database.clone()),
             host: profile.host.clone(),
             port: profile.port,
             username: profile.username.clone(),

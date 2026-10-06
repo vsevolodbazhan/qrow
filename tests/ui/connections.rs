@@ -328,3 +328,70 @@ fn connection_settings_open_on_the_general_page(cx: &mut TestAppContext) {
         assert!(window.try_find("connection-dbt-manifest").is_none());
     });
 }
+
+#[gpui_kit::test]
+fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-name").as_deref(),
+            Some("Postgres")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-port").as_deref(),
+            Some("5432")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-database").as_deref(),
+            Some("postgres")
+        );
+        assert!(window.try_find("connection-authentication").is_none());
+    });
+    fill_connection(&app, cx, "Postgres test");
+    app.fill(cx, "connection-port", "5432");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(
+        cx,
+        "the saved Postgres profile",
+        Duration::from_secs(10),
+        |_, _| !app.saved().profiles.is_empty(),
+    );
+    assert_eq!(
+        app.saved().profiles[0].database_type,
+        qrow::model::DatabaseType::Postgres
+    );
+    assert_eq!(
+        app.saved().profiles[0].authentication,
+        qrow::model::Authentication::Password
+    );
+}
+
+#[gpui_kit::test]
+fn changing_database_type_keeps_custom_connection_fields(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.fill(cx, "connection-name", "Custom");
+    app.fill(cx, "connection-port", "6543");
+    app.scroll_to(cx, "connection-database");
+    app.fill(cx, "connection-database", "custom_database");
+    app.scroll_to(cx, "connection-database-type");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-name").as_deref(),
+            Some("Custom")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-port").as_deref(),
+            Some("6543")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-database").as_deref(),
+            Some("custom_database")
+        );
+    });
+    cancel_form(&app, cx);
+}

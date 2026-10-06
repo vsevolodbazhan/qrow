@@ -39,6 +39,10 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1"
 notify = "7"
+tokio-postgres = "0.7.18"
+tokio-postgres-rustls = "0.14"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

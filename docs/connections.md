@@ -1,6 +1,6 @@
 # Connections
 
-A connection profile stores the settings for a Kyuubi endpoint. Each connection
+A connection profile stores the settings for a Kyuubi or Postgres server. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
@@ -40,13 +40,15 @@ and **Assistant**. The **Assistant** page shows only while the
 search field above the pages to find a field.
 
 1. Click **+** beside Connections.
-2. On the **General** page, enter a name for the profile.
-3. Enter the Kyuubi host and port.
+2. On the **General** page, select **Database type**.
+3. Enter a name, the server host, and the port.
 4. Turn on **TLS** if the server accepts TLS on this port.
-5. Select the authentication:
+5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
    - **Sign-in (OpenID Connect)**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
+
+   For Postgres, enter the role name and password.
 6. Enter the initial database.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
@@ -69,6 +71,54 @@ For example, a session parameter can select an engine-sharing subdomain:
 ```
 
 macOS can request Keychain access when you save the password.
+
+## Use Postgres
+
+Select **Postgres** in **Database type**. The default port is 5432. The initial
+database is the database that Postgres opens for the session. Existing profiles
+without a database type continue to use Kyuubi.
+
+Enter session settings as a JSON object with string values. For example:
+
+```json
+{"search_path": "public", "TimeZone": "UTC"}
+```
+
+Postgres checks each setting when the session opens. If a setting is invalid,
+the connection fails and names the setting. Passwords use macOS Keychain.
+Postgres connections do not use OpenID Connect sign-ins.
+
+Turn on **TLS** to require encryption. The server certificate must match the
+host and have a certificate authority in the system trust store. There is no
+option to accept an invalid certificate.
+
+Each tab has a separate Postgres session. Temporary tables and transaction
+state stay with that tab until the session closes. Cancel sends a Postgres
+cancellation request. SQL errors usually keep the session connected. After an
+error in an explicit transaction, run `ROLLBACK` before other work.
+
+The schema browser shows user schemas, tables, partitioned tables, views,
+materialized views, and foreign tables. It reads column types and comments.
+Names inserted into SQL use double quotes. The assistant receives `postgres`
+as the connector type in its connection context.
+For automatic relation context, the assistant uses `public` for unqualified
+names. Use qualified names when a different `search_path` applies.
+
+### Postgres limits
+
+- Query results use the server's text format, including arrays, JSON, and dates.
+- Qrow reads the result stream before it shows the first page. It keeps up to
+  the result limits in a temporary file. It checks row sizes before retention.
+  Later pages read that file. It drains
+  rows beyond the limits without keeping them. Large results can delay the
+  first page even when only a preview is needed.
+- The Postgres client library can buffer a server row before Qrow checks its
+  size. Result limits do not cap the memory used to receive one oversized row.
+- Response timeout bounds connection setup, session settings, and cancellation.
+  It does not set a query execution timeout. Use the `statement_timeout` session
+  setting when you need one.
+- A SQL error in an explicit transaction keeps that transaction in the failed
+  state. Qrow does not run `ROLLBACK` automatically.
 
 ## Sign in with OpenID Connect
 
@@ -587,8 +637,8 @@ Set these fields on the **Catalog** page of the connection settings:
 
 ### Share schemas
 
-Connections that read the same metastore, for example through different
-users or Spark clusters, can share one schema catalog. Qrow then keeps one
+Connections that read the same database catalog, for example through different
+users, can share one schema catalog. Qrow then keeps one
 copy of the schemas for all of them, and a refresh of one connection fills the
 tree of each connection.
 
@@ -602,8 +652,9 @@ To share a catalog:
 4. Open the settings of each other connection, select the shared catalog in
    **Schema Catalog**, then select **Save**.
 
-The connections of a shared catalog must read the same metastore with the
-same permissions and the same Spark catalog. Qrow cannot check this.
+The connections of a shared catalog must use the same database type and read
+the same schemas with the same permissions. Kyuubi connections must also use
+the same metastore and Spark catalog. Qrow cannot check this.
 
 For a connection that uses a shared catalog:
 
@@ -713,14 +764,16 @@ use.
 - The tree does not show which columns are partition columns. HiveServer2 does
   not report this.
 - Qrow does not save which rows are expanded.
-- Qrow cannot stop a refresh while it opens its session or sends a request to
+- For Kyuubi, Qrow cannot stop a refresh while it opens its session or sends a request to
   the server. A wait for a server answer uses the connection's **Response
-  timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
-- One catalog request can return at most 200,000 rows or 64 MB. If a schema
+  Timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
+- One Kyuubi catalog request can return at most 200,000 rows or 64 MB. If a schema
   exceeds this limit with **Whole schema**, use **One relation at a time**.
   The limit still applies to each table request. These limits apply after
   the server creates its result. They do not limit Spark driver memory.
-- Per-relation reads reduce the column result size. The table list still reads a
+- A Postgres catalog request uses the [Postgres result limits](#postgres-limits).
+  If a request exceeds a limit, the refresh fails and keeps the previous catalog.
+- Per-relation reads reduce the column result size. For Kyuubi, the table list still reads a
   whole schema. Server patterns can also match extra names, for example when
   a name contains `_`. Thus, a refresh can still exhaust driver memory.
 - The keyboard cannot reach **New shared catalog…** below the **Schema
@@ -821,7 +874,7 @@ Passwords are stored in macOS Keychain. They are not part of the
 [workspace file](workspace.md#saved-state). If Qrow cannot read a password,
 edit the connection to save a password again.
 
-Each attempt to connect to one address of the host has a 10-second timeout.
+For Kyuubi, each attempt to connect to one address of the host has a 10-second timeout.
 If the host has more than one address, Qrow tries the next address after a
 failure. Each network write has a 15-second timeout.
 
@@ -854,6 +907,8 @@ The [worker](../src/worker.rs) owns session work for each tab. Credential access
 and network calls run on background threads. The
 [HiveServer2 connector](../src/connector/hive.rs) sends profile parameters when
 opening a session, then selects the initial database.
+The [Postgres connector](../src/connector/postgres.rs) opens the specified
+database, then applies the session settings.
 
 [Idle maintenance](../src/worker/lifecycle.rs) waits for a command or the next
 session deadline. A lifecycle update wakes the worker so it can recalculate the

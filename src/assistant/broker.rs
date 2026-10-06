@@ -116,7 +116,15 @@ pub struct WorkspaceContext {
 /// Returns up to `MAX_CONTEXT_STATEMENTS` ranges of the statements that
 /// overlap `part` of `sql`, and whether more statements exist.
 pub fn context_statement_ranges(sql: &str, part: &Range<usize>) -> (Vec<Range<usize>>, bool) {
-    let ranges = sql::statement_ranges(sql);
+    context_statement_ranges_for(sql, part, crate::model::DatabaseType::Kyuubi)
+}
+
+pub fn context_statement_ranges_for(
+    sql: &str,
+    part: &Range<usize>,
+    database_type: crate::model::DatabaseType,
+) -> (Vec<Range<usize>>, bool) {
+    let ranges = sql::statement_ranges_for(sql, database_type);
     let total = ranges.len();
     let ranges: Vec<_> = ranges
         .into_iter()
@@ -219,6 +227,7 @@ pub struct CallIdentity<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EditorDocument<'a> {
+    pub database_type: crate::model::DatabaseType,
     pub tab_id: Uuid,
     pub connection_id: Option<Uuid>,
     pub revision: u64,
@@ -398,7 +407,12 @@ impl ToolBroker {
             previous_empty = (edit.start == edit.end).then_some(edit.start);
         }
         let mut sql = apply_edits(document.sql, &edits);
-        let formatted = format_replaced_statements(&sql, &mut edits, document.sql_style);
+        let formatted = format_replaced_statements(
+            &sql,
+            &mut edits,
+            document.sql_style,
+            document.database_type,
+        );
         if formatted {
             sql = apply_edits(document.sql, &edits);
         }
@@ -438,12 +452,12 @@ impl ToolBroker {
                 "Edit content is too large.",
             ));
         }
-        sql::validate_single(new_query)
+        sql::validate_single_for(new_query, document.database_type)
             .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
         // A comment that describes the query stays as written above it and
         // outside the statement range, which is the text that runs.
         let (comment, statement) = new_query.split_at(
-            sql::statement_ranges(new_query)
+            sql::statement_ranges_for(new_query, document.database_type)
                 .first()
                 .map_or(0, |range| range.start),
         );
@@ -451,7 +465,7 @@ impl ToolBroker {
         let statement = formatted.as_deref().unwrap_or(statement);
 
         let mut sql = document.sql.to_owned();
-        let last_token = sql::tokens(document.sql)
+        let last_token = sql::tokens_for(document.sql, document.database_type)
             .into_iter()
             .rev()
             .find(|(range, kind)| {
@@ -541,7 +555,7 @@ impl ToolBroker {
                 "The query is too large.",
             ));
         }
-        sql::validate_single(sql)
+        sql::validate_single_for(sql, document.database_type)
             .map_err(|error| ToolError::new(ToolErrorCode::InvalidStatement, error.to_string()))?;
         Ok(RunPlan {
             tab_id: document.tab_id,
@@ -733,8 +747,9 @@ fn format_replaced_statements(
     edited: &str,
     sorted_edits: &mut [TextEdit],
     style: sql::SqlStyle,
+    database_type: crate::model::DatabaseType,
 ) -> bool {
-    let statements: Vec<_> = sql::statement_ranges(edited)
+    let statements: Vec<_> = sql::statement_ranges_for(edited, database_type)
         .into_iter()
         .map(|range| {
             let body = edited[range.clone()].trim_end_matches(';').trim_end();

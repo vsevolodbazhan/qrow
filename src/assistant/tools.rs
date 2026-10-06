@@ -110,7 +110,7 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "limit": {"type": "integer", "minimum": 1, "maximum": catalog::MAX_PAGE}},
             "required": ["version", "connection_id", "schema"], "additionalProperties": false
         })),
-        ("catalog-describe-relation", "Read the kind, comment, and columns with their types and comments of one table or view from the schema catalog of a connection. When Qrow has not read the columns and a tab of the connection is connected, Qrow reads them first. Otherwise the result is not_cached; then ask the user to refresh it, or run DESCRIBE with query-run. When a dbt model, seed, snapshot, or source builds the table, dbt_model gives its unique ID for dbt-describe-model.", json!({
+        ("catalog-describe-relation", "Read the kind, comment, and columns with their types and comments of one table or view from the schema catalog of a connection. When Qrow has not read the columns and a tab of the connection is connected, Qrow reads them first. Otherwise the result is not_cached; then ask the user to refresh it, or query the column catalog with SQL for this connector with query-run. When a dbt model, seed, snapshot, or source builds the table, dbt_model gives its unique ID for dbt-describe-model.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
                 "schema": {"type": "string"}, "relation": {"type": "string"}},

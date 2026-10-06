@@ -70,7 +70,7 @@ impl Missing {
         match self {
             Missing::Schemas => (
                 "not_cached",
-                "Qrow has not read the schemas of this connection, and no tab of the connection is connected. Ask the user to refresh the connection in the Connections sidebar, or run SHOW SCHEMAS with query-run.",
+                "Qrow has not read the schemas of this connection, and no tab of the connection is connected. Ask the user to refresh the connection in the Connections sidebar, or query the schema catalog with SQL for this connector with query-run.",
             ),
             Missing::SchemaNotFound => (
                 "not_found",
@@ -78,11 +78,11 @@ impl Missing {
             ),
             Missing::SchemaHidden => (
                 "schema_hidden",
-                "The Show schemas or Hide schemas settings of this connection hide this schema. Ask the user to change them, or run SHOW TABLES with query-run.",
+                "The Show schemas or Hide schemas settings of this connection hide this schema. Ask the user to change them, or query the relation catalog with SQL for this connector with query-run.",
             ),
             Missing::Relations(_) => (
                 "not_cached",
-                "Qrow has not read the relations of this schema, and no tab of the connection is connected. Ask the user to refresh the schema in the Connections sidebar, or run SHOW TABLES with query-run.",
+                "Qrow has not read the relations of this schema, and no tab of the connection is connected. Ask the user to refresh the schema in the Connections sidebar, or query the relation catalog with SQL for this connector with query-run.",
             ),
             Missing::RelationNotFound => (
                 "not_found",
@@ -90,7 +90,7 @@ impl Missing {
             ),
             Missing::Columns(_) => (
                 "not_cached",
-                "Qrow has not read the columns of this relation, and no tab of the connection is connected. Ask the user to refresh it in the Connections sidebar, or run DESCRIBE with query-run.",
+                "Qrow has not read the columns of this relation, and no tab of the connection is connected. Ask the user to refresh it in the Connections sidebar, or query the column catalog with SQL for this connector with query-run.",
             ),
         }
     }
@@ -349,10 +349,11 @@ impl CatalogContext {
         sql: &str,
         default_schema: &str,
         now: u64,
+        database_type: crate::model::DatabaseType,
     ) -> Self {
         let catalog = catalog.filter(|_| browsing);
         let (referenced_relations, referenced_relations_truncated) = catalog
-            .map(|catalog| referenced_relations(catalog, sql, default_schema))
+            .map(|catalog| referenced_relations_for(catalog, sql, default_schema, database_type))
             .unwrap_or_default();
         Self {
             connection_id,
@@ -375,69 +376,38 @@ impl CatalogContext {
 
 /// The names in `sql` that can be relations: `a.b`, `a.b.c` (the last two
 /// parts), and single names. Comments and string literals are skipped.
-/// Backticks quote a name.
-pub(super) fn names(sql: &str) -> Vec<Vec<String>> {
-    let chars: Vec<char> = sql.chars().collect();
-    let mut names: Vec<Vec<String>> = Vec::new();
-    let mut current: Vec<String> = Vec::new();
-    // Whether the last part of `current` ends with a dot.
+/// Backticks and double quotes can quote a name.
+pub(super) fn names(sql: &str, database_type: crate::model::DatabaseType) -> Vec<Vec<String>> {
+    let mut names = Vec::new();
+    let mut current = Vec::new();
     let mut dot = false;
-    let mut i = 0;
     let finish = |current: &mut Vec<String>, names: &mut Vec<Vec<String>>| {
         if !current.is_empty() {
             names.push(std::mem::take(current));
         }
     };
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '-' && chars.get(i + 1) == Some(&'-') {
-            finish(&mut current, &mut names);
-            while i < chars.len() && chars[i] != '\n' {
-                i += 1;
-            }
+    for (range, kind) in crate::sql::tokens_for(sql, database_type) {
+        let text = &sql[range];
+        if text.trim().is_empty() {
             continue;
         }
-        if c == '/' && chars.get(i + 1) == Some(&'*') {
-            finish(&mut current, &mut names);
-            i += 2;
-            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                i += 1;
+        let part = match kind {
+            crate::sql::Kind::Identifier => {
+                let quote = text.chars().next().unwrap();
+                let inner = text.strip_prefix(quote).unwrap();
+                Some(
+                    inner
+                        .strip_suffix(quote)
+                        .unwrap_or(inner)
+                        .replace(&format!("{quote}{quote}"), &quote.to_string()),
+                )
             }
-            i += 2;
-            continue;
-        }
-        if c == '\'' || c == '"' {
-            finish(&mut current, &mut names);
-            i += 1;
-            while i < chars.len() && chars[i] != c {
-                if chars[i] == '\\' {
-                    i += 1;
-                }
-                i += 1;
+            crate::sql::Kind::Plain
+                if text.starts_with(|c: char| c.is_alphabetic() || c == '_') =>
+            {
+                Some(text.to_owned())
             }
-            i += 1;
-            continue;
-        }
-        let part = if c == '`' {
-            let start = i + 1;
-            let mut end = start;
-            while end < chars.len() && chars[end] != '`' {
-                end += 1;
-            }
-            i = end + 1;
-            Some(
-                chars[start..end.min(chars.len())]
-                    .iter()
-                    .collect::<String>(),
-            )
-        } else if c.is_alphabetic() || c == '_' {
-            let start = i;
-            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
-                i += 1;
-            }
-            Some(chars[start..i].iter().collect::<String>())
-        } else {
-            None
+            _ => None,
         };
         match part {
             Some(part) => {
@@ -447,21 +417,10 @@ pub(super) fn names(sql: &str) -> Vec<Vec<String>> {
                 current.push(part);
                 dot = false;
             }
-            None if c == '.' && !current.is_empty() && !dot => {
-                dot = true;
-                i += 1;
-            }
+            None if text == "." && !current.is_empty() && !dot => dot = true,
             None => {
                 finish(&mut current, &mut names);
                 dot = false;
-                if !c.is_alphanumeric() {
-                    i += 1;
-                } else {
-                    // A number: skip it, so its digits are not a name.
-                    while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '.') {
-                        i += 1;
-                    }
-                }
             }
         }
     }
@@ -477,10 +436,24 @@ pub fn referenced_relations(
     sql: &str,
     default_schema: &str,
 ) -> (Vec<ReferencedRelation>, bool) {
+    referenced_relations_for(
+        catalog,
+        sql,
+        default_schema,
+        crate::model::DatabaseType::Kyuubi,
+    )
+}
+
+fn referenced_relations_for(
+    catalog: &Catalog,
+    sql: &str,
+    default_schema: &str,
+    database_type: crate::model::DatabaseType,
+) -> (Vec<ReferencedRelation>, bool) {
     let mut found: Vec<ReferencedRelation> = Vec::new();
     let mut bytes = 0;
     let mut truncated = false;
-    for name in names(sql) {
+    for name in names(sql, database_type) {
         let (schema, relation) = match name.as_slice() {
             [.., schema, relation] => (schema.as_str(), relation.as_str()),
             [relation] => (default_schema, relation.as_str()),
@@ -835,6 +808,7 @@ mod tests {
             sql,
             "sales",
             NOW,
+            crate::model::DatabaseType::Kyuubi,
         );
         assert!(context.loaded);
         assert_eq!(context.schema_count, 3);
@@ -849,6 +823,7 @@ mod tests {
             sql,
             "sales",
             NOW,
+            crate::model::DatabaseType::Kyuubi,
         );
         assert!(!off.loaded);
         assert!(off.referenced_relations.is_empty());
@@ -857,7 +832,10 @@ mod tests {
     #[test]
     fn names_follow_qualified_and_quoted_identifiers() {
         assert_eq!(
-            names("SELECT a.b, `c d`.e FROM x.y.z WHERE 1.5 > 2"),
+            names(
+                "SELECT a.b, `c d`.e FROM x.y.z WHERE 1.5 > 2",
+                crate::model::DatabaseType::Kyuubi
+            ),
             vec![
                 vec!["SELECT".to_owned()],
                 vec!["a".into(), "b".into()],
@@ -865,6 +843,33 @@ mod tests {
                 vec!["FROM".into()],
                 vec!["x".into(), "y".into(), "z".into()],
                 vec!["WHERE".into()],
+            ]
+        );
+    }
+    #[test]
+    fn postgres_context_matches_quoted_relations_and_skips_dollar_strings() {
+        let catalog = catalog();
+        let (found, _) = referenced_relations_for(
+            &catalog,
+            "SELECT * FROM \"sales\".\"orders\" WHERE note = $$sales.order_items$$",
+            "public",
+            crate::model::DatabaseType::Postgres,
+        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].relation, "orders");
+    }
+
+    #[test]
+    fn quoted_names_keep_literal_quotes_at_their_boundaries() {
+        assert_eq!(
+            names(
+                r#"SELECT * FROM """sales"."orders""""#,
+                crate::model::DatabaseType::Postgres,
+            ),
+            vec![
+                vec!["SELECT".to_owned()],
+                vec!["FROM".to_owned()],
+                vec!["\"sales".to_owned(), "orders\"".to_owned()],
             ]
         );
     }

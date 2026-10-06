@@ -45,6 +45,13 @@ pub enum Kind {
 
 /// Splits `sql` into tokens that cover all of it, in order.
 pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
+    tokens_for(sql, crate::model::DatabaseType::Kyuubi)
+}
+
+pub fn tokens_for(
+    sql: &str,
+    database_type: crate::model::DatabaseType,
+) -> Vec<(Range<usize>, Kind)> {
     let bytes = sql.as_bytes();
     let mut tokens = vec![];
     let mut i = 0;
@@ -70,11 +77,19 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
                 }
             }
             Kind::Comment
+        } else if bytes[i] == b'$' && dollar_quote_end(sql, i).is_some() {
+            let (delimiter_end, string_end) = dollar_quote_end(sql, i).unwrap();
+            i = string_end.unwrap_or(bytes.len()).max(delimiter_end);
+            Kind::String
         } else if matches!(bytes[i], b'\'' | b'"' | b'`') {
             let quote = bytes[i];
             i += 1;
             while i < bytes.len() {
-                if bytes[i] == b'\\' && quote != b'`' {
+                if bytes[i] == b'\\'
+                    && quote != b'`'
+                    && (database_type == crate::model::DatabaseType::Kyuubi
+                        || (quote == b'\'' && start > 0 && matches!(bytes[start - 1], b'E' | b'e')))
+                {
                     i = (i + 2).min(bytes.len());
                 } else if bytes[i] == quote {
                     i += 1;
@@ -87,7 +102,9 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
                     i += 1;
                 }
             }
-            if quote == b'`' {
+            if quote == b'`'
+                || (quote == b'"' && database_type == crate::model::DatabaseType::Postgres)
+            {
                 Kind::Identifier
             } else {
                 Kind::String
@@ -128,13 +145,41 @@ pub fn tokens(sql: &str) -> Vec<(Range<usize>, Kind)> {
     tokens
 }
 
+/// The opening delimiter and end of a Postgres dollar-quoted string.
+fn dollar_quote_end(sql: &str, start: usize) -> Option<(usize, Option<usize>)> {
+    let suffix = &sql[start + 1..];
+    let length = suffix.find('$')?;
+    let tag = &suffix[..length];
+    if !tag.is_empty()
+        && (!tag.starts_with(|c: char| c.is_alphabetic() || c == '_')
+            || !tag.chars().all(|c| c.is_alphanumeric() || c == '_'))
+    {
+        return None;
+    }
+    let delimiter_end = start + length + 2;
+    let delimiter = &sql[start..delimiter_end];
+    Some((
+        delimiter_end,
+        sql[delimiter_end..]
+            .find(delimiter)
+            .map(|offset| delimiter_end + offset + delimiter.len()),
+    ))
+}
+
 /// Byte ranges of the statements in `sql`, each with its separator. Comments
 /// between statements stay outside the ranges.
 pub fn statement_ranges(sql: &str) -> Vec<Range<usize>> {
+    statement_ranges_for(sql, crate::model::DatabaseType::Kyuubi)
+}
+
+pub fn statement_ranges_for(
+    sql: &str,
+    database_type: crate::model::DatabaseType,
+) -> Vec<Range<usize>> {
     let mut start = None;
     let mut end = 0;
     let mut ranges = vec![];
-    for (range, kind) in tokens(sql) {
+    for (range, kind) in tokens_for(sql, database_type) {
         if kind == Kind::Comment || sql[range.clone()].trim().is_empty() {
             continue;
         }
@@ -187,9 +232,16 @@ pub fn statement_range_at(sql: &str, offset: usize) -> Option<Range<usize>> {
 }
 
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
+    validate_single_for(sql, crate::model::DatabaseType::Kyuubi)
+}
+
+pub fn validate_single_for(
+    sql: &str,
+    database_type: crate::model::DatabaseType,
+) -> anyhow::Result<()> {
     let mut statements = 0;
     let mut content = false;
-    for (range, kind) in tokens(sql) {
+    for (range, kind) in tokens_for(sql, database_type) {
         if kind == Kind::Separator {
             if content {
                 statements += 1;
@@ -943,5 +995,43 @@ where pdate >= date '2026-09-26' and pdate < date '2026-09-28';"
         }
         let sql = "SELECT 1;";
         assert_eq!(statement_range_at(sql, sql.len()), Some(0..sql.len()));
+    }
+}
+
+#[cfg(test)]
+mod postgres_tests {
+    use super::*;
+
+    #[test]
+    fn dollar_quoted_bodies_keep_semicolons_and_quotes_inside_one_statement() {
+        for sql in [
+            "SELECT $$a;b'c$$",
+            "DO $body$ BEGIN RAISE NOTICE 'ok'; END $body$",
+            "SELECT $тег$a;b$тег$",
+        ] {
+            validate_single(sql).unwrap();
+            assert_eq!(statement_ranges(sql).len(), 1);
+        }
+        assert!(validate_single("SELECT $$a;b$$; SELECT 2").is_err());
+        assert_eq!(statement_ranges("SELECT $1; SELECT 2").len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod dialect_tests {
+    use super::*;
+    use crate::model::DatabaseType;
+
+    #[test]
+    fn postgres_backslashes_do_not_escape_standard_strings_or_identifiers() {
+        assert_eq!(
+            statement_ranges_for(r"SELECT '\' AS slash; SELECT 2", DatabaseType::Postgres).len(),
+            2
+        );
+        assert_eq!(
+            statement_ranges_for(r#"SELECT "a\"; SELECT 2"#, DatabaseType::Postgres).len(),
+            2
+        );
+        validate_single_for(r"SELECT E'a\';b'", DatabaseType::Postgres).unwrap();
     }
 }

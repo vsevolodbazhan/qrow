@@ -27,7 +27,7 @@ pub use workspace_view::WindowView;
 
 use crate::themes;
 use crate::{
-    connector::hive::HiveConnector,
+    connector::DatabaseConnector,
     logs::{ExecutionId, LogEvent, LogHistory, LogKind, Panel, PanelState, Severity},
     model::{
         AssistantWorkspace, Authentication, CatalogRefresh, CatalogSettings, LINE_HEIGHT_STEP,
@@ -341,6 +341,8 @@ impl Tab {
     }
 }
 struct ProfileEditor {
+    database_type: connection_form::RowSelect,
+    _database_type_subscription: Subscription,
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
@@ -520,7 +522,7 @@ pub struct Qrow {
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
     sign_in_ui: sign_in_view::SignInState,
-    connector: Arc<HiveConnector>,
+    connector: Arc<DatabaseConnector>,
     sidebar: bool,
     /// The panel that the sidebar shows, also while it is hidden.
     sidebar_panel: SidebarPanel,
@@ -740,7 +742,7 @@ impl Qrow {
             sign_ins: workspace.sign_ins,
             oidc,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
-            connector: Arc::new(HiveConnector::new(environment.trust())),
+            connector: Arc::new(DatabaseConnector::new(environment.trust())),
             sidebar: true,
             sidebar_panel: SidebarPanel::Connections,
             sidebar_width: px(240. * scale),
@@ -1793,6 +1795,14 @@ impl Qrow {
         };
         self.run_tab_sql(index, query, false, cx)
     }
+    fn tab_database_type(&self, profile: Option<Uuid>) -> crate::model::DatabaseType {
+        self.profiles
+            .iter()
+            .find(|candidate| Some(candidate.id) == profile)
+            .map(|profile| profile.database_type)
+            .unwrap_or_default()
+    }
+
     /// Runs `query` in the tab `index`. A connection whose sign-in needs the
     /// browser waits for it first, unless the query runs `after_sign_in`.
     fn run_tab_sql(
@@ -1811,8 +1821,9 @@ impl Qrow {
             return true;
         }
         let active = index == self.active && !self.activity.read(cx).is_open();
+        let database_type = self.tab_database_type(self.tabs[index].saved.profile);
         let tab = &mut self.tabs[index];
-        if let Err(e) = sql::validate_single(&query) {
+        if let Err(e) = sql::validate_single_for(&query, database_type) {
             let message = e.to_string();
             Self::record_log(
                 tab,
@@ -2711,8 +2722,69 @@ impl Qrow {
         if !is_new && profile.dbt.is_some() {
             self.ensure_catalog(profile.id);
         }
+        let database_type = connection_form::choice_select(
+            &connection_form::database_type_choices(),
+            &profile.database_type,
+            window,
+            cx,
+        );
+        let database_type_subscription =
+            cx.subscribe_in(&database_type, window, |this, _, event, window, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    if let Some(form) = &mut this.form {
+                        let selected = connection_form::chosen(
+                            &form.database_type,
+                            &connection_form::database_type_choices(),
+                            cx,
+                        );
+                        let previous = form.profile.database_type;
+                        if selected != previous {
+                            let default_name = |kind| match kind {
+                                crate::model::DatabaseType::Kyuubi => "Spark",
+                                crate::model::DatabaseType::Postgres => "Postgres",
+                            };
+                            if form.is_new
+                                && form.fields[0].read(cx).value().as_ref()
+                                    == default_name(previous)
+                            {
+                                form.fields[0].update(cx, |field, cx| {
+                                    field.set_value(default_name(selected), window, cx)
+                                });
+                            }
+                            if form.fields[2].read(cx).value().as_ref()
+                                == previous.default_port().to_string()
+                            {
+                                form.fields[2].update(cx, |field, cx| {
+                                    field.set_value(selected.default_port().to_string(), window, cx)
+                                });
+                            }
+                            if form.fields[5].read(cx).value().as_ref()
+                                == match previous {
+                                    crate::model::DatabaseType::Kyuubi => "avia",
+                                    crate::model::DatabaseType::Postgres => "postgres",
+                                }
+                            {
+                                form.fields[5].update(cx, |field, cx| {
+                                    field.set_value(
+                                        match selected {
+                                            crate::model::DatabaseType::Kyuubi => "avia",
+                                            crate::model::DatabaseType::Postgres => "postgres",
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }
+                            form.profile.database_type = selected;
+                        }
+                    }
+                    cx.notify();
+                }
+            });
         self.form = Some(ProfileEditor {
             dbt,
+            database_type,
+            _database_type_subscription: database_type_subscription,
             parameters,
             notes_counted: connection_form::counts_notes(profile.assistant_notes.len()),
             assistant_notes,
@@ -2852,6 +2924,11 @@ impl Qrow {
         values[6] = form.parameters.read(cx).value().to_string();
         let mut profile = form.profile.clone();
         let mut shared = None;
+        profile.database_type = connection_form::chosen(
+            &form.database_type,
+            &connection_form::database_type_choices(),
+            cx,
+        );
         profile.name = values[0].trim().into();
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
@@ -2954,7 +3031,9 @@ impl Qrow {
             profile.tls = form.tls;
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
-            profile.authentication = if connection_form::uses_sign_in(&form.authentication, cx) {
+            profile.authentication = if profile.database_type == crate::model::DatabaseType::Kyuubi
+                && connection_form::uses_sign_in(&form.authentication, cx)
+            {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
                         .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))

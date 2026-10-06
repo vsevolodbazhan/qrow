@@ -556,7 +556,8 @@ impl Runner {
                         + row.iter().flatten().map(String::capacity).sum::<usize>()
                 })
                 .sum();
-            let limited = self.rows + count > MAX_RESULT_ROWS
+            let limited = self.session.as_ref().unwrap().result_limited()
+                || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
                 self.session.as_mut().unwrap().close_operation()?;

@@ -1238,6 +1238,10 @@ impl Runner {
         loop {
             let batch = self.session().fetch(METADATA_BATCH)?;
             if batch.rows.is_empty() {
+                anyhow::ensure!(
+                    !self.session().result_limited(),
+                    "The catalog request exceeded the connector result limit. Use per-relation column reads or hide some schemas in the connection settings."
+                );
                 break;
             }
             bytes = bytes.saturating_add(

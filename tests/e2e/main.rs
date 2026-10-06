@@ -13,3 +13,5 @@ mod perf;
 mod queries;
 mod sessions;
 mod sign_ins;
+
+mod postgres;
