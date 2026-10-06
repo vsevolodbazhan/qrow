@@ -829,3 +829,124 @@ fn the_pointer_moves_between_the_fields_of_the_sign_in_form(cx: &mut TestAppCont
         });
     }
 }
+
+#[gpui_kit::test]
+fn copy_settings_puts_the_sign_in_without_its_account_on_the_clipboard(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Copy Settings");
+    app.wait_gone(cx, "popup-menu");
+    let copied = cx
+        .read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&copied).unwrap();
+    assert_eq!(json["name"], "Company");
+    assert_eq!(json["issuer"], provider.issuer.as_str());
+    assert_eq!(json["database_hosts"], serde_json::json!(["127.0.0.1"]));
+    // The account and the identifier stay with this user.
+    for private in ["alice", &sign_in.id.to_string(), "identity", "token"] {
+        assert!(!copied.contains(private), "{private} in {copied}");
+    }
+}
+
+#[gpui_kit::test]
+fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, existing) = workspace(&provider, false);
+    let app = launch(cx, &provider, workspace);
+    let mut shared = provider.sign_in("Company");
+    shared.allowed_hosts = vec![
+        "kyuubi-a.example.test".into(),
+        "kyuubi-b.example.test".into(),
+    ];
+    shared.callback_ports = vec![8765];
+    let message = format!("Here is our sign-in:\n{}", shared.to_shared_text());
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(message));
+    open_sign_ins(&app, cx);
+    app.click(cx, "paste-sign-in");
+    app.wait_for(cx, "sign-in-pasted-note");
+    app.update(cx, |window, _| {
+        // The name of the existing sign-in stays unique.
+        assert_eq!(
+            value(window, "sign-in-name").as_deref(),
+            Some("Company copy")
+        );
+        assert_eq!(
+            value(window, "sign-in-issuer").as_deref(),
+            Some(provider.issuer.as_str())
+        );
+        assert_eq!(
+            value(window, "sign-in-database-hosts").as_deref(),
+            Some("kyuubi-a.example.test kyuubi-b.example.test")
+        );
+        assert_eq!(
+            value(window, "sign-in-callback-ports").as_deref(),
+            Some("8765")
+        );
+        // A new sign-in has no account yet.
+        assert!(!present(window, &"sign-in-account-status".into()));
+    });
+    // Cancel adds nothing.
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.settle(cx);
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    app.click(cx, "paste-sign-in");
+    app.wait_for(cx, "sign-in-pasted-note");
+    app.click(cx, "save-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.wait_until(cx, "the pasted sign-in", WAIT, |_, _| {
+        app.saved().sign_ins.len() == 2
+    });
+    let saved = app.saved();
+    let pasted = &saved.sign_ins[1];
+    assert_eq!(pasted.name, "Company copy");
+    assert_ne!(pasted.id, existing.id);
+    assert_ne!(pasted.id, shared.id);
+    assert_eq!(pasted.identity, None);
+    assert_eq!(pasted.allowed_hosts, shared.allowed_hosts);
+    assert_eq!(pasted.callback_ports, vec![8765]);
+    wait_row(&app, cx, pasted, "Not signed in");
+    // Sign-in Settings of a saved sign-in shows no note.
+    open_settings(&app, cx, pasted);
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"sign-in-pasted-note".into()));
+    });
+}
+
+#[gpui_kit::test]
+fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let app = launch(cx, &provider, Workspace::default());
+    open_sign_ins(&app, cx);
+    for (clipboard, reason) in [
+        ("SELECT 1".to_owned(), "does not contain sign-in settings"),
+        (
+            provider
+                .sign_in("Company")
+                .to_shared_text()
+                .replace("\"qrow_sign_in\": 1", "\"qrow_sign_in\": 99"),
+            "newer version",
+        ),
+    ] {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(clipboard));
+        app.click(cx, "paste-first-sign-in");
+        app.wait_for(cx, "close-paste-sign-in-error");
+        app.update(cx, |window, _| {
+            let error = label(window, "paste-sign-in-error").unwrap_or_default();
+            assert!(error.contains(reason), "{error}");
+            assert!(!present(window, &"sign-in-name".into()));
+        });
+        app.click(cx, "close-paste-sign-in-error");
+        app.wait_gone(cx, "close-paste-sign-in-error");
+    }
+    app.wait_for(cx, "sign-ins-empty");
+    assert!(app.saved().sign_ins.is_empty());
+}

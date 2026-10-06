@@ -6,7 +6,7 @@ use crate::support::{MemoryCredentials, SignIns, TestApp};
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::{Authentication, SavedTab, Workspace};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
@@ -107,4 +107,87 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     app.press(cx, "escape");
     app.wait_gone(cx, "popup-menu");
     app.wait_gone(cx, "tooltip");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppContext) {
+    use crate::support::{connection_row, value};
+    use qrow::ui::ShowConnections;
+    let kyuubi = Kyuubi::get();
+    let fixture = FixtureProvider::get();
+    // A colleague copied this sign-in and sent it in a chat message.
+    let shared = fixture.sign_in("Team").to_shared_text();
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT current_user() AS account", "not-used");
+    let connection = workspace.profiles[0].id;
+    workspace.profiles[0].name = "Analytics".into();
+    let browser = fixture.browser("alice", &[]);
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        credentials,
+        SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
+    );
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(format!(
+        "Use this sign-in:\n{shared}"
+    )));
+    app.click(cx, "show-sign-ins");
+    app.click(cx, "paste-first-sign-in");
+    app.wait_for(cx, "sign-in-pasted-note");
+    app.click(cx, "save-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.wait_until(cx, "the pasted sign-in", Duration::from_secs(20), |_, _| {
+        app.saved().sign_ins.len() == 1
+    });
+
+    // The connection uses the pasted sign-in over TLS.
+    app.dispatch(cx, ShowConnections);
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    let port = fixture.tls_port.to_string();
+    app.update(cx, |window, cx| {
+        window.click("connection-port", cx);
+        window.press("cmd-a", cx);
+        window.input(&port, cx);
+    });
+    app.click(cx, "connection-tls");
+    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.wait_for(cx, "connection-sign-in");
+    app.click(cx, "connection-sign-in");
+    app.settle(cx);
+    app.update(cx, |window, cx| window.input("Team", cx));
+    app.settle(cx);
+    app.press(cx, "enter");
+    app.wait_until(
+        cx,
+        "the chosen sign-in",
+        Duration::from_secs(20),
+        |window, _| value(window, "connection-sign-in").as_deref() == Some("Team"),
+    );
+    if app.update(cx, |window, _| {
+        window.try_find("connection-new-sign-in").is_some()
+    }) {
+        app.press(cx, "escape");
+    }
+    app.wait_gone(cx, "connection-new-sign-in");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    let sign_in = app.saved().sign_ins[0].id;
+    app.wait_until(
+        cx,
+        "the saved connection",
+        Duration::from_secs(20),
+        |_, _| {
+            let saved = app.saved();
+            let profile = &saved.profiles[0];
+            profile.tls && profile.authentication == Authentication::Oidc { sign_in }
+        },
+    );
+
+    // Run opens the browser sign-in first, then runs the query.
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "qrow");
 }

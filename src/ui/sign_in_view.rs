@@ -4,7 +4,7 @@
 use super::environment::Browser;
 use super::*;
 use crate::{
-    model::{Authentication, BASE_SCOPES, Identity, SignIn, extra_scopes},
+    model::{Authentication, BASE_SCOPES, Identity, SignIn, extra_scopes, unique_sign_in_name},
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
@@ -41,6 +41,8 @@ pub(super) struct SignInEditor {
     for_connection: bool,
     /// Name, issuer, client ID, scopes, resource, database hosts, callback port.
     fields: Vec<Entity<InputState>>,
+    /// The fields came from settings that another user shared.
+    pasted: bool,
     error: Option<String>,
 }
 
@@ -719,7 +721,7 @@ impl Qrow {
 
     /// The Sign-ins sidebar: its header and one row for each sign-in.
     pub(super) fn sign_ins_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let action_size = self.ui_px(28.);
+        let group_action_size = self.ui_px(24.);
         v_flex()
             .size_full()
             .bg(cx.theme().sidebar)
@@ -740,20 +742,39 @@ impl Qrow {
                             .font_weight(FontWeight::MEDIUM)
                             .child("Sign-ins"),
                     )
+                    // The header actions are compact and touch, so they read
+                    // as one group.
                     .child(
-                        Button::new("add-sign-in")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
+                        h_flex()
                             .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .disabled(self.demo)
-                            .accessibility_label("New Sign-in")
-                            .tooltip("New Sign-in…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_sign_in_editor(None, false, window, cx)
-                            })),
+                            .child(
+                                Button::new("paste-sign-in")
+                                    .ghost()
+                                    .small()
+                                    .w(group_action_size)
+                                    .h(group_action_size)
+                                    .icon(AssetIconName::ClipboardPaste)
+                                    .disabled(self.demo)
+                                    .accessibility_label("Paste Sign-in")
+                                    .tooltip("Paste Sign-in…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.paste_sign_in(window, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("add-sign-in")
+                                    .ghost()
+                                    .small()
+                                    .w(group_action_size)
+                                    .h(group_action_size)
+                                    .icon(IconName::Plus)
+                                    .disabled(self.demo)
+                                    .accessibility_label("New Sign-in")
+                                    .tooltip("New Sign-in…")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_sign_in_editor(None, false, window, cx)
+                                    })),
+                            ),
                     ),
             )
             .when(self.sign_ins.is_empty(), |el| {
@@ -770,14 +791,26 @@ impl Qrow {
                             ),
                         )
                         .child(
-                            div().pt_1().child(
-                                Button::new("add-first-sign-in")
-                                    .label("Add Sign-in…")
-                                    .disabled(self.demo)
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_sign_in_editor(None, false, window, cx)
-                                    })),
-                            ),
+                            h_flex()
+                                .pt_1()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Button::new("add-first-sign-in")
+                                        .label("Add Sign-in…")
+                                        .disabled(self.demo)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_sign_in_editor(None, false, window, cx)
+                                        })),
+                                )
+                                .child(
+                                    Button::new("paste-first-sign-in")
+                                        .label("Paste Sign-in…")
+                                        .disabled(self.demo)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.paste_sign_in(window, cx)
+                                        })),
+                                ),
                         ),
                 )
             })
@@ -944,7 +977,8 @@ impl Qrow {
             )
     }
 
-    /// The menu of a sign-in row: the account actions, Edit, and Delete.
+    /// The menu of a sign-in row: the account actions, Edit, Copy Settings,
+    /// and Delete.
     fn open_sign_in_menu(
         &mut self,
         id: Uuid,
@@ -973,6 +1007,8 @@ impl Qrow {
         let edit = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.open_sign_in_editor(Some(id), false, window, cx)
         });
+        let copy =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.copy_sign_in_settings(id, cx));
         let delete = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.confirm_delete_sign_in(id, window, cx)
         });
@@ -989,6 +1025,7 @@ impl Qrow {
                     );
                 }
                 menu.item(PopupMenuItem::new("Edit").on_click(edit).disabled(working))
+                    .item(PopupMenuItem::new("Copy Settings").on_click(copy))
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
@@ -1001,6 +1038,59 @@ impl Qrow {
             window,
             cx,
         );
+    }
+
+    /// Puts the settings of a sign-in on the clipboard, without its account
+    /// or tokens, so that another user can paste them.
+    fn copy_sign_in_settings(&self, id: Uuid, cx: &mut Context<Self>) {
+        if let Some(sign_in) = self.sign_ins.iter().find(|sign_in| sign_in.id == id) {
+            cx.write_to_clipboard(ClipboardItem::new_string(sign_in.to_shared_text()));
+        }
+    }
+
+    /// Opens Sign-in Settings with the sign-in settings on the clipboard, so
+    /// that the user can examine them before Save adds the sign-in.
+    pub(super) fn paste_sign_in(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.demo || self.dialog_open() || window.has_active_dialog(cx) {
+            return;
+        }
+        let text = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default();
+        match SignIn::from_shared_text(&text) {
+            Ok(mut sign_in) => {
+                sign_in.name = unique_sign_in_name(&sign_in.name, |name| {
+                    self.sign_ins.iter().any(|other| other.name == name)
+                });
+                self.show_sign_in_editor(sign_in, None, false, true, window, cx);
+            }
+            Err(error) => {
+                let message = error.to_string();
+                window.open_alert_dialog(cx, move |alert, _, _| {
+                    alert
+                        .width(px(360.))
+                        .title("Cannot paste the sign-in")
+                        .description(
+                            div()
+                                .id("paste-sign-in-error")
+                                .test_support()
+                                .role(Role::Label)
+                                .aria_label(message.clone())
+                                .child(message.clone()),
+                        )
+                        .footer(
+                            DialogFooter::new().justify_end().child(
+                                Button::new("close-paste-sign-in-error")
+                                    .primary()
+                                    .label("OK")
+                                    .on_click(|_, window, cx| window.close_dialog(cx)),
+                            ),
+                        )
+                });
+                cx.notify();
+            }
+        }
     }
 
     /// Asks before Delete removes a sign-in and its tokens.
@@ -1098,6 +1188,20 @@ impl Qrow {
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
             .cloned()
             .unwrap_or_default();
+        self.show_sign_in_editor(base, id, for_connection, false, window, cx);
+    }
+
+    /// Opens Sign-in Settings with the fields of `base`. `id` is the sign-in
+    /// to change, or `None` to add one.
+    fn show_sign_in_editor(
+        &mut self,
+        base: SignIn,
+        id: Option<Uuid>,
+        for_connection: bool,
+        pasted: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let values = [
             base.name.clone(),
             base.issuer.clone(),
@@ -1133,6 +1237,7 @@ impl Qrow {
             id: id.filter(|id| self.sign_ins.iter().any(|sign_in| sign_in.id == *id)),
             for_connection,
             fields,
+            pasted,
             error: None,
         });
         self.open_sign_in_dialog(window, cx);
@@ -1304,6 +1409,7 @@ impl Qrow {
             .id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id));
         let signed_in = existing.is_some_and(|sign_in| sign_in.identity.is_some());
+        let pasted = editor.pasted;
         let account = existing.map(|sign_in| self.account_field(sign_in.id, signed_in, cx));
         let users = existing
             .map(|sign_in| self.connections_using(sign_in.id))
@@ -1395,6 +1501,20 @@ impl Qrow {
                     .text_color(cx.theme().muted_foreground)
                     .child("OpenID Connect"),
             )
+            .when(pasted, |el| {
+                let note = "Pasted from the clipboard. Make sure that you trust the issuer and the database hosts before you save.";
+                el.child(
+                    div()
+                        .id("sign-in-pasted-note")
+                        .test_support()
+                        .role(Role::Label)
+                        .aria_label(note)
+                        .pt_1()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(note),
+                )
+            })
             .child(
                 v_flex().pt_3().w_full().gap_2().child(
                     Form::vertical()
