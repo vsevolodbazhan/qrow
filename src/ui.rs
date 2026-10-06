@@ -547,7 +547,7 @@ pub struct Qrow {
     /// The indexes of the dbt manifests of the connections.
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
-    dbt_details: Option<dbt_details::DbtDetails>,
+    dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {

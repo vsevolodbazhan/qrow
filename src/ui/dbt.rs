@@ -80,6 +80,11 @@ impl DbtProjects {
         self.worker.refresh(path);
     }
 
+    /// A handle that asks the worker to read manifests again.
+    pub(super) fn refresher(&self) -> worker::Refresher {
+        self.worker.refresher()
+    }
+
     /// The state of the manifest of `profile`.
     pub(super) fn state(&self, profile: Uuid) -> Option<&Arc<ManifestState>> {
         self.states.get(self.keys.get(&profile)?)
@@ -169,7 +174,7 @@ impl Qrow {
             self.rebuild_catalog_tree(cx);
         }
         if changed {
-            self.dbt_details_changed(rebuild, cx);
+            self.dbt_details_changed(cx);
         }
         changed
     }

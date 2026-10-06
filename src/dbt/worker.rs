@@ -208,6 +208,22 @@ impl DbtWorker {
     pub fn refresh(&self, path: &Path) {
         let _ = self.tx.send(Command::Refresh(manifest_key(path)));
     }
+
+    /// A handle that asks the worker to read manifests again, for a view
+    /// that cannot reach the worker.
+    pub fn refresher(&self) -> Refresher {
+        Refresher(self.tx.clone())
+    }
+}
+
+/// Asks a [`DbtWorker`] to read a manifest again.
+#[derive(Clone)]
+pub struct Refresher(mpsc::Sender<Command>);
+
+impl Refresher {
+    pub fn refresh(&self, path: &Path) {
+        let _ = self.0.send(Command::Refresh(manifest_key(path)));
+    }
 }
 
 impl Drop for DbtWorker {

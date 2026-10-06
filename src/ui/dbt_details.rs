@@ -1,32 +1,37 @@
 //! The dbt details sheet of a table in the schema tree: the full
-//! description, the SQL, the tests, the lineage, and the columns of its dbt
+//! description, the SQL, the tests, the columns, and the lineage of its dbt
 //! resource.
+//!
+//! A large model has hundreds of columns and children, so the sheet keeps
+//! its rows as owned data and shows them in a virtual list: a frame lays out
+//! only the rows on screen.
 
 use super::{Qrow, dbt::resource_label};
-use crate::dbt::{Index, Kind, Test, contains_folded};
+use crate::dbt::{
+    Index, Kind, Test, contains_folded,
+    worker::{ManifestState, Refresher},
+};
+use crate::model::DbtProject;
 use gpui_kit::base::{SelectableText, StyledExt as _};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
-    collapsible::Collapsible,
     h_flex,
     input::{Input, InputEvent, InputState},
+    scroll::ScrollableElement as _,
     tag::Tag,
     text::{TextView, TextViewStyle},
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, Context, Entity, Hsla, IntoElement, Role, SharedString, TestSupportExt as _,
-    Window, div, percentage, prelude::*, px, rems,
+    AnyElement, App, Context, Entity, Hsla, IntoElement, ListAlignment, ListState, Render, Role,
+    SharedString, TestSupportExt as _, Window, div, list, percentage, prelude::*, px, relative,
+    rems,
 };
+use std::{ops::Range, sync::Arc};
 use uuid::Uuid;
 
-/// The most columns that the sheet shows at one time. The filter finds the
-/// others.
-const MAX_COLUMN_ROWS: usize = 200;
-/// The most parents or children that the sheet shows.
-const MAX_LINEAGE_ROWS: usize = 200;
 /// The part of the window width that the sheet takes, and its limits in
 /// pixels. The sheet of GPUI Kit cannot be resized.
 const SHEET_WIDTH: f32 = 0.45;
@@ -34,12 +39,93 @@ const MIN_SHEET_WIDTH: f32 = 420.;
 const MAX_SHEET_WIDTH: f32 = 760.;
 /// The height of the SQL box. Longer SQL scrolls in it.
 const SQL_HEIGHT: f32 = 420.;
+/// How far above and below the screen the list lays out rows, so that they
+/// do not appear late during a scroll.
+const OVERDRAW: f32 = 600.;
 
-/// The dbt resource that the sheet shows.
-pub(super) struct DbtDetails {
+impl Qrow {
+    /// Open the details sheet of the dbt resource `unique_id` of `profile`.
+    pub(super) fn open_dbt_details(
+        &mut self,
+        profile: Uuid,
+        unique_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (state, project) = self.dbt_details_source(profile);
+        let refresher = self.dbt.refresher();
+        let code_font: SharedString = self.settings.editor_font_family.clone().into();
+        let unique_id = unique_id.to_owned();
+        let view = cx.new(|cx| {
+            DbtDetailsView::new(
+                profile, unique_id, state, project, refresher, code_font, window, cx,
+            )
+        });
+        self.dbt_details = Some(view.clone());
+        let weak = cx.weak_entity();
+        window.open_sheet(cx, move |sheet, window, cx| {
+            let close = weak.clone();
+            let title = view.read(cx).title.clone();
+            sheet
+                .size(
+                    (window.viewport_size().width * SHEET_WIDTH)
+                        .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
+                )
+                .title(title)
+                .child(view.clone())
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |this, cx| {
+                        this.dbt_details = None;
+                        cx.notify();
+                    });
+                })
+        });
+    }
+
+    /// The manifest state and the dbt project of `profile`.
+    fn dbt_details_source(
+        &self,
+        profile: Uuid,
+    ) -> (Option<Arc<ManifestState>>, Option<DbtProject>) {
+        let project = self
+            .profiles
+            .iter()
+            .find(|candidate| candidate.id == profile)
+            .and_then(|profile| profile.dbt.clone());
+        (self.dbt.state(profile).cloned(), project)
+    }
+
+    /// Give the sheet the new state of its manifest.
+    pub(super) fn dbt_details_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.dbt_details.clone() else {
+            return;
+        };
+        let (state, project) = self.dbt_details_source(view.read(cx).profile);
+        view.update(cx, |view, cx| view.set_source(state, project, cx));
+    }
+}
+
+/// The sheet content: the rows of one dbt resource.
+pub(super) struct DbtDetailsView {
     profile: Uuid,
     unique_id: String,
+    state: Option<Arc<ManifestState>>,
+    project: Option<DbtProject>,
+    refresher: Refresher,
+    code_font: SharedString,
+    title: SharedString,
+    /// The data of the resource, or `None` when the manifest does not have
+    /// it.
+    data: Option<Data>,
     filter: Entity<InputState>,
+    /// The positions of the columns that match the filter.
+    matching: Vec<usize>,
+    rows: Vec<Row>,
+    /// The list measures all rows, so that the scrollbar has the right
+    /// size. A large model takes one long frame to measure.
+    list: ListState,
+    /// Whether the facts tell that the manifest changed since the read.
+    shown_changed: bool,
     /// Whether the SQL part is open.
     sql_open: bool,
     sql: Sql,
@@ -49,8 +135,58 @@ pub(super) struct DbtDetails {
     _subscription: gpui_kit::Subscription,
 }
 
-/// The SQL of the resource. Qrow reads it from the manifest when the user
-/// opens the SQL part.
+/// The data of a resource that the rows show, read from the index once.
+struct Data {
+    facts: Vec<(&'static str, SharedString)>,
+    description: Option<SharedString>,
+    /// The title of the SQL part, and whether the manifest has only the raw
+    /// SQL. `None` for a resource without SQL.
+    sql: Option<(&'static str, bool)>,
+    tests: Vec<TestView>,
+    columns: Vec<ColumnView>,
+    parents: Vec<Linked>,
+    children: Vec<Linked>,
+}
+
+struct ColumnView {
+    name: SharedString,
+    data_type: Option<SharedString>,
+    description: SharedString,
+    tests: Vec<TestView>,
+}
+
+/// A parent or a child: its table or unique ID, and its materialization or
+/// kind.
+struct Linked {
+    name: SharedString,
+    label: SharedString,
+}
+
+/// A test, with its arguments as names and values.
+#[derive(Clone, Debug, PartialEq)]
+struct TestView {
+    name: SharedString,
+    arguments: Vec<(SharedString, SharedString)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Row {
+    Missing,
+    Facts,
+    Description,
+    Sql,
+    Tests,
+    ColumnsTitle,
+    Column(usize),
+    NoColumns,
+    ParentsTitle,
+    Parent(usize),
+    ChildrenTitle,
+    Child(usize),
+}
+
+/// The SQL of the resource. The sheet reads it from the manifest when the
+/// user opens the SQL part.
 enum Sql {
     Unread,
     Reading,
@@ -68,105 +204,236 @@ enum SqlRead {
     Failed(String),
 }
 
-impl Qrow {
-    /// Open the details sheet of the dbt resource `unique_id` of `profile`.
-    pub(super) fn open_dbt_details(
-        &mut self,
+impl DbtDetailsView {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
         profile: Uuid,
-        unique_id: &str,
+        unique_id: String,
+        state: Option<Arc<ManifestState>>,
+        project: Option<DbtProject>,
+        refresher: Refresher,
+        code_font: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter columns"));
-        let subscription = cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify());
-        self.dbt_details = Some(DbtDetails {
+        let subscription = cx.subscribe(&filter, |this, _, _: &InputEvent, cx| {
+            this.filter_changed(cx)
+        });
+        let mut view = Self {
             profile,
-            unique_id: unique_id.to_owned(),
+            title: unique_id.clone().into(),
+            unique_id,
+            state,
+            project,
+            refresher,
+            code_font,
+            data: None,
             filter,
+            matching: Vec::new(),
+            rows: Vec::new(),
+            list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)).measure_all(),
+            shown_changed: false,
             sql_open: false,
             sql: Sql::Unread,
             sql_read: 0,
             _subscription: subscription,
-        });
-        let weak = cx.weak_entity();
-        window.open_sheet(cx, move |sheet, window, cx| {
-            let close = weak.clone();
-            let parts = weak
-                .update(cx, |this, cx| this.dbt_details_content(cx))
-                .ok()
-                .flatten();
-            let sheet = sheet
-                .size(
-                    (window.viewport_size().width * SHEET_WIDTH)
-                        .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
-                )
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.dbt_details = None;
-                        cx.notify();
-                    });
-                });
-            match parts {
-                Some((title, content)) => sheet.title(title).child(content),
-                None => sheet,
-            }
-        });
+        };
+        view.rebuild(cx);
+        view
     }
 
-    /// Open or close the SQL part of the sheet.
-    fn toggle_dbt_sql(&mut self, cx: &mut Context<Self>) {
-        let Some(details) = self.dbt_details.as_mut() else {
+    /// Read the data of the resource from the index again, and show it from
+    /// the top.
+    fn rebuild(&mut self, cx: &App) {
+        self.data = match (&self.state, &self.project) {
+            (Some(state), Some(project)) => data(state, project, &self.unique_id),
+            _ => None,
+        };
+        self.title = self
+            .state
+            .as_ref()
+            .and_then(|state| {
+                let index = state.index.as_ref()?;
+                Some(index.entry(index.find(&self.unique_id)?).name.to_string())
+            })
+            .unwrap_or_else(|| self.unique_id.clone())
+            .into();
+        self.shown_changed = self.manifest_changed();
+        self.matching = self.matching_columns(cx);
+        self.rows = self.make_rows();
+        self.list.reset(self.rows.len());
+    }
+
+    fn matching_columns(&self, cx: &App) -> Vec<usize> {
+        let query = self.filter.read(cx).value().trim().to_owned();
+        let Some(data) = &self.data else {
+            return Vec::new();
+        };
+        data.columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| {
+                query.is_empty()
+                    || contains_folded(&column.name, &query)
+                    || contains_folded(&column.description, &query)
+            })
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    fn make_rows(&self) -> Vec<Row> {
+        let Some(data) = &self.data else {
+            return vec![Row::Missing];
+        };
+        let mut rows = vec![Row::Facts, Row::Description];
+        if data.sql.is_some() {
+            rows.push(Row::Sql);
+        }
+        rows.extend([Row::Tests, Row::ColumnsTitle]);
+        if self.matching.is_empty() {
+            rows.push(Row::NoColumns);
+        } else {
+            rows.extend(self.matching.iter().copied().map(Row::Column));
+        }
+        // The lineage is below the columns: the columns are read more often.
+        rows.push(Row::ParentsTitle);
+        rows.extend((0..data.parents.len()).map(Row::Parent));
+        rows.push(Row::ChildrenTitle);
+        rows.extend((0..data.children.len()).map(Row::Child));
+        rows
+    }
+
+    /// The positions of the column rows in `rows`.
+    fn column_rows(rows: &[Row]) -> Range<usize> {
+        let start = rows
+            .iter()
+            .position(|row| matches!(row, Row::Column(_) | Row::NoColumns))
+            .unwrap_or(rows.len());
+        let end = rows[start..]
+            .iter()
+            .position(|row| !matches!(row, Row::Column(_) | Row::NoColumns))
+            .map_or(rows.len(), |length| start + length);
+        start..end
+    }
+
+    /// Show the columns that match the new filter. Only the column rows
+    /// change, so the list keeps its place.
+    fn filter_changed(&mut self, cx: &mut Context<Self>) {
+        let matching = self.matching_columns(cx);
+        if matching == self.matching {
             return;
+        }
+        self.matching = matching;
+        let old = Self::column_rows(&self.rows);
+        self.rows = self.make_rows();
+        let new = Self::column_rows(&self.rows);
+        self.list.splice(old, new.len());
+        cx.notify();
+    }
+
+    /// Take a new state of the manifest or a new dbt project.
+    fn set_source(
+        &mut self,
+        state: Option<Arc<ManifestState>>,
+        project: Option<DbtProject>,
+        cx: &mut Context<Self>,
+    ) {
+        let index = |state: &Option<Arc<ManifestState>>| {
+            state.as_ref().and_then(|state| state.index.clone())
         };
-        details.sql_open = !details.sql_open;
-        let open = details.sql_open;
-        // A manifest that changed since the read has other SQL, and a failed
-        // read can work now.
-        let stale = match &details.sql {
-            Sql::Unread | Sql::Failed(_) => true,
-            Sql::Read(_) => !self
-                .dbt
-                .state(details.profile)
-                .is_some_and(|state| state.is_current()),
-            Sql::Reading | Sql::Refreshing => false,
-        };
-        if open && stale {
-            self.read_dbt_sql(cx);
+        let new_index = match (index(&self.state), index(&state)) {
+            (Some(old), Some(new)) => !Arc::ptr_eq(&old, &new),
+            (None, None) => false,
+            _ => true,
+        } || project != self.project;
+        self.state = state;
+        self.project = project;
+        if new_index {
+            self.rebuild(cx);
+            // The SQL of the old index is old.
+            self.sql_read += 1;
+            self.sql = Sql::Unread;
+            if self.sql_open {
+                self.read_sql(cx);
+            }
+            cx.notify();
+            return;
+        }
+        if matches!(self.sql, Sql::Refreshing)
+            && let Some(state) = self.state.clone()
+            && !state.parsing
+        {
+            if state.is_current() {
+                self.read_sql(cx);
+            } else if let Some(error) = &state.error {
+                self.sql = Sql::Failed(error.to_string());
+                self.sql_changed();
+            }
+        }
+        // The facts tell whether the manifest changed since the read. A
+        // remeasure measures all rows again, so it happens only on a change.
+        let changed = self.manifest_changed();
+        if changed != self.shown_changed {
+            self.shown_changed = changed;
+            if let Some(facts) = self.rows.iter().position(|row| *row == Row::Facts) {
+                self.list.remeasure_items(facts..facts + 1);
+            }
         }
         cx.notify();
     }
 
-    /// Read the SQL of the resource of the sheet in the background: the
-    /// compiled SQL, or the raw SQL when the manifest has none.
-    fn read_dbt_sql(&mut self, cx: &mut Context<Self>) {
-        let Some(details) = self.dbt_details.as_ref() else {
-            return;
+    /// Whether the manifest file changed after Qrow read it.
+    fn manifest_changed(&self) -> bool {
+        self.state.as_ref().is_some_and(|state| !state.is_current())
+    }
+
+    /// Open or close the SQL part.
+    fn toggle_sql(&mut self, cx: &mut Context<Self>) {
+        self.sql_open = !self.sql_open;
+        // A manifest that changed since the read has other SQL, and a failed
+        // read can work now.
+        let stale = match &self.sql {
+            Sql::Unread | Sql::Failed(_) => true,
+            Sql::Read(_) => !self.state.as_ref().is_some_and(|state| state.is_current()),
+            Sql::Reading | Sql::Refreshing => false,
         };
-        let (profile, unique_id) = (details.profile, details.unique_id.clone());
-        let Some(state) = self.dbt.state(profile).cloned() else {
+        if self.sql_open && stale {
+            self.read_sql(cx);
+        }
+        self.sql_changed();
+        cx.notify();
+    }
+
+    /// The SQL row has a new height.
+    fn sql_changed(&self) {
+        if let Some(row) = self.rows.iter().position(|row| *row == Row::Sql) {
+            self.list.remeasure_items(row..row + 1);
+        }
+    }
+
+    /// Read the SQL in the background: the compiled SQL, or the raw SQL when
+    /// the manifest has none.
+    fn read_sql(&mut self, cx: &mut Context<Self>) {
+        let Some(state) = self.state.clone() else {
             return;
         };
         let span = state.index.as_ref().and_then(|index| {
-            let entry = index.entry(index.find(&unique_id)?);
+            let entry = index.entry(index.find(&self.unique_id)?);
             entry.compiled_code.or(entry.raw_code)
         });
         let Some(span) = span else {
             return;
         };
-        let stale = !state.is_current();
-        if stale {
-            self.dbt.refresh_path(&state.path);
-        }
-        let Some(details) = self.dbt_details.as_mut() else {
-            return;
-        };
-        details.sql_read += 1;
-        if stale {
-            details.sql = Sql::Refreshing;
+        self.sql_read += 1;
+        self.sql_changed();
+        if !state.is_current() {
+            self.refresher.refresh(&state.path);
+            self.sql = Sql::Refreshing;
             return;
         }
-        details.sql = Sql::Reading;
-        let read = details.sql_read;
+        self.sql = Sql::Reading;
+        let read = self.sql_read;
         // Compiled SQL can be large, and the file can be on a slow disk.
         let task = cx.background_executor().spawn(async move {
             let result = crate::dbt::read_sql(&state.path, span);
@@ -183,89 +450,29 @@ impl Qrow {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                let current = this.dbt_details.as_ref().is_some_and(|details| {
-                    details.profile == profile
-                        && details.unique_id == unique_id
-                        && details.sql_read == read
-                });
-                if !current {
+                if this.sql_read != read {
                     return;
                 }
                 match result {
-                    SqlRead::Changed => this.read_dbt_sql(cx),
-                    SqlRead::Read(sql) => {
-                        if let Some(details) = this.dbt_details.as_mut() {
-                            details.sql = Sql::Read(sql.into());
-                        }
-                    }
-                    SqlRead::Failed(error) => {
-                        if let Some(details) = this.dbt_details.as_mut() {
-                            details.sql = Sql::Failed(error);
-                        }
-                    }
+                    SqlRead::Changed => this.read_sql(cx),
+                    SqlRead::Read(sql) => this.sql = Sql::Read(sql.into()),
+                    SqlRead::Failed(error) => this.sql = Sql::Failed(error),
                 }
+                this.sql_changed();
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Follow a new state of the manifest of the sheet. A new index makes
-    /// the SQL old, so the sheet reads it again.
-    pub(super) fn dbt_details_changed(&mut self, new_index: bool, cx: &mut Context<Self>) {
-        let Some(details) = self.dbt_details.as_mut() else {
-            return;
-        };
-        let profile = details.profile;
-        if new_index {
-            details.sql_read += 1;
-            details.sql = Sql::Unread;
-            if details.sql_open {
-                self.read_dbt_sql(cx);
-            }
-            return;
-        }
-        if !matches!(details.sql, Sql::Refreshing) {
-            return;
-        }
-        let Some(state) = self.dbt.state(profile).cloned() else {
-            return;
-        };
-        if state.parsing {
-            return;
-        }
-        if state.is_current() {
-            self.read_dbt_sql(cx);
-        } else if let (Some(error), Some(details)) = (&state.error, self.dbt_details.as_mut()) {
-            details.sql = Sql::Failed(error.to_string());
-        }
-    }
-
-    /// The title and the content of the dbt details sheet. The sheet reads
-    /// the current index, so it follows a refresh of the manifest.
-    fn dbt_details_content(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Option<(SharedString, AnyElement)> {
-        let details = self.dbt_details.as_ref()?;
-        let (profile, unique_id) = (details.profile, details.unique_id.clone());
-        let filter = details.filter.clone();
+    fn render_row(&mut self, position: usize, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let code_font: SharedString = self.settings.editor_font_family.clone().into();
-        let state = self.dbt.state(profile).cloned();
-        let owner = self
-            .profiles
-            .iter()
-            .find(|candidate| candidate.id == profile);
-        let found = state.as_ref().zip(owner).and_then(|(state, owner)| {
-            let index = state.index.as_ref()?;
-            let position = index.find(&unique_id)?;
-            let project = self.dbt_project(owner, Some(state))?;
-            Some((index, position, project))
-        });
-        let Some((index, position, project)) = found else {
-            let text = format!("The dbt manifest does not have {unique_id} now.");
-            let content = div()
+        let Some(row) = self.rows.get(position).copied() else {
+            return div().into_any_element();
+        };
+        let Some(data) = &self.data else {
+            let text = format!("The dbt manifest does not have {} now.", self.unique_id);
+            return div()
                 .id("dbt-details")
                 .test_support()
                 .role(Role::Label)
@@ -274,251 +481,141 @@ impl Qrow {
                 .text_color(muted)
                 .child(text)
                 .into_any_element();
-            return Some((unique_id.into(), content));
         };
-        let entry = index.entry(position);
-        let tests = index.tests(position);
-
-        let mut facts = vec![("Resource", entry.kind.name().to_owned())];
-        if let Some(materialized) = entry.materialized {
-            facts.push(("Materialization", index.symbol(materialized).to_owned()));
-        }
-        if let Some(relation) = project.relation(entry) {
-            facts.push(("Relation", relation));
-        }
-        facts.push(("Unique ID", entry.unique_id.to_string()));
-        if !entry.tags.is_empty() {
-            let tags: Vec<&str> = entry.tags.iter().map(|tag| index.symbol(*tag)).collect();
-            facts.push(("Tags", tags.join(", ")));
-        }
-        let mut manifest = index.generated_at.to_string();
-        if state.as_ref().is_some_and(|state| !state.is_current()) {
-            manifest.push_str(" (changed since the last read)");
-        }
-        facts.push(("Manifest", manifest));
-        let facts = v_flex()
-            .gap_1()
-            .children(facts.into_iter().map(|(label, value)| {
-                h_flex()
-                    .gap_3()
-                    .items_start()
-                    .text_sm()
-                    .child(
-                        div()
-                            .w(px(120.))
-                            .flex_shrink_0()
-                            .text_color(muted)
-                            .child(label),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("dbt-details-{label}")))
-                            .test_support()
-                            .role(Role::Label)
-                            .aria_label(value.clone())
-                            .flex_1()
-                            .min_w_0()
-                            .child(value),
-                    )
-            }));
-
-        let description = entry.description.trim();
-        let description = if description.is_empty() {
-            muted_text("No description.", muted)
-        } else {
-            div()
-                .id("dbt-details-description")
-                .test_support()
-                .role(Role::Label)
-                .aria_label(description.to_owned())
-                .child(markdown(
-                    format!("dbt-description-{unique_id}"),
-                    description,
-                ))
-                .into_any_element()
-        };
-
-        let sql = (entry.kind != Kind::Source)
-            .then(|| {
-                let code = match (entry.compiled_code, entry.raw_code) {
-                    (Some(_), _) => "Compiled SQL",
-                    (None, Some(_)) => "Raw SQL",
-                    (None, None) => return None,
-                };
-                Some(self.dbt_sql_part(code, entry.compiled_code.is_none(), &code_font, cx))
-            })
-            .flatten();
-
-        let view = |test: &Test| test_view(index, &project, test);
-        let model_tests: Vec<TestView> = tests
-            .iter()
-            .filter(|test| test.column.is_none())
-            .map(view)
-            .collect();
-        let model_tests = if model_tests.is_empty() {
-            muted_text("No tests of the table.", muted)
-        } else {
-            tests_element("dbt-details-tests", model_tests, &code_font, muted)
-        };
-
-        let lineage = |id: &str, positions: &[u32]| -> AnyElement {
-            if positions.is_empty() {
-                return muted_text("None.", muted);
-            }
-            let shown = positions.len().min(MAX_LINEAGE_ROWS);
-            v_flex()
-                .id(SharedString::from(format!("dbt-details-{id}")))
-                .test_support()
-                .gap_0p5()
-                .text_sm()
-                .children(positions[..shown].iter().map(|position| {
-                    let entry = index.entry(*position);
-                    let name = project
-                        .relation(entry)
-                        .unwrap_or_else(|| entry.unique_id.to_string());
-                    h_flex().gap_2().child(div().min_w_0().child(name)).child(
-                        div()
-                            .text_color(muted)
-                            .child(resource_label(index, entry).to_owned()),
-                    )
-                }))
-                .when(shown < positions.len(), |list| {
-                    list.child(div().text_color(muted).child(format!(
-                        "And {} more. The assistant can page through all of them.",
-                        positions.len() - shown
-                    )))
-                })
-                .into_any_element()
-        };
-        let parents = lineage("parents", &entry.parents);
-        let children = lineage("children", index.children(position));
-
-        let query = filter.read(cx).value().trim().to_owned();
-        let matching: Vec<_> = entry
-            .columns
-            .iter()
-            .filter(|column| {
-                query.is_empty()
-                    || contains_folded(&column.name, &query)
-                    || contains_folded(&column.description, &query)
-            })
-            .collect();
-        let shown = matching.len().min(MAX_COLUMN_ROWS);
-        let columns = v_flex()
-            .id("dbt-details-columns")
-            .test_support()
-            .gap_3()
-            .children(matching[..shown].iter().map(|column| {
-                let column_tests: Vec<TestView> = tests
-                    .iter()
-                    .filter(|test| {
-                        test.column
-                            .as_deref()
-                            .is_some_and(|name| name.eq_ignore_ascii_case(&column.name))
-                    })
-                    .map(view)
-                    .collect();
-                let data_type = column
-                    .data_type
-                    .map(|symbol| index.symbol(symbol).to_owned());
-                let description = column.description.trim();
-                let id = format!("dbt-details-column-{}", column.name);
+        match row {
+            Row::Missing => div().into_any_element(),
+            Row::Facts => {
+                let changed = self.shown_changed;
                 v_flex()
-                    .id(SharedString::from(id.clone()))
+                    .id("dbt-details")
                     .test_support()
-                    .role(Role::Label)
-                    .aria_label(SharedString::from(column.name.to_string()))
                     .gap_1()
-                    .text_sm()
-                    .child(
+                    .children(data.facts.iter().map(|(label, value)| {
+                        let value = if *label == "Manifest" && changed {
+                            SharedString::from(format!("{value} (changed since the last read)"))
+                        } else {
+                            value.clone()
+                        };
                         h_flex()
-                            .gap_2()
-                            .child(div().font_semibold().child(column.name.to_string()))
-                            .when_some(data_type, |row, data_type| {
-                                row.child(div().text_color(muted).child(data_type))
-                            }),
-                    )
-                    .when(!description.is_empty(), |row| {
-                        row.child(markdown(format!("{id}-description"), description))
-                    })
-                    .when(!column_tests.is_empty(), |row| {
-                        row.child(tests_element(
-                            &format!("{id}-tests"),
-                            column_tests,
-                            &code_font,
-                            muted,
+                            .gap_3()
+                            .items_start()
+                            .text_sm()
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .flex_shrink_0()
+                                    .text_color(muted)
+                                    .child(*label),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("dbt-details-{label}")))
+                                    .test_support()
+                                    .role(Role::Label)
+                                    .aria_label(value.clone())
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(value),
+                            )
+                    }))
+                    .into_any_element()
+            }
+            Row::Description => {
+                let content = match &data.description {
+                    None => muted_text("No description.", muted),
+                    Some(description) => div()
+                        .id("dbt-details-description")
+                        .test_support()
+                        .role(Role::Label)
+                        .aria_label(description.clone())
+                        .child(markdown(
+                            format!("dbt-description-{}", self.unique_id),
+                            description.clone(),
                         ))
-                    })
-            }))
-            .when(matching.is_empty(), |list| {
-                list.child(muted_text(
-                    if entry.columns.is_empty() {
+                        .into_any_element(),
+                };
+                section("Description", content).into_any_element()
+            }
+            Row::Sql => match data.sql {
+                Some((title, raw_only)) => self.sql_part(title, raw_only, cx),
+                None => div().into_any_element(),
+            },
+            Row::Tests => {
+                let content = if data.tests.is_empty() {
+                    muted_text("No tests of the table.", muted)
+                } else {
+                    tests_element("dbt-details-tests", &data.tests, &self.code_font, muted)
+                };
+                section("Table Tests", content).into_any_element()
+            }
+            Row::ColumnsTitle => section(
+                &format!("Columns ({})", data.columns.len()),
+                Input::new(&self.filter)
+                    .id("dbt-details-filter")
+                    .small()
+                    .cleanable(true)
+                    .aria_label("Filter columns")
+                    .into_any_element(),
+            )
+            .into_any_element(),
+            Row::NoColumns => div()
+                .pt_3()
+                .child(muted_text(
+                    if data.columns.is_empty() {
                         "The dbt project does not document the columns."
                     } else {
                         "No columns match the filter."
                     },
                     muted,
                 ))
-            })
-            .when(shown < matching.len(), |list| {
-                list.child(muted_text(
-                    &format!(
-                        "{shown} of {} columns. Filter to find the others.",
-                        matching.len()
-                    ),
-                    muted,
-                ))
-            });
-
-        let content = v_flex()
-            .id("dbt-details")
-            .test_support()
-            .gap_5()
-            .pb_4()
-            .child(facts)
-            .child(section("Description", description))
-            .when_some(sql, |content, sql| content.child(sql))
-            .child(section("Table Tests", model_tests))
-            .child(section(
-                &format!("Parents ({})", entry.parents.len()),
-                parents,
-            ))
-            .child(section(
-                &format!("Children ({})", index.children(position).len()),
-                children,
-            ))
-            .child(section(
-                &format!("Columns ({})", entry.columns.len()),
+                .into_any_element(),
+            Row::Column(position) => {
+                let column = &data.columns[position];
+                let id = format!("dbt-details-column-{}", column.name);
                 v_flex()
-                    .gap_3()
+                    .id(SharedString::from(id.clone()))
+                    .test_support()
+                    .role(Role::Label)
+                    .aria_label(column.name.clone())
+                    .pt_3()
+                    .gap_1()
+                    .text_sm()
                     .child(
-                        Input::new(&filter)
-                            .id("dbt-details-filter")
-                            .small()
-                            .cleanable(true)
-                            .aria_label("Filter columns"),
+                        h_flex()
+                            .gap_2()
+                            .child(div().font_semibold().child(column.name.clone()))
+                            .when_some(column.data_type.clone(), |row, data_type| {
+                                row.child(div().text_color(muted).child(data_type))
+                            }),
                     )
-                    .child(columns)
-                    .into_any_element(),
-            ))
-            .into_any_element();
-        Some((entry.name.to_string().into(), content))
+                    .when(!column.description.is_empty(), |row| {
+                        row.child(markdown(
+                            format!("{id}-description"),
+                            column.description.clone(),
+                        ))
+                    })
+                    .when(!column.tests.is_empty(), |row| {
+                        row.child(tests_element(
+                            &format!("{id}-tests"),
+                            &column.tests,
+                            &self.code_font,
+                            muted,
+                        ))
+                    })
+                    .into_any_element()
+            }
+            Row::ParentsTitle => lineage_title("Parents", data.parents.len(), muted),
+            Row::ChildrenTitle => lineage_title("Children", data.children.len(), muted),
+            Row::Parent(position) => linked_row(&data.parents[position], muted),
+            Row::Child(position) => linked_row(&data.children[position], muted),
+        }
     }
 
-    /// The SQL part of the sheet: a header that opens it, then the SQL with
-    /// a copy button. `raw_only` tells that the manifest has no compiled SQL.
-    fn dbt_sql_part(
-        &self,
-        title: &'static str,
-        raw_only: bool,
-        code_font: &SharedString,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let Some(details) = self.dbt_details.as_ref() else {
-            return div().into_any_element();
-        };
+    /// The SQL part: a header that opens it, then the SQL with a copy
+    /// button. `raw_only` tells that the manifest has no compiled SQL.
+    fn sql_part(&self, title: &'static str, raw_only: bool, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let open = details.sql_open;
+        let open = self.sql_open;
         let header = Button::new("dbt-details-sql-toggle")
             .ghost()
             .small()
@@ -539,8 +636,8 @@ impl Qrow {
                     )
                     .child(div().text_sm().font_semibold().child(title)),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_dbt_sql(cx)));
-        let body = match &details.sql {
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_sql(cx)));
+        let body = open.then(|| match &self.sql {
             Sql::Unread | Sql::Reading => muted_text("Reading the SQL…", muted),
             Sql::Refreshing => muted_text(
                 "The dbt manifest changed. Qrow reads it again, then shows the SQL.",
@@ -579,28 +676,159 @@ impl Qrow {
                         .border_color(cx.theme().border)
                         .rounded(cx.theme().radius)
                         .bg(cx.theme().secondary)
-                        .font_family(code_font.clone())
+                        .font_family(self.code_font.clone())
                         .text_xs()
                         .child(SelectableText::new("dbt-sql", sql.clone())),
                 )
                 .into_any_element(),
-        };
-        Collapsible::new()
-            .open(open)
-            .w_full()
+        });
+        v_flex()
+            .pt_4()
             .gap_2()
             .child(header)
-            .content(body)
+            .children(body)
             .into_any_element()
     }
+}
+
+impl Render for DbtDetailsView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let rows = list(
+            self.list.clone(),
+            // GPUI's list lays a row out at the width of its content, so
+            // each row takes the full width. The padding keeps the row out
+            // from under the scrollbar.
+            cx.processor(|this, position, _, cx| {
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .pr_3()
+                    .child(this.render_row(position, cx))
+                    .into_any_element()
+            }),
+        )
+        .size_full()
+        .pb_4();
+        // The sheet body scrolls its children, so the list takes the height
+        // of the body and scrolls by itself.
+        div()
+            .id("dbt-details-list")
+            .size_full()
+            .child(rows)
+            .vertical_scrollbar(&self.list)
+    }
+}
+
+/// The data of `unique_id` in the index of `state`.
+fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<Data> {
+    let index = state.index.as_ref()?;
+    let position = index.find(unique_id)?;
+    let project =
+        crate::assistant::dbt::Project::new(index, project, state.refreshed, !state.is_current());
+    let entry = index.entry(position);
+    let tests = index.tests(position);
+    let shared = |text: &str| SharedString::from(text.to_owned());
+
+    let mut facts = vec![("Resource", shared(entry.kind.name()))];
+    if let Some(materialized) = entry.materialized {
+        facts.push(("Materialization", shared(index.symbol(materialized))));
+    }
+    if let Some(relation) = project.relation(entry) {
+        facts.push(("Relation", relation.into()));
+    }
+    facts.push(("Unique ID", shared(&entry.unique_id)));
+    if !entry.tags.is_empty() {
+        let tags: Vec<&str> = entry.tags.iter().map(|tag| index.symbol(*tag)).collect();
+        facts.push(("Tags", tags.join(", ").into()));
+    }
+    facts.push(("Manifest", shared(&index.generated_at)));
+
+    let description = entry.description.trim();
+    let sql = match (entry.kind, entry.compiled_code, entry.raw_code) {
+        (Kind::Source, _, _) | (_, None, None) => None,
+        (_, Some(_), _) => Some(("Compiled SQL", false)),
+        (_, None, Some(_)) => Some(("Raw SQL", true)),
+    };
+    let view = |test: &Test| test_view(index, &project, test);
+    let columns = entry
+        .columns
+        .iter()
+        .map(|column| ColumnView {
+            name: shared(&column.name),
+            data_type: column.data_type.map(|symbol| shared(index.symbol(symbol))),
+            description: shared(column.description.trim()),
+            tests: tests
+                .iter()
+                .filter(|test| {
+                    test.column
+                        .as_deref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(&column.name))
+                })
+                .map(view)
+                .collect(),
+        })
+        .collect();
+    let linked = |positions: &[u32]| -> Vec<Linked> {
+        positions
+            .iter()
+            .map(|position| {
+                let entry = index.entry(*position);
+                Linked {
+                    name: project
+                        .relation(entry)
+                        .unwrap_or_else(|| entry.unique_id.to_string())
+                        .into(),
+                    label: shared(resource_label(index, entry)),
+                }
+            })
+            .collect()
+    };
+    Some(Data {
+        facts,
+        description: (!description.is_empty()).then(|| shared(description)),
+        sql,
+        tests: tests
+            .iter()
+            .filter(|test| test.column.is_none())
+            .map(view)
+            .collect(),
+        columns,
+        parents: linked(&entry.parents),
+        children: linked(index.children(position)),
+    })
 }
 
 /// A titled part of the sheet.
 fn section(title: &str, content: AnyElement) -> impl IntoElement {
     v_flex()
+        .pt_5()
         .gap_2()
         .child(div().text_sm().font_semibold().child(title.to_owned()))
         .child(content)
+}
+
+fn lineage_title(title: &str, count: usize, muted: Hsla) -> AnyElement {
+    v_flex()
+        .pt_5()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .font_semibold()
+                .child(format!("{title} ({count})")),
+        )
+        .when(count == 0, |part| part.child(muted_text("None.", muted)))
+        .into_any_element()
+}
+
+fn linked_row(linked: &Linked, muted: Hsla) -> AnyElement {
+    h_flex()
+        .pt_0p5()
+        .gap_2()
+        .text_sm()
+        .child(div().min_w_0().child(linked.name.clone()))
+        .child(div().text_color(muted).child(linked.label.clone()))
+        .into_any_element()
 }
 
 fn muted_text(text: &str, color: Hsla) -> AnyElement {
@@ -613,8 +841,8 @@ fn muted_text(text: &str, color: Hsla) -> AnyElement {
 
 /// A dbt description as Markdown. Its headings stay below the titles of the
 /// sheet.
-fn markdown(id: String, text: &str) -> TextView {
-    TextView::markdown(SharedString::from(id), text.to_owned())
+fn markdown(id: String, text: SharedString) -> TextView {
+    TextView::markdown(SharedString::from(id), text)
         .style(
             TextViewStyle::default()
                 .paragraph_gap(rems(0.5))
@@ -626,17 +854,10 @@ fn markdown(id: String, text: &str) -> TextView {
         .max_w_full()
 }
 
-/// A test, with its arguments as names and values.
-#[derive(Debug, PartialEq)]
-struct TestView {
-    name: String,
-    arguments: Vec<(String, String)>,
-}
-
 fn test_view(index: &Index, project: &crate::assistant::dbt::Project, test: &Test) -> TestView {
-    let mut arguments = Vec::new();
+    let mut arguments: Vec<(SharedString, SharedString)> = Vec::new();
     if !test.values.is_empty() {
-        arguments.push(("values".to_owned(), test.values.join(", ")));
+        arguments.push(("values".into(), test.values.join(", ").into()));
     }
     if let Some(text) = &test.to_text {
         let target = test
@@ -648,16 +869,20 @@ fn test_view(index: &Index, project: &crate::assistant::dbt::Project, test: &Tes
                     .unwrap_or_else(|| entry.unique_id.to_string())
             })
             .unwrap_or_else(|| text.to_string());
-        arguments.push(("to".to_owned(), target));
+        arguments.push(("to".into(), target.into()));
         if let Some(field) = &test.field {
-            arguments.push(("field".to_owned(), field.to_string()));
+            arguments.push(("field".into(), field.to_string().into()));
         }
     }
     if let Some(text) = &test.arguments {
-        arguments.extend(argument_pairs(text));
+        arguments.extend(
+            argument_pairs(text)
+                .into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
     }
     TestView {
-        name: index.symbol(test.name).to_owned(),
+        name: index.symbol(test.name).to_owned().into(),
         arguments,
     }
 }
@@ -684,49 +909,53 @@ fn argument_pairs(json: &str) -> Vec<(String, String)> {
 /// values in the code font.
 fn tests_element(
     id: &str,
-    tests: Vec<TestView>,
+    tests: &[TestView],
     code_font: &SharedString,
     muted: Hsla,
 ) -> AnyElement {
-    let (simple, detailed): (Vec<_>, Vec<_>) = tests
-        .into_iter()
-        .partition(|test| test.arguments.is_empty());
+    let simple = tests.iter().filter(|test| test.arguments.is_empty());
+    let detailed = tests.iter().filter(|test| !test.arguments.is_empty());
     v_flex()
         .id(SharedString::from(id.to_owned()))
         .test_support()
         .gap_2()
-        .when(!simple.is_empty(), |list| {
+        .when(simple.clone().next().is_some(), |list| {
             list.child(
                 h_flex()
                     .flex_wrap()
                     .gap_1()
-                    .children(simple.into_iter().map(|test| test_tag(test.name))),
+                    .children(simple.map(|test| test_tag(test.name.clone()))),
             )
         })
-        .children(detailed.into_iter().map(|test| {
+        .children(detailed.map(|test| {
             v_flex()
                 .gap_1()
-                .child(h_flex().child(test_tag(test.name)))
-                .children(test.arguments.into_iter().map(|(name, value)| {
-                    h_flex()
-                        .items_start()
-                        .gap_2()
+                .child(h_flex().child(test_tag(test.name.clone())))
+                // The arguments of one test read as one block.
+                .child(
+                    v_flex()
                         .pl_2()
                         .text_xs()
-                        .child(div().flex_shrink_0().text_color(muted).child(name))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .font_family(code_font.clone())
-                                .child(value),
-                        )
-                }))
+                        .line_height(relative(1.4))
+                        .children(test.arguments.iter().map(|(name, value)| {
+                            h_flex()
+                                .items_start()
+                                .gap_2()
+                                .child(div().flex_shrink_0().text_color(muted).child(name.clone()))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .font_family(code_font.clone())
+                                        .child(value.clone()),
+                                )
+                        })),
+                )
         }))
         .into_any_element()
 }
 
-fn test_tag(name: String) -> impl IntoElement {
+fn test_tag(name: SharedString) -> impl IntoElement {
     Tag::secondary().small().child(name)
 }
 

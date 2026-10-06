@@ -339,10 +339,10 @@ Details**. A panel opens at the right side of the window. It shows:
   manifest again first, then shows the SQL.
 - The tests of the table. A test with arguments shows each argument under its
   name.
-- The parents and children, with the materialization of each model or the
-  kind of each other resource.
 - The documented columns, with their types, descriptions, and tests. Type in
   **Filter columns** to find columns by name or description.
+- The parents and children, with the materialization of each model or the
+  kind of each other resource.
 
 The panel takes almost half of the window width, so make the window wider to
 read long text more easily.
