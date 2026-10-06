@@ -125,11 +125,20 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
+      - name: checkout-target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-target.outputs.target_sha }}
       - name: download-package
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: ${{ matrix.package }}
           path: package
+      - name: setup-uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
       - name: create-dmg
         shell: bash
         env:
@@ -142,12 +151,10 @@ jobs:
           codesign --verify --deep --strict dist/Qrow.app
           test "$(lipo -archs dist/Qrow.app/Contents/MacOS/qrow)" = "$PACKAGE_ARCH"
           dmg_path="dist/Qrow-${RELEASE_VERSION}-${PACKAGE_ARCH}.dmg"
-          hdiutil create \
-            -volname "Qrow ${RELEASE_VERSION}" \
-            -srcfolder dist/Qrow.app \
-            -ov \
-            -format UDZO \
-            "$dmg_path"
+          uv run --locked python scripts/package/dmg.py build \
+            --app dist/Qrow.app \
+            --output "$dmg_path" \
+            --volume-name "Qrow ${RELEASE_VERSION}"
           hdiutil imageinfo "$dmg_path" >/dev/null
           # Keep the old ARM64 URL valid until the tap updater supports both architectures.
           if [ "$PACKAGE_ARCH" = arm64 ]; then

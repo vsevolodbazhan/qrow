@@ -2,7 +2,7 @@
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
-qrow_require_commands cargo rustc uv codesign ditto lipo
+qrow_require_commands cargo rustc uv codesign ditto hdiutil lipo
 qrow_require_macos
 qrow_require_xcode_tools
 for file in Cargo.lock LICENSE NOTICE pyproject.toml uv.lock assets/app-icons/macos/qrow.png; do
@@ -62,4 +62,9 @@ PLIST
 codesign --force --deep --sign - "$QROW_BUNDLE"
 codesign --verify --deep --strict "$QROW_BUNDLE"
 ditto -c -k --keepParent "$QROW_BUNDLE" "$QROW_DIST_DIR/Qrow-macos.zip"
-echo "Built $QROW_BUNDLE and $QROW_DIST_DIR/Qrow-macos.zip for $qrow_architecture (macOS $QROW_MACOS_MINIMUM+)."
+QROW_DMG="$QROW_DIST_DIR/Qrow-$QROW_VERSION-$qrow_architecture.dmg"
+uv run --locked python scripts/package/dmg.py build \
+    --app "$QROW_BUNDLE" \
+    --output "$QROW_DMG" \
+    --volume-name "Qrow $QROW_VERSION"
+echo "Built $QROW_BUNDLE, $QROW_DIST_DIR/Qrow-macos.zip, and $QROW_DMG for $qrow_architecture (macOS $QROW_MACOS_MINIMUM+)."

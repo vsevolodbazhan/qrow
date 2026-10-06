@@ -88,6 +88,7 @@ class PlanTests(unittest.TestCase):
             "tests/desktop/fake-codex.py": everything,
             "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e"],
             "scripts/package/macos.sh": ["static", "core", "package"],
+            "scripts/package/dmg.py": ["static", "core", "package"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }
@@ -168,6 +169,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('if [ "$PACKAGE_ARCH" = arm64 ]; then', dmg)
         self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
         self.assertIn('"dist/Qrow-${RELEASE_VERSION}.dmg"', job("publish", RELEASE))
+
+    def test_the_release_dmg_comes_from_the_packaging_script(self):
+        # The installer window, the Applications shortcut, and the icon layout
+        # are the job of scripts/package/dmg.py, not of a raw disk image.
+        dmg = job("dmg", RELEASE)
+        self.assertIn("uv run --locked python scripts/package/dmg.py build", dmg)
+        self.assertIn('--volume-name "Qrow ${RELEASE_VERSION}"', dmg)
+        self.assertIn("hdiutil imageinfo", dmg)
+        self.assertNotIn("hdiutil create", dmg)
+        # The packaging script lives in the repository at the released commit.
+        self.assertIn("uses: actions/checkout@", dmg)
+        self.assertIn("ref: ${{ needs.resolve-target.outputs.target_sha }}", dmg)
+        self.assertIn("setup-uv", dmg)
 
     def test_only_main_saves_rust_caches(self):
         checks = read(CHECKS)
