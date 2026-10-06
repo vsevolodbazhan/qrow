@@ -331,7 +331,8 @@ Details**. A panel opens at the right side of the window. It shows the kind,
 the materialization, the tags, and the file of the resource, the full
 description, the tests, the parents and children, and the documented columns
 with their descriptions and tests. Type in **Filter columns** to find columns
-by name or description. Drag the edge of the panel to make it wider.
+by name or description. The panel takes almost half of the window width, so
+make the window wider to read long text more easily.
 
 To read the SQL of the model, right-click the table and select **Open Model
 SQL**, or select **Open Model SQL** in the details panel. Qrow

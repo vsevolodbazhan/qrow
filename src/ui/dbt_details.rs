@@ -23,8 +23,11 @@ use uuid::Uuid;
 const MAX_COLUMN_ROWS: usize = 200;
 /// The most parents or children that the sheet shows.
 const MAX_LINEAGE_ROWS: usize = 200;
-/// The width of the sheet when it opens. The user can resize it.
-const SHEET_WIDTH: f32 = 560.;
+/// The part of the window width that the sheet takes, and its limits in
+/// pixels. The sheet of GPUI Kit cannot be resized.
+const SHEET_WIDTH: f32 = 0.45;
+const MIN_SHEET_WIDTH: f32 = 420.;
+const MAX_SHEET_WIDTH: f32 = 760.;
 
 /// The dbt resource that the sheet shows.
 pub(super) struct DbtDetails {
@@ -59,8 +62,10 @@ impl Qrow {
                 .ok()
                 .flatten();
             let sheet = sheet
-                .size(px(SHEET_WIDTH))
-                .resizable(true)
+                .size(
+                    (window.viewport_size().width * SHEET_WIDTH)
+                        .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
+                )
                 .on_close(move |_, _, cx| {
                     let _ = close.update(cx, |this, cx| {
                         this.dbt_details = None;
