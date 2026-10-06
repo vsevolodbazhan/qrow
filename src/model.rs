@@ -369,6 +369,9 @@ pub struct Profile {
     /// Encrypts the transport with TLS. Profiles before version 6 use plain TCP.
     #[serde(default)]
     pub tls: bool,
+    /// The Postgres TLS policy. None preserves the earlier TLS checkbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_ssl_mode: Option<PostgresSslMode>,
     #[serde(default)]
     pub authentication: Authentication,
     /// Facts about the connection that the user writes for the assistant.
@@ -527,6 +530,15 @@ pub fn format_schema_rules(rules: &[SchemaRule]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The encryption and server identity checks of a Postgres connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresSslMode {
+    Disable,
+    Require,
+    VerifyFull,
 }
 
 /// The SQL server and dialect of a connection.
@@ -869,6 +881,7 @@ impl Default for Profile {
             catalog_column_reads: CatalogColumnReads::default(),
             shared_catalog: None,
             tls: false,
+            postgres_ssl_mode: None,
             authentication: Authentication::Password,
             assistant_notes: String::new(),
             dbt: None,
@@ -877,6 +890,15 @@ impl Default for Profile {
 }
 
 impl Profile {
+    /// Resolve saved profiles that predate explicit Postgres TLS modes.
+    pub fn postgres_ssl_mode(&self) -> PostgresSslMode {
+        self.postgres_ssl_mode.unwrap_or(if self.tls {
+            PostgresSslMode::VerifyFull
+        } else {
+            PostgresSslMode::Disable
+        })
+    }
+
     /// Return whether two profiles open the same authenticated session.
     ///
     /// The display name and idle policy can change while a session remains
@@ -890,7 +912,11 @@ impl Profile {
             && self.username == other.username
             && self.database == other.database
             && self.parameters == other.parameters
-            && self.tls == other.tls
+            && if self.database_type == DatabaseType::Postgres {
+                self.postgres_ssl_mode() == other.postgres_ssl_mode()
+            } else {
+                self.tls == other.tls
+            }
             && self.authentication == other.authentication
     }
 
@@ -2193,6 +2219,47 @@ mod tests {
         assert_eq!(identity.display(), "Ada");
         identity.name = None;
         assert_eq!(identity.display(), "s-1");
+    }
+
+    #[test]
+    fn postgres_tls_modes_preserve_legacy_profiles_and_session_identity() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Postgres,
+            ..Profile::default()
+        };
+        for (tls, expected) in [
+            (false, PostgresSslMode::Disable),
+            (true, PostgresSslMode::VerifyFull),
+        ] {
+            profile.tls = tls;
+            let json = serde_json::to_string(&profile).unwrap();
+            assert!(!json.contains("postgres_ssl_mode"));
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), expected);
+        }
+        let legacy = profile.clone();
+        profile.postgres_ssl_mode = Some(PostgresSslMode::VerifyFull);
+        assert!(legacy.connection_identity_eq(&profile));
+        for mode in [
+            PostgresSslMode::Disable,
+            PostgresSslMode::Require,
+            PostgresSslMode::VerifyFull,
+        ] {
+            profile.postgres_ssl_mode = Some(mode);
+            let json = serde_json::to_string(&profile).unwrap();
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), mode);
+            assert_eq!(
+                legacy.connection_identity_eq(&restored),
+                mode == PostgresSslMode::VerifyFull
+            );
+        }
+        profile.database_type = DatabaseType::Kyuubi;
+        let mut changed = profile.clone();
+        changed.postgres_ssl_mode = Some(PostgresSslMode::Require);
+        assert!(profile.connection_identity_eq(&changed));
+        changed.tls = false;
+        assert!(!profile.connection_identity_eq(&changed));
     }
 
     #[test]

@@ -219,30 +219,61 @@ impl Qrow {
                 false,
                 |_, form, _, _| form_input(form, 2, "Port"),
             ))
-            .item(connection_row(
-                qrow,
-                "TLS",
-                if uses_sign_in && !form.tls {
-                    "Without TLS, others on the network can read and use the access token."
-                } else {
-                    "Encrypts the connection. The server must accept TLS on this port."
-                },
-                &["ssl", "encryption", "security"],
-                false,
-                |_, form, _, cx| {
-                    Switch::new("connection-tls")
-                        .checked(form.tls)
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("TLS")
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            if let Some(form) = &mut this.form {
-                                form.tls = *checked;
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                },
-            ))
+            .items(postgres.then(|| {
+                connection_row(
+                    qrow,
+                    "TLS mode",
+                    match connection_form::chosen(
+                        &form.postgres_ssl_mode,
+                        &connection_form::postgres_ssl_mode_choices(),
+                        cx,
+                    ) {
+                        crate::model::PostgresSslMode::Disable => "Connects without encryption.",
+                        crate::model::PostgresSslMode::Require => {
+                            "Encrypts without checking the server certificate."
+                        }
+                        crate::model::PostgresSslMode::VerifyFull => {
+                            "Checks the server certificate and hostname."
+                        }
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.postgres_ssl_mode)
+                            .id("connection-postgres-ssl-mode")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS mode")
+                            .into_any_element()
+                    },
+                )
+            }))
+            .items((!postgres).then(|| {
+                connection_row(
+                    qrow,
+                    "TLS",
+                    if uses_sign_in && !form.tls {
+                        "Without TLS, others on the network can read and use the access token."
+                    } else {
+                        "Encrypts the connection. The server must accept TLS on this port."
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, cx| {
+                        Switch::new("connection-tls")
+                            .checked(form.tls)
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS")
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.form {
+                                    form.tls = *checked;
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    },
+                )
+            }))
             .items((!postgres).then(|| {
                 connection_row(
                     qrow,

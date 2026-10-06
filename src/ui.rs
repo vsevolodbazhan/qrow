@@ -343,6 +343,8 @@ impl Tab {
 struct ProfileEditor {
     database_type: connection_form::RowSelect,
     _database_type_subscription: Subscription,
+    postgres_ssl_mode: connection_form::RowSelect,
+    _postgres_ssl_mode_subscription: Subscription,
     profile: Profile,
     fields: Vec<Entity<InputState>>,
     parameters: Entity<TextareaState>,
@@ -2781,10 +2783,28 @@ impl Qrow {
                     cx.notify();
                 }
             });
+        let postgres_ssl_mode = connection_form::choice_select(
+            &connection_form::postgres_ssl_mode_choices(),
+            &if is_new {
+                crate::model::PostgresSslMode::Require
+            } else {
+                profile.postgres_ssl_mode()
+            },
+            window,
+            cx,
+        );
+        let postgres_ssl_mode_subscription =
+            cx.subscribe_in(&postgres_ssl_mode, window, |_, _, event, _, cx| {
+                if matches!(event, SelectEvent::Confirm(Some(_))) {
+                    cx.notify();
+                }
+            });
         self.form = Some(ProfileEditor {
             dbt,
             database_type,
             _database_type_subscription: database_type_subscription,
+            postgres_ssl_mode,
+            _postgres_ssl_mode_subscription: postgres_ssl_mode_subscription,
             parameters,
             notes_counted: connection_form::counts_notes(profile.assistant_notes.len()),
             assistant_notes,
@@ -3028,7 +3048,17 @@ impl Qrow {
                 connection_form::keeps_connected(&form.idle_behavior, cx),
                 &profile.lifecycle,
             )?;
-            profile.tls = form.tls;
+            if profile.database_type == crate::model::DatabaseType::Postgres {
+                let mode = connection_form::chosen(
+                    &form.postgres_ssl_mode,
+                    &connection_form::postgres_ssl_mode_choices(),
+                    cx,
+                );
+                profile.postgres_ssl_mode = Some(mode);
+                profile.tls = mode != crate::model::PostgresSslMode::Disable;
+            } else {
+                profile.tls = form.tls;
+            }
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
             profile.authentication = if profile.database_type == crate::model::DatabaseType::Kyuubi

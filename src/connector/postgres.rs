@@ -1,7 +1,12 @@
 //! Postgres sessions. Values use the server's text representation.
+mod tls;
+
 use super::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session};
 use crate::{
-    model::{Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
+    model::{
+        Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PostgresSslMode, Profile,
+        Row,
+    },
     tls::Trust,
 };
 use anyhow::{Context, Result};
@@ -144,6 +149,7 @@ impl Connector for PostgresConnector {
             .enable_all()
             .build()?;
         let timeout = Duration::from_secs(profile.lifecycle.response_timeout_seconds);
+        let ssl_mode = profile.postgres_ssl_mode();
         let mut config = Config::new();
         config
             .host(&profile.host)
@@ -153,17 +159,17 @@ impl Connector for PostgresConnector {
             .password(secret.value()?.as_str())
             .connect_timeout(timeout)
             .application_name("Qrow")
-            .ssl_mode(if profile.tls {
+            .ssl_mode(if ssl_mode != PostgresSslMode::Disable {
                 SslMode::Require
             } else {
                 SslMode::Disable
             });
-        let tls = if profile.tls {
-            Some(MakeRustlsConnect::new(
+        let tls = match ssl_mode {
+            PostgresSslMode::Disable => None,
+            PostgresSslMode::Require => Some(MakeRustlsConnect::new(tls::encryption_only()?)),
+            PostgresSslMode::VerifyFull => Some(MakeRustlsConnect::new(
                 (*self.trust.client_config()?).clone(),
-            ))
-        } else {
-            None
+            )),
         };
         let (client, connection) = runtime.block_on(async {
             tokio::time::timeout(timeout, async {

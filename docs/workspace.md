@@ -117,6 +117,10 @@ each connection. Earlier connections load with password authentication and
 without TLS. They keep their identifiers and stored passwords. An earlier
 version of Qrow cannot open a version 6 workspace.
 
+Postgres profiles store an optional TLS mode. A profile without this field uses
+its earlier TLS checkbox. An enabled checkbox still verifies the certificate
+and hostname. See [Postgres connections](connections.md#use-postgres).
+
 ## Quit and save
 
 Qrow saves after a short editing delay. **Qrow → Quit Qrow**, **⌘Q**, and the

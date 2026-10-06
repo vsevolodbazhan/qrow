@@ -311,8 +311,10 @@ archive to the mirror first, as its README tells.
 Run `./qtest run postgres`. This suite starts a separate disposable Postgres 17
 container with a synthetic password and a temporary TLS certificate. It tests
 connector results, SQL errors, cancellation, session settings, schema metadata,
-and certificate verification. On macOS, it also tests queries, result pages,
-and cancellation through the real Qrow window.
+TLS encryption without a trusted certificate, and certificate verification.
+On macOS, it also tests encrypted queries, result pages, and cancellation
+through the real Qrow window. The unit suite includes a protocol test that
+checks that required TLS cannot fall back to plaintext.
 
 The suite requires Docker. It does not use the Spark fixture or a native server
 runtime. It removes the container, its volumes, and certificates after the run.

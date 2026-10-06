@@ -1,7 +1,7 @@
 use crate::support::{MemoryCredentials, TestApp, cell, header};
 use gpui_kit::TestAppContext;
 use qrow::{
-    model::{DatabaseType, Profile, SavedTab, Workspace},
+    model::{DatabaseType, PostgresSslMode, Profile, SavedTab, Workspace},
     storage::Credentials,
 };
 
@@ -10,6 +10,7 @@ fn workspace(sql: &str) -> (Workspace, MemoryCredentials) {
     assert!(fixture.starts_with("qrow-e2e-postgres-"));
     let profile = Profile {
         database_type: DatabaseType::Postgres,
+        postgres_ssl_mode: Some(PostgresSslMode::Require),
         name: "Postgres".into(),
         host: "127.0.0.1".into(),
         port: std::env::var("QROW_POSTGRES_PORT")
@@ -51,6 +52,11 @@ fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     app.wait_cell(cx, 0, 1, "1001");
     app.run_sql(cx, "SELECT missing_column");
     app.wait_status(cx, "Error: Query failed");
+    app.run_complete(
+        cx,
+        "SELECT ssl AS value FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+    );
+    app.wait_cell(cx, 0, 1, "t");
     app.run_complete(cx, "SELECT $$a;b$$ AS value");
     app.wait_cell(cx, 0, 1, "a;b");
     app.click(cx, "disconnect");

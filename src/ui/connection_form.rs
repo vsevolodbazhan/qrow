@@ -774,6 +774,15 @@ pub(super) fn database_type_choices() -> Vec<(crate::model::DatabaseType, String
         .collect()
 }
 
+pub(super) fn postgres_ssl_mode_choices() -> Vec<(crate::model::PostgresSslMode, String)> {
+    use crate::model::PostgresSslMode;
+    vec![
+        (PostgresSslMode::Disable, "Disabled".into()),
+        (PostgresSslMode::Require, "Require TLS".into()),
+        (PostgresSslMode::VerifyFull, "Verify certificate".into()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

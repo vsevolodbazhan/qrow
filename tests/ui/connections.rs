@@ -348,6 +348,11 @@ fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAp
             Some("postgres")
         );
         assert!(window.try_find("connection-authentication").is_none());
+        assert!(window.try_find("connection-tls").is_none());
+        assert_eq!(
+            crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("Require TLS")
+        );
     });
     fill_connection(&app, cx, "Postgres test");
     app.fill(cx, "connection-port", "5432");
@@ -364,9 +369,63 @@ fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAp
         qrow::model::DatabaseType::Postgres
     );
     assert_eq!(
+        app.saved().profiles[0].postgres_ssl_mode,
+        Some(qrow::model::PostgresSslMode::Require)
+    );
+    assert_eq!(
         app.saved().profiles[0].authentication,
         qrow::model::Authentication::Password
     );
+}
+
+#[gpui_kit::test]
+fn postgres_tls_choices_save_and_keep_legacy_verification(cx: &mut TestAppContext) {
+    use qrow::model::{DatabaseType, PostgresSslMode};
+    let (mut workspace, credentials) = connections(&["Postgres legacy"]);
+    let id = workspace.profiles[0].id;
+    workspace.profiles[0].database_type = DatabaseType::Postgres;
+    workspace.profiles[0].tls = true;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    for (label, mode) in [
+        ("Require TLS", PostgresSslMode::Require),
+        ("Disabled", PostgresSslMode::Disable),
+        ("Verify certificate", PostgresSslMode::VerifyFull),
+    ] {
+        app.context_menu(cx, connection_row(id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        if app.saved().profiles[0].postgres_ssl_mode.is_none() {
+            app.update(cx, |window, _| {
+                assert_eq!(
+                    crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+                    Some("Verify certificate")
+                )
+            });
+        }
+        app.select(cx, "connection-postgres-ssl-mode", label);
+        app.click(cx, "save-profile");
+        app.wait_gone(cx, "connection-name");
+        app.wait_until(
+            cx,
+            "the saved TLS choice",
+            Duration::from_secs(10),
+            |_, _| app.saved().profiles[0].postgres_ssl_mode == Some(mode),
+        );
+        assert_eq!(
+            app.saved().profiles[0].tls,
+            mode != PostgresSslMode::Disable
+        );
+    }
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("Verify certificate")
+        )
+    });
+    cancel_form(&app, cx);
 }
 
 #[gpui_kit::test]

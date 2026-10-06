@@ -4,7 +4,7 @@ use qrow::{
         Completion, Connector, DatabaseConnector, MetadataRequest, QueryError, QueryState, Secret,
         Session, postgres::PostgresConnector, wait_for_completion,
     },
-    model::{Authentication, DatabaseType, Profile},
+    model::{Authentication, DatabaseType, PostgresSslMode, Profile},
     tls::Trust,
 };
 use std::{
@@ -37,6 +37,41 @@ fn connect() -> Box<dyn Session> {
 fn complete(session: &mut dyn Session, sql: &str) -> Result<Completion> {
     session.execute(sql)?;
     wait_for_completion(session, Some(Instant::now() + Duration::from_secs(10)))
+}
+
+#[test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn explicit_tls_modes_encrypt_without_a_trust_store_and_keep_verification_available() -> Result<()>
+{
+    let mut p = profile();
+    for (mode, expected) in [
+        (PostgresSslMode::Require, "t"),
+        (PostgresSslMode::Disable, "f"),
+    ] {
+        p.postgres_ssl_mode = Some(mode);
+        let mut session =
+            PostgresConnector::default().connect(&p, Secret::password("qrow-test-password"))?;
+        complete(
+            &mut *session,
+            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+        )?;
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some(expected));
+    }
+    p.postgres_ssl_mode = Some(PostgresSslMode::VerifyFull);
+    assert!(
+        PostgresConnector::default()
+            .connect(&p, Secret::password("qrow-test-password"))
+            .is_err()
+    );
+    let ca = std::fs::read(std::env::var("QROW_POSTGRES_CA")?)?;
+    let mut session = PostgresConnector::new(Trust::from_pem(&ca)?)
+        .connect(&p, Secret::password("qrow-test-password"))?;
+    complete(
+        &mut *session,
+        "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()",
+    )?;
+    assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("t"));
+    Ok(())
 }
 
 #[test]

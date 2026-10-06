@@ -42,7 +42,8 @@ search field above the pages to find a field.
 1. Click **+** beside Connections.
 2. On the **General** page, select **Database type**.
 3. Enter a name, the server host, and the port.
-4. Turn on **TLS** if the server accepts TLS on this port.
+4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
+   For Postgres, select a [TLS mode](#use-postgres).
 5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
    - **Sign-in (OpenID Connect)**: select a
@@ -88,9 +89,19 @@ Postgres checks each setting when the session opens. If a setting is invalid,
 the connection fails and names the setting. Passwords use macOS Keychain.
 Postgres connections do not use OpenID Connect sign-ins.
 
-Turn on **TLS** to require encryption. The server certificate must match the
-host and have a certificate authority in the system trust store. There is no
-option to accept an invalid certificate.
+Select a **TLS mode**:
+
+- **Require TLS** encrypts the connection without a certificate or hostname
+  check. New Postgres connections use this mode. It does not check the server
+  identity. You do not need to add a certificate authority to Keychain.
+- **Verify certificate** encrypts the connection and checks the certificate
+  and hostname against the system trust store.
+- **Disabled** connects without encryption. A server that requires TLS rejects
+  this mode.
+
+Both TLS modes fail if the server does not accept encryption. They do not
+retry without TLS. Existing Postgres profiles keep their earlier choice.
+Profiles with the old TLS checkbox enabled use **Verify certificate**.
 
 Each tab has a separate Postgres session. Temporary tables and transaction
 state stay with that tab until the session closes. Cancel sends a Postgres

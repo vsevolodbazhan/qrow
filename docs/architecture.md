@@ -21,7 +21,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [dbt index](../src/dbt.rs) | Read a dbt `manifest.json` into a compact index of models, sources, tests, lineage, and metrics, and save the index in a [binary form](../src/dbt/saved.rs). The index keeps the position of each SQL text in the manifest, not the SQL. |
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
-| [Postgres connector](../src/connector/postgres.rs) | Implement password authentication, verified TLS, cancellation, and text results for Postgres. |
+| [Postgres connector](../src/connector/postgres.rs) | Implement password authentication, TLS modes, cancellation, and text results for Postgres. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
 | [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |
 | [Sign-ins](../src/oidc/) | Run the OpenID Connect browser sign-in, validate ID tokens, and give access tokens to connections. |
