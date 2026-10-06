@@ -12,7 +12,7 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
-use gpui_kit::base::{SelectableText, StyledExt as _};
+use gpui_kit::base::{SelectableText, StyledExt as _, TextSelectionHandle};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -37,8 +37,9 @@ use uuid::Uuid;
 const SHEET_WIDTH: f32 = 0.45;
 const MIN_SHEET_WIDTH: f32 = 420.;
 const MAX_SHEET_WIDTH: f32 = 760.;
-/// The height of the SQL box. Longer SQL scrolls in it.
-const SQL_HEIGHT: f32 = 420.;
+/// The lines of SQL in one row of the list. The SQL scrolls with the rest
+/// of the sheet, and the list lays out only the rows on screen.
+const SQL_CHUNK_LINES: usize = 30;
 /// How far above and below the screen the list lays out rows, so that they
 /// do not appear late during a scroll.
 const OVERDRAW: f32 = 600.;
@@ -185,6 +186,7 @@ enum Row {
     Parent(usize),
     ChildrenTitle,
     Child(usize),
+    SqlChunk(usize),
 }
 
 /// The SQL of the resource. The sheet reads it from the manifest when the
@@ -195,8 +197,32 @@ enum Sql {
     /// The manifest changed after Qrow read it, so the positions of the SQL
     /// are wrong. Qrow reads the manifest again first.
     Refreshing,
-    Read(SharedString),
+    Read(SqlText),
     Failed(String),
+}
+
+/// SQL that the sheet read, in rows of [`SQL_CHUNK_LINES`] lines. The rows
+/// share one selection, so a selection can go across them.
+struct SqlText {
+    full: SharedString,
+    chunks: Vec<SharedString>,
+    selection: TextSelectionHandle,
+}
+
+impl SqlText {
+    fn new(sql: String, cx: &mut App) -> Self {
+        let lines: Vec<&str> = sql.lines().collect();
+        let chunks = lines
+            .chunks(SQL_CHUNK_LINES)
+            .map(|chunk| SharedString::from(chunk.join("\n")))
+            .collect();
+        let selection = TextSelectionHandle::new(sql.clone(), cx);
+        Self {
+            full: sql.into(),
+            chunks,
+            selection,
+        }
+    }
 }
 
 /// The result of a read of the SQL in the background.
@@ -293,6 +319,9 @@ impl DbtDetailsView {
         let mut rows = vec![Row::Facts, Row::Description];
         if data.sql.is_some() {
             rows.push(Row::Sql);
+            if let (true, Sql::Read(sql)) = (self.sql_open, &self.sql) {
+                rows.extend((0..sql.chunks.len()).map(Row::SqlChunk));
+            }
         }
         rows.extend([Row::Tests, Row::ColumnsTitle]);
         if self.matching.is_empty() {
@@ -357,10 +386,10 @@ impl DbtDetailsView {
         self.state = state;
         self.project = project;
         if new_index {
-            self.rebuild(cx);
             // The SQL of the old index is old.
             self.sql_read += 1;
             self.sql = Sql::Unread;
+            self.rebuild(cx);
             if self.sql_open {
                 self.read_sql(cx);
             }
@@ -422,11 +451,23 @@ impl DbtDetailsView {
         cx.notify();
     }
 
-    /// The SQL row has a new height.
-    fn sql_changed(&self) {
-        if let Some(row) = self.rows.iter().position(|row| *row == Row::Sql) {
-            self.list.remeasure_items(row..row + 1);
-        }
+    /// The SQL part changed: its header has a new height, and the rows of
+    /// SQL came or went.
+    fn sql_changed(&mut self) {
+        let Some(sql) = self.rows.iter().position(|row| *row == Row::Sql) else {
+            return;
+        };
+        let chunks = |rows: &[Row]| {
+            rows[sql + 1..]
+                .iter()
+                .take_while(|row| matches!(row, Row::SqlChunk(_)))
+                .count()
+        };
+        let old = chunks(&self.rows);
+        self.rows = self.make_rows();
+        let new = chunks(&self.rows);
+        self.list.splice(sql + 1..sql + 1 + old, new);
+        self.list.remeasure_items(sql..sql + 1 + new);
     }
 
     /// Read the SQL in the background: the compiled SQL, or the raw SQL when
@@ -443,13 +484,14 @@ impl DbtDetailsView {
             return;
         };
         self.sql_read += 1;
-        self.sql_changed();
         if !state.is_current() {
             self.refresher.refresh(&state.path);
             self.sql = Sql::Refreshing;
+            self.sql_changed();
             return;
         }
         self.sql = Sql::Reading;
+        self.sql_changed();
         let read = self.sql_read;
         // Compiled SQL can be large, and the file can be on a slow disk.
         let task = cx.background_executor().spawn(async move {
@@ -472,7 +514,7 @@ impl DbtDetailsView {
                 }
                 match result {
                     SqlRead::Changed => this.read_sql(cx),
-                    SqlRead::Read(sql) => this.sql = Sql::Read(sql.into()),
+                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql, cx)),
                     SqlRead::Failed(error) => this.sql = Sql::Failed(error),
                 }
                 this.sql_changed();
@@ -557,6 +599,7 @@ impl DbtDetailsView {
                 Some((title, raw_only)) => self.sql_part(title, raw_only, cx),
                 None => div().into_any_element(),
             },
+            Row::SqlChunk(position) => self.sql_chunk(position, cx),
             Row::Tests => {
                 let content = if data.tests.is_empty() {
                     muted_text("No tests of the table.", muted)
@@ -661,41 +704,23 @@ impl DbtDetailsView {
                 muted,
             ),
             Sql::Failed(error) => muted_text(&format!("Could not read the SQL: {error}"), muted),
-            Sql::Read(sql) => v_flex()
-                .gap_1()
+            Sql::Read(sql) => h_flex()
+                .id("dbt-details-sql")
+                .test_support()
+                .role(Role::Label)
+                .aria_label(sql.full.clone())
+                .gap_2()
+                .text_xs()
+                .text_color(muted)
+                .child(div().flex_1().child(if raw_only {
+                    "The manifest has no compiled SQL. This is the SQL with Jinja."
+                } else {
+                    "The SQL that dbt compiled, without Jinja."
+                }))
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(div().flex_1().child(if raw_only {
-                            "The manifest has no compiled SQL. This is the SQL with Jinja."
-                        } else {
-                            "The SQL that dbt compiled, without Jinja."
-                        }))
-                        .child(
-                            Clipboard::new("dbt-details-copy-sql")
-                                .value(sql.clone())
-                                .tooltip("Copy SQL"),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("dbt-details-sql")
-                        .test_support()
-                        .role(Role::Label)
-                        .aria_label(sql.clone())
-                        .max_h(px(SQL_HEIGHT))
-                        .overflow_y_scroll()
-                        .overflow_x_scroll()
-                        .p_2()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().secondary)
-                        .font_family(self.code_font.clone())
-                        .text_xs()
-                        .child(SelectableText::new("dbt-sql", sql.clone())),
+                    Clipboard::new("dbt-details-copy-sql")
+                        .value(sql.full.clone())
+                        .tooltip("Copy SQL"),
                 )
                 .into_any_element(),
         });
@@ -704,6 +729,39 @@ impl DbtDetailsView {
             .gap_2()
             .child(header)
             .children(body)
+            .into_any_element()
+    }
+
+    /// The rows of SQL form one box. They scroll with the sheet instead of
+    /// in a box of their own.
+    fn sql_chunk(&self, position: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Sql::Read(sql) = &self.sql else {
+            return div().into_any_element();
+        };
+        let Some(text) = sql.chunks.get(position) else {
+            return div().into_any_element();
+        };
+        let last = position + 1 == sql.chunks.len();
+        div()
+            .w_full()
+            .px_2()
+            .bg(cx.theme().secondary)
+            .border_color(cx.theme().border)
+            .border_x_1()
+            .when(position == 0, |chunk| {
+                chunk.mt_1().pt_2().border_t_1().rounded_t_md()
+            })
+            .when(last, |chunk| chunk.pb_2().border_b_1().rounded_b_md())
+            .font_family(self.code_font.clone())
+            .text_xs()
+            .child(
+                SelectableText::with_handle(
+                    SharedString::from(format!("dbt-sql-{position}")),
+                    sql.selection.clone(),
+                    text.clone(),
+                )
+                .document_order(position as u64),
+            )
             .into_any_element()
     }
 }
