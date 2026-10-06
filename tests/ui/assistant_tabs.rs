@@ -59,6 +59,27 @@ fn tabs_of(app: &TestApp, profile: Uuid) -> Vec<SavedTab> {
         .collect()
 }
 
+/// Read the saved thread after the background workspace save has finished.
+fn saved_thread_for_tab(app: &TestApp, cx: &mut TestAppContext, tab: Uuid) -> String {
+    let mut thread = None;
+    app.wait_until(
+        cx,
+        "the saved conversation of the tab",
+        REPLY_TIMEOUT,
+        |_, _| {
+            thread = app
+                .saved()
+                .assistant
+                .conversations
+                .into_iter()
+                .find(|conversation| conversation.tab_id == Some(tab))
+                .map(|conversation| conversation.thread_id);
+            thread.is_some()
+        },
+    );
+    thread.unwrap()
+}
+
 #[gpui_kit::test]
 fn query_dots_keep_sql_state_while_their_conversation_works_or_waits(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
@@ -254,14 +275,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     // Selecting the other conversation selects its tab and connection.
     app.show_threads(cx);
     let alpha_tab = tab_of(&app, alpha).unwrap().id;
-    let alpha_thread = app
-        .saved()
-        .assistant
-        .conversations
-        .into_iter()
-        .find(|conversation| conversation.tab_id == Some(alpha_tab))
-        .unwrap()
-        .thread_id;
+    let alpha_thread = saved_thread_for_tab(&app, cx, alpha_tab);
     app.click(cx, format!("assistant-thread-{alpha_thread}"));
     app.show_conversation(cx);
     app.wait_editor(cx, "SELECT 11");
@@ -276,14 +290,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.wait_label(cx, "Toggle assistant, reply ready");
     app.show_threads(cx);
     let beta_tab = tab_of(&app, beta).unwrap().id;
-    let beta_thread = app
-        .saved()
-        .assistant
-        .conversations
-        .into_iter()
-        .find(|conversation| conversation.tab_id == Some(beta_tab))
-        .unwrap()
-        .thread_id;
+    let beta_thread = saved_thread_for_tab(&app, cx, beta_tab);
     app.click(cx, format!("assistant-thread-{beta_thread}"));
     app.show_conversation(cx);
     app.wait_reply(cx, "Finished Beta: approval_cancelled");
