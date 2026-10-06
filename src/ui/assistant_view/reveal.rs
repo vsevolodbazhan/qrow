@@ -102,8 +102,9 @@ pub(super) fn cut(text: &str, shown: usize, wanted: usize, settled: bool) -> usi
     for _ in 0..8 {
         let next = span_end(text, shown, cut, settled);
         let next = row_end(text, shown, next, settled);
+        // The end of a span or a row stays shown when its word can grow.
         let next = if next > cut {
-            word_end(text, shown, next, settled)
+            word_end(text, shown, next, settled).max(next)
         } else {
             next
         };
@@ -426,6 +427,8 @@ mod tests {
         assert_eq!(cut("A **bold", 0, 6, false), 1);
         assert_eq!(cut("A **bold\nNext", 0, 6, false), 8);
         assert_eq!(cut("A **bold", 0, 6, true), 8);
+        // A span that ends the received text shows whole.
+        assert_eq!(cut("**hello world**", 0, 3, false), 15);
     }
 
     #[::core::prelude::v1::test]

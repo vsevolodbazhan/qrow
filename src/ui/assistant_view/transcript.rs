@@ -632,4 +632,21 @@ mod tests {
         entry.toggle_expanded();
         assert!(entry.expanded() && entry.revision() > streamed);
     }
+
+    #[::core::prelude::v1::test]
+    fn final_text_after_a_shown_reply_also_shows() {
+        let mut entry = TranscriptEntry::streamed(Speaker::Assistant, "One two ", None);
+        while entry.advance_reveal(Duration::from_millis(100)) {}
+        assert!(entry.shown_text().starts_with("One two"));
+        assert!(entry.show_all() || entry.shown_text() == "One two ");
+        // Codex can drop streamed parts. The final text has them.
+        entry.set_text("One two three four");
+        assert!(entry.revealing());
+        while entry.advance_reveal(Duration::from_millis(100)) {}
+        assert_eq!(entry.shown_text(), "One two three four");
+        assert!(!entry.revealing());
+        // Other final text shows at once.
+        entry.set_text("Something else");
+        assert_eq!(entry.shown_text(), "Something else");
+    }
 }
