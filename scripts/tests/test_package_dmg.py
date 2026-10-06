@@ -122,17 +122,19 @@ class BackgroundTests(unittest.TestCase):
         if dmg.font(dmg.CAPTION_SIZE) is None:
             self.skipTest("no font for the drag hint")
         image = render()
-        center = (dmg.APP_POSITION[0] + dmg.APPLICATIONS_POSITION[0]) // 2
-        box = (center - 120, dmg.CAPTION_TOP, center + 120, dmg.CAPTION_TOP + 2 * dmg.CAPTION_SIZE)
-        self.assertGreater(color_count(image, box, dmg.CAPTION_COLOR, 30), 20)
-        # The hint is centered between the icons.
+        center = (dmg.APP_POSITION[0] + dmg.APPLICATIONS_POSITION[0]) / 2
+        # The band spans the window, so a wide font cannot run out of it.
+        band = (0, dmg.CAPTION_TOP, image.width, dmg.CAPTION_TOP + 2 * dmg.CAPTION_SIZE)
+        self.assertGreater(color_count(image, band, dmg.CAPTION_COLOR, 30), 20)
+        # The ink of the hint, with its anti-aliased edges, is centered between
+        # the icons.
         columns = [
             x
-            for y in range(box[1], box[3])
-            for x in range(box[0], box[2])
-            if sum(abs(a - b) for a, b in zip(image.getpixel((x, y)), dmg.CAPTION_COLOR)) <= 30
+            for y in range(band[1], band[3])
+            for x in range(band[0], band[2])
+            if luminance(image.getpixel((0, y))) - luminance(image.getpixel((x, y))) > 24
         ]
-        self.assertAlmostEqual((min(columns) + max(columns)) / 2, center, delta=3)
+        self.assertAlmostEqual((min(columns) + max(columns)) / 2, center, delta=2)
 
 
 class LayoutTests(unittest.TestCase):
