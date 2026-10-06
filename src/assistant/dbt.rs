@@ -327,7 +327,12 @@ impl<'a> Project<'a> {
             }
             let (kept, _) = fit(tests, limit / 2);
             let without = size(&make(0, &kept));
-            make(limit.saturating_sub(without + 16), &kept)
+            let shortened = make(limit.saturating_sub(without + 16), &kept);
+            if size(&shortened) <= limit {
+                shortened
+            } else {
+                make(0, &[])
+            }
         };
         value["matched_column_count"] = json!(matched.len());
         value["column_offset"] = json!(column_offset);
@@ -645,14 +650,26 @@ fn cut(text: &str, limit: usize) -> String {
     cut_flag(text, limit).0
 }
 
-/// `text` cut to at most `limit` bytes, and whether it was cut.
+/// `text` cut so that it takes at most `limit` bytes in JSON, with `…` at
+/// the end, and whether it was cut. Escapes count: a newline takes two bytes.
 fn cut_flag(text: &str, limit: usize) -> (String, bool) {
-    if text.len() <= limit {
+    let cost = |c: char| match c {
+        '"' | '\\' | '\n' | '\r' | '\t' | '\u{8}' | '\u{c}' => 2,
+        c if (c as u32) < 0x20 => 6,
+        c => c.len_utf8(),
+    };
+    if text.chars().map(cost).sum::<usize>() <= limit {
         return (text.to_owned(), false);
     }
-    let mut end = limit.saturating_sub('…'.len_utf8());
-    while !text.is_char_boundary(end) {
-        end -= 1;
+    let room = limit.saturating_sub('…'.len_utf8());
+    let mut used = 0;
+    let mut end = 0;
+    for (at, c) in text.char_indices() {
+        used += cost(c);
+        if used > room {
+            break;
+        }
+        end = at + c.len_utf8();
     }
     (format!("{}…", &text[..end]), true)
 }

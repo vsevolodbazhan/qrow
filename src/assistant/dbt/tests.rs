@@ -412,8 +412,8 @@ fn every_part_of_a_model_fits_in_a_tool_result() {
         json!({
             "unique_id": "model.lake.big", "resource_type": "model", "name": "big",
             "schema": "core", "relation_name": "`core`.`big`",
-            "description": "x".repeat(100_000),
-            "columns": {"status": {"name": "status", "description": "y".repeat(100_000)}},
+            "description": "x\"".repeat(50_000),
+            "columns": {"status": {"name": "status", "description": "y\n".repeat(50_000)}},
         }),
     );
     for number in 0..400 {
@@ -477,4 +477,18 @@ fn the_relation_lookup_agrees_with_one_lookup() {
             "{relation}"
         );
     }
+}
+
+#[test]
+fn a_cut_counts_the_escapes_of_json() {
+    let text = "a\n".repeat(1_000);
+    let (cut, truncated) = cut_flag(&text, 100);
+    assert!(truncated);
+    assert!(serde_json::to_string(&cut).unwrap().len() - 2 <= 100);
+    assert_eq!(
+        cut_flag("short \"text\"", 100),
+        ("short \"text\"".into(), false)
+    );
+    let (cut, _) = cut_flag(&"é".repeat(100), 11);
+    assert_eq!(cut, "éééé…");
 }
