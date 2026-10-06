@@ -8,7 +8,7 @@ use gpui_kit::test::TestWindowExt;
 use qrow::model::{Authentication, SavedTab, Workspace};
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -123,6 +123,69 @@ fn switching_from_a_copy_uses_the_selected_sign_in_and_releases_old_sessions(
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "42");
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn retrying_a_cancelled_query_reopens_sign_in_and_runs_the_latest_sql(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let fixture = FixtureProvider::get();
+    let sign_in = fixture.sign_in("Fixture");
+    let mut profile = kyuubi.profile("Analytics");
+    profile.port = fixture.tls_port;
+    profile.tls = true;
+    profile.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1 AS value".into();
+    let workspace = Workspace {
+        profiles: vec![profile],
+        tabs: vec![tab],
+        sign_ins: vec![sign_in],
+        ..Workspace::default()
+    };
+    let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+    let browser_urls = opened.clone();
+    let finish = fixture.browser("alice", &[]);
+    let browser = move |url: &str| {
+        let count = {
+            let mut urls = browser_urls.lock().unwrap();
+            urls.push(url.to_owned());
+            urls.len()
+        };
+        if count == 3 { finish(url) } else { Ok(()) }
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
+    );
+    for count in 1..=3 {
+        app.click(cx, "run");
+        app.wait_until(
+            cx,
+            "the browser sign-in page",
+            Duration::from_secs(20),
+            |_, _| opened.lock().unwrap().len() == count,
+        );
+        if count < 3 {
+            app.wait_status(cx, "Waiting for sign-in");
+            app.click(cx, "cancel");
+            app.wait_status(cx, "Cancelled: Sign-in not finished");
+            app.type_sql(cx, "SELECT 42 AS value");
+        }
+    }
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "42");
+    let urls = opened.lock().unwrap();
+    assert_eq!(urls.len(), 3);
+    assert!(
+        urls.iter().all(|url| url == &urls[0]),
+        "one shared sign-in attempt"
+    );
     assert_eq!(app.credentials.reads(), 0);
 }
 

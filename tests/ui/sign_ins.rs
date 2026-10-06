@@ -13,7 +13,10 @@ use qrow::{
     storage::TokenStore,
     ui::{ShowConnections, ShowSignIns, ToggleActivity, ToggleSidebar},
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -750,6 +753,107 @@ fn cancel_ends_a_query_that_waits_for_the_browser(cx: &mut TestAppContext) {
     // The browser sign-in continues, and the sidebar can cancel it.
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Waiting for the browser…");
+}
+
+#[gpui_kit::test]
+fn rerunning_a_cancelled_query_reopens_the_pending_browser_sign_in(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (mut workspace, sign_in) = unreachable_workspace(&provider);
+    let mut second = SavedTab::new(2, workspace.profiles.first().map(|profile| profile.id));
+    second.sql = "SELECT 2".into();
+    workspace.tabs.push(second);
+    let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+    let browser_urls = opened.clone();
+    let finish = provider.browser("alice");
+    let browser = move |url: &str| {
+        let count = {
+            let mut urls = browser_urls.lock().unwrap();
+            urls.push(url.to_owned());
+            urls.len()
+        };
+        if count == 3 { finish(url) } else { Ok(()) }
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(browser))),
+    );
+    for count in 1..=3 {
+        app.click(cx, "run");
+        app.wait_until(cx, "the reopened browser", WAIT, |_, _| {
+            opened.lock().unwrap().len() == count
+        });
+        if count == 1 {
+            app.click_labelled(cx, "Query 2");
+            app.click(cx, "run");
+            wait_query_status(&app, cx, "Waiting for sign-in");
+            app.settle(cx);
+            assert_eq!(
+                opened.lock().unwrap().len(),
+                1,
+                "the second tab shares the attempt"
+            );
+            app.click_starting(cx, "Query 1");
+        }
+        if count < 3 {
+            wait_query_status(&app, cx, "Waiting for sign-in");
+            app.click(cx, "cancel");
+            wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+        }
+    }
+    wait_query_status(&app, cx, "Error: Connection failed");
+    app.click_starting(cx, "Query 2");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    let urls = opened.lock().unwrap();
+    assert_eq!(urls.len(), 3);
+    assert!(
+        urls.iter().all(|url| url == &urls[0]),
+        "one shared sign-in attempt"
+    );
+    assert_eq!(provider.authorization_grants(), 1);
+}
+
+#[gpui_kit::test]
+fn a_browser_reopen_failure_keeps_the_pending_sign_in_available(cx: &mut TestAppContext) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let provider = Provider::start();
+    let (workspace, _) = unreachable_workspace(&provider);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let browser_count = opened.clone();
+    let finish = provider.browser("alice");
+    let browser = move |url: &str| match browser_count.fetch_add(1, Ordering::SeqCst) {
+        0 => Ok(()),
+        1 => anyhow::bail!("synthetic browser error"),
+        _ => finish(url),
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(browser))),
+    );
+    app.click(cx, "run");
+    app.wait_until(cx, "the initial browser", WAIT, |_, _| {
+        opened.load(Ordering::SeqCst) == 1
+    });
+    wait_query_status(&app, cx, "Waiting for sign-in");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+    app.click(cx, "run");
+    app.wait_until(cx, "the browser error", WAIT, |window, _| {
+        label(window, "workspace-message")
+            .is_some_and(|message| message.starts_with("Could not open the sign-in page."))
+    });
+    wait_query_status(&app, cx, "Waiting for sign-in");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    assert_eq!(opened.load(Ordering::SeqCst), 3);
+    assert_eq!(provider.authorization_grants(), 1);
 }
 
 #[gpui_kit::test]

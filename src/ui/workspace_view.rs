@@ -862,6 +862,7 @@ impl Qrow {
                 el.child(
                     div()
                         .id("workspace-message")
+                        .test_support()
                         .px_3()
                         .py_2()
                         .text_color(cx.theme().warning)

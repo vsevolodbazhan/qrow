@@ -167,6 +167,10 @@ second run. If the sign-in fails, the query ends with
 **Error: Sign-in required**. If you cancel it in the browser, the query ends
 with **Cancelled: Sign-in not finished**. Click **Cancel** to stop the query
 while it waits. The browser sign-in then continues in the Sign-ins sidebar.
+If you run the cancelled query again, Qrow opens the page of that sign-in
+again. Other queries that wait for the same sign-in continue to wait.
+To start a new sign-in attempt, cancel the sign-in in the Sign-ins sidebar.
+Then run the query again.
 Qrow opens the browser only once for each query. An open session continues
 without a new token, so a query in it does not open the browser. While a
 browser sign-in or a sign-out of the sign-in runs, each new query of its

@@ -21,7 +21,10 @@ use gpui_kit::component::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 /// The result of background sign-in work.
@@ -30,6 +33,13 @@ enum Outcome {
     SignedOut(Uuid, Result<(), String>),
     Removed(Uuid, Result<(), String>),
     Retried(Uuid, Result<(), String>),
+    BrowserFailed(Uuid, Arc<AtomicBool>),
+}
+
+/// One browser sign-in shared by the queries that wait for it.
+struct PendingSignIn {
+    cancel: Arc<AtomicBool>,
+    url: Arc<Mutex<Option<String>>>,
 }
 
 /// The form of the Sign-in Settings dialog, which adds or edits a sign-in.
@@ -99,7 +109,7 @@ const TOKEN_FIELDS: std::ops::RangeInclusive<usize> = 1..=4;
 
 pub(super) struct SignInState {
     /// Browser sign-ins that run, with their cancellation flags.
-    pending: HashMap<Uuid, Arc<AtomicBool>>,
+    pending: HashMap<Uuid, PendingSignIn>,
     signing_out: HashSet<Uuid>,
     retrying: HashSet<Uuid>,
     /// The last failure of an action, shown with the sign-in.
@@ -109,10 +119,12 @@ pub(super) struct SignInState {
     statuses: Vec<(Uuid, Status)>,
     outcomes: (mpsc::Sender<Outcome>, mpsc::Receiver<Outcome>),
     /// Authorization URLs to open on the main thread.
-    urls: (mpsc::Sender<String>, mpsc::Receiver<String>),
+    urls: (mpsc::Sender<BrowserPage>, mpsc::Receiver<BrowserPage>),
     browser: Option<Browser>,
     pub(super) editor: Option<SignInEditor>,
 }
+
+type BrowserPage = (Uuid, Arc<AtomicBool>, String);
 
 impl SignInState {
     pub(super) fn new(browser: Option<Browser>) -> Self {
@@ -131,8 +143,8 @@ impl SignInState {
 
     /// Stops browser sign-ins, for example when the window closes.
     pub(super) fn cancel_all(&self) {
-        for cancel in self.pending.values() {
-            cancel.store(true, Ordering::SeqCst);
+        for pending in self.pending.values() {
+            pending.cancel.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -274,7 +286,14 @@ impl Qrow {
             return;
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        self.sign_in_ui.pending.insert(id, cancel.clone());
+        let authorization_url = Arc::new(Mutex::new(None));
+        self.sign_in_ui.pending.insert(
+            id,
+            PendingSignIn {
+                cancel: cancel.clone(),
+                url: authorization_url.clone(),
+            },
+        );
         self.sign_in_ui.errors.remove(&id);
         let service = self.oidc.clone();
         let outcomes = self.sign_in_ui.outcomes.0.clone();
@@ -283,10 +302,18 @@ impl Qrow {
         let wake = self.wake.clone();
         std::thread::spawn(move || {
             let open = |url: &str| -> anyhow::Result<()> {
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(oidc::SignInError::new(
+                        Failure::Cancelled,
+                        "Sign-in was cancelled",
+                    )
+                    .into());
+                }
+                *authorization_url.lock().unwrap() = Some(url.to_owned());
                 match &browser {
                     Some(browser) => browser(url),
                     None => {
-                        urls.send(url.to_owned())?;
+                        urls.send((id, cancel.clone(), url.to_owned()))?;
                         let _ = wake.try_send(());
                         Ok(())
                     }
@@ -302,10 +329,38 @@ impl Qrow {
     }
 
     pub(super) fn cancel_sign_in(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if let Some(cancel) = self.sign_in_ui.pending.get(&id) {
-            cancel.store(true, Ordering::SeqCst);
+        if let Some(pending) = self.sign_in_ui.pending.get(&id) {
+            pending.cancel.store(true, Ordering::SeqCst);
         }
         cx.notify();
+    }
+
+    /// Opens the page of an existing attempt after a cancelled query is run again.
+    fn reopen_sign_in(&self, id: Uuid, cx: &mut Context<Self>) {
+        let Some(pending) = self.sign_in_ui.pending.get(&id) else {
+            return;
+        };
+        if pending.cancel.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(url) = pending.url.lock().unwrap().clone() else {
+            return;
+        };
+        match &self.sign_in_ui.browser {
+            Some(browser) => {
+                let browser = browser.clone();
+                let cancel = pending.cancel.clone();
+                let outcomes = self.sign_in_ui.outcomes.0.clone();
+                let wake = self.wake.clone();
+                std::thread::spawn(move || {
+                    if !cancel.load(Ordering::SeqCst) && browser(&url).is_err() {
+                        let _ = outcomes.send(Outcome::BrowserFailed(id, cancel));
+                        let _ = wake.try_send(());
+                    }
+                });
+            }
+            None => cx.open_url(&url),
+        }
     }
 
     pub(super) fn sign_out(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -368,9 +423,17 @@ impl Qrow {
     /// status from a refresh. Returns whether something changed.
     pub(super) fn tick_sign_ins(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
-        let urls: Vec<String> = self.sign_in_ui.urls.1.try_iter().collect();
-        for url in urls {
-            cx.open_url(&url);
+        let urls: Vec<BrowserPage> = self.sign_in_ui.urls.1.try_iter().collect();
+        for (id, cancel, url) in urls {
+            if self
+                .sign_in_ui
+                .pending
+                .get(&id)
+                .is_some_and(|pending| Arc::ptr_eq(&pending.cancel, &cancel))
+                && !cancel.load(Ordering::SeqCst)
+            {
+                cx.open_url(&url);
+            }
         }
         let outcomes: Vec<Outcome> = self.sign_in_ui.outcomes.1.try_iter().collect();
         for outcome in outcomes {
@@ -378,6 +441,11 @@ impl Qrow {
             match outcome {
                 Outcome::SignedIn(id, result) => {
                     self.sign_in_ui.pending.remove(&id);
+                    for tab in &mut self.tabs {
+                        if tab.cancelled_sign_in == Some(id) {
+                            tab.cancelled_sign_in = None;
+                        }
+                    }
                     let ended = match &result {
                         Ok(_) => Ok(()),
                         Err((Failure::Cancelled, _)) => Err(None),
@@ -444,6 +512,32 @@ impl Qrow {
                         self.sign_in_ui.errors.insert(id, message);
                     } else {
                         self.sign_in_ui.errors.remove(&id);
+                    }
+                }
+                Outcome::BrowserFailed(id, cancel) => {
+                    if self
+                        .sign_in_ui
+                        .pending
+                        .get(&id)
+                        .is_some_and(|pending| Arc::ptr_eq(&pending.cancel, &cancel))
+                        && !cancel.load(Ordering::SeqCst)
+                    {
+                        let message = "Could not open the sign-in page. Cancel the sign-in in the Sign-ins sidebar, then try again.";
+                        self.message = Some(message.into());
+                        for tab in &mut self.tabs {
+                            if tab
+                                .sign_in_wait
+                                .as_ref()
+                                .is_some_and(|wait| wait.sign_in == id)
+                            {
+                                Self::record_local_log(
+                                    tab,
+                                    Severity::Error,
+                                    LogKind::SignIn,
+                                    message,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -564,6 +658,7 @@ impl Qrow {
             .map(|candidate| candidate.name.clone())
             .unwrap_or_default();
         let tab = &mut self.tabs[index];
+        let reopen = tab.cancelled_sign_in.take() == Some(sign_in);
         tab.sign_in_wait = Some(SignInWait { sign_in, sql });
         tab.busy = true;
         tab.cancelling = false;
@@ -577,6 +672,9 @@ impl Qrow {
             LogKind::SignIn,
             format!("Sign in to \"{name}\" in the browser. The query runs after the sign-in."),
         );
+        if reopen {
+            self.reopen_sign_in(sign_in, cx);
+        }
         self.start_waiting_sign_ins(cx);
     }
 
@@ -671,9 +769,10 @@ impl Qrow {
     /// browser sign-in continues, and the Sign-ins sidebar can cancel it.
     pub(super) fn cancel_sign_in_wait(&mut self, index: usize, cx: &mut Context<Self>) {
         let tab = &mut self.tabs[index];
-        if tab.sign_in_wait.take().is_none() {
+        let Some(wait) = tab.sign_in_wait.take() else {
             return;
-        }
+        };
+        tab.cancelled_sign_in = Some(wait.sign_in);
         tab.busy = false;
         tab.started = None;
         tab.set_status_detail("Cancelled", "Sign-in not finished");
