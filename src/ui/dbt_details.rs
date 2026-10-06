@@ -12,7 +12,7 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
-use gpui_kit::base::{SelectableText, StyledExt as _, TextSelectionHandle};
+use gpui_kit::base::{SelectableText, StyledExt as _};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -201,26 +201,23 @@ enum Sql {
     Failed(String),
 }
 
-/// SQL that the sheet read, in rows of [`SQL_CHUNK_LINES`] lines. The rows
-/// share one selection, so a selection can go across them.
+/// SQL that the sheet read, in rows of [`SQL_CHUNK_LINES`] lines. Each row
+/// is a selectable run in reading order, so a selection can go across them.
 struct SqlText {
     full: SharedString,
     chunks: Vec<SharedString>,
-    selection: TextSelectionHandle,
 }
 
 impl SqlText {
-    fn new(sql: String, cx: &mut App) -> Self {
+    fn new(sql: String) -> Self {
         let lines: Vec<&str> = sql.lines().collect();
         let chunks = lines
             .chunks(SQL_CHUNK_LINES)
             .map(|chunk| SharedString::from(chunk.join("\n")))
             .collect();
-        let selection = TextSelectionHandle::new(sql.clone(), cx);
         Self {
             full: sql.into(),
             chunks,
-            selection,
         }
     }
 }
@@ -514,7 +511,7 @@ impl DbtDetailsView {
                 }
                 match result {
                     SqlRead::Changed => this.read_sql(cx),
-                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql, cx)),
+                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql)),
                     SqlRead::Failed(error) => this.sql = Sql::Failed(error),
                 }
                 this.sql_changed();
@@ -755,9 +752,8 @@ impl DbtDetailsView {
             .font_family(self.code_font.clone())
             .text_xs()
             .child(
-                SelectableText::with_handle(
+                SelectableText::new(
                     SharedString::from(format!("dbt-sql-{position}")),
-                    sql.selection.clone(),
                     text.clone(),
                 )
                 .document_order(position as u64),
