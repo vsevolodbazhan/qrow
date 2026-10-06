@@ -102,6 +102,7 @@ pub(super) fn cut(text: &str, shown: usize, wanted: usize, settled: bool) -> usi
     for _ in 0..8 {
         let next = span_end(text, shown, cut, settled);
         let next = row_end(text, shown, next, settled);
+        let next = marker_end(text, shown, next, settled);
         // The end of a span or a row stays shown when its word can grow.
         let next = if next > cut {
             word_end(text, shown, next, settled).max(next)
@@ -280,6 +281,37 @@ fn row_end(text: &str, shown: usize, cut: usize, settled: bool) -> usize {
     }
 }
 
+/// Whether `text` is only the marker of a list item, a quote, or a heading.
+fn block_marker(text: &str) -> bool {
+    let number = text.trim_end_matches(['.', ')']);
+    matches!(text, "-" | "*" | "+" | ">")
+        || (1..=6).contains(&text.len()) && text.bytes().all(|byte| byte == b'#')
+        || text.len() == number.len() + 1
+            && !number.is_empty()
+            && number.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Moves `cut` after a block marker that starts its line to the end of the
+/// first word after it, or to the start of the line. A marker alone shows an
+/// empty list item.
+fn marker_end(text: &str, shown: usize, cut: usize, settled: bool) -> usize {
+    let start = text[..cut].rfind('\n').map_or(0, |index| index + 1);
+    if !block_marker(text[start..cut].trim_start()) {
+        return cut;
+    }
+    let line = text[cut..].split('\n').next().unwrap_or_default();
+    match line.find(|c: char| !c.is_whitespace()) {
+        Some(offset) => {
+            let word = cut + offset;
+            let end = word_end(text, shown, word, settled);
+            if end > word { end } else { start.max(shown) }
+        }
+        // An empty item shows when its line is complete.
+        None if settled || cut + line.len() < text.len() => cut,
+        None => start.max(shown),
+    }
+}
+
 impl Qrow {
     /// Starts the steps that show streamed replies, unless they run.
     pub(super) fn reveal_assistant_replies(&mut self, cx: &mut Context<Self>) {
@@ -447,6 +479,18 @@ mod tests {
         assert_eq!(cut(text, 0, delimiter_end + 4, false), row_end);
         assert_eq!(cut(text, 0, row_end + 4, false), row_end + 1);
         assert_eq!(cut(text, 0, row_end + 4, true), text.len());
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_block_marker_shows_with_its_first_word() {
+        assert_eq!(cut("Intro.\n- Item text", 0, 8, false), 13);
+        assert_eq!(cut("Intro.\n- Ite", 0, 8, false), 7);
+        assert_eq!(cut("Intro.\n12. Item text", 0, 10, false), 15);
+        assert_eq!(cut("Intro.\n## Title", 0, 9, false), 7);
+        assert_eq!(cut("Intro.\n## Title", 0, 9, true), 15);
+        // A rule and a dash in a sentence are text.
+        assert_eq!(cut("Intro.\n---\nNext", 0, 10, false), 10);
+        assert_eq!(cut("a - b c", 0, 3, false), 3);
     }
 
     #[::core::prelude::v1::test]
