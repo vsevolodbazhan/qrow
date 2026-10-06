@@ -42,6 +42,7 @@ fn workspace(sql: &str) -> (Workspace, MemoryCredentials) {
 fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
     let app = TestApp::launch_with(cx, workspace, credentials);
+    app.wait_label(cx, "Postgres database");
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     app.update(cx, |window, _| {

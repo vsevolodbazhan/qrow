@@ -3,7 +3,15 @@ use std::borrow::Cow;
 use gpui_kit::{AssetSource, SharedString};
 
 pub(crate) const SPARK_ICON: &str = "connection-type-icons/apache-spark.svg";
+pub(crate) const POSTGRES_ICON: &str = "connection-type-icons/postgres.svg";
 pub(crate) const APP_ICON: &str = "app-icons/qrow-256.png";
+pub(crate) fn connection_icon(database_type: crate::model::DatabaseType) -> &'static str {
+    match database_type {
+        crate::model::DatabaseType::Kyuubi => SPARK_ICON,
+        crate::model::DatabaseType::Postgres => POSTGRES_ICON,
+    }
+}
+
 #[cfg(test)]
 const TRIANGLE_ALERT_ICON: &str = "icons/triangle-alert.svg";
 #[cfg(test)]
@@ -51,6 +59,11 @@ impl AssetSource for Assets {
                 "../assets/connection-type-icons/apache-spark.svg"
             ))));
         }
+        if path == POSTGRES_ICON {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/connection-type-icons/postgres.svg"
+            ))));
+        }
         if path == APP_ICON {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/app-icons/qrow-256.png"
@@ -65,7 +78,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(QrowIconAssets.list(path)?);
-        for asset in [SPARK_ICON, APP_ICON] {
+        for asset in [SPARK_ICON, POSTGRES_ICON, APP_ICON] {
             if asset.starts_with(path) {
                 paths.push(asset.into());
             }
@@ -78,6 +91,31 @@ impl AssetSource for Assets {
 mod tests {
     use super::*;
     use gpui_kit::AssetSource;
+
+    #[test]
+    fn connection_icons_are_embedded_and_listed_for_each_database_type() {
+        let paths = Assets.list("connection-type-icons/").unwrap();
+        for kind in [
+            crate::model::DatabaseType::Kyuubi,
+            crate::model::DatabaseType::Postgres,
+        ] {
+            let path = connection_icon(kind);
+            let bytes = Assets
+                .load(path)
+                .unwrap()
+                .expect("embedded connection icon");
+            assert!(std::str::from_utf8(&bytes).unwrap().contains("<svg"));
+            assert!(paths.iter().any(|listed| listed == path));
+        }
+        assert_ne!(
+            connection_icon(crate::model::DatabaseType::Kyuubi),
+            connection_icon(crate::model::DatabaseType::Postgres),
+        );
+        assert_ne!(
+            Assets.load(SPARK_ICON).unwrap(),
+            Assets.load(POSTGRES_ICON).unwrap()
+        );
+    }
 
     #[test]
     fn triangle_alert_asset_is_available() {

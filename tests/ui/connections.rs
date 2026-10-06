@@ -454,3 +454,12 @@ fn changing_database_type_keeps_custom_connection_fields(cx: &mut TestAppContext
     });
     cancel_form(&app, cx);
 }
+
+#[gpui_kit::test]
+fn connection_icons_identify_postgres_and_spark(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) = connections(&["Spark test", "Postgres test"]);
+    workspace.profiles[1].database_type = qrow::model::DatabaseType::Postgres;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.wait_label(cx, "Spark (HiveServer2) database");
+    app.wait_label(cx, "Postgres database");
+}

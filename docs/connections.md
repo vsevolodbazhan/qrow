@@ -6,6 +6,9 @@ its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
 bar, press **⌘B**, or select **View → Connections**.
 
+The connection icon identifies the database type. Kyuubi connections use the
+Spark icon. Postgres connections use the elephant icon.
+
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
 

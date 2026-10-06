@@ -623,6 +623,7 @@ impl Builder<'_> {
 
 /// What a connection row shows in the current frame.
 struct ConnectionRow {
+    database_type: crate::model::DatabaseType,
     name: String,
     tooltip: StatusTooltip,
     running: bool,
@@ -1362,6 +1363,7 @@ impl Qrow {
                         (
                             id,
                             ConnectionRow {
+                                database_type: profile.database_type,
                                 name: profile.name.clone(),
                                 tooltip,
                                 connected,
@@ -2217,13 +2219,17 @@ fn connection_row(
                 .when(!has_status, |el| el.pr_3())
                 .child(
                     div()
+                        .id(child_id(entry, "icon"))
+                        .test_support()
+                        .role(Role::Image)
+                        .aria_label(format!("{} database", row.database_type.label()))
                         .w(px(context.scale * 16.))
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
                         .child(
                             gpui_kit::component::Icon::default()
-                                .path(crate::assets::SPARK_ICON)
+                                .path(crate::assets::connection_icon(row.database_type))
                                 .size_4(),
                         ),
                 )
