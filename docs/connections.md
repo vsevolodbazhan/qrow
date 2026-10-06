@@ -6,7 +6,7 @@ its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
 bar, press **⌘B**, or select **View → Connections**.
 
-The connection icon identifies the database type. Kyuubi connections use the
+The connection icon identifies the connection type. Kyuubi connections use the
 Spark icon. Postgres connections use the elephant icon.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
@@ -43,7 +43,7 @@ and **Assistant**. The **Assistant** page shows only while the
 search field above the pages to find a field.
 
 1. Click **+** beside Connections.
-2. On the **General** page, select **Database type**.
+2. On the **General** page, select **Connection type**.
 3. Enter a name, the server hostname or IP address, and the port.
 4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
    For Postgres, select a [TLS mode](#use-postgres).
@@ -78,9 +78,9 @@ macOS can request Keychain access when you save the password.
 
 ## Use Postgres
 
-Select **Postgres** in **Database type**. The default port is 5432. The initial
+Select **Postgres** in **Connection type**. The default port is 5432. The initial
 database is the database that Postgres opens for the session. Existing profiles
-without a database type continue to use Kyuubi.
+without a connection type continue to use Kyuubi.
 
 Enter session settings as a JSON object with string values. For example:
 
@@ -131,6 +131,7 @@ names. Use qualified names when a different `search_path` applies.
 - Response timeout bounds connection setup, session settings, and cancellation.
   It does not set a query execution timeout. Use the `statement_timeout` session
   setting when you need one.
+- A late cancellation request can cancel the next query in the same session.
 - A SQL error in an explicit transaction keeps that transaction in the failed
   state. Qrow does not run `ROLLBACK` automatically.
 
@@ -666,7 +667,7 @@ To share a catalog:
 4. Open the settings of each other connection, select the shared catalog in
    **Schema Catalog**, then select **Save**.
 
-The connections of a shared catalog must use the same database type and read
+The connections of a shared catalog must use the same connection type and read
 the same schemas with the same permissions. Kyuubi connections must also use
 the same metastore and Spark catalog. Qrow cannot check this.
 

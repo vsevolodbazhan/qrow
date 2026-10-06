@@ -174,7 +174,7 @@ impl Qrow {
         let fields = SettingGroup::new()
             .item(connection_row(
                 qrow,
-                "Database type",
+                "Connection type",
                 "",
                 &["connector", "type"],
                 false,
@@ -183,7 +183,7 @@ impl Qrow {
                         .id("connection-database-type")
                         .w_full()
                         .disabled(form.saving.is_some())
-                        .accessibility_label("Database type")
+                        .accessibility_label("Connection type")
                         .into_any_element()
                 },
             ))

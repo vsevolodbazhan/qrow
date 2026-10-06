@@ -333,6 +333,12 @@ fn connection_settings_open_on_the_general_page(cx: &mut TestAppContext) {
 fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "connection-database-type").as_deref(),
+            Some("Connection type")
+        );
+    });
     app.select(cx, "connection-database-type", "Postgres");
     app.update(cx, |window, _| {
         assert_eq!(
