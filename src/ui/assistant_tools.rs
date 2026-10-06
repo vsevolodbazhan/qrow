@@ -1563,7 +1563,17 @@ impl Qrow {
         let call = call.clone();
         cx.spawn(async move |this, cx| {
             let result = task.await;
-            let _ = this.update(cx, |this, cx| this.finish_assistant_tool(call, result, cx));
+            let _ = this.update(cx, |this, cx| {
+                // The conversation or its turn can end during the read.
+                let current = this.assistant.conversation(&call.thread_id).is_some()
+                    && this
+                        .thread_run(&call.thread_id)
+                        .and_then(|run| run.active_turn.as_deref())
+                        == Some(call.turn_id.as_str());
+                if current {
+                    this.finish_assistant_tool(call, result, cx);
+                }
+            });
         })
         .detach();
         None

@@ -262,6 +262,14 @@ impl Qrow {
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                // The user can delete the connection during the read.
+                if !this
+                    .profiles
+                    .iter()
+                    .any(|candidate| candidate.id == profile)
+                {
+                    return;
+                }
                 let sql = match result {
                     Ok(sql) => sql,
                     Err(error) => {
