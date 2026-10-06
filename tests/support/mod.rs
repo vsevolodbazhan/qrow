@@ -366,6 +366,13 @@ pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit:
     assert_dot_in(window, row.bounds(), Some(expected));
 }
 
+/// A sign-in row paints the shared dot in the expected theme color.
+pub fn assert_sign_in_dot(window: &Window, sign_in: Uuid, expected: gpui_kit::Hsla) {
+    let dot = window.find(format!("sign-in-status-{sign_in}"));
+    assert!(dot.visible(), "The sign-in dot is hidden");
+    assert_dot_in(window, dot.bounds(), Some(expected));
+}
+
 /// Clicks the center of an observed element, as `TestWindowExt::click` does
 /// for an ID. Use it for elements that GPUI Kit owns and does not name, like
 /// the search field of Settings. Prefer IDs for Qrow's own controls.
@@ -430,7 +437,7 @@ pub fn header(window: &Window, column: usize) -> Option<String> {
 /// The sign-in tokens, trusted authorities, and browser of a test window.
 #[derive(Clone)]
 pub struct SignIns {
-    pub tokens: Arc<MemoryTokenStore>,
+    pub tokens: Arc<dyn TokenStore>,
     pub trust: Trust,
     pub browser: Option<Browser>,
 }
@@ -438,7 +445,7 @@ pub struct SignIns {
 impl SignIns {
     pub fn new(trust: Trust, browser: Option<Browser>) -> Self {
         Self {
-            tokens: Arc::default(),
+            tokens: Arc::new(MemoryTokenStore::default()),
             trust,
             browser,
         }

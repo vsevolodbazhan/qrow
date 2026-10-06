@@ -167,6 +167,10 @@ second run. If the sign-in fails, the query ends with
 **Error: Sign-in required**. If you cancel it in the browser, the query ends
 with **Cancelled: Sign-in not finished**. Click **Cancel** to stop the query
 while it waits. The browser sign-in then continues in the Sign-ins sidebar.
+If you run the cancelled query again, Qrow opens the page of that sign-in
+again. Other queries that wait for the same sign-in continue to wait.
+To start a new sign-in attempt, cancel the sign-in in the Sign-ins sidebar.
+Then run the query again.
 Qrow opens the browser only once for each query. An open session continues
 without a new token, so a query in it does not open the browser. While a
 browser sign-in or a sign-out of the sign-in runs, each new query of its
@@ -208,7 +212,14 @@ tokens, it shows the error and the sign-in stays signed in.
 When **Delete** is disabled, hover over the command to see the reason in a tooltip.
 Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
-sign-in.
+sign-in. If token removal fails, the sign-in remains available and its row
+shows the error. When no primary action button is shown, a red dot marks a
+failed action and a yellow dot marks a sign-in that needs attention.
+
+If Keychain rejects token removal with "Invalid attempt to change the owner
+of this item", Qrow tries to delete the exact token item by its reference.
+Qrow confirms that the item is absent before it removes the sign-in. If this
+also fails, Qrow keeps the sign-in and shows the Keychain error.
 
 ### Server requirements
 

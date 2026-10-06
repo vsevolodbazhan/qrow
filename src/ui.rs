@@ -242,6 +242,7 @@ struct Tab {
     submitted_sql: Option<String>,
     /// The query waits for this browser sign-in, and then runs.
     sign_in_wait: Option<sign_in_view::SignInWait>,
+    cancelled_sign_in: Option<Uuid>,
     /// The query runs after an automatic sign-in, so a second sign-in
     /// error stays an error.
     signed_in_for_run: bool,
@@ -844,6 +845,7 @@ impl Qrow {
             current_execution: None,
             submitted_sql: None,
             sign_in_wait: None,
+            cancelled_sign_in: None,
             signed_in_for_run: false,
             release_pending: false,
             next_execution_id: 1,

@@ -2,18 +2,25 @@
 //! bar, and sign-in authentication in Connection Settings, against a mock
 //! OpenID Connect provider in the test process.
 use crate::support::{
-    MemoryCredentials, SignIns, TestApp, label, offline_profile,
+    MemoryCredentials, SignIns, TestApp, assert_sign_in_dot, label, offline_profile,
     oidc::{Provider, subject, trust},
     present, value,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::{
     model::{Authentication, SavedTab, SignIn, Workspace},
-    storage::TokenStore,
+    storage::{MemoryTokenStore, TokenStore},
     ui::{ShowConnections, ShowSignIns, ToggleActivity, ToggleSidebar},
 };
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 const WAIT: Duration = Duration::from_secs(20);
 
@@ -490,6 +497,72 @@ fn an_unused_sign_in_can_be_deleted(cx: &mut TestAppContext) {
     });
 }
 
+/// Failed removal must preserve both the token record and the saved sign-in.
+#[derive(Default)]
+struct FailingDeletion {
+    tokens: MemoryTokenStore,
+    fail: AtomicBool,
+}
+
+impl TokenStore for FailingDeletion {
+    fn load_tokens(&self, id: uuid::Uuid) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
+        self.tokens.load_tokens(id)
+    }
+    fn save_tokens(&self, id: uuid::Uuid, record: &str) -> anyhow::Result<()> {
+        self.tokens.save_tokens(id, record)
+    }
+    fn delete_tokens(&self, id: uuid::Uuid) -> anyhow::Result<()> {
+        if self.fail.load(Ordering::SeqCst) {
+            anyhow::bail!(
+                "Could not delete the sign-in tokens from macOS Keychain: Invalid attempt to change the owner of this item."
+            );
+        }
+        self.tokens.delete_tokens(id)
+    }
+}
+
+#[gpui_kit::test]
+fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, false);
+    let tokens = Arc::new(FailingDeletion::default());
+    tokens.fail.store(true, Ordering::SeqCst);
+    let mut sign_ins = SignIns::new(trust(), Some(Arc::new(provider.browser("alice"))));
+    sign_ins.tokens = tokens.clone();
+    let app = TestApp::launch_with_sign_ins(cx, workspace, MemoryCredentials::default(), sign_ins);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    let record = tokens.load_tokens(sign_in.id).unwrap().unwrap();
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-sign-in");
+    wait_row(&app, cx, &sign_in, "The last action failed");
+    app.update(cx, |window, cx| {
+        assert_sign_in_dot(window, sign_in.id, cx.theme().danger);
+    });
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    assert_eq!(tokens.load_tokens(sign_in.id).unwrap().unwrap(), record);
+    // The error remains visible in Settings, and the account remains signed in.
+    open_settings(&app, cx, &sign_in);
+    app.wait_until(cx, "the Keychain error", WAIT, |window, _| {
+        label(window, "sign-in-account-error")
+            .is_some_and(|error| error.contains("Invalid attempt to change the owner"))
+    });
+    app.wait_for(cx, "sign-in-account-sign-out");
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    tokens.fail.store(false, Ordering::SeqCst);
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-sign-in");
+    app.wait_for(cx, "sign-ins-empty");
+    app.wait_until(cx, "the saved removal", WAIT, |_, _| {
+        app.saved().sign_ins.is_empty()
+    });
+    assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
+}
+
 #[gpui_kit::test]
 fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     let provider = Provider::start();
@@ -658,6 +731,23 @@ fn an_expired_sign_in_opens_the_browser_and_runs_the_query_after_it(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn an_unreachable_provider_shows_a_yellow_sign_in_dot(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    provider.set_access_ttl(10);
+    let (workspace, sign_in) = unreachable_workspace(&provider);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    provider.set_down(true);
+    app.click(cx, "run");
+    wait_row(&app, cx, &sign_in, "Cannot reach the provider");
+    app.update(cx, |window, cx| {
+        assert_sign_in_dot(window, sign_in.id, cx.theme().warning);
+    });
+}
+
+#[gpui_kit::test]
 fn a_query_cancelled_during_the_refresh_does_not_open_the_browser(cx: &mut TestAppContext) {
     let provider = Provider::start();
     provider.set_access_ttl(10);
@@ -750,6 +840,107 @@ fn cancel_ends_a_query_that_waits_for_the_browser(cx: &mut TestAppContext) {
     // The browser sign-in continues, and the sidebar can cancel it.
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Waiting for the browser…");
+}
+
+#[gpui_kit::test]
+fn rerunning_a_cancelled_query_reopens_the_pending_browser_sign_in(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (mut workspace, sign_in) = unreachable_workspace(&provider);
+    let mut second = SavedTab::new(2, workspace.profiles.first().map(|profile| profile.id));
+    second.sql = "SELECT 2".into();
+    workspace.tabs.push(second);
+    let opened = Arc::new(Mutex::new(Vec::<String>::new()));
+    let browser_urls = opened.clone();
+    let finish = provider.browser("alice");
+    let browser = move |url: &str| {
+        let count = {
+            let mut urls = browser_urls.lock().unwrap();
+            urls.push(url.to_owned());
+            urls.len()
+        };
+        if count == 3 { finish(url) } else { Ok(()) }
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(browser))),
+    );
+    for count in 1..=3 {
+        app.click(cx, "run");
+        app.wait_until(cx, "the reopened browser", WAIT, |_, _| {
+            opened.lock().unwrap().len() == count
+        });
+        if count == 1 {
+            app.click_labelled(cx, "Query 2");
+            app.click(cx, "run");
+            wait_query_status(&app, cx, "Waiting for sign-in");
+            app.settle(cx);
+            assert_eq!(
+                opened.lock().unwrap().len(),
+                1,
+                "the second tab shares the attempt"
+            );
+            app.click_starting(cx, "Query 1");
+        }
+        if count < 3 {
+            wait_query_status(&app, cx, "Waiting for sign-in");
+            app.click(cx, "cancel");
+            wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+        }
+    }
+    wait_query_status(&app, cx, "Error: Connection failed");
+    app.click_starting(cx, "Query 2");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    let urls = opened.lock().unwrap();
+    assert_eq!(urls.len(), 3);
+    assert!(
+        urls.iter().all(|url| url == &urls[0]),
+        "one shared sign-in attempt"
+    );
+    assert_eq!(provider.authorization_grants(), 1);
+}
+
+#[gpui_kit::test]
+fn a_browser_reopen_failure_keeps_the_pending_sign_in_available(cx: &mut TestAppContext) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let provider = Provider::start();
+    let (workspace, _) = unreachable_workspace(&provider);
+    let opened = Arc::new(AtomicUsize::new(0));
+    let browser_count = opened.clone();
+    let finish = provider.browser("alice");
+    let browser = move |url: &str| match browser_count.fetch_add(1, Ordering::SeqCst) {
+        0 => Ok(()),
+        1 => anyhow::bail!("synthetic browser error"),
+        _ => finish(url),
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(browser))),
+    );
+    app.click(cx, "run");
+    app.wait_until(cx, "the initial browser", WAIT, |_, _| {
+        opened.load(Ordering::SeqCst) == 1
+    });
+    wait_query_status(&app, cx, "Waiting for sign-in");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+    app.click(cx, "run");
+    app.wait_until(cx, "the browser error", WAIT, |window, _| {
+        label(window, "workspace-message")
+            .is_some_and(|message| message.starts_with("Could not open the sign-in page."))
+    });
+    wait_query_status(&app, cx, "Waiting for sign-in");
+    app.click(cx, "cancel");
+    wait_query_status(&app, cx, "Cancelled: Sign-in not finished");
+    app.click(cx, "run");
+    wait_query_status(&app, cx, "Error: Connection failed");
+    assert_eq!(opened.load(Ordering::SeqCst), 3);
+    assert_eq!(provider.authorization_grants(), 1);
 }
 
 #[gpui_kit::test]

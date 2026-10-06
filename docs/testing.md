@@ -88,8 +88,11 @@ check. A test filter runs only the matching GPUI tests.
 - Qrow forbids unsafe code in its own sources, including the generated
   bindings. Third-party dependencies can contain unsafe code.
 
-The Keychain test uses the real macOS Keychain, so no suite runs it. Run it
-with `cargo test --test integration keychain:: -- --ignored`.
+The macOS unit tests use explicit temporary keychains with synthetic tokens.
+They check token removal when another executable created the item. They do not
+change the default keychain or its search list. A separate password test uses
+the real macOS Keychain, so no suite runs it. Run that test with
+`cargo test --test integration keychain:: -- --ignored`.
 
 ## Groups
 

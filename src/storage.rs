@@ -327,13 +327,49 @@ impl TokenStore for Keychain {
     }
 
     fn delete_tokens(&self, id: Uuid) -> Result<()> {
-        match security_framework::passwords::delete_generic_password(TOKEN_SERVICE, &id.to_string())
-        {
-            Err(error) if error.code() != ITEM_NOT_FOUND => {
-                Err(error).context("Could not delete the sign-in tokens from macOS Keychain")
+        let mut items = security_framework::item::ItemSearchOptions::new();
+        items
+            .class(security_framework::item::ItemClass::generic_password())
+            .service(TOKEN_SERVICE)
+            .account(&id.to_string());
+        delete_keychain_tokens(items)
+            .context("Could not delete the sign-in tokens from macOS Keychain")
+    }
+}
+
+/// Recover from the legacy Keychain owner check without changing access rules.
+/// The reference API discards its result, so success requires verified absence.
+#[cfg(target_os = "macos")]
+fn delete_keychain_tokens(
+    mut items: security_framework::item::ItemSearchOptions,
+) -> security_framework::base::Result<()> {
+    use security_framework::item::{Limit, Reference, SearchResult};
+    const INVALID_OWNER_EDIT: i32 = -25244;
+    let original = match items.delete() {
+        Ok(()) => return Ok(()),
+        Err(error) if error.code() == ITEM_NOT_FOUND => return Ok(()),
+        Err(error) if error.code() == INVALID_OWNER_EDIT => error,
+        Err(error) => return Err(error),
+    };
+    // The caller supplies the exact generic-password service and UUID account.
+    // Request references only: deletion does not need to read token data.
+    items.load_refs(true).limit(Limit::All);
+    match items.search() {
+        Ok(found) => {
+            for item in found {
+                match item {
+                    SearchResult::Ref(Reference::KeychainItem(item)) => item.delete(),
+                    _ => return Err(original),
+                }
             }
-            _ => Ok(()),
         }
+        Err(error) if error.code() == ITEM_NOT_FOUND => return Ok(()),
+        Err(_) => return Err(original),
+    }
+    match items.search() {
+        Err(error) if error.code() == ITEM_NOT_FOUND => Ok(()),
+        Ok(found) if found.is_empty() => Ok(()),
+        _ => Err(original),
     }
 }
 
@@ -383,5 +419,119 @@ impl Credentials for Keychain {
     }
     fn delete_password(&self, _: Uuid) -> Result<()> {
         anyhow::bail!("Keychain requires macOS")
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_tests {
+    use super::*;
+    use security_framework::{
+        item::{ItemClass, ItemSearchOptions},
+        os::macos::keychain::{CreateOptions, SecKeychain},
+    };
+
+    const TARGET: &str = "00000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "00000000-0000-4000-8000-000000000002";
+    const OTHER_SERVICE: &str = "io.qrow.synthetic-other";
+    const PASSWORD: &str = "qrow-synthetic-test-only";
+
+    fn query(keychain: &SecKeychain, service: &str, account: &str) -> ItemSearchOptions {
+        let mut items = ItemSearchOptions::new();
+        items
+            .keychains(std::slice::from_ref(keychain))
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account);
+        items
+    }
+
+    #[test]
+    #[ignore = "Child helper: the parent supplies an isolated keychain"]
+    fn create_foreign_token_items() {
+        let path = std::env::var_os("QROW_SYNTHETIC_KEYCHAIN").expect("isolated keychain path");
+        let mut keychain = SecKeychain::open(path).unwrap();
+        keychain.unlock(Some(PASSWORD)).unwrap();
+        for (service, account) in [
+            (TOKEN_SERVICE, TARGET),
+            (TOKEN_SERVICE, OTHER),
+            (OTHER_SERVICE, TARGET),
+        ] {
+            keychain
+                .add_generic_password(service, account, b"synthetic-token")
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn deletes_foreign_token_items_without_deleting_other_accounts_or_services() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("synthetic.keychain");
+        let keychain = CreateOptions::new()
+            .password(PASSWORD)
+            .create(&path)
+            .unwrap();
+        // An item's creator basename differs from this test executable. That
+        // reproduces SecItemDelete's owner-check error without user credentials.
+        let creator = temporary.path().join("qrow-synthetic-keychain-creator");
+        fs::copy(std::env::current_exe().unwrap(), &creator).unwrap();
+        let output = std::process::Command::new(creator)
+            .env("QROW_SYNTHETIC_KEYCHAIN", &path)
+            .args([
+                "--exact",
+                "storage::keychain_tests::create_foreign_token_items",
+                "--ignored",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .delete()
+                .unwrap_err()
+                .code(),
+            -25244
+        );
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .load_refs(true)
+                .search()
+                .unwrap_err()
+                .code(),
+            ITEM_NOT_FOUND
+        );
+        for (service, account) in [(TOKEN_SERVICE, OTHER), (OTHER_SERVICE, TARGET)] {
+            assert_eq!(
+                query(&keychain, service, account)
+                    .load_refs(true)
+                    .search()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        // Repeated deletion of an absent token record succeeds.
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+    }
+
+    #[test]
+    fn deletes_token_items_created_by_the_current_executable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let keychain = CreateOptions::new()
+            .password(PASSWORD)
+            .create(temporary.path().join("synthetic.keychain"))
+            .unwrap();
+        keychain
+            .add_generic_password(TOKEN_SERVICE, TARGET, b"synthetic-token")
+            .unwrap();
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .load_refs(true)
+                .search()
+                .unwrap_err()
+                .code(),
+            ITEM_NOT_FOUND
+        );
     }
 }
