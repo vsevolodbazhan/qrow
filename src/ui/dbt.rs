@@ -247,26 +247,47 @@ impl Qrow {
             (None, Some(span)) => (span, "Raw"),
             (None, None) => return,
         };
-        let sql = match crate::dbt::read_sql(&state.path, span) {
-            Ok(sql) => sql,
-            Err(error) => {
-                self.message = Some(format!("Could not read the SQL of {unique_id}: {error}"));
-                cx.notify();
-                return;
+        let name = entry.name.to_string();
+        let unique_id = unique_id.to_owned();
+        // Read in the background: compiled SQL can be large, and the file
+        // can be on a slow disk.
+        let task = cx.background_executor().spawn(async move {
+            let sql = crate::dbt::read_sql(&state.path, span).map_err(|error| error.to_string())?;
+            // dbt can write the file during the read.
+            if !state.is_current() {
+                return Err("The dbt manifest changed during the read. Try again.".to_owned());
             }
-        };
-        let mut saved = crate::model::SavedTab::new(1, Some(profile));
-        saved.title = entry
-            .name
-            .chars()
-            .take(crate::model::MAX_TAB_TITLE)
-            .collect();
-        saved.sql = format!("-- {code} SQL of {unique_id} from the dbt manifest\n{sql}");
-        let tab = self.make_tab(saved, window, cx);
-        self.tabs.push(tab);
-        let index = self.tabs.len() - 1;
-        self.activate(index, window, cx);
-        self.changed(cx);
+            Ok(sql)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let sql = match result {
+                    Ok(sql) => sql,
+                    Err(error) => {
+                        this.message =
+                            Some(format!("Could not read the SQL of {unique_id}: {error}"));
+                        cx.notify();
+                        return;
+                    }
+                };
+                let title: String = name.chars().take(crate::model::MAX_TAB_TITLE).collect();
+                let title = crate::model::unique_tab_title(&title, |candidate| {
+                    this.tabs.iter().any(|tab| {
+                        tab.saved.profile == Some(profile) && tab.saved.title == candidate
+                    })
+                });
+                let mut saved = crate::model::SavedTab::new(1, Some(profile));
+                saved.title = title;
+                saved.sql = format!("-- {code} SQL of {unique_id} from the dbt manifest\n{sql}");
+                let tab = this.make_tab(saved, window, cx);
+                this.tabs.push(tab);
+                let index = this.tabs.len() - 1;
+                this.activate(index, window, cx);
+                this.changed(cx);
+            });
+        })
+        .detach();
     }
 
     /// Whether Qrow parses the manifest of `profile` now.

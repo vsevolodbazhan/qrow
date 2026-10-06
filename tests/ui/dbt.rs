@@ -346,7 +346,7 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
     app.wait_reply(
         cx,
         &format!(
-            "dbt 1.12.5, models 12; model {id}, table points to {id}; {}, {} tests, columns id 2 tests; parents {}",
+            "dbt 1.12.5, models 12; model {id}, table points to {id}; {}, {} tests, columns id 2 tests; parents {}; raw sql, compiled missing True",
             index.symbol(model.materialized.unwrap()),
             dbt_manifest::test_names(1).len(),
             model.parents.len(),
@@ -426,6 +426,37 @@ fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
         .unwrap();
     assert_eq!(tab.profile, Some(id));
     let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
+
+    // A second tab of the same model gets another title. The tab has the
+    // name of the table, so the row is found among the tree entries.
+    let entries: gpui_kit::ElementId = "entries".into();
+    app.update(cx, |window, cx| {
+        let element = crate::support::elements(window)
+            .into_iter()
+            .find(|element| {
+                element.label() == Some(alias.as_str()) && element.path().contains(&entries)
+            })
+            .expect("the table row");
+        crate::support::pointer_click(window, &element, gpui_kit::MouseButton::Right, cx);
+    });
+    app.wait_for(cx, "popup-menu");
+    app.choose(cx, "popup-menu", "Open Model SQL");
+    app.wait_until(cx, "the second SQL tab", TIMEOUT, |_, _| {
+        app.saved()
+            .tabs
+            .iter()
+            .filter(|tab| tab.title.starts_with(&title))
+            .count()
+            == 2
+    });
+    let titles: std::collections::BTreeSet<String> = app
+        .saved()
+        .tabs
+        .into_iter()
+        .map(|tab| tab.title)
+        .filter(|candidate| candidate.starts_with(&title))
+        .collect();
+    assert_eq!(titles.len(), 2, "{titles:?}");
     assert_eq!(
         tab.sql,
         format!(
