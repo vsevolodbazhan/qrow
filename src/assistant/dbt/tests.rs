@@ -142,11 +142,12 @@ fn a_model_is_light_by_default_and_gives_columns_on_request() {
         value["columns"],
         json!([
             {"name": "id", "description": "The key.", "description_truncated": false,
-             "data_type": null, "tests": [{"test": "unique"}]},
+             "data_type": null, "test_count": 1, "tests": [{"test": "unique"}], "tests_truncated": false},
             {"name": "customer_id", "description": "", "description_truncated": false,
-             "data_type": "bigint", "tests": [{"test": "relationships", "to": "core.customers", "field": "id"}]},
+             "data_type": "bigint", "test_count": 1,
+             "tests": [{"test": "relationships", "to": "core.customers", "field": "id"}], "tests_truncated": false},
             {"name": "amount", "description": "", "description_truncated": false,
-             "data_type": null, "tests": [{"test": "not_null"}]},
+             "data_type": null, "test_count": 1, "tests": [{"test": "not_null"}], "tests_truncated": false},
         ])
     );
 
@@ -400,4 +401,80 @@ fn the_context_names_the_models_of_the_tab_sql() {
         "Manifest not found: run dbt parse in the project"
     );
     assert_eq!(value["models"], 3);
+}
+
+#[test]
+fn every_part_of_a_model_fits_in_a_tool_result() {
+    // Many model tests and one column with many large tests.
+    let mut nodes = serde_json::Map::new();
+    nodes.insert(
+        "model.lake.big".into(),
+        json!({
+            "unique_id": "model.lake.big", "resource_type": "model", "name": "big",
+            "schema": "core", "relation_name": "`core`.`big`",
+            "description": "x".repeat(100_000),
+            "columns": {"status": {"name": "status", "description": "y".repeat(100_000)}},
+        }),
+    );
+    for number in 0..400 {
+        let id = format!("test.lake.model_test_{number}");
+        nodes.insert(
+            id.clone(),
+            json!({
+                "unique_id": id, "resource_type": "test", "attached_node": "model.lake.big",
+                "test_metadata": {"name": format!("custom_model_check_{number}"), "kwargs": {}},
+            }),
+        );
+        let id = format!("test.lake.status_{number}");
+        let values: Vec<String> = (0..50)
+            .map(|v| format!("status_value_{number}_{v}"))
+            .collect();
+        nodes.insert(
+            id.clone(),
+            json!({
+                "unique_id": id, "resource_type": "test", "attached_node": "model.lake.big",
+                "column_name": "status",
+                "test_metadata": {"name": "accepted_values", "kwargs": {"values": values}},
+            }),
+        );
+    }
+    let index = index(json!({"metadata": {"dbt_schema_version": V12}, "nodes": nodes}));
+    let project = DbtProject {
+        schema_mapping: vec![],
+        ..project()
+    };
+    let dbt = Project::new(&index, &project, None, false);
+    let big = dbt.resolve("core.big").unwrap();
+    let light = dbt.describe(big, &[], 0);
+    assert!(size(&light) + ENVELOPE_BYTES <= MAX_TOOL_OUTPUT_BYTES);
+    assert_eq!(light["description_truncated"], true);
+    assert_eq!(light["model_test_count"], 400);
+    assert_eq!(light["model_tests_truncated"], true);
+    let columns = dbt.describe(big, &["status".into()], 0);
+    assert!(
+        size(&columns) + ENVELOPE_BYTES <= MAX_TOOL_OUTPUT_BYTES,
+        "{}",
+        size(&columns)
+    );
+    let status = &columns["columns"][0];
+    assert_eq!(status["test_count"], 400);
+    assert_eq!(status["tests_truncated"], true);
+}
+
+#[test]
+fn the_relation_lookup_agrees_with_one_lookup() {
+    let (index, project) = (lake("Orders."), project());
+    let relations = matching::relations(&index, &project);
+    for entry in index.entries() {
+        let Some(relation) = Project::new(&index, &project, None, false).relation(entry) else {
+            continue;
+        };
+        let (schema, name) = relation.split_once('.').unwrap();
+        let key = (schema.to_lowercase(), name.to_lowercase());
+        assert_eq!(
+            relations.get(&key).copied(),
+            matching::entry_for(&index, &project, schema, name),
+            "{relation}"
+        );
+    }
 }

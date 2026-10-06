@@ -25,14 +25,17 @@ use std::{
 const ENVELOPE_BYTES: usize = 2 * 1024;
 /// The longest description that a tool gives. Longer ones are cut, and the
 /// result tells so.
-const MAX_DESCRIPTION_BYTES: usize = 16 * 1024;
+const MAX_DESCRIPTION_BYTES: usize = 12 * 1024;
+/// The largest list of documented column names in a model description. The
+/// columns argument gives all columns in pages.
+const MAX_DOCUMENTED_BYTES: usize = 12 * 1024;
+/// The largest list of the tests of a model, without its column tests.
+const MAX_MODEL_TESTS_BYTES: usize = 8 * 1024;
 /// The longest description in a list of resources.
 const MAX_LIST_DESCRIPTION_BYTES: usize = 200;
 /// The most parents or children that a model description lists.
 /// `dbt-read-lineage` gives the others.
 const MAX_DIRECT: usize = 100;
-/// The most column names in the list of documented columns.
-const MAX_DOCUMENTED: usize = 2_000;
 /// The resources of one page of `dbt-search-models` and `dbt-read-lineage`.
 pub const DEFAULT_PAGE: usize = 50;
 pub const MAX_PAGE: usize = 500;
@@ -238,16 +241,24 @@ impl<'a> Project<'a> {
                 .collect()
         };
         let declared = |name: &str| entry.columns.iter().find(|column| &*column.name == name);
-        let documented: Vec<&str> = names
+        let documented: Vec<Value> = names
             .iter()
-            .copied()
             .filter(|name| {
                 !column_tests(name).is_empty()
                     || declared(name).is_some_and(|column| {
                         !column.description.is_empty() || column.data_type.is_some()
                     })
             })
+            .map(|name| json!(name))
             .collect();
+        let (documented, documented_truncated) = fit(documented, MAX_DOCUMENTED_BYTES);
+        let model_tests: Vec<Value> = tests
+            .iter()
+            .filter(|test| test.column.is_none())
+            .map(|test| self.test(test))
+            .collect();
+        let model_test_count = model_tests.len();
+        let (model_tests, model_tests_truncated) = fit(model_tests, MAX_MODEL_TESTS_BYTES);
         let parents = &entry.parents;
         let children = index.children(position);
         let (description, description_truncated) =
@@ -264,14 +275,12 @@ impl<'a> Project<'a> {
             "path": entry.path,
             "source_name": entry.source_name.map(|name| index.symbol(name)),
             "column_count": names.len(),
-            "documented_columns": &documented[..documented.len().min(MAX_DOCUMENTED)],
-            "documented_columns_truncated": documented.len() > MAX_DOCUMENTED,
+            "documented_columns": documented,
+            "documented_columns_truncated": documented_truncated,
             "test_count": tests.len(),
-            "model_tests": tests
-                .iter()
-                .filter(|test| test.column.is_none())
-                .map(|test| self.test(test))
-                .collect::<Vec<_>>(),
+            "model_test_count": model_test_count,
+            "model_tests": model_tests,
+            "model_tests_truncated": model_tests_truncated,
             "parent_count": parents.len(),
             "parents": parents.iter().take(MAX_DIRECT).map(|p| self.short_name(*p)).collect::<Vec<_>>(),
             "parents_truncated": parents.len() > MAX_DIRECT,
@@ -288,17 +297,37 @@ impl<'a> Project<'a> {
             .copied()
             .filter(|name| columns.iter().any(|pattern| glob_match(pattern, name)))
             .collect();
+        // A column within `limit` bytes: a column that does not fit gets a
+        // shorter description, and then fewer tests.
         let column = |name: &str, limit: usize| {
             let declared = declared(name);
-            let (description, truncated) =
-                cut_flag(declared.map_or("", |column| &column.description), limit);
-            json!({
-                "name": name,
-                "description": description,
-                "description_truncated": truncated,
-                "data_type": declared.and_then(|column| column.data_type).map(|t| index.symbol(t)),
-                "tests": column_tests(name).into_iter().map(|test| self.test(test)).collect::<Vec<_>>(),
-            })
+            let tests: Vec<Value> = column_tests(name)
+                .into_iter()
+                .map(|test| self.test(test))
+                .collect();
+            let test_count = tests.len();
+            let make = |description: usize, tests: &[Value]| {
+                let (text, truncated) = cut_flag(
+                    declared.map_or("", |column| &column.description),
+                    description,
+                );
+                json!({
+                    "name": name,
+                    "description": text,
+                    "description_truncated": truncated,
+                    "data_type": declared.and_then(|column| column.data_type).map(|t| index.symbol(t)),
+                    "test_count": test_count,
+                    "tests": tests,
+                    "tests_truncated": tests.len() < test_count,
+                })
+            };
+            let full = make(MAX_DESCRIPTION_BYTES, &tests);
+            if size(&full) <= limit {
+                return full;
+            }
+            let (kept, _) = fit(tests, limit / 2);
+            let without = size(&make(0, &kept));
+            make(limit.saturating_sub(without + 16), &kept)
         };
         value["matched_column_count"] = json!(matched.len());
         value["column_offset"] = json!(column_offset);
@@ -306,18 +335,18 @@ impl<'a> Project<'a> {
         let mut used = size(&value) + 64;
         let mut page = Vec::new();
         for name in matched.iter().skip(column_offset) {
-            let mut item = column(name, MAX_DESCRIPTION_BYTES);
-            let mut item_size = size(&item) + 1;
-            // A column that does not fit alone gets a shorter description.
-            if page.is_empty() && used + item_size > budget {
-                item = column(name, budget.saturating_sub(used + 1024).max(256) / 2);
-                item_size = size(&item) + 1;
+            let item = column(name, usize::MAX);
+            let item_size = size(&item) + 1;
+            if used + item_size <= budget {
+                used += item_size;
+                page.push(item);
+                continue;
             }
-            if used + item_size > budget && !page.is_empty() {
-                break;
+            // A column that does not fit alone is shortened to the space left.
+            if page.is_empty() {
+                page.push(column(name, budget.saturating_sub(used)));
             }
-            used += item_size;
-            page.push(item);
+            break;
         }
         let end = column_offset.min(matched.len()) + page.len();
         value["columns"] = json!(page);
@@ -429,13 +458,20 @@ impl<'a> Project<'a> {
         let mut found: Vec<ReferencedModel> = Vec::new();
         let mut bytes = 0;
         let mut truncated = false;
+        // One pass over the manifest, and one lookup for each distinct name.
+        let relations = matching::relations(self.index, self.project);
+        let mut seen = BTreeSet::new();
         for name in super::catalog::names(sql) {
             let (schema, relation) = match name.as_slice() {
                 [.., schema, relation] => (schema.as_str(), relation.as_str()),
                 [relation] => (default_schema, relation.as_str()),
                 [] => continue,
             };
-            let Some(position) = self.entry_for(schema, relation) else {
+            let key = (schema.to_lowercase(), relation.to_lowercase());
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let Some(&position) = relations.get(&key) else {
                 continue;
             };
             let entry = self.index.entry(position);
@@ -580,6 +616,20 @@ fn page<T>(
         }
         count /= 2;
     }
+}
+
+/// The first `items` that fit in `limit` bytes, and whether some did not.
+fn fit(items: Vec<Value>, limit: usize) -> (Vec<Value>, bool) {
+    let mut used = 2;
+    let count = items
+        .iter()
+        .take_while(|item| {
+            used += size(item) + 1;
+            used <= limit
+        })
+        .count();
+    let truncated = count < items.len();
+    (items.into_iter().take(count).collect(), truncated)
 }
 
 fn seconds(time: SystemTime) -> Option<u64> {
