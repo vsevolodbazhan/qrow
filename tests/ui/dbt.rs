@@ -447,6 +447,21 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         !crate::support::present(window, &"dbt-details-sql".into())
     });
 
+    // dbt writes new SQL while the part is closed. The connection refreshes
+    // manually, so the reopened part reads the manifest again first.
+    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let changed = format!("{raw}\n-- changed");
+    value["nodes"][dbt_manifest::model_id(1)]["raw_code"] = changed.clone().into();
+    std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    app.click(cx, "dbt-details-sql-toggle");
+    app.wait_until(cx, "the new model SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-sql").as_deref() == Some(changed.as_str())
+    });
+    app.click(cx, "dbt-details-sql-toggle");
+    app.wait_until(cx, "the closed SQL", TIMEOUT, |window, _| {
+        !crate::support::present(window, &"dbt-details-sql".into())
+    });
+
     app.fill(cx, "dbt-details-filter", "col_001");
     app.wait_until(cx, "the filtered columns", TIMEOUT, |window, _| {
         !crate::support::present(window, &column_id("id"))

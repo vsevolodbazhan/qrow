@@ -119,7 +119,18 @@ impl Qrow {
             return;
         };
         details.sql_open = !details.sql_open;
-        if details.sql_open && matches!(details.sql, Sql::Unread) {
+        let open = details.sql_open;
+        // A manifest that changed since the read has other SQL, and a failed
+        // read can work now.
+        let stale = match &details.sql {
+            Sql::Unread | Sql::Failed(_) => true,
+            Sql::Read(_) => !self
+                .dbt
+                .state(details.profile)
+                .is_some_and(|state| state.is_current()),
+            Sql::Reading | Sql::Refreshing => false,
+        };
+        if open && stale {
             self.read_dbt_sql(cx);
         }
         cx.notify();
@@ -158,9 +169,13 @@ impl Qrow {
         let read = details.sql_read;
         // Compiled SQL can be large, and the file can be on a slow disk.
         let task = cx.background_executor().spawn(async move {
-            match crate::dbt::read_sql(&state.path, span) {
-                // dbt can write the file during the read.
-                Ok(_) if !state.is_current() => SqlRead::Changed,
+            let result = crate::dbt::read_sql(&state.path, span);
+            // dbt can write the file during the read, which can also make
+            // the read fail.
+            if !state.is_current() {
+                return SqlRead::Changed;
+            }
+            match result {
                 Ok(sql) => SqlRead::Read(sql),
                 Err(error) => SqlRead::Failed(error.to_string()),
             }
