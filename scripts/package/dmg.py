@@ -12,151 +12,130 @@ from pathlib import Path
 
 from ds_store import DSStore
 from mac_alias import Alias
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageFont
 
-# The Qrow One Dark palette: src/one-dark.json.
-BASE = (30, 32, 36)  # background
-DEEP = (21, 23, 27)  # background, lower edge
-ACCENT = (97, 175, 239)  # primary
-CAPTION_COLOR = (139, 148, 164)  # muted foreground
+# Finder draws the icon labels in black on a picture background in both the
+# light and the dark appearance, so the picture is light. The accent is the
+# Qrow primary color (src/one-dark.json), darkened to read on light gray.
+TOP = (250, 250, 252)
+BOTTOM = (234, 237, 242)
+ACCENT = (66, 139, 214)
+CAPTION_COLOR = (128, 134, 146)
 
-# The Finder window that opens when the installer mounts.
-WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT = 120, 120, 720, 440
-TOOLBAR_HEIGHT = 52
-BACKGROUND_SIZE = (WINDOW_WIDTH, WINDOW_HEIGHT - TOOLBAR_HEIGHT)
-BACKGROUND_NAME = "background.png"
+# The Finder window that opens when the installer mounts. It has no toolbar,
+# so the content area is the window less the title bar.
+WINDOW_X, WINDOW_Y, WINDOW_WIDTH, WINDOW_HEIGHT = 200, 160, 640, 400
+TITLE_BAR_HEIGHT = 32
+BACKGROUND_SIZE = (WINDOW_WIDTH, WINDOW_HEIGHT - TITLE_BAR_HEIGHT)
+# Finder picks the representation that matches the display from one TIFF.
+BACKGROUND_SCALES = (1, 2)
+BACKGROUND_NAME = "background.tiff"
 APPLICATIONS = "Applications"
 ICON_SIZE = 128
 # Icon positions in the window content area: Finder reads Iloc as the center
 # of the 128x128 icon box, so the boxes below are the centers plus half a box.
-APP_POSITION = (220, 116)
-APPLICATIONS_POSITION = (500, 116)
-# The hint between the two icons.
-CAPTION = "Drag to Applications"
-CAPTION_SIZE = 15
-CAPTION_OFFSET = APP_POSITION[1] + ICON_SIZE // 2 + 64
+APP_POSITION = (170, 150)
+APPLICATIONS_POSITION = (470, 150)
+CAPTION = "Drag Qrow to Applications to install"
+CAPTION_SIZE = 13
+CAPTION_WEIGHT = b"Medium"
+CAPTION_TOP = 284
 FONT_CANDIDATES = (
-    "/System/Library/Fonts/Helvetica.ttc",
     "/System/Library/Fonts/SFNS.ttf",
+    "/System/Library/Fonts/Helvetica.ttc",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 )
-ARROW_WIDTH = 6
-# The arrow mask is drawn large and scaled down for smooth edges.
-ARROW_SCALE = 4
-# The hint leaves the app icon downhill, bends at the bottom, and rises onto the
-# base line of the head, so the shaft and the head end in one point and one
-# direction and nothing sticks out of the head.
-ARROW_START = (APP_POSITION[0] + ICON_SIZE // 2 + 8, APP_POSITION[1] - 6)
-ARROW_TIP = (APPLICATIONS_POSITION[0] - ICON_SIZE // 2 - 16, APPLICATIONS_POSITION[1])
-ARROW_HEAD_ANGLE = -35.0
-ARROW_HEAD_LENGTH = 30
-ARROW_HEAD_SPREAD = 15
-ARROW_LEAVE_ANGLE = 38.0
-ARROW_CURVE = (45.0, 55.0)
-ARROW_SAMPLES = 64
+# The arrow is a straight shaft with an open head on the line between the
+# icon centers. Its mask is drawn large and scaled down for smooth edges.
+ARROW_START = (APP_POSITION[0] + ICON_SIZE // 2 + 30, APP_POSITION[1])
+ARROW_TIP = (APPLICATIONS_POSITION[0] - ICON_SIZE // 2 - 30, APPLICATIONS_POSITION[1])
+ARROW_WIDTH = 3.0
+ARROW_HEAD_LENGTH = 12.0
+ARROW_HEAD_ANGLE = 42.0
+SUPERSAMPLE = 4
 
 
-def font(size: int) -> ImageFont.FreeTypeFont | None:
+def font(size: float) -> ImageFont.FreeTypeFont | None:
     for candidate in FONT_CANDIDATES:
         try:
-            return ImageFont.truetype(candidate, size)
+            loaded = ImageFont.truetype(candidate, round(size))
         except OSError:
             continue
+        try:
+            loaded.set_variation_by_name(CAPTION_WEIGHT)
+        except (OSError, ValueError):
+            pass
+        return loaded
     return None
 
 
-def bezier(controls: list[tuple[float, float]], step: float) -> tuple[float, float]:
-    """Return one point of the curve that the control points describe."""
-    points = list(controls)
-    while len(points) > 1:
-        points = [
-            ((1 - step) * start[0] + step * end[0], (1 - step) * start[1] + step * end[1])
-            for start, end in zip(points, points[1:])
-        ]
-    return points[0]
+def arrow_strokes() -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """Return the shaft and the two strokes of the open head, in points."""
+    strokes = [(ARROW_START, ARROW_TIP)]
+    for side in (-1, 1):
+        angle = math.radians(180.0 + side * ARROW_HEAD_ANGLE)
+        end = (
+            ARROW_TIP[0] + ARROW_HEAD_LENGTH * math.cos(angle),
+            ARROW_TIP[1] + ARROW_HEAD_LENGTH * math.sin(angle),
+        )
+        strokes.append((ARROW_TIP, end))
+    return strokes
 
 
-def arrow_geometry() -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
-    """Return the curved shaft and the head triangle of the drag hint."""
-    angle = math.radians(ARROW_HEAD_ANGLE)
-    axis = (math.cos(angle), math.sin(angle))
-    base = (
-        ARROW_TIP[0] - ARROW_HEAD_LENGTH * axis[0],
-        ARROW_TIP[1] - ARROW_HEAD_LENGTH * axis[1],
-    )
-    leave = math.radians(ARROW_LEAVE_ANGLE)
-    controls = [
-        ARROW_START,
-        (ARROW_START[0] + ARROW_CURVE[0] * math.cos(leave), ARROW_START[1] + ARROW_CURVE[0] * math.sin(leave)),
-        (base[0] - ARROW_CURVE[1] * axis[0], base[1] - ARROW_CURVE[1] * axis[1]),
-        base,
-    ]
-    path = [bezier(controls, step / ARROW_SAMPLES) for step in range(ARROW_SAMPLES + 1)]
-    perpendicular = (-axis[1], axis[0])
-    head = [
-        ARROW_TIP,
-        (
-            base[0] + ARROW_HEAD_SPREAD * perpendicular[0],
-            base[1] + ARROW_HEAD_SPREAD * perpendicular[1],
-        ),
-        (
-            base[0] - ARROW_HEAD_SPREAD * perpendicular[0],
-            base[1] - ARROW_HEAD_SPREAD * perpendicular[1],
-        ),
-    ]
-    return path, head
-
-
-def draw_drag_arrow(image: Image.Image) -> Image.Image:
-    """Draw the curved arrow that points from the app to the Applications shortcut."""
+def draw_arrow(image: Image.Image, scale: int) -> Image.Image:
+    """Draw the arrow that points from the app to the Applications shortcut."""
     width, height = image.size
-    mask = Image.new("L", (width * ARROW_SCALE, height * ARROW_SCALE), 0)
+    factor = scale * SUPERSAMPLE
+    mask = Image.new("L", (width * SUPERSAMPLE, height * SUPERSAMPLE), 0)
     draw = ImageDraw.Draw(mask)
-    path, head = arrow_geometry()
-    draw.line(
-        [(x * ARROW_SCALE, y * ARROW_SCALE) for x, y in path],
-        fill=255,
-        width=ARROW_WIDTH * ARROW_SCALE,
-        joint="curve",
-    )
-    draw.polygon([(x * ARROW_SCALE, y * ARROW_SCALE) for x, y in head], fill=255)
+    radius = ARROW_WIDTH * factor / 2
+    for start, end in arrow_strokes():
+        points = [(x * factor, y * factor) for x, y in (start, end)]
+        draw.line(points, fill=255, width=round(ARROW_WIDTH * factor))
+        # Round caps, so the head strokes meet the shaft in one smooth tip.
+        for x, y in points:
+            draw.ellipse([x - radius, y - radius, x + radius, y + radius], fill=255)
     mask = mask.resize((width, height), Image.Resampling.LANCZOS)
     return Image.composite(Image.new("RGB", (width, height), ACCENT), image, mask)
 
 
-def draw_caption(image: Image.Image) -> None:
+def draw_caption(image: Image.Image, scale: int) -> None:
     """Write the hint below the icons when the system has a usable font."""
-    text_font = font(CAPTION_SIZE)
+    text_font = font(CAPTION_SIZE * scale)
     if text_font is None:
         return
     draw = ImageDraw.Draw(image)
     box = draw.textbbox((0, 0), CAPTION, font=text_font)
-    center = (APP_POSITION[0] + APPLICATIONS_POSITION[0]) // 2
-    position = (center - (box[2] - box[0]) // 2 - box[0], CAPTION_OFFSET)
+    center = (APP_POSITION[0] + APPLICATIONS_POSITION[0]) / 2 * scale
+    position = (round(center - (box[2] - box[0]) / 2 - box[0]), CAPTION_TOP * scale)
     draw.text(position, CAPTION, font=text_font, fill=CAPTION_COLOR)
 
 
-def render_background(path: Path) -> None:
-    """Draw the installer background in the project colors."""
-    width, height = BACKGROUND_SIZE
+def render_background(path: Path, scale: int = 1) -> None:
+    """Draw the installer background at a display scale: 1 or 2 pixels per point."""
+    width, height = BACKGROUND_SIZE[0] * scale, BACKGROUND_SIZE[1] * scale
     image = Image.new("RGB", (width, height))
     draw = ImageDraw.Draw(image)
     for row in range(height):
         progress = row / max(height - 1, 1)
-        color = tuple(round(BASE[i] + (DEEP[i] - BASE[i]) * progress) for i in range(3))
+        color = tuple(round(TOP[i] + (BOTTOM[i] - TOP[i]) * progress) for i in range(3))
         draw.line([(0, row), (width, row)], fill=color)
-    glow = Image.new("L", (width, height), 0)
-    radius = round(width * 0.42)
-    center = (round(width * 0.74), round(height * 0.30))
-    ImageDraw.Draw(glow).ellipse(
-        [center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius], fill=110
-    )
-    glow = glow.filter(ImageFilter.GaussianBlur(radius * 0.55))
-    image = Image.composite(Image.new("RGB", (width, height), ACCENT), image, glow)
-    image = draw_drag_arrow(image)
-    draw_caption(image)
+    image = draw_arrow(image, scale)
+    draw_caption(image, scale)
     path.parent.mkdir(parents=True, exist_ok=True)
-    image.save(path, format="PNG")
+    image.save(path, format="PNG", dpi=(72 * scale, 72 * scale))
+
+
+def write_background(path: Path) -> None:
+    """Write one TIFF with a representation for each display scale."""
+    with tempfile.TemporaryDirectory(prefix="qrow-dmg-background-") as temporary:
+        layers = []
+        for scale in BACKGROUND_SCALES:
+            layer = Path(temporary) / f"background-{scale}x.png"
+            render_background(layer, scale)
+            layers.append(str(layer))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        run(["tiffutil", "-cathidpicheck", *layers, "-out", str(path)])
 
 
 def stage(folder: Path, app: Path) -> str:
@@ -164,7 +143,7 @@ def stage(folder: Path, app: Path) -> str:
     # ditto keeps the code signature and the extended attributes of the bundle.
     run(["ditto", str(app), str(folder / app.name)])
     (folder / APPLICATIONS).symlink_to("/Applications")
-    render_background(folder / ".background" / BACKGROUND_NAME)
+    write_background(folder / ".background" / BACKGROUND_NAME)
     return app.name
 
 
@@ -187,7 +166,7 @@ def write_layout(folder: Path, app_name: str, background_alias: bytes) -> None:
         "showIconPreview": True,
         "showItemInfo": False,
         "labelOnBottom": True,
-        "textSize": 14.0,
+        "textSize": 13.0,
         "iconSize": float(ICON_SIZE),
         "scrollPositionX": 0.0,
         "scrollPositionY": 0.0,
@@ -199,7 +178,7 @@ def write_layout(folder: Path, app_name: str, background_alias: bytes) -> None:
         "PreviewPaneVisibility": False,
         "SidebarWidth": 0,
         "ShowTabView": False,
-        "ShowToolbar": True,
+        "ShowToolbar": False,
         "ShowPathbar": False,
         "ShowSidebar": False,
     }
@@ -285,11 +264,14 @@ def main() -> None:
     build_command.add_argument("--volume-name", required=True, help="Name of the mounted installer")
     background_command = commands.add_parser("background", help="Write the background image")
     background_command.add_argument("--output", type=Path, required=True, help="Path of the PNG to write")
+    background_command.add_argument(
+        "--scale", type=int, choices=BACKGROUND_SCALES, default=2, help="Pixels per point"
+    )
     arguments = parser.parse_args()
     if arguments.command == "build":
         build(arguments.app, arguments.output, arguments.volume_name)
     else:
-        render_background(arguments.output)
+        render_background(arguments.output, arguments.scale)
         print(f"Wrote {arguments.output}.")
 
 
