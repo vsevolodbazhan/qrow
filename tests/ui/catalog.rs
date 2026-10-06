@@ -367,7 +367,7 @@ fn column_icons_align_under_the_table_icon_at_each_zoom(cx: &mut TestAppContext)
         app.click_labelled(cx, "avia");
         wait_shows(&app, cx, "bookings");
         app.click_labelled(cx, "bookings");
-        wait_shows(&app, cx, "gate STRING");
+        wait_shows(&app, cx, "gate string");
         app.update(cx, |window, _| {
             let relation = format!("r\u{1f}{}\u{1f}avia\u{1f}bookings", profile.id);
             let table = bounds_of(window, &format!("{relation}\u{1f}icon"));
@@ -402,8 +402,8 @@ fn the_tree_shows_a_cached_catalog_without_a_session(cx: &mut TestAppContext) {
     app.click_labelled(cx, "avia");
     wait_shows(&app, cx, "daily");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "booking_id BIGINT");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "booking_id bigint");
+    wait_shows(&app, cx, "gate string");
 
     // Without a live session, an unloaded schema waits for a refresh.
     app.click_labelled(cx, "finance");
@@ -722,7 +722,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
 
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Copy Qualified Name");
@@ -741,13 +741,13 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     });
 
     let gate = app.update(cx, |window, _| {
-        labelled(window, "gate STRING").unwrap().bounds()
+        labelled(window, "gate string").unwrap().bounds()
     });
     // Only Insert into Editor inserts. A double-click does not change SQL.
     app.update(cx, |window, cx| press_at(window, gate.center(), 2, cx));
     app.settle(cx);
     app.update(cx, |window, _| {
-        assert!(labelled(window, "gate STRING").is_some());
+        assert!(labelled(window, "gate string").is_some());
     });
     std::thread::sleep(Duration::from_millis(600));
     assert_eq!(app.saved().tabs[0].sql, "`avia`.`daily`");
@@ -895,10 +895,10 @@ fn the_keyboard_copies_and_inserts_the_selected_name(cx: &mut TestAppContext) {
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
 
     // A click selects the row and focuses the tree. Down moves to the next row.
-    app.click_labelled(cx, "booking_id BIGINT");
+    app.click_labelled(cx, "booking_id bigint");
     app.press(cx, "down");
     app.press(cx, "cmd-c");
     app.settle(cx);
@@ -933,10 +933,10 @@ fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut 
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
-    app.click_labelled(cx, "booking_id BIGINT");
+    wait_shows(&app, cx, "gate string");
+    app.click_labelled(cx, "booking_id bigint");
     app.update(cx, |window, _| {
-        assert_eq!(selected_tree_rows(window), ["booking_id BIGINT"]);
+        assert_eq!(selected_tree_rows(window), ["booking_id bigint"]);
     });
 
     app.toggle_connection(cx, profile.id);
@@ -945,7 +945,7 @@ fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut 
         assert!(
             !selected_tree_rows(window)
                 .iter()
-                .any(|row| row == "booking_id BIGINT")
+                .any(|row| row == "booking_id bigint")
         );
         assert_connection_highlight(window, cx, current.id, true);
         assert_connection_highlight(window, cx, profile.id, false);
@@ -957,7 +957,7 @@ fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut 
         assert!(
             !selected_tree_rows(window)
                 .iter()
-                .any(|row| row == "booking_id BIGINT")
+                .any(|row| row == "booking_id bigint")
         );
         assert_connection_highlight(window, cx, current.id, true);
         assert_connection_highlight(window, cx, profile.id, false);
@@ -1037,12 +1037,12 @@ fn hiding_or_replacing_connections_clears_the_catalog_selection(cx: &mut TestApp
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
 
     for exit in ["cmd-b", "show-connections", "show-sign-ins"] {
-        app.click_labelled(cx, "booking_id BIGINT");
+        app.click_labelled(cx, "booking_id bigint");
         app.update(cx, |window, _| {
-            assert_eq!(selected_tree_rows(window), ["booking_id BIGINT"]);
+            assert_eq!(selected_tree_rows(window), ["booking_id bigint"]);
         });
         if exit == "cmd-b" {
             app.press(cx, exit);
@@ -1212,7 +1212,7 @@ fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "daily");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
 
     let hover = |app: &TestApp, cx: &mut TestAppContext, row: &str| -> Option<String> {
         // One hover, then rest: the row decides when its tooltip opens.
@@ -1223,14 +1223,14 @@ fn a_tooltip_shows_only_a_cut_name_or_a_comment(cx: &mut TestAppContext) {
     };
     assert_eq!(hover(&app, cx, &long), Some(long.clone()));
     assert_eq!(hover(&app, cx, "daily"), None);
-    assert_eq!(hover(&app, cx, "gate STRING"), None);
+    assert_eq!(hover(&app, cx, "gate string"), None);
     assert_eq!(
-        hover(&app, cx, "day DATE").as_deref(),
-        Some("day DATE\nBooking day")
+        hover(&app, cx, "day date").as_deref(),
+        Some("day date\nBooking day")
     );
 
     // An open menu hides the tooltip of the row that it belongs to.
-    app.context_menu_labelled(cx, "day DATE");
+    app.context_menu_labelled(cx, "day date");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     app.update(cx, |window, _| {
@@ -1260,17 +1260,17 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     expand_connection(&app, cx, &profile);
     app.click_labelled(cx, "avia");
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
 
     // A schema keeps its relations open, but their columns close.
     app.context_menu_labelled(cx, "avia");
     app.choose(cx, "popup-menu", "Collapse");
-    gone(&app, cx, "gate STRING");
+    gone(&app, cx, "gate string");
     wait_shows(&app, cx, "bookings");
 
     // A connection keeps its schemas, but they close.
     app.click_labelled(cx, "bookings");
-    wait_shows(&app, cx, "gate STRING");
+    wait_shows(&app, cx, "gate string");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Collapse");
     gone(&app, cx, "bookings");

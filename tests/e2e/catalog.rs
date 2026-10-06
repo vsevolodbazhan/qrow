@@ -344,7 +344,7 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     });
     app.click_labelled(cx, "bookings");
     app.wait_until(cx, "the columns", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "gate STRING").is_some()
+        labelled(window, "gate string").is_some()
     });
     app.update(cx, |window, _| {
         let relation = format!("r\u{1f}{}\u{1f}{schema}\u{1f}bookings", profile.id);
@@ -360,7 +360,7 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     app.context_menu_labelled(cx, "bookings");
     app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(cx, "the new column", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "fare DOUBLE").is_some()
+        labelled(window, "fare double").is_some()
     });
     app.update(cx, |window, _| {
         assert_catalog_icon(
@@ -375,9 +375,9 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
     // A different live query connection must remain the only highlighted root.
     app.select_connection(cx, &reader);
     app.run_complete(cx, "SELECT 1");
-    app.click_labelled(cx, "id BIGINT");
+    app.click_labelled(cx, "id bigint");
     app.update(cx, |window, _| {
-        assert_eq!(selected_tree_rows(window), ["id BIGINT"]);
+        assert_eq!(selected_tree_rows(window), ["id bigint"]);
     });
     for _ in 0..2 {
         app.toggle_connection(cx, profile.id);
@@ -386,13 +386,13 @@ fn a_live_session_loads_the_tree_and_a_refresh_shows_a_new_column(cx: &mut TestA
             assert!(
                 !selected_tree_rows(window)
                     .iter()
-                    .any(|row| row == "id BIGINT")
+                    .any(|row| row == "id bigint")
             );
             assert_connection_highlight(window, cx, reader.id, true);
             assert_connection_highlight(window, cx, profile.id, false);
         });
     }
-    app.click_labelled(cx, "id BIGINT");
+    app.click_labelled(cx, "id bigint");
     app.press(cx, "cmd-b");
     app.wait_gone(cx, "add-connection");
     app.press(cx, "cmd-b");
@@ -512,19 +512,19 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
         });
         app.click_labelled(cx, "fourth");
         app.wait_until(cx, "the table to expand", QUERY_TIMEOUT, |window, _| {
-            labelled(window, "c0 INT").is_some()
+            labelled(window, "c0 int").is_some()
         });
         scroll_tree(cx, -20_000.);
         app.wait_until(
             cx,
             "the refreshed column in the tree",
             QUERY_TIMEOUT,
-            |window, _| labelled(window, &format!("{added} STRING")).is_some(),
+            |window, _| labelled(window, &format!("{added} string")).is_some(),
         );
         scroll_tree(cx, 20_000.);
         app.click_labelled(cx, "fourth");
         app.wait_until(cx, "the table to collapse", QUERY_TIMEOUT, |window, _| {
-            labelled(window, "c0 INT").is_none()
+            labelled(window, "c0 int").is_none()
         });
         app.fill_labelled(cx, "Search Tables", "");
     }
@@ -579,7 +579,7 @@ fn the_first_run_on_a_stale_connection_fills_its_tree(cx: &mut TestAppContext) {
     app.click_labelled(cx, &schema);
     app.click_labelled(cx, "bookings");
     app.wait_until(cx, "the columns", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "gate STRING").is_some()
+        labelled(window, "gate string").is_some()
     });
     // Expansion did not read the catalog again.
     let activity = app.activity(cx, reader.id);
@@ -675,7 +675,7 @@ fn a_live_shared_connection_resumes_an_unfinished_cache_before_its_period(cx: &m
     app.click_labelled(cx, &pending);
     app.click_labelled(cx, "bookings");
     app.wait_until(cx, "the resumed columns", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "gate STRING").is_some()
+        labelled(window, "gate string").is_some()
     });
     // Schemas already completed in this period are preserved.
     assert!(
@@ -737,7 +737,7 @@ fn a_refresh_of_one_connection_fills_the_shared_tree_of_another(cx: &mut TestApp
     app.click_labelled(cx, &schema);
     app.click_labelled(cx, "bookings");
     app.wait_until(cx, "the shared columns", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "gate STRING").is_some()
+        labelled(window, "gate string").is_some()
     });
 
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
@@ -829,6 +829,6 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     app.click_labelled(cx, &schema);
     app.click_labelled(cx, "cached_orders");
     app.wait_until(cx, "the seeded columns", QUERY_TIMEOUT, |window, _| {
-        labelled(window, "cached_id BIGINT").is_some()
+        labelled(window, "cached_id bigint").is_some()
     });
 }

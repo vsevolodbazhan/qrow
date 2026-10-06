@@ -222,7 +222,7 @@ fn large_catalog(cx: &mut TestAppContext) -> TestApp {
         cx,
         "the expanded table",
         std::time::Duration::from_secs(10),
-        |window, _| support::labelled(window, "column_00 STRING").is_some(),
+        |window, _| support::labelled(window, "column_00 string").is_some(),
     );
     app
 }
@@ -235,7 +235,7 @@ fn catalog_tree(cx: &mut TestAppContext) {
     report("ui.catalog.frame", median_ms(&frame), "ms", 50.);
 
     let scroll = app.update(cx, |window, cx| {
-        let position = support::labelled(window, "column_00 STRING")
+        let position = support::labelled(window, "column_00 string")
             .expect("A visible column row")
             .bounds()
             .center();
