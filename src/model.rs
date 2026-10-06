@@ -950,14 +950,9 @@ impl SignIn {
     pub fn from_shared_text(text: &str) -> anyhow::Result<Self> {
         const NOT_A_SIGN_IN: &str = "The clipboard does not contain sign-in settings. Use Copy Settings on a sign-in, then try again.";
         anyhow::ensure!(text.len() <= MAX_SHARED_SIGN_IN_BYTES, NOT_A_SIGN_IN);
-        let (Some(start), Some(end)) = (text.find('{'), text.rfind('}')) else {
-            anyhow::bail!(NOT_A_SIGN_IN);
-        };
-        anyhow::ensure!(start < end, NOT_A_SIGN_IN);
-        let json = &text[start..=end];
-        let value: serde_json::Value = serde_json::from_str(json)
-            .or_else(|_| serde_json::from_str(&json.replace(['\u{201C}', '\u{201D}'], "\"")))
-            .map_err(|_| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        let value = shared_sign_in_object(text)
+            .or_else(|| shared_sign_in_object(&text.replace(['\u{201C}', '\u{201D}'], "\"")))
+            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
         let version = value
             .get("qrow_sign_in")
             .and_then(serde_json::Value::as_u64)
@@ -983,6 +978,27 @@ impl SignIn {
         sign_in.validate()?;
         Ok(sign_in)
     }
+}
+
+/// The first JSON object in `text` that has the `qrow_sign_in` marker. Other
+/// text, also text with braces, can come before and after it.
+fn shared_sign_in_object(text: &str) -> Option<serde_json::Value> {
+    // The object starts at one of the nearest braces before a marker. A few
+    // tries for each marker keep the work linear in the length of the text.
+    const STARTS_PER_MARKER: usize = 4;
+    text.match_indices("\"qrow_sign_in\"")
+        .find_map(|(marker, _)| {
+            text[..marker]
+                .rmatch_indices('{')
+                .take(STARTS_PER_MARKER)
+                .find_map(|(start, _)| {
+                    serde_json::Deserializer::from_str(&text[start..])
+                        .into_iter::<serde_json::Value>()
+                        .next()?
+                        .ok()
+                        .filter(|value| value.get("qrow_sign_in").is_some())
+                })
+        })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1741,6 +1757,12 @@ mod tests {
         let text = sign_in().to_shared_text();
         let message = format!("Our sign-in:\n```\n{text}\n```\nThanks!");
         assert_eq!(SignIn::from_shared_text(&message).unwrap().name, "Company");
+        let braces = format!("Use {{your_username}} in the connection:\n{text}\nSee {{docs}}.");
+        assert_eq!(SignIn::from_shared_text(&braces).unwrap().name, "Company");
+        let compact =
+            serde_json::to_string(&serde_json::from_str::<serde_json::Value>(&text).unwrap())
+                .unwrap();
+        assert_eq!(SignIn::from_shared_text(&compact).unwrap().name, "Company");
         let typographic = text.replace('"', "\u{201C}");
         assert_eq!(
             SignIn::from_shared_text(&typographic).unwrap().client_id,
