@@ -1520,10 +1520,10 @@ impl Qrow {
             "dbt-read-sql" => {
                 let input: DbtSqlInput = parse(arguments)?;
                 version(input.version)?;
-                let position = project.resolve(&input.model).map_err(fail)?;
                 let state = state.expect("a project has a state");
                 // The positions of the SQL in the file are wrong after a
-                // change. A refresh makes them right.
+                // change, and the model can be new. A refresh makes them
+                // right.
                 if !state.is_current() {
                     self.dbt.refresh_path(&state.path);
                     return Err(failure(
@@ -1531,6 +1531,7 @@ impl Qrow {
                         "The dbt manifest changed after Qrow read it. Qrow reads it again now; try again in a few seconds.",
                     ));
                 }
+                let position = project.resolve(&input.model).map_err(fail)?;
                 project
                     .read_sql(
                         position,

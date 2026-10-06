@@ -390,27 +390,36 @@ impl<'a> Project<'a> {
                 format!("Qrow cannot read the SQL: {error}"),
             )
         })?;
-        let mut start = offset.min(sql.len());
-        while !sql.is_char_boundary(start) {
-            start -= 1;
+        // Like tab-read-sql: a page has at least one character, and it is
+        // halved until its escaped SQL fits in a tool result.
+        let mut limit = limit.clamp(1, MAX_SQL_BYTES);
+        loop {
+            let page = super::broker::sql_page(&sql, offset, limit).ok_or_else(|| {
+                failure(
+                    "invalid_offset",
+                    "offset is past the end of the SQL or inside a character. Use next_offset.",
+                )
+            })?;
+            let value = json!({
+                "unique_id": entry.unique_id,
+                "relation": self.relation(entry),
+                "code": code,
+                // dbt parse writes no compiled SQL. dbt compile, run, or
+                // build does.
+                "compiled_missing": compiled && code == "raw",
+                "sql": &sql[page.clone()],
+                "sql_offset": page.start,
+                "sql_bytes": sql.len(),
+                "next_offset": (page.end < sql.len()).then_some(page.end),
+                "manifest": self.manifest(),
+            });
+            if size(&value) + ENVELOPE_BYTES <= MAX_TOOL_OUTPUT_BYTES
+                || sql[page.clone()].chars().nth(1).is_none()
+            {
+                return Ok(value);
+            }
+            limit = (page.len() / 2).max(1);
         }
-        let mut end = (start + limit.clamp(1, MAX_SQL_BYTES)).min(sql.len());
-        while !sql.is_char_boundary(end) {
-            end -= 1;
-        }
-        Ok(json!({
-            "unique_id": entry.unique_id,
-            "relation": self.relation(entry),
-            "code": code,
-            // dbt parse writes no compiled SQL. dbt compile, run, or build
-            // does.
-            "compiled_missing": compiled && code == "raw",
-            "sql": &sql[start..end],
-            "sql_offset": start,
-            "sql_bytes": sql.len(),
-            "next_offset": (end < sql.len()).then_some(end),
-            "manifest": self.manifest(),
-        }))
     }
 
     /// The resources that pass `filters`, from `offset`, for

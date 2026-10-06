@@ -546,6 +546,19 @@ fn model_sql_is_read_from_the_manifest_in_pages() {
     );
     assert_eq!(rest["sql_bytes"], raw.len());
 
+    // A limit smaller than a character still moves forward, and an offset
+    // inside a character is an error.
+    let cyrillic = raw.find('з').unwrap();
+    let one = dbt.read_sql(daily, &path, false, cyrillic, 1).unwrap();
+    assert_eq!(one["sql"], "з");
+    assert_eq!(one["next_offset"], cyrillic + 'з'.len_utf8());
+    assert_eq!(
+        dbt.read_sql(daily, &path, false, cyrillic + 1, 10)
+            .unwrap_err()
+            .code,
+        "invalid_offset"
+    );
+
     // A manifest from dbt parse has only the raw SQL.
     let parsed = dbt.resolve("core.parsed").unwrap();
     let value = dbt.read_sql(parsed, &path, true, 0, 100).unwrap();
@@ -554,4 +567,41 @@ fn model_sql_is_read_from_the_manifest_in_pages() {
         (json!("raw"), json!(true))
     );
     assert_eq!(value["sql"], "select 1");
+}
+
+#[test]
+fn a_page_of_sql_with_many_escapes_fits_in_a_tool_result() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("manifest.json");
+    // Control characters take six bytes each in JSON.
+    let raw = "\u{1}".repeat(40_000);
+    let value = json!({
+        "metadata": {"dbt_schema_version": V12},
+        "nodes": {"model.lake.odd": {
+            "unique_id": "model.lake.odd", "resource_type": "model", "name": "odd",
+            "schema": "core", "relation_name": "x", "raw_code": raw,
+        }},
+    });
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    let index = crate::dbt::parse(&std::fs::read(&path).unwrap()).unwrap();
+    let project = DbtProject {
+        schema_mapping: vec![],
+        ..project()
+    };
+    let dbt = Project::new(&index, &project, None, false);
+    let odd = dbt.resolve("model.lake.odd").unwrap();
+    let mut offset = 0;
+    let mut read = 0;
+    loop {
+        let page = dbt
+            .read_sql(odd, &path, false, offset, MAX_SQL_BYTES)
+            .unwrap();
+        assert!(size(&page) + ENVELOPE_BYTES <= MAX_TOOL_OUTPUT_BYTES);
+        read += page["sql"].as_str().unwrap().len();
+        match page["next_offset"].as_u64() {
+            Some(next) => offset = next as usize,
+            None => break,
+        }
+    }
+    assert_eq!(read, raw.len());
 }
