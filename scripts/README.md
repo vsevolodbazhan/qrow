@@ -7,6 +7,7 @@ maintenance, and binding generation. Build and package commands are in the
 
 | Path | Purpose |
 | --- | --- |
+| `ci/` | CI maintenance: the deletion of Rust build caches that newer caches replaced. |
 | `qtest/` | The [`./qtest`](../docs/testing.md) command: suite catalog, runner, and command line. |
 | `core/` | Shared prerequisite checks, the size check, and the dependency policy check. `environment.py` finds the target directory, Docker, and the JDK for the Python scripts. |
 | `e2e/` | Disposable test servers and their downloads, the native driver entry point, and synthetic credential cleanup. |

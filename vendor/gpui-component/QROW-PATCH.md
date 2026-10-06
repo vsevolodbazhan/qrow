@@ -5,6 +5,9 @@ source has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items
+  accept a tooltip, including when disabled. Dismissing a menu hides the
+  tooltip. This gives a disabled Delete action a reason without an extra row.
 - `src/searchable_list/item.rs`: a row of a Select or Combobox list has 1 pixel
   of space above and below its highlight. Before, the highlights of two
   adjacent rows touched, for example a hovered row below the chosen row. Popup

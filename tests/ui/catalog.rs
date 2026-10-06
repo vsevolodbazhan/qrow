@@ -11,7 +11,10 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, CatalogColumn, RelationEntry, RelationKind},
-    model::{CatalogRefresh, CatalogSettings, Profile, SavedTab, SharedCatalog, Workspace},
+    model::{
+        CatalogColumnReads, CatalogRefresh, CatalogSettings, Profile, SavedTab, SharedCatalog,
+        Workspace,
+    },
     storage::{self, Credentials},
 };
 use std::{collections::BTreeMap, net::TcpListener, time::Duration};
@@ -1314,6 +1317,18 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
             Some("30")
         );
     });
+    app.scroll_to(cx, "connection-column-reads");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-column-reads").as_deref(),
+            Some("One relation at a time")
+        );
+        assert_eq!(
+            bounds_of(window, "connection-column-reads").left(),
+            bounds_of(window, "connection-show-schemas").left()
+        );
+    });
+    app.select(cx, "connection-column-reads", "Whole schema");
 
     // While connected shows the period, and both fields are validated.
     app.scroll_to(cx, "connection-schema-refresh");
@@ -1348,12 +1363,25 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
 
     // Disabled hides the other Schemas fields and keeps their values.
     edit(cx);
+    app.scroll_to(cx, "connection-column-reads");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-column-reads").as_deref(),
+            Some("Whole schema")
+        );
+    });
+    assert_eq!(
+        app.saved().profiles[0].catalog_column_reads,
+        CatalogColumnReads::Schema
+    );
+    app.scroll_to(cx, "connection-schema-refresh");
     app.select(cx, "connection-schema-refresh", "Disabled");
     for hidden in [
         "connection-refresh-period",
         "connection-show-schemas",
         "connection-hide-schemas",
         "connection-refresh-timeout",
+        "connection-column-reads",
     ] {
         app.wait_gone(cx, hidden);
     }
@@ -1381,6 +1409,10 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
             Some("15")
         );
     });
+    assert_eq!(
+        app.saved().profiles[0].catalog_column_reads,
+        CatalogColumnReads::Schema
+    );
     app.click(cx, "cancel-profile");
     app.wait_gone(cx, "connection-name");
 

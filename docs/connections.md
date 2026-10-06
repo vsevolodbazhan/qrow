@@ -178,7 +178,7 @@ tokens, it shows the error and the sign-in stays signed in.
 
 **Delete** is available only when no connection uses the sign-in. The
 **Connections** field of Sign-in Settings names the connections that use it.
-When **Delete** is disabled, its menu shows the reason below the command.
+When **Delete** is disabled, hover over the command to see the reason in a tooltip.
 Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
 sign-in.
@@ -310,10 +310,23 @@ not change the idle timer, the keep-alive, or the results of a tab.
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
 A connection refresh reads one schema at a time: first its tables, then their
-columns. It starts with the schemas that Qrow read longest ago. The progress
-row shows the number of schemas that are done. A connection with many schemas
-or tables can need many minutes. To make it faster, hide the schemas that you
-do not use.
+columns. By default, **Column reads** is **One relation at a time**. Qrow reads
+the columns of each table or view in a separate request. Each request ends
+before the next starts. This reduces the column result that the Spark driver
+holds in memory.
+
+For fewer requests, set **Column reads** to **Whole schema** in the
+connection's **Schemas** section. This reads all columns of a schema in one
+request. Large schemas can exhaust the memory of a small driver. If a request
+fails and the session stays available, Qrow reads each table separately.
+Per-relation reads can take longer because they send more requests. The same
+**Refresh timeout** applies to both choices. Connections saved before this
+setting was added also use **One relation at a time**.
+
+A connection refresh starts with the schemas that Qrow read longest ago.
+The progress row shows the number of schemas that are done. A connection
+with many schemas or tables can need many minutes. To make it faster, hide
+the schemas that you do not use.
 
 Each refresh stops when it takes longer than **Refresh timeout** in the
 connection settings. The default is 30 minutes. The tree keeps what the
@@ -431,6 +444,8 @@ For a connection that uses a shared catalog:
   use while one of its tabs has a live session. Otherwise, Qrow uses the
   first connection in the sidebar that has a live session. The default is
   **Any connected connection**.
+- **Column reads** belongs to each connection. A refresh uses the choice of
+  the connection that runs it. Different clusters can use different choices.
 
 Each refresh uses the session, the user, and the cluster of the connection
 that asked for it. Qrow runs one refresh of a shared catalog at a time. A
@@ -529,7 +544,12 @@ use.
   the server. A wait for a server answer uses the connection's **Response
   timeout**. Thus, a refresh can take longer than its **Refresh timeout**.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
-  has more columns, its refresh fails. Hide schemas or refresh single tables.
+  exceeds this limit with **Whole schema**, use **One relation at a time**.
+  The limit still applies to each table request. These limits apply after
+  the server creates its result. They do not limit Spark driver memory.
+- Per-relation reads reduce the column result size. The table list still reads a
+  whole schema. Server patterns can also match extra names, for example when
+  a name contains `_`. Thus, a refresh can still exhaust driver memory.
 - The keyboard cannot reach **New shared catalog…** below the **Schema
   catalog** list. Use the pointer. In the list, **Enter** selects a catalog
   and **Escape** closes the list.

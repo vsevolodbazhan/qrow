@@ -267,11 +267,10 @@ impl Tab {
         }
     }
 
-    /// The tooltip of the tab: the state of its dot, then the status of the
-    /// last work of the tab, like "Error: Connection failed". A tab without
-    /// a dot has the tooltip on the tab itself.
+    /// Show the tab name and dot state. A tab without a dot has the tooltip
+    /// on the tab itself.
     fn status_tooltip(&self) -> StatusTooltip {
-        let tooltip = StatusTooltip::new(
+        StatusTooltip::new(
             self.saved.title.clone(),
             match self.dot_status() {
                 Some(DotStatus::Connected) => "Idle",
@@ -282,13 +281,7 @@ impl Tab {
                 Some(DotStatus::Attention) => unreachable!("SQL never needs approval"),
                 None => "Not Connected",
             },
-        );
-        let status = self.status_label();
-        if status == "Not connected" {
-            tooltip
-        } else {
-            tooltip.detail(status)
-        }
+        )
     }
 
     fn dot_status(&self) -> Option<DotStatus> {
@@ -357,6 +350,7 @@ struct ProfileEditor {
     /// Manual or automatic schema refresh.
     schema_refresh: connection_form::ChoiceSelect,
     _schema_refresh_subscription: Subscription,
+    column_reads: connection_form::RowSelect,
     /// The catalog that the connection uses. A change loads the settings of
     /// the chosen catalog into the Schemas fields.
     catalog_select: connection_form::RowCombobox,
@@ -2580,6 +2574,12 @@ impl Qrow {
             window,
             cx,
         );
+        let column_reads = connection_form::choice_select(
+            &connection_form::column_read_choices(),
+            &profile.catalog_column_reads,
+            window,
+            cx,
+        );
         let catalog_choices = connection_form::catalog_choices(&self.shared_catalogs);
         let catalog = match &shared {
             Some(shared) => connection_form::CatalogChoice::Shared(shared.id),
@@ -2641,6 +2641,7 @@ impl Qrow {
             _idle_behavior_subscription: idle_behavior_subscription,
             schema_refresh,
             _schema_refresh_subscription: schema_refresh_subscription,
+            column_reads,
             catalog_select,
             catalog_choices,
             catalog_choice: catalog,
@@ -2798,6 +2799,11 @@ impl Qrow {
                         .cloned()
                 });
             } else {
+                profile.catalog_column_reads = connection_form::chosen(
+                    &form.column_reads,
+                    &connection_form::column_read_choices(),
+                    cx,
+                );
                 let choice = connection_form::chosen_catalog(
                     &form.catalog_select,
                     &form.catalog_choices,

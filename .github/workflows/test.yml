@@ -22,3 +22,23 @@ jobs:
     uses: ./.github/workflows/checks.yml
     with:
       ref: ${{ github.sha }}
+
+  # A run on main can save new Rust caches next to the caches that they
+  # replace. Delete the replaced caches to stay inside the repository limit.
+  cache-cleanup:
+    name: cache-cleanup
+    needs: checks
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/ci
+      - run: python3 scripts/ci/rust_caches.py
+        env:
+          GH_TOKEN: ${{ github.token }}

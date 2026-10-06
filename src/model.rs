@@ -335,6 +335,9 @@ pub struct Profile {
     pub lifecycle: ConnectionLifecycle,
     #[serde(default)]
     pub catalog: CatalogSettings,
+    /// The column-read scope of this connection, also for a shared catalog.
+    #[serde(default)]
+    pub catalog_column_reads: CatalogColumnReads,
     /// The shared catalog that the connection uses, or `None` for a catalog
     /// of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,6 +351,15 @@ pub struct Profile {
     /// Qrow adds them to the workspace context of a conversation.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub assistant_notes: String,
+}
+
+/// How a refresh reads columns. Table reads reduce the result held by the driver.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogColumnReads {
+    #[default]
+    Table,
+    Schema,
 }
 
 /// How a connection proves the identity of its database user.
@@ -634,6 +646,7 @@ impl Default for Profile {
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
+            catalog_column_reads: CatalogColumnReads::default(),
             shared_catalog: None,
             tls: false,
             authentication: Authentication::Password,
@@ -1276,6 +1289,25 @@ mod tests {
         // A connection saved before the schema tree existed did not browse
         // schemas, and it still does not.
         assert_eq!(restored.catalog, CatalogSettings::default());
+    }
+
+    #[test]
+    fn column_reads_default_for_saved_connections_and_round_trip_both_modes() {
+        let profile = Profile::default();
+        assert_eq!(profile.catalog_column_reads, CatalogColumnReads::Table);
+        let mut saved = serde_json::to_value(&profile).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("catalog_column_reads");
+        let restored: Profile = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.catalog_column_reads, CatalogColumnReads::Table);
+        for mode in [CatalogColumnReads::Table, CatalogColumnReads::Schema] {
+            let mut profile = profile.clone();
+            profile.catalog_column_reads = mode;
+            let text = serde_json::to_string(&profile).unwrap();
+            assert_eq!(serde_json::from_str::<Profile>(&text).unwrap(), profile);
+        }
     }
 
     #[test]
