@@ -5,7 +5,7 @@ use super::{ProfileEditor, Qrow, connection_form};
 use crate::{
     activity::ActivityEntry,
     dbt::{
-        Index, Kind,
+        Entry, Index, Kind,
         matching::{self, CatalogNames, Match},
         worker::{self, DbtWorker, Event, ManifestState, Use, manifest_key},
     },
@@ -168,6 +168,9 @@ impl Qrow {
         if rebuild || std::mem::take(&mut self.dbt.tree_stale) {
             self.rebuild_catalog_tree(cx);
         }
+        if changed {
+            self.dbt_details_changed(rebuild, cx);
+        }
         changed
     }
 
@@ -212,90 +215,6 @@ impl Qrow {
                 Some((profile.id, DbtLookup { index, relations }))
             })
             .collect()
-    }
-
-    /// Open the SQL of the dbt resource `unique_id` of `profile` in a new
-    /// tab: the compiled SQL, or the raw SQL when the manifest has none.
-    pub(super) fn open_model_sql(
-        &mut self,
-        profile: Uuid,
-        unique_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(state) = self.dbt.state(profile).cloned() else {
-            return;
-        };
-        let Some(index) = state.index.as_ref() else {
-            return;
-        };
-        let Some(entry) = index.find(unique_id).map(|position| index.entry(position)) else {
-            return;
-        };
-        // The positions of the SQL in the file are wrong after a change.
-        if !state.is_current() {
-            self.dbt.refresh_path(&state.path);
-            self.message = Some(
-                "The dbt manifest changed. Qrow is reading it again; open the SQL after the refresh."
-                    .into(),
-            );
-            cx.notify();
-            return;
-        }
-        let (span, code) = match (entry.compiled_code, entry.raw_code) {
-            (Some(span), _) => (span, "Compiled"),
-            (None, Some(span)) => (span, "Raw"),
-            (None, None) => return,
-        };
-        let name = entry.name.to_string();
-        let unique_id = unique_id.to_owned();
-        // Read in the background: compiled SQL can be large, and the file
-        // can be on a slow disk.
-        let task = cx.background_executor().spawn(async move {
-            let sql = crate::dbt::read_sql(&state.path, span).map_err(|error| error.to_string())?;
-            // dbt can write the file during the read.
-            if !state.is_current() {
-                return Err("The dbt manifest changed during the read. Try again.".to_owned());
-            }
-            Ok(sql)
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                // The user can delete the connection during the read.
-                if !this
-                    .profiles
-                    .iter()
-                    .any(|candidate| candidate.id == profile)
-                {
-                    return;
-                }
-                let sql = match result {
-                    Ok(sql) => sql,
-                    Err(error) => {
-                        this.message =
-                            Some(format!("Could not read the SQL of {unique_id}: {error}"));
-                        cx.notify();
-                        return;
-                    }
-                };
-                let title: String = name.chars().take(crate::model::MAX_TAB_TITLE).collect();
-                let title = crate::model::unique_tab_title(&title, |candidate| {
-                    this.tabs.iter().any(|tab| {
-                        tab.saved.profile == Some(profile) && tab.saved.title == candidate
-                    })
-                });
-                let mut saved = crate::model::SavedTab::new(1, Some(profile));
-                saved.title = title;
-                saved.sql = format!("-- {code} SQL of {unique_id} from the dbt manifest\n{sql}");
-                let tab = this.make_tab(saved, window, cx);
-                this.tabs.push(tab);
-                let index = this.tabs.len() - 1;
-                this.activate(index, window, cx);
-                this.changed(cx);
-            });
-        })
-        .detach();
     }
 
     /// Whether Qrow parses the manifest of `profile` now.
@@ -624,8 +543,6 @@ pub(super) struct DbtBadge {
     pub(super) description: Option<String>,
     /// Whether the tooltip has only a part of the description.
     pub(super) description_cut: bool,
-    /// Whether the manifest has SQL of the resource.
-    pub(super) has_sql: bool,
 }
 
 /// The longest dbt description in a tooltip, in characters. The details
@@ -649,12 +566,7 @@ impl DbtLookup {
     ) -> Option<DbtBadge> {
         let key = (schema.to_lowercase(), relation.to_lowercase());
         let entry = self.index.entry(*self.relations.get(&key)?);
-        let detail = match (entry.kind, entry.materialized) {
-            (Kind::Model, Some(materialized)) => {
-                format!("dbt {}", self.index.symbol(materialized))
-            }
-            (kind, _) => format!("dbt {}", kind.name()),
-        };
+        let detail = format!("dbt {}", resource_label(&self.index, entry));
         let description = entry.description.trim();
         let (description, description_cut) =
             if description.is_empty() || comment.map(str::trim) == Some(description) {
@@ -668,9 +580,16 @@ impl DbtLookup {
             detail,
             description,
             description_cut,
-            has_sql: entry.kind != Kind::Source
-                && (entry.compiled_code.is_some() || entry.raw_code.is_some()),
         })
+    }
+}
+
+/// The materialization of a model, like `incremental`, or the kind of
+/// another resource, like `seed` or `source`.
+pub(super) fn resource_label<'a>(index: &'a Index, entry: &'a Entry) -> &'a str {
+    match (entry.kind, entry.materialized) {
+        (Kind::Model, Some(materialized)) => index.symbol(materialized),
+        (kind, _) => kind.name(),
     }
 }
 
@@ -912,7 +831,6 @@ mod tests {
         let badge = lookup.badge("CORE", "Orders", None).unwrap();
         assert_eq!(badge.unique_id, "model.lake.orders");
         assert_eq!(badge.detail, "dbt incremental");
-        assert!(badge.has_sql);
         assert!(badge.description_cut);
         let description = badge.description.unwrap();
         // The cut is after a whole word.
@@ -926,7 +844,6 @@ mod tests {
         let source = lookup.badge("raw", "orders", None).unwrap();
         assert_eq!(source.detail, "dbt source");
         assert_eq!(source.description, None);
-        assert!(!source.has_sql);
         assert!(lookup.badge("dev_core", "orders", None).is_none());
     }
 

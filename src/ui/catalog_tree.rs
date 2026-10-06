@@ -1198,25 +1198,18 @@ impl Qrow {
         let insert = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.insert_into_editor(insert.clone(), window, cx)
         });
-        let (details, model_sql) = match &node {
+        let details = match &node {
             Node::Relation {
                 profile,
                 dbt: Some(dbt),
                 ..
             } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
-                let id = unique_id.clone();
-                let details = cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_dbt_details(profile, &id, window, cx)
-                });
-                let model_sql = dbt.has_sql.then(|| {
-                    cx.listener(move |this, _: &ClickEvent, window, cx| {
-                        this.open_model_sql(profile, &unique_id, window, cx)
-                    })
-                });
-                (Some(details), model_sql)
+                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_dbt_details(profile, &unique_id, window, cx)
+                }))
             }
-            _ => (None, None),
+            _ => None,
         };
         let collapse = match &node {
             Node::Schema { name, .. } => {
@@ -1254,14 +1247,10 @@ impl Qrow {
                 let menu = menu
                     .item(PopupMenuItem::new(copy_label).on_click(copy))
                     .item(PopupMenuItem::new("Insert into editor").on_click(insert));
-                let menu = match details {
+                match details {
                     Some(details) => menu
                         .separator()
                         .item(PopupMenuItem::new("Show dbt Details").on_click(details)),
-                    None => menu,
-                };
-                match model_sql {
-                    Some(open) => menu.item(PopupMenuItem::new("Open Model SQL").on_click(open)),
                     None => menu,
                 }
             },

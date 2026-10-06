@@ -327,19 +327,25 @@ source builds shows its kind after its name, for example `dbt incremental` or
 cut to a few lines.
 
 To read the full description, right-click the table and select **Show dbt
-Details**. A panel opens at the right side of the window. It shows the kind,
-the materialization, the tags, and the file of the resource, the full
-description, the tests, the parents and children, and the documented columns
-with their descriptions and tests. Type in **Filter columns** to find columns
-by name or description. The panel takes almost half of the window width, so
-make the window wider to read long text more easily.
+Details**. A panel opens at the right side of the window. It shows:
 
-To read the SQL of the model, right-click the table and select **Open Model
-SQL**, or select **Open Model SQL** in the details panel. Qrow
-opens the compiled SQL in a new tab of the connection, or the raw SQL with
-Jinja when the manifest has no compiled SQL, for example a manifest from
-`dbt parse`. When the manifest changed after Qrow read it, Qrow reads it
-again first; then select **Open Model SQL** again.
+- The kind, the materialization, the relation, the unique ID, and the tags of
+  the resource.
+- The full description.
+- The SQL of the model, in a closed part. Click **Compiled SQL** to open it,
+  and click the copy button to copy it. When the manifest has no compiled SQL,
+  for example a manifest from `dbt parse`, the part is **Raw SQL** and has the
+  SQL with Jinja. When the manifest changed after Qrow read it, Qrow reads the
+  manifest again first, then shows the SQL.
+- The tests of the table. A test with arguments shows each argument under its
+  name.
+- The parents and children, with the materialization of each model or the
+  kind of each other resource.
+- The documented columns, with their types, descriptions, and tests. Type in
+  **Filter columns** to find columns by name or description.
+
+The panel takes almost half of the window width, so make the window wider to
+read long text more easily.
 
 ### dbt limitations
 

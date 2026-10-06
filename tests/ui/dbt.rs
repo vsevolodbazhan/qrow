@@ -356,7 +356,7 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
-fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
+fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let bytes = dbt_manifest::generate(&shape());
     let manifest = project(&directory, &bytes);
@@ -414,6 +414,9 @@ fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
 
     // The details sheet has the full description and the columns.
     app.context_menu_labelled(cx, &alias);
+    app.update(cx, |window, _| {
+        assert!(crate::support::labelled(window, "Open Model SQL").is_none());
+    });
     app.choose(cx, "popup-menu", "Show dbt Details");
     app.wait_until(cx, "the dbt details", TIMEOUT, |window, _| {
         label(window, "dbt-details-description").as_deref() == Some(model.description.trim())
@@ -429,6 +432,21 @@ fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
             assert!(crate::support::present(window, &column_id(name)), "{name}");
         }
     });
+    // The SQL opens in the sheet and can be copied. The manifest has no
+    // compiled SQL, so the sheet shows the raw SQL.
+    let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
+    app.click(cx, "dbt-details-sql-toggle");
+    app.wait_until(cx, "the model SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-sql").as_deref() == Some(raw.as_str())
+    });
+    app.click(cx, "dbt-details-copy-sql");
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(copied.as_deref(), Some(raw.as_str()));
+    app.click(cx, "dbt-details-sql-toggle");
+    app.wait_until(cx, "the closed SQL", TIMEOUT, |window, _| {
+        !crate::support::present(window, &"dbt-details-sql".into())
+    });
+
     app.fill(cx, "dbt-details-filter", "col_001");
     app.wait_until(cx, "the filtered columns", TIMEOUT, |window, _| {
         !crate::support::present(window, &column_id("id"))
@@ -441,57 +459,4 @@ fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
     app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
         !crate::support::present(window, &"dbt-details".into())
     });
-
-    app.context_menu_labelled(cx, &alias);
-    app.choose(cx, "popup-menu", "Open Model SQL");
-    let title = dbt_manifest::model_name(1);
-    app.wait_until(cx, "the SQL tab", TIMEOUT, |_, _| {
-        app.saved().tabs.iter().any(|tab| tab.title == title)
-    });
-    let tab = app
-        .saved()
-        .tabs
-        .into_iter()
-        .find(|tab| tab.title == title)
-        .unwrap();
-    assert_eq!(tab.profile, Some(id));
-    let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
-
-    // A second tab of the same model gets another title. The tab has the
-    // name of the table, so the row is found among the tree entries.
-    let entries: gpui_kit::ElementId = "entries".into();
-    app.update(cx, |window, cx| {
-        let element = crate::support::elements(window)
-            .into_iter()
-            .find(|element| {
-                element.label() == Some(alias.as_str()) && element.path().contains(&entries)
-            })
-            .expect("the table row");
-        crate::support::pointer_click(window, &element, gpui_kit::MouseButton::Right, cx);
-    });
-    app.wait_for(cx, "popup-menu");
-    app.choose(cx, "popup-menu", "Open Model SQL");
-    app.wait_until(cx, "the second SQL tab", TIMEOUT, |_, _| {
-        app.saved()
-            .tabs
-            .iter()
-            .filter(|tab| tab.title.starts_with(&title))
-            .count()
-            == 2
-    });
-    let titles: std::collections::BTreeSet<String> = app
-        .saved()
-        .tabs
-        .into_iter()
-        .map(|tab| tab.title)
-        .filter(|candidate| candidate.starts_with(&title))
-        .collect();
-    assert_eq!(titles.len(), 2, "{titles:?}");
-    assert_eq!(
-        tab.sql,
-        format!(
-            "-- Raw SQL of {} from the dbt manifest\n{raw}",
-            dbt_manifest::model_id(1)
-        )
-    );
 }
