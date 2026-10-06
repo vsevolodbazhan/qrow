@@ -55,6 +55,11 @@ list and the assistant toggle show.
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
 
+Codex sends a reply in parts of different sizes. Qrow shows the reply word by
+word at an even speed, about 0.3 seconds after the text arrives, and each word
+fades in. Qrow does not split bold text, inline code, a link, or a table row.
+If you reduce motion in macOS, each part shows when it arrives.
+
 Your messages show at the right. Assistant replies and errors use the full width
 of the conversation. If a table is too wide for a reply, its columns become
 narrower and their text wraps. If the columns are at their minimum width, you

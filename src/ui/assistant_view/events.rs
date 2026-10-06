@@ -144,6 +144,8 @@ impl Qrow {
                 if selected && entries.len() > previous_count {
                     self.scroll_assistant_to_bottom(cx);
                 }
+                // The final text of a reply can be longer than the streamed text.
+                self.reveal_assistant_replies(cx);
                 if self.assistant_state.title_history_reads.remove(&thread_id)
                     && !self.send_assistant_title_request(&thread_id, cx)
                 {
@@ -235,13 +237,14 @@ impl Qrow {
                     last.push_text(&text);
                     false
                 } else {
-                    entries.push(TranscriptEntry::new(
+                    entries.push(TranscriptEntry::streamed(
                         Speaker::Assistant,
-                        text,
+                        &text,
                         Some(turn_id),
                     ));
                     true
                 };
+                self.reveal_assistant_replies(cx);
                 // The transcript follows a growing reply while you stay at its end.
                 if selected && new_message {
                     self.scroll_assistant_to_bottom(cx);

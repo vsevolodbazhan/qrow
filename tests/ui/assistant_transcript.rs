@@ -158,3 +158,89 @@ fn the_pane_and_the_workspace_stay_current_between_their_own_changes(cx: &mut Te
             && transcript(window).is_empty()
     });
 }
+
+/// The parts of the reply "Stream a reply in bursts", and the reply.
+fn bursts() -> (usize, String) {
+    let burst = |number: usize| -> String {
+        (0..20)
+            .map(|index| format!("burst{number}word{index} "))
+            .collect()
+    };
+    let reply = (0..3).map(burst).collect::<String>() + "End of Stream a reply in bursts";
+    (burst(0).len(), reply)
+}
+
+/// The texts of the reply that the transcript showed until the whole reply
+/// showed, each one time.
+fn shown_steps(app: &TestApp, cx: &mut TestAppContext, reply: &str) -> Vec<String> {
+    let mut steps: Vec<String> = Vec::new();
+    app.wait_until(cx, "the whole reply", REPLY_TIMEOUT, |window, _| {
+        let Some(shown) = transcript(window)
+            .into_iter()
+            .find_map(|entry| entry.strip_prefix("Assistant: ").map(str::to_owned))
+        else {
+            return false;
+        };
+        let done = shown == reply;
+        if !shown.is_empty() && steps.last() != Some(&shown) {
+            steps.push(shown);
+        }
+        done
+    });
+    steps
+}
+
+#[gpui_kit::test]
+fn a_streamed_reply_shows_word_by_word(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(Workspace::default());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    // The reveal steps use the test clock.
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.open_assistant(cx);
+    app.send(cx, "Stream a reply in bursts");
+    let (first_burst, reply) = bursts();
+    let steps = shown_steps(&app, cx, &reply);
+
+    // Each step adds whole words to the text before it.
+    for (before, after) in std::iter::once("")
+        .chain(steps.iter().map(String::as_str))
+        .zip(&steps)
+    {
+        assert!(
+            after.starts_with(before) && after.len() > before.len(),
+            "{steps:?}"
+        );
+        assert!(
+            after.ends_with(' ')
+                || reply[after.len()..].is_empty()
+                || reply[after.len()..].starts_with(' '),
+            "a step ends in a word: {after:?}"
+        );
+    }
+    // Codex sent the first 20 words at once. They show in several steps.
+    let first = steps
+        .iter()
+        .filter(|step| step.len() <= first_burst)
+        .count();
+    assert!(
+        first >= 4,
+        "the first part showed in {first} steps: {steps:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_streamed_reply_shows_at_once_with_reduced_motion(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(Workspace::default());
+    // TestApp turns on reduced motion.
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.send(cx, "Stream a reply in bursts");
+    let (first_burst, reply) = bursts();
+    let steps = shown_steps(&app, cx, &reply);
+
+    // Each part shows when it arrives.
+    assert_eq!(steps[0].len(), first_burst, "{steps:?}");
+    assert!(steps.len() <= 4, "{steps:?}");
+}

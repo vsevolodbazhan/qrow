@@ -161,6 +161,10 @@ pub(in crate::ui) struct TranscriptEntry {
     /// without a copy. A change replaces them.
     text: SharedString,
     label: SharedString,
+    /// The part of `text` that shows. A streamed reply shows its text step
+    /// by step. See [`Reveal`].
+    shown: SharedString,
+    reveal: Option<Reveal>,
     pub turn_id: Option<String>,
     pub tool: Option<ToolActivity>,
     pub detail: Option<String>,
@@ -176,6 +180,8 @@ impl TranscriptEntry {
             speaker,
             text: SharedString::default(),
             label: SharedString::default(),
+            shown: SharedString::default(),
+            reveal: None,
             turn_id,
             tool: None,
             detail: None,
@@ -183,6 +189,14 @@ impl TranscriptEntry {
             revision: 0,
         };
         entry.set_text(text);
+        entry
+    }
+
+    /// The first part of a streamed reply. Its text shows step by step.
+    pub fn streamed(speaker: Speaker, text: &str, turn_id: Option<String>) -> Self {
+        let mut entry = Self::new(speaker, "", turn_id);
+        entry.reveal = Some(Reveal::default());
+        entry.push_text(text);
         entry
     }
 
@@ -197,7 +211,12 @@ impl TranscriptEntry {
         &self.text
     }
 
-    /// The accessible label: the speaker and the text.
+    /// The text that the transcript shows.
+    pub fn shown_text(&self) -> &SharedString {
+        &self.shown
+    }
+
+    /// The accessible label: the speaker and the shown text.
     pub fn label(&self) -> &SharedString {
         &self.label
     }
@@ -216,8 +235,26 @@ impl TranscriptEntry {
         self.revision
     }
 
+    /// Replaces the text with its final version. A streamed reply that the
+    /// new text continues shows the rest step by step.
     pub fn set_text(&mut self, text: impl Into<SharedString>) {
-        self.text = text.into();
+        let text = text.into();
+        match &mut self.reveal {
+            Some(reveal) if text.starts_with(self.shown.as_str()) => reveal.complete(),
+            _ => self.reveal = None,
+        }
+        self.replace_text(text);
+    }
+
+    fn replace_text(&mut self, text: SharedString) {
+        self.text = text;
+        if self.reveal.is_none() {
+            self.shown = self.text.clone();
+        }
+        self.shown_changed();
+    }
+
+    fn shown_changed(&mut self) {
         self.revision += 1;
         let speaker = if self.tool.is_some() {
             "Tool call"
@@ -229,7 +266,7 @@ impl TranscriptEntry {
                 Speaker::Error => "Assistant error",
             }
         };
-        self.label = format!("{speaker}: {}", self.text).into();
+        self.label = format!("{speaker}: {}", self.shown).into();
     }
 
     /// Appends a streamed part. This copies the text once for each part.
@@ -237,7 +274,46 @@ impl TranscriptEntry {
         let mut text = String::with_capacity(self.text.len() + part.len());
         text.push_str(&self.text);
         text.push_str(part);
-        self.set_text(text);
+        if let Some(reveal) = &mut self.reveal {
+            reveal.received();
+        }
+        self.replace_text(text.into());
+    }
+
+    /// Whether the entry has streamed text that does not show yet.
+    pub fn revealing(&self) -> bool {
+        self.reveal.is_some() && self.shown.len() < self.text.len()
+    }
+
+    /// Shows more of the streamed text. Returns whether the shown text changed.
+    pub fn advance_reveal(&mut self, elapsed: std::time::Duration) -> bool {
+        let Some(reveal) = &mut self.reveal else {
+            return false;
+        };
+        if !reveal.advance(&self.text, elapsed) {
+            return false;
+        }
+        self.shown = if reveal.shown() == self.text.len() {
+            self.text.clone()
+        } else {
+            self.text[..reveal.shown()].to_owned().into()
+        };
+        self.shown_changed();
+        true
+    }
+
+    /// Shows all streamed text at once. Returns whether the shown text changed.
+    pub fn show_all(&mut self) -> bool {
+        let Some(reveal) = &mut self.reveal else {
+            return false;
+        };
+        reveal.show_all(&self.text);
+        if self.shown == self.text {
+            return false;
+        }
+        self.shown = self.text.clone();
+        self.shown_changed();
+        true
     }
 
     pub fn with_detail(mut self, detail: String) -> Self {
@@ -555,5 +631,22 @@ mod tests {
         let streamed = entry.revision();
         entry.toggle_expanded();
         assert!(entry.expanded() && entry.revision() > streamed);
+    }
+
+    #[::core::prelude::v1::test]
+    fn final_text_after_a_shown_reply_also_shows() {
+        let mut entry = TranscriptEntry::streamed(Speaker::Assistant, "One two ", None);
+        while entry.advance_reveal(Duration::from_millis(100)) {}
+        assert!(entry.shown_text().starts_with("One two"));
+        assert!(entry.show_all() || entry.shown_text() == "One two ");
+        // Codex can drop streamed parts. The final text has them.
+        entry.set_text("One two three four");
+        assert!(entry.revealing());
+        while entry.advance_reveal(Duration::from_millis(100)) {}
+        assert_eq!(entry.shown_text(), "One two three four");
+        assert!(!entry.revealing());
+        // Other final text shows at once.
+        entry.set_text("Something else");
+        assert_eq!(entry.shown_text(), "Something else");
     }
 }

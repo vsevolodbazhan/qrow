@@ -71,8 +71,10 @@ fn message_entry(qrow: &Qrow, entry: &TranscriptEntry, cx: &App) -> AnyElement {
     table_style.overflow.x = Some(Overflow::Scroll);
     let content = TextView::markdown(
         format!("assistant-markdown-{}", entry.id),
-        entry.text().clone(),
+        entry.shown_text().clone(),
     )
+    // Each word that a streamed reply shows fades in.
+    .stream_fade(true)
     .style(TextViewStyle::default().table(table_style))
     .font_family(qrow.settings.assistant_font_family.clone())
     .text_size(qrow.ui_px(qrow.settings.assistant_font_size))

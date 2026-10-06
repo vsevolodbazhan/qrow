@@ -266,6 +266,8 @@ pub(in crate::ui) struct AssistantState {
     pub idle_stop: Option<Task<()>>,
     /// The last Codex command or event, or the time that the pane closed.
     pub idle_since: Instant,
+    /// The steps that show streamed replies run.
+    pub revealing: bool,
 }
 
 impl AssistantState {
@@ -298,6 +300,7 @@ impl AssistantState {
             unstarted_threads: BTreeSet::new(),
             idle_stop: None,
             idle_since: cx.background_executor().now(),
+            revealing: false,
         }
     }
 
