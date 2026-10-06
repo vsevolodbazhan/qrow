@@ -99,6 +99,33 @@ authorization-code flow with PKCE (`S256`). Add the `offline_access` scope if
 the provider issues refresh tokens only with it. Use **Resource** only if the
 provider requires an RFC 8707 resource indicator.
 
+### Share a sign-in
+
+To give a sign-in to a colleague, for example in a Slack message:
+
+1. Right-click the sign-in and select **Copy Settings**.
+2. Paste the text into the message.
+
+The text contains the name, the issuer, the client ID, the scopes, the
+resource, the database hosts, and the callback ports. It does not contain
+your account or your tokens.
+
+To add a sign-in that a colleague sent to you:
+
+1. Copy the text of the message.
+2. Open the **Sign-ins** sidebar and click the paste button beside **+**.
+   When the sidebar is empty, click **Paste Sign-in…**.
+3. Sign-in Settings opens with the values. Make sure that you trust the
+   issuer and the database hosts. Qrow sends your access tokens to these
+   hosts.
+4. Click **Save**.
+
+Qrow ignores other text of the message around the settings. If a sign-in
+with the same name exists, Qrow adds `copy` to the name. If the clipboard
+does not contain sign-in settings, Qrow tells you and adds nothing. Each
+user signs in with their own account. Each connection keeps its own
+database username, so a colleague must add their own connections.
+
 ### Sign in and use a sign-in
 
 Click **Sign In…** on the row of the sign-in. Qrow opens the default browser.
@@ -108,8 +135,8 @@ stop. The row then shows the email or name of the account.
 Click a row to open **Sign-in Settings**. The **Account** field shows the
 status and the actions for the account on the same row. The actions are on
 the right. Right-click a row for **Sign In…**,
-**Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit** and
-**Delete**.
+**Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit**,
+**Copy Settings**, and **Delete**.
 
 The **Connections** field shows the number of connections that use the
 sign-in. Neutral tags show the names below the heading. The tags wrap when
