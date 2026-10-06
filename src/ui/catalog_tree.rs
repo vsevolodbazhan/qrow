@@ -1616,7 +1616,8 @@ fn render_entry(
             )
         });
     // Each level indents by the disclosure and the gap after it, so the
-    // disclosure of a row is under the icon of its parent.
+    // disclosure of a row is under the icon of its parent. Column rows have
+    // no disclosure lane, so their icon is under the icon of their relation.
     let indent = ui_px(8. + (16. + ROW_GAP) * entry.depth() as f32);
     let Some(node) = nodes.get(&id) else {
         return div().h(ui_px(ROW_HEIGHT)).into_any_element();
@@ -1736,6 +1737,7 @@ fn render_entry(
     }
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
+    let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
@@ -1752,7 +1754,7 @@ fn render_entry(
             el.hover(|el| el.bg(cx.theme().tokens.list_hover))
         })
         .text_color(cx.theme().sidebar_foreground)
-        .child(disclosure)
+        .when(!leaf, |el| el.child(disclosure))
         .child(
             div()
                 .id(child_id(&id, "icon"))

@@ -284,8 +284,8 @@ so a failed deletion can leave the password in Keychain.
 The Connections sidebar is a tree. Each connection is a root row. Under a
 connection that browses schemas, the tree shows its schemas, then the tables
 and views of each schema, then the columns of each table or view. A column
-row shows a minus icon, the column name, and its type. A schema row shows
-the number of its tables and views.
+row shows a minus icon under the icon of its table or view, the column name,
+and its type. A schema row shows the number of its tables and views.
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema refresh**, the first field of the

@@ -354,7 +354,7 @@ fn scroll_tree(app: &TestApp, cx: &mut TestAppContext, pixels: f32) {
 }
 
 #[gpui_kit::test]
-fn column_icons_align_before_the_names_at_each_zoom(cx: &mut TestAppContext) {
+fn column_icons_align_under_the_table_icon_at_each_zoom(cx: &mut TestAppContext) {
     for scale in [0.75, 1., 1.5] {
         let profile = offline_profile("Warehouse");
         let directory = tempfile::tempdir().unwrap();
@@ -370,8 +370,15 @@ fn column_icons_align_before_the_names_at_each_zoom(cx: &mut TestAppContext) {
         wait_shows(&app, cx, "gate STRING");
         app.update(cx, |window, _| {
             let relation = format!("r\u{1f}{}\u{1f}avia\u{1f}bookings", profile.id);
+            let table = bounds_of(window, &format!("{relation}\u{1f}icon"));
             for (index, name) in ["booking_id", "gate"].iter().enumerate() {
-                assert_catalog_icon(window, &format!("{relation}\u{1f}{index}\u{1f}{name}"));
+                let column = format!("{relation}\u{1f}{index}\u{1f}{name}");
+                assert_catalog_icon(window, &column);
+                let icon = bounds_of(window, &format!("{column}\u{1f}icon"));
+                assert!(
+                    (icon.left() - table.left()).abs() <= gpui_kit::px(0.5),
+                    "A column icon must be under the icon of its table"
+                );
             }
         });
     }
