@@ -198,11 +198,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Host",
-                if postgres {
-                    "Hostname of the Postgres server."
-                } else {
-                    "Hostname of the Kyuubi or HiveServer2 endpoint."
-                },
+                "Hostname or IP address of the server.",
                 &["server", "address", "kyuubi"],
                 false,
                 |_, form, _, _| form_input(form, 1, "Host"),
@@ -210,11 +206,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Port",
-                if postgres {
-                    "Postgres port on that host."
-                } else {
-                    "Thrift port on that host."
-                },
+                "Port on that host.",
                 &["server"],
                 false,
                 |_, form, _, _| form_input(form, 2, "Port"),
@@ -305,13 +297,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Username",
-                if postgres {
-                    "The Postgres role used to connect."
-                } else if uses_sign_in {
-                    "The database account. Kyuubi checks that the signed-in identity can use it."
-                } else {
-                    "The database account for LDAP authentication."
-                },
+                "The database account used to connect.",
                 &["user", "account", "login"],
                 false,
                 |_, form, _, _| form_input(form, 3, "Username"),
@@ -320,11 +306,7 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "Password",
-                    if postgres {
-                        "The password of the Postgres role."
-                    } else {
-                        "Used for LDAP authentication."
-                    },
+                    "The password for this account.",
                     &["ldap", "secret"],
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
@@ -341,11 +323,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Session Parameters",
-                if postgres {
-                    "JSON object with Postgres setting names and string values."
-                } else {
-                    "JSON object with string values."
-                },
+                "JSON object with setting names and string values.",
                 &["spark", "conf", "configuration", "json"],
                 true,
                 |_, form, _, _| {

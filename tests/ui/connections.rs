@@ -463,3 +463,59 @@ fn connection_icons_identify_postgres_and_spark(cx: &mut TestAppContext) {
     app.wait_label(cx, "Spark (HiveServer2) database");
     app.wait_label(cx, "Postgres database");
 }
+
+#[gpui_kit::test]
+fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    let fields = [
+        "Host",
+        "Port",
+        "Username",
+        "Password",
+        "Initial database",
+        "Session parameters",
+    ];
+    let shared = app.update(cx, |window, _| {
+        fields.map(|field| label(window, format!("connection-help-{field}")).unwrap())
+    });
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        for (field, expected) in fields.into_iter().zip(shared) {
+            assert_eq!(
+                label(window, format!("connection-help-{field}")).as_deref(),
+                Some(expected.as_str())
+            );
+        }
+        for help in gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| {
+                element
+                    .path()
+                    .iter()
+                    .any(|id| format!("{id:?}").contains("connection-help-"))
+            })
+        {
+            let text = help.label().unwrap_or_default();
+            assert!(
+                !["Postgres", "Kyuubi", "HiveServer2", "LDAP"]
+                    .iter()
+                    .any(|kind| text.contains(kind)),
+                "database type leaked into help: {text}"
+            );
+        }
+    });
+    app.scroll_to(cx, "connection-response-timeout");
+    app.wait_label(
+        cx,
+        "Seconds to wait for setup and cancellation, from 10 to 3600.",
+    );
+    app.scroll_to(cx, "connection-database-type");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.scroll_to(cx, "connection-response-timeout");
+    app.wait_label(
+        cx,
+        "Seconds to wait for a server response, from 10 to 3600.",
+    );
+    cancel_form(&app, cx);
+}

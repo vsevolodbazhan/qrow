@@ -44,7 +44,7 @@ search field above the pages to find a field.
 
 1. Click **+** beside Connections.
 2. On the **General** page, select **Database type**.
-3. Enter a name, the server host, and the port.
+3. Enter a name, the server hostname or IP address, and the port.
 4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
    For Postgres, select a [TLS mode](#use-postgres).
 5. For Kyuubi, select the authentication:
