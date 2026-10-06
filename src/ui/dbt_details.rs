@@ -26,8 +26,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, Hsla, IntoElement, ListAlignment, ListState, Render, Role,
-    SharedString, TestSupportExt as _, Window, div, list, percentage, prelude::*, px, relative,
-    rems,
+    SharedString, StyleRefinement, TestSupportExt as _, Window, div, list, percentage, prelude::*,
+    px, relative, rems,
 };
 use std::{ops::Range, sync::Arc};
 use uuid::Uuid;
@@ -867,13 +867,15 @@ fn muted_text(text: &str, color: Hsla) -> AnyElement {
 }
 
 /// A dbt description as Markdown. Its headings stay below the titles of the
-/// sheet.
+/// sheet, and its code blocks have the size of the SQL part instead of the
+/// larger code size of the theme.
 fn markdown(id: String, text: SharedString) -> TextView {
     TextView::markdown(SharedString::from(id), text)
         .style(
             TextViewStyle::default()
                 .paragraph_gap(rems(0.5))
-                .heading_font_size(|_, base| base),
+                .heading_font_size(|_, base| base)
+                .code_block(StyleRefinement::default().text_xs().p_2()),
         )
         .selectable(true)
         .text_sm()
