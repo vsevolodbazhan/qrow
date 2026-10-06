@@ -66,7 +66,9 @@ class CatalogJobTests(unittest.TestCase):
             with self.subTest(job=name):
                 if name != "plan":
                     self.assertIn(f"\n| `{name}` | ", guide)
-                self.assertIn(f"\nchecks / {name}\n", development)
+                # A pull request never runs a main-only job, so it cannot be a required check.
+                required = name == "plan" or catalog.CI_JOBS[name].pull_requests
+                self.assertEqual(f"\nchecks / {name}\n" in development, required)
 
     def test_ci_runs_every_suite(self):
         covered = {name for ci_job in catalog.CI_JOBS.values() for name in [*ci_job.suites, *ci_job.report_only]}
@@ -75,23 +77,31 @@ class CatalogJobTests(unittest.TestCase):
 
 class PlanTests(unittest.TestCase):
     def test_paths_select_jobs_and_what_they_wait_for(self):
-        everything = list(catalog.CI_JOBS)
+        everything = ["static", "core", "ui", "package", "backend", "e2e", "perf"]
         cases = {
             "docs/queries.md": ["static"],
             "scripts/tests/test_hooks.py": ["static"],
             "src/ui.rs": everything,
             ".cargo/config.toml": everything,
-            "scripts/e2e/driver.sh": ["static", "core", "package", "backend", "e2e", "package-intel", "e2e-intel"],
+            "scripts/e2e/driver.sh": ["static", "core", "package", "backend", "e2e"],
             # The UI tests embed the synthetic Codex server.
             "tests/desktop/fake-codex.py": everything,
-            "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e", "package-intel", "e2e-intel"],
-            "scripts/package/macos.sh": ["static", "core", "package", "package-intel"],
+            "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e"],
+            "scripts/package/macos.sh": ["static", "core", "package"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }
         for path, expected in cases.items():
             with self.subTest(path=path):
                 self.assertEqual(catalog.ci_jobs_for_changes([path]), expected)
+
+    def test_intel_jobs_run_outside_pull_requests_only(self):
+        main_only = [name for name, ci_job in catalog.CI_JOBS.items() if not ci_job.pull_requests]
+        self.assertEqual(main_only, ["ui-intel", "package-intel", "e2e-intel"])
+        # A pull request job that waited for one of them would never run.
+        for name, ci_job in catalog.CI_JOBS.items():
+            if ci_job.pull_requests:
+                self.assertFalse(set(ci_job.needs) & set(main_only), name)
 
     def test_plan_job_selects_all_jobs_outside_pull_requests(self):
         body = job("plan")

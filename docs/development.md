@@ -108,10 +108,10 @@ checks / package
 checks / backend
 checks / e2e
 checks / perf
-checks / ui-intel
-checks / package-intel
-checks / e2e-intel
 ```
+
+Do not require the Intel checks. Pull requests skip them, and the run on
+`main` after a merge reports their failures.
 
 There is no aggregate CI gate. A skipped job counts as passed: a job that the
 plan does not select, and a server job of a fork pull request. The `plan`

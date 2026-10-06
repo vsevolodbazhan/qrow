@@ -240,6 +240,15 @@ class RunTests(unittest.TestCase):
             cli.main(["ci", "e2e"])
         self.assertTrue(run.call_args.kwargs["require_all"])
 
+    def test_the_job_list_shows_the_jobs_that_pull_requests_skip(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            cli.main(["ci"])
+        lines = {line.split()[0]: line for line in output.getvalue().splitlines()}
+        for name, job in catalog.CI_JOBS.items():
+            with self.subTest(job=name):
+                self.assertEqual(lines[name].endswith("not in pull requests"), not job.pull_requests)
+
     def test_a_nextest_step_that_writes_no_report_does_not_report_old_failures(self):
         report = runner.junit_report()
         report.parent.mkdir(parents=True)

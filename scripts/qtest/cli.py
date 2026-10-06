@@ -155,7 +155,8 @@ def command_ci(args):
         for job in catalog.CI_JOBS.values():
             suites = ", ".join([*job.suites, *(f"{name} (report only)" for name in job.report_only)])
             needs = f"  waits for {', '.join(job.needs)}" if job.needs else ""
-            print(f"{job.name:<8} {job.runner:<13} {suites}{needs}")
+            scope = "" if job.pull_requests else "  not in pull requests"
+            print(f"{job.name:<13} {job.runner:<14} {suites}{needs}{scope}")
         return EXIT_PASSED
     if args.job == "plan":
         names = list(catalog.CI_JOBS) if args.all else catalog.ci_jobs_for_changes(runner.changed_paths_from_git())
