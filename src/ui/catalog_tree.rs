@@ -59,6 +59,8 @@ pub(super) enum Node {
         comment: Option<String>,
         loading: bool,
         error: Option<String>,
+        /// The dbt resource that builds the relation.
+        dbt: Option<super::dbt::DbtBadge>,
     },
     Column {
         profile: Uuid,
@@ -269,6 +271,8 @@ fn child_id(parent: &SharedString, suffix: &str) -> SharedString {
 /// Builds the tree items and their nodes.
 struct Builder<'a> {
     tree: &'a CatalogTree,
+    /// The dbt resources of the tables of each connection.
+    dbt: &'a HashMap<Uuid, super::dbt::DbtLookup>,
     search: String,
     nodes: HashMap<SharedString, Node>,
     matches: usize,
@@ -538,6 +542,10 @@ impl Builder<'_> {
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
                             error: relation.error_for(profile).map(str::to_owned),
+                            dbt: self
+                                .dbt
+                                .get(&profile)
+                                .and_then(|lookup| lookup.badge(schema, name)),
                         },
                     );
                     let expanded = self.is_expanded(&item_id);
@@ -624,8 +632,10 @@ impl Qrow {
     /// Rebuild the tree items. Keeps the selected row when it still exists.
     pub(super) fn rebuild_catalog_tree(&mut self, cx: &mut Context<Self>) {
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
+        let dbt = self.dbt_lookups();
         let mut builder = Builder {
             tree: &self.catalog,
+            dbt: &dbt,
             search,
             nodes: HashMap::new(),
             matches: 0,
@@ -1189,6 +1199,19 @@ impl Qrow {
         let insert = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.insert_into_editor(insert.clone(), window, cx)
         });
+        let model_sql = match &node {
+            Node::Relation {
+                profile,
+                dbt: Some(dbt),
+                ..
+            } if dbt.has_sql => {
+                let (profile, unique_id) = (*profile, dbt.unique_id.clone());
+                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_model_sql(profile, &unique_id, window, cx)
+                }))
+            }
+            _ => None,
+        };
         let collapse = match &node {
             Node::Schema { name, .. } => {
                 let has_expanded = self.has_expanded_descendants(profile, Some(name), cx);
@@ -1222,8 +1245,15 @@ impl Qrow {
                     None => menu,
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
-                menu.item(PopupMenuItem::new(copy_label).on_click(copy))
-                    .item(PopupMenuItem::new("Insert into editor").on_click(insert))
+                let menu = menu
+                    .item(PopupMenuItem::new(copy_label).on_click(copy))
+                    .item(PopupMenuItem::new("Insert into editor").on_click(insert));
+                match model_sql {
+                    Some(open) => menu
+                        .separator()
+                        .item(PopupMenuItem::new("Open Model SQL").on_click(open)),
+                    None => menu,
+                }
             },
             window,
             cx,
@@ -1675,18 +1705,31 @@ fn render_entry(
             comment,
             loading,
             error,
+            dbt,
             ..
-        } => (
-            Some(match kind {
-                RelationKind::Table => AssetIconName::Table,
-                RelationKind::View => AssetIconName::Eye,
-            }),
-            name.clone().into(),
-            None,
-            *loading,
-            error.clone(),
-            row_tooltip(name, comment.as_deref(), error.as_deref()),
-        ),
+        } => {
+            // The dbt description adds a line, unless the table comment has
+            // it already.
+            let description = dbt
+                .as_ref()
+                .and_then(|dbt| dbt.description.as_deref())
+                .filter(|description| comment.as_deref() != Some(*description));
+            let comment = match (comment.as_deref(), description) {
+                (Some(comment), Some(description)) => Some(format!("{comment}\n{description}")),
+                (comment, description) => comment.or(description).map(str::to_owned),
+            };
+            (
+                Some(match kind {
+                    RelationKind::Table => AssetIconName::Table,
+                    RelationKind::View => AssetIconName::Eye,
+                }),
+                name.clone().into(),
+                dbt.as_ref().map(|dbt| dbt.detail.clone()),
+                *loading,
+                error.clone(),
+                row_tooltip(name, comment.as_deref(), error.as_deref()),
+            )
+        }
         Node::Column {
             name,
             data_type,
@@ -1720,7 +1763,10 @@ fn render_entry(
     let label_key = child_id(&id, "label");
     let detail_key = child_id(&id, "detail");
     let has_comment = match node {
-        Node::Relation { comment, .. } | Node::Column { comment, .. } => comment.is_some(),
+        Node::Relation { comment, dbt, .. } => {
+            comment.is_some() || dbt.as_ref().is_some_and(|dbt| dbt.description.is_some())
+        }
+        Node::Column { comment, .. } => comment.is_some(),
         _ => false,
     };
     let truncation = (!has_comment && error.is_none()).then(|| Truncation {

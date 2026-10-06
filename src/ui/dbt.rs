@@ -46,6 +46,8 @@ pub(super) struct DbtProjects {
     keys: HashMap<Uuid, PathBuf>,
     /// The projects that the worker has: connection, manifest, automatic.
     configured: Vec<(Uuid, String, bool)>,
+    /// The schema tree shows dbt data of projects that changed.
+    tree_stale: bool,
 }
 
 impl DbtProjects {
@@ -69,6 +71,7 @@ impl DbtProjects {
             states: HashMap::new(),
             keys: HashMap::new(),
             configured: Vec::new(),
+            tree_stale: false,
         }
     }
 
@@ -110,6 +113,7 @@ impl Qrow {
         self.dbt
             .states
             .retain(|key, _| keys.values().any(|k| k == key));
+        self.dbt.tree_stale = true;
         self.dbt.worker.configure(
             configured
                 .iter()
@@ -126,11 +130,19 @@ impl Qrow {
     /// each connection that uses the manifest.
     pub(super) fn drain_dbt(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
+        let mut rebuild = false;
         let mut activity = Vec::new();
         for event in self.dbt.worker.events.try_iter() {
             changed = true;
             match event {
                 Event::State(state) => {
+                    let previous = self.dbt.states.get(&state.path);
+                    let same = match (previous.and_then(|p| p.index.as_ref()), &state.index) {
+                        (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    rebuild |= !same;
                     if self.dbt.keys.values().any(|key| *key == state.path) {
                         self.dbt.states.insert(state.path.clone(), state);
                     }
@@ -150,6 +162,11 @@ impl Qrow {
         }
         for (profile, entry) in activity {
             self.record_activity(profile, entry, cx);
+        }
+        // The schema tree marks the tables of the new index, and of a new
+        // schema mapping.
+        if rebuild || std::mem::take(&mut self.dbt.tree_stale) {
+            self.rebuild_catalog_tree(cx);
         }
         changed
     }
@@ -182,6 +199,74 @@ impl Qrow {
             state.refreshed,
             !state.is_current(),
         ))
+    }
+
+    /// The dbt resources of the tables of each connection with a dbt index.
+    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, DbtLookup> {
+        self.profiles
+            .iter()
+            .filter_map(|profile| {
+                let project = profile.dbt.as_ref()?;
+                let index = self.dbt.state(profile.id)?.index.clone()?;
+                let relations = matching::relations(&index, project);
+                Some((profile.id, DbtLookup { index, relations }))
+            })
+            .collect()
+    }
+
+    /// Open the SQL of the dbt resource `unique_id` of `profile` in a new
+    /// tab: the compiled SQL, or the raw SQL when the manifest has none.
+    pub(super) fn open_model_sql(
+        &mut self,
+        profile: Uuid,
+        unique_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(state) = self.dbt.state(profile).cloned() else {
+            return;
+        };
+        let Some(index) = state.index.as_ref() else {
+            return;
+        };
+        let Some(entry) = index.find(unique_id).map(|position| index.entry(position)) else {
+            return;
+        };
+        // The positions of the SQL in the file are wrong after a change.
+        if !state.is_current() {
+            self.dbt.refresh_path(&state.path);
+            self.message = Some(
+                "The dbt manifest changed. Qrow is reading it again; open the SQL after the refresh."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+        let (span, code) = match (entry.compiled_code, entry.raw_code) {
+            (Some(span), _) => (span, "Compiled"),
+            (None, Some(span)) => (span, "Raw"),
+            (None, None) => return,
+        };
+        let sql = match crate::dbt::read_sql(&state.path, span) {
+            Ok(sql) => sql,
+            Err(error) => {
+                self.message = Some(format!("Could not read the SQL of {unique_id}: {error}"));
+                cx.notify();
+                return;
+            }
+        };
+        let mut saved = crate::model::SavedTab::new(1, Some(profile));
+        saved.title = entry
+            .name
+            .chars()
+            .take(crate::model::MAX_TAB_TITLE)
+            .collect();
+        saved.sql = format!("-- {code} SQL of {unique_id} from the dbt manifest\n{sql}");
+        let tab = self.make_tab(saved, window, cx);
+        self.tabs.push(tab);
+        let index = self.tabs.len() - 1;
+        self.activate(index, window, cx);
+        self.changed(cx);
     }
 
     /// Whether Qrow parses the manifest of `profile` now.
@@ -499,6 +584,59 @@ struct Matches {
     rows: Vec<String>,
 }
 
+/// What the schema tree shows for a table that a dbt resource builds.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct DbtBadge {
+    pub(super) unique_id: String,
+    /// The text after the name, like `dbt incremental` or `dbt source`.
+    pub(super) detail: String,
+    /// The start of the dbt description, for the tooltip.
+    pub(super) description: Option<String>,
+    /// Whether the manifest has SQL of the resource.
+    pub(super) has_sql: bool,
+}
+
+/// The longest dbt description in a tooltip, in characters.
+const TOOLTIP_DESCRIPTION_CHARS: usize = 300;
+
+/// The dbt resources of the tables of one connection.
+pub(super) struct DbtLookup {
+    index: Arc<Index>,
+    relations: HashMap<(String, String), u32>,
+}
+
+impl DbtLookup {
+    /// The badge of the table `relation` in `schema`.
+    pub(super) fn badge(&self, schema: &str, relation: &str) -> Option<DbtBadge> {
+        let key = (schema.to_lowercase(), relation.to_lowercase());
+        let entry = self.index.entry(*self.relations.get(&key)?);
+        let detail = match (entry.kind, entry.materialized) {
+            (Kind::Model, Some(materialized)) => {
+                format!("dbt {}", self.index.symbol(materialized))
+            }
+            (kind, _) => format!("dbt {}", kind.name()),
+        };
+        let description = entry.description.trim();
+        let description = (!description.is_empty()).then(|| {
+            let mut text: String = description
+                .chars()
+                .take(TOOLTIP_DESCRIPTION_CHARS)
+                .collect();
+            if text.len() < description.len() {
+                text.push('…');
+            }
+            text
+        });
+        Some(DbtBadge {
+            unique_id: entry.unique_id.to_string(),
+            detail,
+            description,
+            has_sql: entry.kind != Kind::Source
+                && (entry.compiled_code.is_some() || entry.raw_code.is_some()),
+        })
+    }
+}
+
 /// The dbt fields of Connection Settings.
 pub(super) struct DbtForm {
     pub(super) manifest: Entity<InputState>,
@@ -673,6 +811,48 @@ mod tests {
             manifest_status("/m.json", true, Some(&state)),
             "Manifest not found: run dbt parse in the project"
         );
+    }
+
+    #[test]
+    fn a_table_badge_names_the_materialization_and_the_description() {
+        let value = serde_json::json!({
+            "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json"},
+            "nodes": {
+                "model.lake.orders": {
+                    "unique_id": "model.lake.orders", "resource_type": "model", "name": "orders",
+                    "schema": "dev_core", "alias": "orders", "relation_name": "x",
+                    "config": {"materialized": "incremental"},
+                    "description": format!("  {}  ", "Long text. ".repeat(40)),
+                    "raw_code": "select 1",
+                },
+            },
+            "sources": {
+                "source.lake.raw.orders": {
+                    "unique_id": "source.lake.raw.orders", "resource_type": "source",
+                    "name": "orders", "schema": "raw", "source_name": "raw",
+                },
+            },
+        });
+        let index = Arc::new(crate::dbt::parse(&serde_json::to_vec(&value).unwrap()).unwrap());
+        let project = DbtProject {
+            manifest: "/m".into(),
+            refresh: DbtRefresh::Manual,
+            schema_mapping: parse_schema_rules("dev_* = *").unwrap(),
+        };
+        let relations = matching::relations(&index, &project);
+        let lookup = DbtLookup { index, relations };
+        let badge = lookup.badge("CORE", "Orders").unwrap();
+        assert_eq!(badge.unique_id, "model.lake.orders");
+        assert_eq!(badge.detail, "dbt incremental");
+        assert!(badge.has_sql);
+        let description = badge.description.unwrap();
+        assert!(description.starts_with("Long text.") && description.ends_with('…'));
+        assert_eq!(description.chars().count(), TOOLTIP_DESCRIPTION_CHARS + 1);
+        let source = lookup.badge("raw", "orders").unwrap();
+        assert_eq!(source.detail, "dbt source");
+        assert_eq!(source.description, None);
+        assert!(!source.has_sql);
+        assert!(lookup.badge("dev_core", "orders").is_none());
     }
 
     #[test]

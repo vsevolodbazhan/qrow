@@ -319,6 +319,17 @@ Qrow can match only the schemas and tables that it has read. Refresh the
 schemas of the connection first. A model in a schema without loaded tables
 does not count as a match or as a failure.
 
+### See dbt models in the schema tree
+
+In the schema tree, a table or view that a dbt model, seed, snapshot, or
+source builds shows its kind after its name, for example `dbt incremental` or
+`dbt source`. Its tooltip adds the start of the dbt description. To read the
+SQL of the model, right-click the table and select **Open Model SQL**. Qrow
+opens the compiled SQL in a new tab of the connection, or the raw SQL with
+Jinja when the manifest has no compiled SQL, for example a manifest from
+`dbt parse`. When the manifest changed after Qrow read it, Qrow reads it
+again first; then select **Open Model SQL** again.
+
 ### dbt limitations
 
 - A connection can have only one dbt project.

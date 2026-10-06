@@ -354,3 +354,83 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
         ),
     );
 }
+
+#[gpui_kit::test]
+fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
+    let directory = tempfile::tempdir().unwrap();
+    let bytes = dbt_manifest::generate(&shape());
+    let manifest = project(&directory, &bytes);
+    let index = qrow::dbt::parse(&bytes).unwrap();
+    let model = index
+        .entry(index.find(&dbt_manifest::model_id(1)).unwrap())
+        .clone();
+    let mut profile = offline_profile("Lake");
+    profile.dbt = Some(DbtProject {
+        manifest: manifest.to_string_lossy().into_owned(),
+        refresh: DbtRefresh::Manual,
+        schema_mapping: vec![SchemaRule {
+            kind: SchemaRuleKind::Prefix,
+            from: "analytics_".into(),
+            to: String::new(),
+        }],
+    });
+    cache(&directory, &profile);
+    let saved = directory.path().join("dbt");
+    let id = profile.id;
+    let app = launch(cx, directory, profile);
+    app.wait_until(cx, "the dbt index", TIMEOUT, |_, _| {
+        std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
+    });
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    let alias = dbt_manifest::model_alias(1);
+    app.toggle_connection(cx, id);
+    app.wait_until(cx, "the schema", TIMEOUT, |window, _| {
+        crate::support::labelled(window, &schema).is_some()
+    });
+    app.click_labelled(cx, &schema);
+    app.wait_until(cx, "the table", TIMEOUT, |window, _| {
+        crate::support::labelled(window, &alias).is_some()
+    });
+    // The row has a detail with the materialization; a unit test checks
+    // its text.
+    let detail: gpui_kit::ElementId =
+        format!("r\u{1f}{id}\u{1f}{schema}\u{1f}{alias}\u{1f}detail").into();
+    app.wait_until(cx, "the dbt detail", TIMEOUT, |window, _| {
+        crate::support::present(window, &detail)
+    });
+    // The tooltip has the start of the dbt description.
+    app.hover_labelled(cx, &alias);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.settle(cx);
+    let tooltip = app.update(cx, |window, _| label(window, "catalog-tooltip"));
+    let description: String = model.description.trim().chars().take(300).collect();
+    assert!(
+        tooltip
+            .as_deref()
+            .is_some_and(|text| text.starts_with(&format!("{alias}\n{description}"))),
+        "{tooltip:?}"
+    );
+
+    app.context_menu_labelled(cx, &alias);
+    app.choose(cx, "popup-menu", "Open Model SQL");
+    let title = dbt_manifest::model_name(1);
+    app.wait_until(cx, "the SQL tab", TIMEOUT, |_, _| {
+        app.saved().tabs.iter().any(|tab| tab.title == title)
+    });
+    let tab = app
+        .saved()
+        .tabs
+        .into_iter()
+        .find(|tab| tab.title == title)
+        .unwrap();
+    assert_eq!(tab.profile, Some(id));
+    let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
+    assert_eq!(
+        tab.sql,
+        format!(
+            "-- Raw SQL of {} from the dbt manifest\n{raw}",
+            dbt_manifest::model_id(1)
+        )
+    );
+}
