@@ -325,6 +325,7 @@ sh scripts/e2e/driver.sh --preflight
 ./qtest run desktop
 ```
 
+The driver uses a monotonic clock that is available on macOS 12.
 The driver at `target/e2e-tools/native-driver`, or the terminal that starts
 it, needs the Accessibility and Screen Recording permissions. Give them in
 System Settings when preflight reports that they are missing. Preflight
@@ -489,6 +490,9 @@ the transcript, the editor, and the approval card. `codex.processes()` lists
 the server processes, and `FakeCodex::running(pid)` shows if a process still
 exists. `app.pass_time(duration)` moves the test clock of Qrow's timers
 forward, for example for the idle stop of Codex. Codex itself uses wall time.
+Idle-stop tests wait for Qrow to process the history response after a reply.
+Codex events restart the idle period, so process them before you advance the
+test clock.
 
 Follow these rules:
 
@@ -603,24 +607,28 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | --- | --- | --- | --- |
 | `static` | Linux | `scripts`, `policy`, `deps`, `fmt`, `clippy`, `rustdoc` | |
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
-| `ui` | macOS | `clippy-app`, `unit`, `ui` | `core` |
-| `package` | macOS | `package`, and `perf-app` (report only) | `core` |
+| `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
+| `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
 | `backend` | Linux | `backend` with Docker | `core` |
-| `e2e` | macOS | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
-| `perf` | macOS | `perf`, and `perf-ui` (report only) | `core` |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
+| `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
+| `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
+| `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e` (report only), with local Java servers | `package-intel` |
 
 The failures of `core` predict the failures of the macOS and server jobs, so
 these jobs wait for it. `e2e` also waits for the package that it tests. A
 failed job skips the jobs that wait for it. `static` lints the core library,
-and `ui` lints the application, so each Clippy pass runs in one job. A
+and the two `ui` jobs lint the application on their Mac architecture. A
 report-only suite runs, and its measurements go into the run summary. Its
 failure does not fail the job.
 
 A `plan` job selects the jobs of a pull request from its changed files. It
-always selects `static`. Changes to Rust sources select all jobs. Changes to
-the server fixture or the E2E scripts select `backend` and `e2e`. Changes
-under `tests/desktop/` select `e2e`. Changes to the packaging or probe
-scripts, `assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
+always selects `static`. Changes to Rust sources or `.cargo/config.toml`
+select all jobs. Changes to the server fixture or the E2E scripts select
+`backend` and both E2E jobs. Changes
+under `tests/desktop/` select both E2E jobs. Changes to the packaging or probe
+scripts, `assets/`, `LICENSE`, or `NOTICE` select both package jobs. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 jobs. A
 selected job also selects the jobs that it waits for. A job that the plan does
@@ -629,21 +637,23 @@ To see the plan of your changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS
-accessibility APIs. `e2e` runs on the hosted `macos-15` runner, and its
-suites share one set of servers. The native archives download from the
+accessibility APIs. The ARM64 jobs use `macos-15`, and the Intel jobs use
+`macos-15-intel`.
+Each E2E job tests the package for its architecture and shares one set of
+servers between its suites. The native archives download from the
 mirror in each run, with a limit of 2 hours for each archive. Each Rust build
-cache belongs to one job, and only that job saves it. `e2e` also restores the
-cache of `ui`, because `ui` also builds the E2E test binary. Runs on `main`
-save the build caches. Other runs only restore them. A change to
+cache belongs to one job, and only that job saves it. Each E2E job also
+restores the cache of its UI job, which builds the E2E test binary. Runs on
+`main` save the build caches. Other runs only restore them. A change to
 `Cargo.lock` or to the toolchain gives a cache a new name, and the old cache
 stays. After the checks of a run on `main`, the `cache-cleanup` job of the test
 workflow deletes the old caches. For each job, it keeps the newest cache. A
 release of an older commit with another `Cargo.lock` saves a newer cache that
 `main` does not use, so the next run on `main` builds the dependencies again.
 To see the caches that it deletes, run
-`python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`. CI keeps its artifacts
-for one day. Runs on `main` also keep the measurements of the
-`package`, `e2e`, and `perf` jobs for 90 days, in the `performance-JOB`
+`python3 scripts/ci/rust_caches.py --repository OWNER/NAME --dry-run`.
+CI keeps its artifacts for one day. Runs on `main` also keep the measurements of the
+package, E2E, and `perf` jobs for 90 days, in the `performance-JOB`
 artifacts. See [Check performance](#check-performance). See
 [Development](development.md#hooks-and-continuous-integration) for workflow
 events, required checks, and releases.

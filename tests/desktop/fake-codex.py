@@ -357,6 +357,12 @@ for line in sys.stdin:
                 },
             }
         )
+        history_notification = os.path.join(state_dir, "notify-idle-history")
+        if method == "thread/read" and os.path.exists(history_notification):
+            os.remove(history_notification)
+            # The UI can observe this notification only after it handles the history response.
+            send({"method": "thread/name/updated",
+                  "params": {"threadId": thread_id, "threadName": "Idle history loaded"}})
     elif method == "thread/delete":
         # Test deletion of a conversation whose Codex history is missing.
         send({"id": request_id, "error": missing_rollout(request["params"]["threadId"])})

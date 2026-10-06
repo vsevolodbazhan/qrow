@@ -19,6 +19,16 @@ import runner  # noqa: E402
 GUIDE = (ROOT / "docs/testing.md").read_text()
 
 
+class SummaryTests(unittest.TestCase):
+    def test_fixture_failure_without_step_log_reports_original_error(self):
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            cli.print_summary({"run": "fixture-failure", "status": "failed", "artifacts": "/tmp/evidence",
+                               "suites": [{"name": "e2e", "status": "failed", "reason": "fixture timed out"}]})
+        self.assertIn("fixture timed out", output.getvalue())
+        self.assertIn("/tmp/evidence", output.getvalue())
+
+
 class CatalogTests(unittest.TestCase):
     def test_groups_name_existing_suites_without_server_suites(self):
         for name, (_, members) in catalog.GROUPS.items():

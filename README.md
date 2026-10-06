@@ -54,8 +54,10 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 
 - **Kyuubi/Spark only.** The only connector implemented is HiveServer2 over
   SASL PLAIN, matching the deployment I connect to daily. Trino, Postgres and DuckDB are planned.
-- **Apple Silicon macOS only.** That's the hardware I run every day; there's
-  no Intel or other-OS build.
+- **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
+  The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
+  Other operating systems are not supported. The assistant also needs a compatible
+  Codex executable.
 - **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
 - **Codex only**. For now, assistant can only be powered by Codex. Claude support is planned.
@@ -98,7 +100,7 @@ with Apple Developer ID. To bypass the Gatekeeper:
 
 ### Prerequisites
 
-- A current stable Rust toolchain, including `cargo` and `rustc`.
+- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
 - Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
   toolchain used by `./qtest` and by the packaging, dependency-license, and
@@ -148,6 +150,22 @@ and `dist/Qrow-macos.zip`.
 You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
 After changing the source, quit Qrow, rerun the packaging script, and reopen the
 app. The packaged app does not update automatically when you run `cargo build`.
+
+The minimum macOS version is 12.0. [`.cargo/config.toml`](.cargo/config.toml)
+sets the build baseline, and packaging uses it for the app bundle. A higher
+`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
+Do not use `target-cpu=native` for a package that you share with older Macs.
+
+To build for another Mac architecture, install its Rust target and set
+`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
+Packaging reads the executable from the target's subdirectory and checks its
+architecture. The package includes license notices for the selected target.
+GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
+Silicon and `Qrow-VERSION-x86_64.dmg` for Intel. Choose the file for your Mac.
+CI tests both builds on macOS 15. It does not test every macOS 12 driver.
+The file without an architecture suffix remains an ARM64 alias for older tap
+updaters. Until the tap update and a new release are published, use a local
+Intel build. Existing Homebrew releases contain only the ARM64 app.
 
 ## Preview
 

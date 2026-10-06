@@ -51,7 +51,7 @@ def github_archives(repository, tag, member, platforms):
 
 
 # The digests are the SHA-256 digests of the release assets, calculated from
-# the downloaded files. CI uses linux-x86_64 and macos-aarch64.
+# the downloaded files. CI uses Linux x86_64 and macOS ARM64 and x86_64.
 NEXTEST_MACOS = ("cargo-nextest-0.9.146-universal-apple-darwin.tar.gz",
                  "39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8")
 LLVM_COV_MACOS = ("cargo-llvm-cov-universal-apple-darwin.tar.gz",
@@ -241,7 +241,7 @@ GROUPS = {
 
 # Changed paths select suites for `qtest run --changed` and the hooks.
 RUST_PATHS = (r"^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|build\.rs|src/|tests/(?!fixture/)|benches/|vendor/"
-              r"|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
+              r"|\.cargo/config\.toml$|themes/|assets/(app-icons|connection-type-icons)/|\.config/nextest\.toml$)")
 RUST_SUITES = ("fmt", "clippy", "rustdoc", "unit", "ui")
 CHANGE_RULES = (
     (RUST_PATHS, RUST_SUITES),
@@ -310,6 +310,11 @@ CI_JOBS = {
         CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
         CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
+        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+        CiJob("package-intel", "macos-15-intel", ("package",), report_only=("perf-app",), needs=("core",),
+              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), report_only=("perf-e2e",),
+              needs=("package-intel",), paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.

@@ -1,3 +1,4 @@
+import Dispatch
 import AppKit
 import ApplicationServices
 import Foundation
@@ -10,7 +11,10 @@ struct Failure: Error, CustomStringConvertible {
 }
 let env = ProcessInfo.processInfo.environment
 let artifacts = env["QROW_E2E_ARTIFACTS"] ?? "/tmp"
-let clock = ContinuousClock()
+// DispatchTime uses a monotonic clock and is available on Monterey.
+func monotonicSeconds() -> Double {
+    Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000
+}
 var inputPID: pid_t = 0
 
 func require(_ condition: Bool, _ message: String) throws {
@@ -47,7 +51,7 @@ func key(_ code: CGKeyCode, flags: CGEventFlags = []) {
     }
 }
 func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
-    let deadline = clock.now.advanced(by: .seconds(5))
+    let deadline = (monotonicSeconds() + 5)
     var position: CFTypeRef?
     var size: CFTypeRef?
     repeat {
@@ -55,7 +59,7 @@ func elementBounds(_ element: AXUIElement) throws -> (CGPoint, CGSize) {
         size = attribute(element, kAXSizeAttribute)
         if position != nil && size != nil { break }
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-    } while clock.now < deadline
+    } while monotonicSeconds() < deadline
     guard let position, let size else { throw Failure("Element has no bounds: \(strings(element))") }
     var point = CGPoint.zero
     var extent = CGSize.zero
@@ -234,45 +238,45 @@ final class Driver {
         }
     }
     func wait(_ label: String, timeout: Double = 150, role: String? = nil) throws -> AXUIElement {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         repeat {
             if let element = find(label, role: role) { return element }
             try require(process.isRunning, "Qrow exited while waiting for \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("Timed out waiting for \(label)")
     }
     func waitAny(_ labels: [String], timeout: Double = 150) throws -> AXUIElement {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         repeat {
             for label in labels {
                 if let element = find(label) { return element }
             }
             try require(process.isRunning, "Qrow exited while waiting for \(labels.joined(separator: ", "))")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("Timed out waiting for \(labels.joined(separator: ", "))")
     }
     func waitExact(_ label: String, timeout: Double = 150, role: String? = nil) throws -> AXUIElement {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         repeat {
             if let element = findExact(label, role: role) {
                 return element
             }
             try require(process.isRunning, "Qrow exited while waiting for \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("Timed out waiting for \(label)")
     }
     func waitGone(_ label: String, timeout: Double = 10, role: String? = nil) throws {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         while find(label, role: role) != nil {
-            try require(clock.now < deadline, "Old UI state remained visible: \(label)")
+            try require(monotonicSeconds() < deadline, "Old UI state remained visible: \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
     }
     func press(_ label: String, pointer: Bool = false) throws {
-        let deadline = clock.now.advanced(by: .seconds(150))
+        let deadline = (monotonicSeconds() + 150)
         repeat {
             let control = find(label, role: kAXButtonRole) ?? find(label, role: kAXCheckBoxRole)
             if let control, attribute(control, kAXEnabledAttribute) as? Bool != false {
@@ -286,7 +290,7 @@ final class Driver {
             }
             try require(process.isRunning, "Qrow exited while waiting for button: \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("Button never became enabled: \(label)")
     }
     func activate(_ element: AXUIElement) throws {
@@ -313,21 +317,21 @@ final class Driver {
         }
     }
     func waitInput(_ label: String, timeout: Double = 10) throws -> AXUIElement {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         repeat {
             if let input = accessibleInput(label) { return input }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("Missing accessible input: \(label)")
     }
     func waitInputValue(_ label: String, _ expected: String, timeout: Double = 10) throws {
-        let deadline = clock.now.advanced(by: .seconds(timeout))
+        let deadline = (monotonicSeconds() + timeout)
         repeat {
             if let input = accessibleInput(label),
                attribute(input, kAXValueAttribute) as? String == expected { return }
             try require(process.isRunning, "Qrow exited while waiting for \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("\(label) did not become \(expected)")
     }
     func fill(_ label: String, _ value: String) throws {
@@ -374,9 +378,9 @@ final class Driver {
         // some macOS environments do not deliver synthetic Cmd+V events to
         // that input. Keep the real click and keyboard path, then use the
         // published accessibility action when the value did not arrive.
-        let keyboardDeadline = clock.now.advanced(by: .seconds(1))
+        let keyboardDeadline = (monotonicSeconds() + 1)
         while label == "Password" || accessibleInput(label).flatMap({ attribute($0, kAXValueAttribute) as? String }) != value {
-            if clock.now >= keyboardDeadline { break }
+            if monotonicSeconds() >= keyboardDeadline { break }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
         if label == "Password" || accessibleInput(label).flatMap({ attribute($0, kAXValueAttribute) as? String }) != value {
@@ -386,9 +390,9 @@ final class Driver {
                 "Input accessibility action failed: \(label)"
             )
             if label != "Password" {
-                let deadline = clock.now.advanced(by: .seconds(5))
+                let deadline = (monotonicSeconds() + 5)
                 while accessibleInput(label).flatMap({ attribute($0, kAXValueAttribute) as? String }) != value {
-                    try require(clock.now < deadline, "Input did not accept text: \(label)")
+                    try require(monotonicSeconds() < deadline, "Input did not accept text: \(label)")
                     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
                 }
             }
@@ -463,13 +467,13 @@ final class Driver {
         process.environment = env
         process.standardOutput = log
         process.standardError = log
-        let started = clock.now
+        let started = monotonicSeconds()
         try process.run()
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
         _ = try wait(demo ? "SQL Editor" : "New Connection", timeout: 20)
-        samples.append("launch_to_accessible_new_connection_seconds=\(started.duration(to: clock.now))")
+        samples.append("launch_to_accessible_new_connection_seconds=\(monotonicSeconds() - started)")
         try setTestWindowFrame(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -591,9 +595,9 @@ final class Driver {
         let backup = workspace.deletingLastPathComponent().appendingPathComponent("workspace-before-quit.json")
         let baseline = "SELECT 'saved-before-quit' -- " + UUID().uuidString
         try fill("SQL Editor", baseline)
-        var deadline = clock.now.advanced(by: .seconds(10))
+        var deadline = (monotonicSeconds() + 10)
         while !savedSQL(baseline, at: workspace) {
-            try require(clock.now < deadline, "Initial workspace autosave did not complete")
+            try require(monotonicSeconds() < deadline, "Initial workspace autosave did not complete")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
         try FileManager.default.moveItem(at: workspace, to: backup)
@@ -633,9 +637,9 @@ final class Driver {
         try FileManager.default.removeItem(at: workspace)
         try FileManager.default.moveItem(at: backup, to: workspace)
         try press("Retry Save and Quit")
-        deadline = clock.now.advanced(by: .seconds(10))
+        deadline = (monotonicSeconds() + 10)
         while process.isRunning {
-            try require(clock.now < deadline, "Save retry did not finish quitting")
+            try require(monotonicSeconds() < deadline, "Save retry did not finish quitting")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
         }
         try require(savedSQL(finalSQL, at: workspace), "Quit completed without saving the final SQL edit")
@@ -667,13 +671,13 @@ final class Driver {
         return menus[1]
     }
     func applicationMenuItem(_ label: String, in menu: AXUIElement) throws -> AXUIElement {
-        let deadline = clock.now.advanced(by: .seconds(10))
+        let deadline = (monotonicSeconds() + 10)
         var item: AXUIElement?
         repeat {
             item = descendants(menu).first { strings($0).contains(label) }
             if item != nil { break }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         guard let item else { throw Failure("The application menu has no item: \(label)") }
         return item
     }
@@ -698,13 +702,13 @@ final class Driver {
         try selectApplicationMenuItem("About Qrow", from: menu)
         let copyright = "Copyright © 2026 Vsevolod Bazhan"
         _ = try wait(copyright, timeout: 10)
-        let deadline = clock.now.advanced(by: .seconds(10))
+        let deadline = (monotonicSeconds() + 10)
         var version: String?
         repeat {
             version = elements().flatMap(strings).first(where: isVersion)
             if version != nil { break }
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         guard let version else { throw Failure("The About dialog does not report a version") }
         try snapshot("about")
         // Escape closes the dialog, and the menu item opens it again.
@@ -728,14 +732,14 @@ final class Driver {
         return control.flatMap { attribute($0, kAXValueAttribute) as? String }
     }
     func waitSettingValue(_ label: String, _ expected: String) throws {
-        let deadline = clock.now.advanced(by: .seconds(10))
+        let deadline = (monotonicSeconds() + 10)
         var value: String?
         repeat {
             value = settingValue(label)
             if value == expected { return }
             try require(process.isRunning, "Qrow exited while waiting for \(label)")
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
-        } while clock.now < deadline
+        } while monotonicSeconds() < deadline
         throw Failure("\(label) shows \(value ?? "nothing"), expected \(expected)")
     }
     /// Writes a new synthetic workspace with the UI scale and pane width at

@@ -1,5 +1,5 @@
 [graph]
-targets = ["aarch64-apple-darwin"]
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
 
 [advisories]
 # These inherited maintenance advisories have no compatible fixed releases.

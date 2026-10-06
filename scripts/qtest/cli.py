@@ -191,7 +191,7 @@ def print_summary(summary):
               file=sys.stderr)
         for failure in suite.get("failures", []):
             print(f"           FAILED {failure['test']}", file=sys.stderr)
-        if suite["status"] == "failed":
+        if suite["status"] == "failed" and suite.get("log"):
             print(f"           log: {suite['log']}", file=sys.stderr)
     print(f"  artifacts: {summary['artifacts']}", file=sys.stderr)
 

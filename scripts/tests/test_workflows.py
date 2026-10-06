@@ -49,7 +49,8 @@ class CatalogJobTests(unittest.TestCase):
                 if name == "static":
                     self.assertNotIn("if:", body.split("steps:")[0])
                 else:
-                    self.assertIn(f"fromJSON(needs.plan.outputs.jobs).{name}", body)
+                    self.assertTrue(f"fromJSON(needs.plan.outputs.jobs).{name}" in body or
+                                    f"fromJSON(needs.plan.outputs.jobs)['{name}']" in body)
 
     def test_suites_of_jobs_exist(self):
         for ci_job in catalog.CI_JOBS.values():
@@ -79,11 +80,12 @@ class PlanTests(unittest.TestCase):
             "docs/queries.md": ["static"],
             "scripts/tests/test_hooks.py": ["static"],
             "src/ui.rs": everything,
-            "scripts/e2e/driver.sh": ["static", "core", "package", "backend", "e2e"],
+            ".cargo/config.toml": everything,
+            "scripts/e2e/driver.sh": ["static", "core", "package", "backend", "e2e", "package-intel", "e2e-intel"],
             # The UI tests embed the synthetic Codex server.
             "tests/desktop/fake-codex.py": everything,
-            "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e"],
-            "scripts/package/macos.sh": ["static", "core", "package"],
+            "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e", "package-intel", "e2e-intel"],
+            "scripts/package/macos.sh": ["static", "core", "package", "package-intel"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }
@@ -123,7 +125,7 @@ class WorkflowTests(unittest.TestCase):
         for name in catalog.CI_JOBS:
             with self.subTest(job=name):
                 forks_skip = "head.repo.full_name == github.repository" in job(name)
-                self.assertEqual(forks_skip, name in ("backend", "e2e"))
+                self.assertEqual(forks_skip, name in ("backend", "e2e", "e2e-intel"))
 
     def test_the_tested_package_is_the_released_package(self):
         package = job("package")
@@ -134,11 +136,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("name: macos-package\n", e2e)
         self.assertIn("QROW_E2E_REUSE_MACOS_PACKAGE: true", e2e)
         dmg = job("dmg", RELEASE)
-        self.assertEqual(needs(dmg) or re.findall(r"^      - (\S+)$", dmg.split("runs-on")[0], re.MULTILINE),
+        self.assertEqual(needs(dmg) or re.findall(r"^      - (\S+)$", dmg.split("strategy:")[0], re.MULTILINE),
                          ["resolve-target", "checks"])
-        self.assertIn("name: macos-package\n", dmg)
+        self.assertIn("name: ${{ matrix.package }}\n", dmg)
         self.assertNotIn("scripts/package/macos.sh", read(RELEASE))
         self.assertIn("- dmg", job("publish", RELEASE))
+
+    def test_intel_package_is_tested_and_both_architectures_are_released(self):
+        self.assertEqual(needs(job("e2e-intel")), ["plan", "package-intel"])
+        for name in ("package-intel", "e2e-intel"):
+            self.assertIn("name: macos-package-x86_64\n", job(name))
+        dmg = job("dmg", RELEASE)
+        for arch, runner, artifact in (("arm64", "macos-15", "macos-package"),
+                                       ("x86_64", "macos-15-intel", "macos-package-x86_64")):
+            self.assertIn(f"- arch: {arch}\n            runner: {runner}\n            package: {artifact}\n", dmg)
+            self.assertIn(f'"dist/Qrow-${{RELEASE_VERSION}}-{arch}.dmg"', job("publish", RELEASE))
+        self.assertIn('lipo -archs dist/Qrow.app/Contents/MacOS/qrow', dmg)
+        self.assertIn("name: release-dmg-${{ matrix.arch }}", dmg)
+        self.assertIn("pattern: release-dmg-*", job("publish", RELEASE))
+        self.assertIn("merge-multiple: true", job("publish", RELEASE))
+        self.assertIn('if [ "$PACKAGE_ARCH" = arm64 ]; then', dmg)
+        self.assertIn('cp "$dmg_path" "dist/Qrow-${RELEASE_VERSION}.dmg"', dmg)
+        self.assertIn('"dist/Qrow-${RELEASE_VERSION}.dmg"', job("publish", RELEASE))
 
     def test_only_main_saves_rust_caches(self):
         checks = read(CHECKS)
