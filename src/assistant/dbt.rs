@@ -203,11 +203,10 @@ impl<'a> Project<'a> {
         });
         if description {
             let first = entry.description.lines().next().unwrap_or_default();
-            value["description"] = json!(cut(first, MAX_LIST_DESCRIPTION_BYTES));
-            value["description_truncated"] = json!(
-                first.len() > MAX_LIST_DESCRIPTION_BYTES
-                    || first.len() < entry.description.trim_end().len()
-            );
+            let (text, cut) = cut_flag(first, MAX_LIST_DESCRIPTION_BYTES);
+            value["description"] = json!(text);
+            value["description_truncated"] =
+                json!(cut || first.len() < entry.description.trim_end().len());
         }
         value
     }

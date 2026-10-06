@@ -491,4 +491,10 @@ fn a_cut_counts_the_escapes_of_json() {
     );
     let (cut, _) = cut_flag(&"é".repeat(100), 11);
     assert_eq!(cut, "éééé…");
+
+    // A list tells when escapes made a description too long.
+    let (index, project) = (lake(&"\"".repeat(150)), project());
+    let dbt = Project::new(&index, &project, None, false);
+    let listed = dbt.listed(index.find("model.lake.orders").unwrap(), true);
+    assert_eq!(listed["description_truncated"], true);
 }
