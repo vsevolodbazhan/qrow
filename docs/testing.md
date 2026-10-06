@@ -70,10 +70,18 @@ binary.
 The full `ui` suite also checks tooltip alignment with the native macOS font
 backend at 1× and 2× display scales. Titles, statuses, and shortcuts share
 the vertical center of the first line. Checks cover system and Menlo fonts
-at 75%, 100%, and 150% UI scale. It runs this check on the process main
+at 75%, 100%, 110%, 125%, and 150% UI scale. It runs this check on the process main
 thread because AppKit requires that thread. The other headless UI tests
 use GPUI's test text backend. Run `./qtest run ui` to include the native
 check. A test filter runs only the matching GPUI tests.
+
+UI tests also compare the Connections and Sign-ins headers with query tabs.
+They check text height, control centers, and separator positions at different
+UI scales and window widths. The native check repeats these comparisons with
+system and Menlo fonts at 1× and 2× display scales. The query E2E test checks
+header alignment before and after a query completes. Divider checks verify that
+the editor and toolbar touch the sidebar border and that the active gutter
+paints the adjacent pixel. They cover both display scales and pane resizing.
 
 - Local protocol fixtures test the connector without a real Spark deployment.
   They verify client messages, but they cannot show how a real server

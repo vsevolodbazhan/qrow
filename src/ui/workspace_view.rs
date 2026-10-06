@@ -30,6 +30,42 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
+    pub(super) fn sidebar_header(
+        &self,
+        title: &'static str,
+        cx: &App,
+    ) -> impl IntoElement + ParentElement {
+        h_flex()
+            .id("sidebar-header")
+            .test_support()
+            .relative()
+            .h(self.ui_px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .pl_3()
+            .pr_2()
+            .gap_1()
+            // Match TabBar's painted separator without reducing the content height.
+            .child(
+                div()
+                    .id("sidebar-header-border")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
+                    .border_b_1()
+                    .border_color(cx.theme().border),
+            )
+            .child(
+                div()
+                    .id("sidebar-title")
+                    .test_support()
+                    .flex_1()
+                    .text_base()
+                    .line_height(relative(1.25))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title),
+            )
+    }
+
     fn query_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
@@ -203,6 +239,8 @@ impl Qrow {
         let tab = &self.tabs[self.active];
         let active = tab.saved.profile;
         h_flex()
+            .id("query-toolbar")
+            .test_support()
             .h_12()
             .px_3()
             .gap_2()
@@ -545,65 +583,26 @@ impl Qrow {
     }
 
     fn splitter(&self, horizontal: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let handle = div()
             .id(if horizontal {
                 "sidebar-splitter"
             } else {
                 "editor-splitter"
             })
-            .relative()
-            .flex_shrink_0()
+            .test_support()
+            .absolute()
             .when(horizontal, |el| {
-                el.w(self.ui_px(5.))
-                    .mx(self.ui_px(-2.))
+                el.left(self.ui_px(-2.))
+                    .w(self.ui_px(5.))
                     .h_full()
                     .cursor(CursorStyle::ResizeLeftRight)
             })
             .when(!horizontal, |el| {
-                el.h(self.ui_px(5.))
-                    .my(self.ui_px(-2.))
+                el.top(self.ui_px(-2.))
+                    .h(self.ui_px(5.))
                     .w_full()
                     .cursor(CursorStyle::ResizeUpDown)
             })
-            .when(horizontal, |el| {
-                // Overlap the divider so display scaling cannot leave a pixel gap.
-                el.child(
-                    div()
-                        .absolute()
-                        .left(self.ui_px(2.))
-                        .w(self.ui_px(3.))
-                        .h_full()
-                        .bg(cx.theme().background),
-                )
-                .child(
-                    div()
-                        .absolute()
-                        .left(self.ui_px(2.))
-                        .w(self.ui_px(3.))
-                        .top_0()
-                        .h(self.ui_px(TAB_BAR_HEIGHT))
-                        .bg(cx.theme().tokens.tab_bar)
-                        .border_b_1()
-                        .border_color(cx.theme().border),
-                )
-            })
-            .child(
-                div()
-                    .absolute()
-                    .bg(
-                        if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
-                            cx.theme().primary
-                        } else {
-                            cx.theme().border
-                        },
-                    )
-                    .when(horizontal, |el| {
-                        el.left(self.ui_px(2.)).w(self.ui_px(1.)).h_full()
-                    })
-                    .when(!horizontal, |el| {
-                        el.top(self.ui_px(2.)).h(self.ui_px(1.)).w_full()
-                    }),
-            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -618,7 +617,28 @@ impl Qrow {
                     ));
                     cx.stop_propagation();
                 }),
+            );
+        // Reserve exactly the painted divider's width. The wider drag target
+        // stays out of layout so separately rounded margins cannot leave a gap.
+        div()
+            .id(if horizontal {
+                "sidebar-divider"
+            } else {
+                "editor-divider"
+            })
+            .test_support()
+            .relative()
+            .flex_shrink_0()
+            .bg(
+                if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
+                    cx.theme().primary
+                } else {
+                    cx.theme().border
+                },
             )
+            .when(horizontal, |el| el.w(self.ui_px(1.)).h_full())
+            .when(!horizontal, |el| el.h(self.ui_px(1.)).w_full())
+            .child(handle)
     }
 
     fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {

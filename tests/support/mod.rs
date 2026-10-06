@@ -98,6 +98,86 @@ pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
 }
 
+/// Sidebar and query-tab content use the same centered header band.
+pub fn assert_workspace_header_alignment(window: &Window, sidebar_action: &str) {
+    let sidebar = bounds_of(window, sidebar_action);
+    let tabs = bounds_of(window, "new-tab");
+    let header = bounds_of(window, "sidebar-header");
+    for action in [sidebar, tabs] {
+        // Odd and even physical heights need different centers on the pixel grid.
+        assert_eq!(
+            action.top(),
+            window.pixel_snap(header.center().y - action.size.height / 2.),
+            "The header action {action:?} must use the centered header band {header:?}"
+        );
+    }
+    let border = bounds_of(window, "sidebar-header-border");
+    let title = bounds_of(window, "sidebar-title");
+    let tab = elements(window)
+        .into_iter()
+        .find(|element| element.role() == Some(gpui_kit::Role::Tab))
+        .expect("The workspace has a query tab")
+        .bounds();
+    assert_eq!(border, header, "The separator covers the header frame");
+    assert_eq!(header.top(), tab.top());
+    assert_eq!(header.bottom(), tab.bottom());
+    assert_eq!(
+        title.size.height,
+        window.pixel_snap(window.rem_size() * 1.25),
+        "The sidebar title must use the query tab's line height"
+    );
+    assert_eq!(
+        title.top(),
+        window.pixel_snap(tab.center().y - title.size.height / 2.),
+        "The sidebar title must use the tab's centered text layout"
+    );
+}
+
+/// The content starts at the divider, including the editor's active gutter.
+pub fn assert_workspace_divider_alignment(window: &Window, cx: &App) {
+    use gpui_kit::component::ActiveTheme as _;
+
+    let divider = bounds_of(window, "sidebar-divider");
+    let editor = bounds_of(window, "sql-editor");
+    let toolbar = bounds_of(window, "query-toolbar");
+    assert_eq!(
+        editor.bottom(),
+        bounds_of(window, "editor-divider").top(),
+        "The editor touches the results divider"
+    );
+    assert_eq!(
+        divider.right(),
+        editor.left(),
+        "The editor touches the divider"
+    );
+    assert_eq!(
+        divider.right(),
+        toolbar.left(),
+        "The toolbar touches the divider"
+    );
+
+    let active =
+        gpui_kit::Background::from(cx.theme().highlight_theme.style.editor_active_line.unwrap());
+    let editor = editor.scale(window.scale_factor());
+    let quads = window.painted_quads();
+    let row = quads
+        .iter()
+        .find(|quad| quad.background == active && editor.contains(&quad.bounds.center()))
+        .expect("The editor paints its active row");
+    let adjacent = point(
+        divider.right().scale(window.scale_factor()) + px(0.5).scale(1.),
+        row.bounds.center().y,
+    );
+    assert!(
+        quads.iter().any(|quad| {
+            quad.background == active
+                && quad.bounds.contains(&adjacent)
+                && quad.content_mask.bounds.contains(&adjacent)
+        }),
+        "The active gutter paints the first pixel after the divider"
+    );
+}
+
 /// Compare the visual centers of the first line's capital letters.
 pub fn assert_tooltip_header_center(window: &mut Window, cx: &App, secondary: &str) {
     use gpui_kit::component::ActiveTheme;

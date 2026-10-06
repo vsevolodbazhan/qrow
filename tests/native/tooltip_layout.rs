@@ -10,6 +10,7 @@ fn main() {
     use std::time::Duration;
     use support::{
         MemoryCredentials, TestApp, assert_tooltip_header_center, assert_tooltip_metadata_rows,
+        assert_workspace_divider_alignment, assert_workspace_header_alignment,
         assistant::FakeCodex, bounds_of, label, offline_profile,
     };
 
@@ -21,7 +22,7 @@ fn main() {
             .any(|name| name == "Menlo")
     );
     for font in [".SystemUIFont", "Menlo"] {
-        for ui_scale in [0.75, 1., 1.5] {
+        for ui_scale in [0.75, 1., 1.1, 1.25, 1.5] {
             for display_scale in [1., 2.] {
                 println!("tooltip-layout: {font} UI {ui_scale} display {display_scale}");
                 let mut cx = TestAppContext::build_with_text_system(
@@ -44,6 +45,16 @@ fn main() {
                     TestApp::launch_in(&mut cx, directory, workspace, MemoryCredentials::default());
                 cx.simulate_window_scale_factor_change(app.window, display_scale);
                 app.settle(&mut cx);
+                app.update(&mut cx, |window, cx| {
+                    assert_workspace_divider_alignment(window, cx);
+                    assert_workspace_header_alignment(window, "add-connection");
+                });
+                app.click(&mut cx, "show-sign-ins");
+                app.update(&mut cx, |window, cx| {
+                    assert_workspace_divider_alignment(window, cx);
+                    assert_workspace_header_alignment(window, "add-sign-in");
+                });
+                app.click(&mut cx, "show-connections");
                 for (target, title, secondary) in [
                     (name.as_str(), name.as_str(), "status-tooltip-status"),
                     ("New Tab", "New Tab", "status-tooltip-shortcut"),
@@ -79,7 +90,7 @@ fn main() {
             }
         }
     }
-    println!("tooltip-layout: 72 native font and display scale checks passed");
+    println!("tooltip-layout: 120 native font and display scale checks passed");
 }
 
 #[cfg(not(target_os = "macos"))]

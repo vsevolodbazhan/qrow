@@ -1,5 +1,8 @@
 use crate::support::fixture::{Kyuubi, PASSWORD, QUERY_TIMEOUT};
-use crate::support::{TestApp, bounds_of, cell, header, label};
+use crate::support::{
+    TestApp, assert_workspace_divider_alignment, assert_workspace_header_alignment, bounds_of,
+    cell, header, label,
+};
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{TestAppContext, px, size};
 use qrow::model::SavedTab;
@@ -9,9 +12,16 @@ use std::time::Duration;
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppContext) {
     let kyuubi = Kyuubi::get();
-    let (workspace, credentials) = kyuubi.workspace("SELECT missing_column", PASSWORD);
+    let (mut workspace, credentials) = kyuubi.workspace("SELECT missing_column", PASSWORD);
+    workspace.settings.ui_scale = 1.1;
     let query = workspace.tabs[0].id;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    cx.simulate_window_scale_factor_change(app.window, 2.);
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_workspace_header_alignment(window, "add-connection");
+        assert_workspace_divider_alignment(window, cx);
+    });
     let assert_tooltip = |cx: &mut TestAppContext, expected| {
         if expected == "Not Connected" {
             app.hover_labelled(cx, "Query 1");
@@ -39,6 +49,10 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
     assert_eq!(cx.update(|cx| app.status(cx)), "Error: Query failed");
     assert_tooltip(cx, "Idle");
     app.run_complete(cx, "SELECT 42 AS value");
+    app.update(cx, |window, cx| {
+        assert_workspace_header_alignment(window, "add-connection");
+        assert_workspace_divider_alignment(window, cx);
+    });
     // The status of the new run has no detail of the previous error.
     assert_eq!(cx.update(|cx| app.status(cx)), "Complete");
     app.update(cx, |window, _| {
