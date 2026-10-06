@@ -1046,9 +1046,23 @@ impl Qrow {
                 slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
             }
             None if account.attention => slot.child(
-                Icon::new(AssetIconName::TriangleAlert)
-                    .small()
-                    .text_color(cx.theme().warning),
+                div()
+                    .id(SharedString::from(format!("sign-in-status-{id}")))
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(if error.is_some() {
+                        "The last action failed"
+                    } else {
+                        &account.summary
+                    })
+                    .child(
+                        if error.is_some() {
+                            DotStatus::Error
+                        } else {
+                            DotStatus::Attention
+                        }
+                        .dot(cx),
+                    ),
             ),
             None => slot,
         };

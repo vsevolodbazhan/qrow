@@ -212,7 +212,14 @@ tokens, it shows the error and the sign-in stays signed in.
 When **Delete** is disabled, hover over the command to see the reason in a tooltip.
 Change authentication in these connections before you delete the sign-in.
 Qrow asks before it deletes the sign-in. Delete also deletes the tokens of the
-sign-in.
+sign-in. If token removal fails, the sign-in remains available and its row
+shows the error. When no primary action button is shown, a red dot marks a
+failed action and a yellow dot marks a sign-in that needs attention.
+
+If Keychain rejects token removal with "Invalid attempt to change the owner
+of this item", Qrow tries to delete the exact token item by its reference.
+Qrow confirms that the item is absent before it removes the sign-in. If this
+also fails, Qrow keeps the sign-in and shows the Keychain error.
 
 ### Server requirements
 

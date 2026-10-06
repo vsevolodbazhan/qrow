@@ -2,19 +2,23 @@
 //! bar, and sign-in authentication in Connection Settings, against a mock
 //! OpenID Connect provider in the test process.
 use crate::support::{
-    MemoryCredentials, SignIns, TestApp, label, offline_profile,
+    MemoryCredentials, SignIns, TestApp, assert_sign_in_dot, label, offline_profile,
     oidc::{Provider, subject, trust},
     present, value,
 };
 use gpui_kit::TestAppContext;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::{
     model::{Authentication, SavedTab, SignIn, Workspace},
-    storage::TokenStore,
+    storage::{MemoryTokenStore, TokenStore},
     ui::{ShowConnections, ShowSignIns, ToggleActivity, ToggleSidebar},
 };
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -493,6 +497,72 @@ fn an_unused_sign_in_can_be_deleted(cx: &mut TestAppContext) {
     });
 }
 
+/// Failed removal must preserve both the token record and the saved sign-in.
+#[derive(Default)]
+struct FailingDeletion {
+    tokens: MemoryTokenStore,
+    fail: AtomicBool,
+}
+
+impl TokenStore for FailingDeletion {
+    fn load_tokens(&self, id: uuid::Uuid) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
+        self.tokens.load_tokens(id)
+    }
+    fn save_tokens(&self, id: uuid::Uuid, record: &str) -> anyhow::Result<()> {
+        self.tokens.save_tokens(id, record)
+    }
+    fn delete_tokens(&self, id: uuid::Uuid) -> anyhow::Result<()> {
+        if self.fail.load(Ordering::SeqCst) {
+            anyhow::bail!(
+                "Could not delete the sign-in tokens from macOS Keychain: Invalid attempt to change the owner of this item."
+            );
+        }
+        self.tokens.delete_tokens(id)
+    }
+}
+
+#[gpui_kit::test]
+fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, false);
+    let tokens = Arc::new(FailingDeletion::default());
+    tokens.fail.store(true, Ordering::SeqCst);
+    let mut sign_ins = SignIns::new(trust(), Some(Arc::new(provider.browser("alice"))));
+    sign_ins.tokens = tokens.clone();
+    let app = TestApp::launch_with_sign_ins(cx, workspace, MemoryCredentials::default(), sign_ins);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    let record = tokens.load_tokens(sign_in.id).unwrap().unwrap();
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-sign-in");
+    wait_row(&app, cx, &sign_in, "The last action failed");
+    app.update(cx, |window, cx| {
+        assert_sign_in_dot(window, sign_in.id, cx.theme().danger);
+    });
+    assert_eq!(app.saved().sign_ins.len(), 1);
+    assert_eq!(tokens.load_tokens(sign_in.id).unwrap().unwrap(), record);
+    // The error remains visible in Settings, and the account remains signed in.
+    open_settings(&app, cx, &sign_in);
+    app.wait_until(cx, "the Keychain error", WAIT, |window, _| {
+        label(window, "sign-in-account-error")
+            .is_some_and(|error| error.contains("Invalid attempt to change the owner"))
+    });
+    app.wait_for(cx, "sign-in-account-sign-out");
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    tokens.fail.store(false, Ordering::SeqCst);
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Delete");
+    app.click(cx, "confirm-delete-sign-in");
+    app.wait_for(cx, "sign-ins-empty");
+    app.wait_until(cx, "the saved removal", WAIT, |_, _| {
+        app.saved().sign_ins.is_empty()
+    });
+    assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
+}
+
 #[gpui_kit::test]
 fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     let provider = Provider::start();
@@ -658,6 +728,23 @@ fn an_expired_sign_in_opens_the_browser_and_runs_the_query_after_it(cx: &mut Tes
     assert_eq!(provider.authorization_grants(), 2);
     // The sidebar still shows the Sign-ins panel.
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
+}
+
+#[gpui_kit::test]
+fn an_unreachable_provider_shows_a_yellow_sign_in_dot(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    provider.set_access_ttl(10);
+    let (workspace, sign_in) = unreachable_workspace(&provider);
+    let app = launch(cx, &provider, workspace);
+    open_sign_ins(&app, cx);
+    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    provider.set_down(true);
+    app.click(cx, "run");
+    wait_row(&app, cx, &sign_in, "Cannot reach the provider");
+    app.update(cx, |window, cx| {
+        assert_sign_in_dot(window, sign_in.id, cx.theme().warning);
+    });
 }
 
 #[gpui_kit::test]

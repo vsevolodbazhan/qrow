@@ -1,7 +1,7 @@
 use gpui_kit::component::{ActiveTheme, badge::Badge, button::Button};
 use gpui_kit::{AnyElement, App, IntoElement, ParentElement, Styled, div};
 
-/// One shared priority for the dots of tabs, connections, and conversations.
+/// One shared priority for the dots of tabs, connections, sign-ins, and conversations.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum DotStatus {
     Connected,
