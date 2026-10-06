@@ -323,8 +323,18 @@ does not count as a match or as a failure.
 
 In the schema tree, a table or view that a dbt model, seed, snapshot, or
 source builds shows its kind after its name, for example `dbt incremental` or
-`dbt source`. Its tooltip adds the start of the dbt description. To read the
-SQL of the model, right-click the table and select **Open Model SQL**. Qrow
+`dbt source`. Its tooltip adds the first paragraph of the dbt description,
+cut to a few lines.
+
+To read the full description, right-click the table and select **Show dbt
+Details**. A panel opens at the right side of the window. It shows the kind,
+the materialization, the tags, and the file of the resource, the full
+description, the tests, the parents and children, and the documented columns
+with their descriptions and tests. Type in **Filter columns** to find columns
+by name or description. Drag the edge of the panel to make it wider.
+
+To read the SQL of the model, right-click the table and select **Open Model
+SQL**, or select **Open Model SQL** in the details panel. Qrow
 opens the compiled SQL in a new tab of the connection, or the raw SQL with
 Jinja when the manifest has no compiled SQL, for example a manifest from
 `dbt parse`. When the manifest changed after Qrow read it, Qrow reads it

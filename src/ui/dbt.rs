@@ -619,14 +619,18 @@ pub(super) struct DbtBadge {
     pub(super) unique_id: String,
     /// The text after the name, like `dbt incremental` or `dbt source`.
     pub(super) detail: String,
-    /// The start of the dbt description, for the tooltip.
+    /// The start of the dbt description, for the tooltip, unless the
+    /// catalog comment has the same text.
     pub(super) description: Option<String>,
+    /// Whether the tooltip has only a part of the description.
+    pub(super) description_cut: bool,
     /// Whether the manifest has SQL of the resource.
     pub(super) has_sql: bool,
 }
 
-/// The longest dbt description in a tooltip, in characters.
-const TOOLTIP_DESCRIPTION_CHARS: usize = 300;
+/// The longest dbt description in a tooltip, in characters. The details
+/// sheet has the full text.
+const TOOLTIP_DESCRIPTION_CHARS: usize = 240;
 
 /// The dbt resources of the tables of one connection.
 pub(super) struct DbtLookup {
@@ -635,8 +639,14 @@ pub(super) struct DbtLookup {
 }
 
 impl DbtLookup {
-    /// The badge of the table `relation` in `schema`.
-    pub(super) fn badge(&self, schema: &str, relation: &str) -> Option<DbtBadge> {
+    /// The badge of the table `relation` in `schema`, which has the catalog
+    /// comment `comment`.
+    pub(super) fn badge(
+        &self,
+        schema: &str,
+        relation: &str,
+        comment: Option<&str>,
+    ) -> Option<DbtBadge> {
         let key = (schema.to_lowercase(), relation.to_lowercase());
         let entry = self.index.entry(*self.relations.get(&key)?);
         let detail = match (entry.kind, entry.materialized) {
@@ -646,24 +656,53 @@ impl DbtLookup {
             (kind, _) => format!("dbt {}", kind.name()),
         };
         let description = entry.description.trim();
-        let description = (!description.is_empty()).then(|| {
-            let mut text: String = description
-                .chars()
-                .take(TOOLTIP_DESCRIPTION_CHARS)
-                .collect();
-            if text.len() < description.len() {
-                text.push('…');
-            }
-            text
-        });
+        let (description, description_cut) =
+            if description.is_empty() || comment.map(str::trim) == Some(description) {
+                (None, false)
+            } else {
+                let (summary, cut) = summary(description, TOOLTIP_DESCRIPTION_CHARS);
+                (Some(summary), cut)
+            };
         Some(DbtBadge {
             unique_id: entry.unique_id.to_string(),
             detail,
             description,
+            description_cut,
             has_sql: entry.kind != Kind::Source
                 && (entry.compiled_code.is_some() || entry.raw_code.is_some()),
         })
     }
+}
+
+/// The first paragraph of `text` on one line, cut at a word to `limit`
+/// characters, and whether it drops a part of `text`.
+fn summary(text: &str, limit: usize) -> (String, bool) {
+    let text = text.trim();
+    let paragraph = text.split("\n\n").next().unwrap_or_default();
+    let words: Vec<&str> = paragraph.split_whitespace().collect();
+    let mut summary = String::new();
+    let mut taken = 0;
+    for word in &words {
+        let length = summary.chars().count() + usize::from(taken > 0) + word.chars().count();
+        if length > limit {
+            break;
+        }
+        if taken > 0 {
+            summary.push(' ');
+        }
+        summary.push_str(word);
+        taken += 1;
+    }
+    let mut cut = taken < words.len() || paragraph.len() < text.len();
+    // A first word longer than the limit is cut inside the word.
+    if taken == 0 && !words.is_empty() {
+        summary = words[0].chars().take(limit).collect();
+        cut = true;
+    }
+    if cut {
+        summary.push('…');
+    }
+    (summary, cut)
 }
 
 /// The dbt fields of Connection Settings.
@@ -870,18 +909,43 @@ mod tests {
         };
         let relations = matching::relations(&index, &project);
         let lookup = DbtLookup { index, relations };
-        let badge = lookup.badge("CORE", "Orders").unwrap();
+        let badge = lookup.badge("CORE", "Orders", None).unwrap();
         assert_eq!(badge.unique_id, "model.lake.orders");
         assert_eq!(badge.detail, "dbt incremental");
         assert!(badge.has_sql);
+        assert!(badge.description_cut);
         let description = badge.description.unwrap();
-        assert!(description.starts_with("Long text.") && description.ends_with('…'));
-        assert_eq!(description.chars().count(), TOOLTIP_DESCRIPTION_CHARS + 1);
-        let source = lookup.badge("raw", "orders").unwrap();
+        // The cut is after a whole word.
+        let start = description.strip_suffix('…').unwrap();
+        assert!("Long text. ".repeat(40).starts_with(&format!("{start} ")));
+        assert!(description.chars().count() <= TOOLTIP_DESCRIPTION_CHARS + 1);
+        // A catalog comment with the same text needs no second line.
+        let comment = "Long text. ".repeat(40);
+        let same = lookup.badge("core", "orders", Some(&comment)).unwrap();
+        assert_eq!(same.description, None);
+        let source = lookup.badge("raw", "orders", None).unwrap();
         assert_eq!(source.detail, "dbt source");
         assert_eq!(source.description, None);
         assert!(!source.has_sql);
-        assert!(lookup.badge("dev_core", "orders").is_none());
+        assert!(lookup.badge("dev_core", "orders", None).is_none());
+    }
+
+    #[test]
+    fn a_summary_has_the_first_paragraph_on_one_line() {
+        assert_eq!(summary("Short.", 20), ("Short.".to_owned(), false));
+        assert_eq!(
+            summary("One\ntwo  three.", 20),
+            ("One two three.".to_owned(), false)
+        );
+        assert_eq!(
+            summary("First part.\n\nSecond part.", 20),
+            ("First part.…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Words that do not fit", 12),
+            ("Words that…".to_owned(), true)
+        );
+        assert_eq!(summary("Ünïcödé_wörd", 4), ("Ünïc…".to_owned(), true));
     }
 
     #[test]

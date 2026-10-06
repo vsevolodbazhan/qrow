@@ -398,19 +398,49 @@ fn the_tree_marks_dbt_tables_and_opens_their_sql(cx: &mut TestAppContext) {
     app.wait_until(cx, "the dbt detail", TIMEOUT, |window, _| {
         crate::support::present(window, &detail)
     });
-    // The tooltip has the start of the dbt description.
+    // The tooltip has the start of the dbt description on one line.
     app.hover_labelled(cx, &alias);
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(800));
     app.settle(cx);
     let tooltip = app.update(cx, |window, _| label(window, "catalog-tooltip"));
-    let description: String = model.description.trim().chars().take(300).collect();
+    let words: Vec<&str> = model.description.split_whitespace().take(6).collect();
     assert!(
         tooltip
             .as_deref()
-            .is_some_and(|text| text.starts_with(&format!("{alias}\n{description}"))),
+            .is_some_and(|text| text.starts_with(&format!("{alias}\n{}", words.join(" ")))),
         "{tooltip:?}"
     );
+
+    // The details sheet has the full description and the columns.
+    app.context_menu_labelled(cx, &alias);
+    app.choose(cx, "popup-menu", "Show dbt Details");
+    app.wait_until(cx, "the dbt details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-description").as_deref() == Some(model.description.trim())
+    });
+    let column_id =
+        |name: &str| -> gpui_kit::ElementId { format!("dbt-details-column-{name}").into() };
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "dbt-details-Unique ID").as_deref(),
+            Some(dbt_manifest::model_id(1).as_str())
+        );
+        for name in ["id", "col_001", "col_002"] {
+            assert!(crate::support::present(window, &column_id(name)), "{name}");
+        }
+    });
+    app.fill(cx, "dbt-details-filter", "col_001");
+    app.wait_until(cx, "the filtered columns", TIMEOUT, |window, _| {
+        !crate::support::present(window, &column_id("id"))
+    });
+    app.update(cx, |window, _| {
+        assert!(crate::support::present(window, &column_id("col_001")));
+        assert!(!crate::support::present(window, &column_id("col_002")));
+    });
+    app.press(cx, "escape");
+    app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
+        !crate::support::present(window, &"dbt-details".into())
+    });
 
     app.context_menu_labelled(cx, &alias);
     app.choose(cx, "popup-menu", "Open Model SQL");

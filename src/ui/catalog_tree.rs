@@ -542,10 +542,9 @@ impl Builder<'_> {
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
                             error: relation.error_for(profile).map(str::to_owned),
-                            dbt: self
-                                .dbt
-                                .get(&profile)
-                                .and_then(|lookup| lookup.badge(schema, name)),
+                            dbt: self.dbt.get(&profile).and_then(|lookup| {
+                                lookup.badge(schema, name, relation.comment.as_deref())
+                            }),
                         },
                     );
                     let expanded = self.is_expanded(&item_id);
@@ -1199,18 +1198,25 @@ impl Qrow {
         let insert = cx.listener(move |this, _: &ClickEvent, window, cx| {
             this.insert_into_editor(insert.clone(), window, cx)
         });
-        let model_sql = match &node {
+        let (details, model_sql) = match &node {
             Node::Relation {
                 profile,
                 dbt: Some(dbt),
                 ..
-            } if dbt.has_sql => {
+            } => {
                 let (profile, unique_id) = (*profile, dbt.unique_id.clone());
-                Some(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                    this.open_model_sql(profile, &unique_id, window, cx)
-                }))
+                let id = unique_id.clone();
+                let details = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    this.open_dbt_details(profile, &id, window, cx)
+                });
+                let model_sql = dbt.has_sql.then(|| {
+                    cx.listener(move |this, _: &ClickEvent, window, cx| {
+                        this.open_model_sql(profile, &unique_id, window, cx)
+                    })
+                });
+                (Some(details), model_sql)
             }
-            _ => None,
+            _ => (None, None),
         };
         let collapse = match &node {
             Node::Schema { name, .. } => {
@@ -1248,10 +1254,14 @@ impl Qrow {
                 let menu = menu
                     .item(PopupMenuItem::new(copy_label).on_click(copy))
                     .item(PopupMenuItem::new("Insert into editor").on_click(insert));
-                match model_sql {
-                    Some(open) => menu
+                let menu = match details {
+                    Some(details) => menu
                         .separator()
-                        .item(PopupMenuItem::new("Open Model SQL").on_click(open)),
+                        .item(PopupMenuItem::new("Show dbt Details").on_click(details)),
+                    None => menu,
+                };
+                match model_sql {
+                    Some(open) => menu.item(PopupMenuItem::new("Open Model SQL").on_click(open)),
                     None => menu,
                 }
             },
@@ -1708,13 +1718,17 @@ fn render_entry(
             dbt,
             ..
         } => {
-            // The dbt description adds a line, unless the table comment has
-            // it already.
-            let description = dbt
-                .as_ref()
-                .and_then(|dbt| dbt.description.as_deref())
-                .filter(|description| comment.as_deref() != Some(*description));
-            let comment = match (comment.as_deref(), description) {
+            // The dbt description adds a line. The details sheet has the
+            // full text of a long description.
+            let description = dbt.as_ref().and_then(|dbt| {
+                let description = dbt.description.as_deref()?;
+                Some(if dbt.description_cut {
+                    format!("{description}\nShow dbt Details has the full text.")
+                } else {
+                    description.to_owned()
+                })
+            });
+            let comment = match (comment.as_deref(), description.as_deref()) {
                 (Some(comment), Some(description)) => Some(format!("{comment}\n{description}")),
                 (comment, description) => comment.or(description).map(str::to_owned),
             };
@@ -1893,8 +1907,11 @@ fn render_entry(
 fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
     let text = SharedString::from(text.to_owned());
     Tooltip::element(move |_, _| {
+        // Long comments wrap instead of making the tooltip as wide as the
+        // window.
         div()
             .id("catalog-tooltip")
+            .max_w(rems(TOOLTIP_WIDTH_REMS))
             .test_support()
             .aria_label(text.clone())
             .child(text.clone())
@@ -1922,6 +1939,9 @@ fn display_type(data_type: &str) -> String {
         })
         .collect()
 }
+
+/// The widest tree tooltip, at the standard text size.
+const TOOLTIP_WIDTH_REMS: f32 = 26.;
 
 /// The longest error summary in a tooltip, in characters.
 const ERROR_SUMMARY_CHARS: usize = 200;
