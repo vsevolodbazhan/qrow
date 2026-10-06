@@ -87,7 +87,10 @@ impl Reveal {
         if cut <= self.shown {
             return false;
         }
-        self.credit -= text[self.shown..cut].chars().count() as f32;
+        // A long span or table row that shows at once does not delay the
+        // text after it. The debt of a word end stays.
+        self.credit =
+            (self.credit - text[self.shown..cut].chars().count() as f32).max(-(MAX_WORD as f32));
         self.shown = cut;
         true
     }
@@ -427,6 +430,28 @@ mod tests {
         let (min, max) = (steps.iter().min().unwrap(), steps.iter().max().unwrap());
         assert!(*min > 0, "the reveal stopped: {steps:?}");
         assert!(max - min <= 20, "the speed is not even: {steps:?}");
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_long_span_does_not_delay_the_text_after_it() {
+        let span = format!("**{}**", "word ".repeat(400).trim_end());
+        let frames = play(
+            &[(0., "Start "), (0.2, &span), (0.2, " and the tail end")],
+            1.,
+        );
+        let tail = frames
+            .iter()
+            .position(|frame| frame.contains("the tail"))
+            .unwrap();
+        let span = frames
+            .iter()
+            .position(|frame| frame.contains("**word"))
+            .unwrap();
+        assert!(
+            tail - span < 10,
+            "the tail showed {} frames after the span",
+            tail - span
+        );
     }
 
     #[::core::prelude::v1::test]
