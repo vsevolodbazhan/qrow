@@ -468,5 +468,6 @@ conversation. If Codex uses an API key, Codex applies API-key billing. Manage
 sign-out in Codex, because its account is shared with other Codex clients.
 
 The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
-to delete demo conversations on normal exit. A conversation can remain if
-Codex does not confirm deletion before exit or if Qrow crashes.
+to delete demo conversations on normal exit. It reads the deletion replies
+after stopping the assistant worker. A conversation can remain if Codex does
+not confirm deletion before exit or if Qrow crashes.

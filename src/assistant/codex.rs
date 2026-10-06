@@ -90,6 +90,8 @@ pub struct CodexHarness {
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
     reader_overflowed: Arc<AtomicBool>,
     request_timeout: Duration,
+    /// Shutdown cleanup must read replies after the worker receives Stop.
+    deleting_on_shutdown: bool,
     next_id: u64,
     pid_update: Box<dyn Fn(u32) + Send>,
     title_jobs: Vec<TitleJob>,
@@ -304,6 +306,7 @@ impl CodexHarness {
             stderr_tail,
             reader_overflowed,
             request_timeout: REQUEST_TIMEOUT,
+            deleting_on_shutdown: false,
             next_id: 1,
             pid_update: Box::new(on_spawn),
             title_jobs: Vec::new(),
@@ -713,6 +716,7 @@ impl CodexHarness {
                 Some(command @ Message::Command(_)) => self.inbox.hold(command),
                 Some(Message::Codex(Err(error))) => return Err(self.output_error(&error)),
                 Some(Message::CodexClosed) => return Err(self.closed_error()),
+                Some(Message::Stop) if self.deleting_on_shutdown => {}
                 Some(Message::Stop) => bail!("Assistant is stopping"),
                 None => bail!(
                     "Codex app-server did not respond within {} seconds{}",
@@ -1086,6 +1090,21 @@ impl CodexHarness {
             Err(error) if is_missing_rollout(&error, thread_id) => Ok(()),
             Err(error) => Err(error),
         }
+    }
+
+    /// Delete demo conversations after stopping the worker. A queued Stop
+    /// cannot cancel these requests, but the normal request timeout still applies.
+    pub(crate) fn delete_conversations_on_shutdown(
+        &mut self,
+        ids: impl IntoIterator<Item = String>,
+    ) -> Result<()> {
+        self.deleting_on_shutdown = true;
+        let results: Vec<_> = ids
+            .into_iter()
+            .map(|id| self.delete_conversation(&id))
+            .collect();
+        self.deleting_on_shutdown = false;
+        results.into_iter().collect::<Result<Vec<_>>>().map(|_| ())
     }
 
     pub fn start_turn(&mut self, request: TurnRequest) -> Result<Turn> {
