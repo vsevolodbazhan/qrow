@@ -47,14 +47,14 @@ Settings to change the Logs text. The default line-height multiplier is 1.2.
 
 Logs show only the work that changes something for the tab. A failed
 keep-alive shows with its SQL and the error, because it closed the session.
-Select **Show Activity** on that line to see the other work of the connection.
+Select **Show activity** on that line to see the other work of the connection.
 Successful keep-alives and schema refreshes show only in
 [Activity](activity.md). Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
 batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
-deletes that history. **Clear** deletes the current history. **Copy All** copies
-all stored entries with the timestamps that Logs shows. **Copy Error** copies
+deletes that history. **Clear** deletes the current history. **Copy all** copies
+all stored entries with the timestamps that Logs shows. **Copy error** copies
 the latest error with its timestamp. Text selection and both copy commands
 preserve multiline text and Unicode error details.
 
@@ -109,7 +109,7 @@ of the latest error. A single latest execution can be more than 8 MiB. Qrow
 adds an `Older log entries were removed` line at the start of Logs history when it
 removes old groups. The line marks the boundary before the retained entries.
 It has no timestamp because it does not describe a timed event. The line
-appears in the entry count and **Copy All** output.
+appears in the entry count and **Copy all** output.
 
 ## Manage tabs
 

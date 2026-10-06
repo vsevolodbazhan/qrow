@@ -177,7 +177,7 @@ impl Qrow {
                             .when(uses_sign_in, |el| {
                                 el.child(
                                     Field::new()
-                                        .label("Sign-in")
+                                        .label("Sign-In")
                                         .child(
                                             // The combobox has no accessibility of
                                             // its own in GPUI Kit 0.6.6, so this
@@ -186,7 +186,7 @@ impl Qrow {
                                                 .id("connection-sign-in")
                                                 .test_support()
                                                 .role(Role::ComboBox)
-                                                .aria_label("Sign-in")
+                                                .aria_label("Sign-In")
                                                 .aria_value(sign_in_label)
                                                 .w_full()
                                                 .child(
@@ -203,7 +203,7 @@ impl Qrow {
                                                                 .w_full()
                                                                 .justify_start()
                                                                 .icon(IconName::Plus)
-                                                                .label("New Sign-in…")
+                                                                .label("New sign-in…")
                                                                 .on_click(move |_, window, cx| {
                                                                     let _ = qrow.update(cx, |this, cx| {
                                                                         this.open_sign_in_editor(None, true, window, cx)
@@ -233,24 +233,24 @@ impl Qrow {
                                 ))
                             })
                             .child(field(
-                                "Initial database",
+                                "Initial Database",
                                 Some("Selected when the session opens."),
-                                input(5, "Initial database"),
+                                input(5, "Initial Database"),
                             ))
                             .child(field(
-                                "Session parameters",
+                                "Session Parameters",
                                 Some("JSON object with string values."),
                                 Textarea::new(&form.parameters)
                                     .w_full()
                                     .disabled(saving)
                                     .font_family("Menlo")
-                                    .aria_label("Session parameters")
+                                    .aria_label("Session Parameters")
                                     .into_any_element(),
                             ))
                             .child(field(
-                                "Response timeout",
+                                "Response Timeout",
                                 Some("Seconds to wait for a server response, from 10 to 3600."),
-                                input(14, "Response timeout in seconds"),
+                                input(14, "Response Timeout in Seconds"),
                             )),
                     )
                     .child(connection_form::render_lifecycle(form, cx))
@@ -306,7 +306,7 @@ impl Qrow {
                             .label(if saving { "Saving" } else { "Save" })
                             .map(|mut button| {
                                 button.interactivity().tooltip(
-                                    StatusTooltip::new("Save Connection", "")
+                                    StatusTooltip::new("Save connection", "")
                                         .for_action(&SaveConnection, Some("ConnectionSettings")),
                                 );
                                 button

@@ -41,7 +41,7 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
     app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
-            Some("Send Message")
+            Some("Send message")
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
@@ -50,7 +50,7 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
         assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
         assert_eq!(
             label(window, "assistant-send-mode").as_deref(),
-            Some("SQL Mode: Ask First")
+            Some("SQL Mode: Ask first")
         );
         assert!(
             bounds_of(window, "assistant-send-mode").right()
@@ -92,9 +92,9 @@ fn run_mode_needs_confirmation_and_reconnect_replaces_send(cx: &mut TestAppConte
     app.click(cx, "confirm-conversation-auto-run");
     app.wait_until(
         cx,
-        "SQL Mode: Auto Run",
+        "SQL Mode: Auto run",
         std::time::Duration::from_secs(10),
-        |window, _| label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto Run"),
+        |window, _| label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto run"),
     );
 
     // Reconnect replaces Send and Cancel while Codex is disconnected.

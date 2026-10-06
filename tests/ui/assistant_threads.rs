@@ -86,7 +86,7 @@ fn an_open_conversation_tooltip_follows_its_title_and_reply_state(cx: &mut TestA
         cx,
         "the unread reply in the open tooltip",
         REPLY_TIMEOUT,
-        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread Reply"),
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread reply"),
     );
 }
 
@@ -118,7 +118,7 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     rename_to(&app, cx, "Custom title");
     app.wait_conversations(cx, &[("Custom title", User)]);
     app.click(cx, "assistant-conversation-menu");
-    app.choose(cx, "popup-menu", "Regenerate Title");
+    app.choose(cx, "popup-menu", "Regenerate title");
     app.wait_conversations(cx, &[(GENERATED, Codex)]);
 
     // A second conversation with the same title.
@@ -164,18 +164,18 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     rename_to(&app, cx, "Listed title");
     app.wait_conversations(cx, &[(GENERATED, Codex), ("Listed title", User)]);
     // The search ignores case. An empty search shows every conversation.
-    app.fill_labelled(cx, "Search Conversations", "LISTED");
+    app.fill_labelled(cx, "Search conversations", "LISTED");
     app.wait_until(cx, "one matching row", REPLY_TIMEOUT, |window, _| {
         labelled_starting(window, &row(GENERATED)).is_empty()
             && labelled_starting(window, &row("Listed title")).len() == 1
     });
-    app.fill_labelled(cx, "Search Conversations", "");
+    app.fill_labelled(cx, "Search conversations", "");
     app.wait_until(cx, "every row", REPLY_TIMEOUT, |window, _| {
         labelled_starting(window, &row(GENERATED)).len() == 1
             && labelled_starting(window, &row("Listed title")).len() == 1
     });
     app.context_menu_starting(cx, &row("Listed title"));
-    app.choose(cx, "popup-menu", "Regenerate Title");
+    app.choose(cx, "popup-menu", "Regenerate title");
     app.wait_conversations(cx, &[(GENERATED, Codex), (GENERATED, Codex)]);
     app.wait_until(cx, "the regenerated row", REPLY_TIMEOUT, |window, _| {
         labelled_starting(window, &row("Listed title")).is_empty()
@@ -316,7 +316,7 @@ fn conversation_search_fits_the_header(cx: &mut TestAppContext) {
     app.open_assistant(cx);
     app.show_threads(cx);
     app.update(cx, |window, _| {
-        let search = bounds_of(window, "Search Conversations");
+        let search = bounds_of(window, "Search conversations");
         let toggle = bounds_of(window, "assistant-toggle-threads");
         let control = window
             .try_find("assistant-back-to-thread")

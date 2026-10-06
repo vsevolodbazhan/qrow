@@ -12,30 +12,30 @@ header. Column headers remain visible when a query returns columns but no rows.
 
 ## Browse and copy
 
-Each page contains up to 1,000 rows. **Next Page** fetches another page when needed.
+Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
 The bar above the table shows neutral tags for the visible row range,
 downloaded row count, column count, and query duration. **Loaded** counts the
 rows in the preview. It does not give the total number of rows on the server.
 The tag tooltips use the same names as the rows in **Result Details**:
-**Visible rows**, **Loaded rows**, **Columns**, and **Query duration**.
+**Visible Rows**, **Loaded Rows**, **Columns**, and **Query Duration**.
 When the tags do not fit, the bar keeps the row range and shows an information
-button. Click **Result Details** to read all four values as neutral tags.
+button. Click **Show result details** to read all four values as neutral tags.
 The heading uses semibold text. At the smallest widths, the row range also
 moves into **Result Details**. The page buttons show arrows at all widths.
-Their tooltips show **Previous Page** and **Next Page**.
+Their tooltips show **Previous page** and **Next page**.
 At large UI scales, a wide sidebar can leave too little space for the page
 buttons. Reduce the sidebar width if the buttons do not fit.
 
-With focus in the toolbar, use Tab to focus **Result Details**.
+With focus in the toolbar, use Tab to focus **Show result details**.
 Press Enter or Space to open it.
 Press Escape or click outside to close it. Escape returns focus to the button.
 The values update as rows arrive. The query duration is absent before the
 first query.
-**Previous Page** and **Next Page** reuse downloaded pages without
+**Previous page** and **Next page** reuse downloaded pages without
 executing SQL again.
 You can browse downloaded pages while a fetch runs.
 
-Row numbers refer to the full result. If **Next Page** finds no more rows,
+Row numbers refer to the full result. If **Next page** finds no more rows,
 the last populated page stays visible. Changing pages clears the selection and resets
 the scroll position. New batches preserve the current scroll position.
 
@@ -44,7 +44,7 @@ The scrollbars overlay the right and bottom edges of the table.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
-Right-click a cell to use **Copy Cell** or **Copy Row**. Copy actions use full
+Right-click a cell to use **Copy cell** or **Copy row**. Copy actions use full
 stored values from the displayed page. Long cells show a shortened preview,
 but their stored and copied values are not shortened. File export is not
 implemented.
@@ -87,7 +87,7 @@ same time.
 
 Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows, but the downloaded rows remain visible. Selecting another
-connection keeps the preview and its session. **Next Page** can fetch remaining
+connection keeps the preview and its session. **Next page** can fetch remaining
 rows from that session, even when another connection is selected. The next
 accepted query replaces the previous preview, regardless of the selected
 connection.

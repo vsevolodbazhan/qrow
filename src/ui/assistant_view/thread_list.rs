@@ -90,8 +90,8 @@ impl AssistantPane {
                                 .ghost()
                                 .small()
                                 .icon(IconName::ArrowLeft)
-                                .accessibility_label("Back to Conversation")
-                                .tooltip("Back to Conversation")
+                                .accessibility_label("Back to conversation")
+                                .tooltip("Back to conversation")
                                 .on_click(cx.listener(|pane, _, window, cx| {
                                     pane.thread_list_override = Some(false);
                                     pane.read_visible_reply(window, cx);
@@ -104,7 +104,7 @@ impl AssistantPane {
                             .small()
                             .flex_1()
                             .min_w_0()
-                            .aria_label("Search Conversations"),
+                            .aria_label("Search conversations"),
                     ),
             )
             .child(
@@ -127,7 +127,7 @@ impl AssistantPane {
                                 search.is_empty()
                                     || self.search_matches(&conversation.title, &search)
                                     || self.search_matches(place, &search)
-                                    || (*closed && self.search_matches("Tab Closed", &search))
+                                    || (*closed && self.search_matches("Tab closed", &search))
                             })
                             .map(|(conversation, (place, closed))| {
                                 let id = conversation.thread_id.clone();
@@ -195,8 +195,8 @@ impl AssistantPane {
                                                                 .flex_1().min_w_0().truncate().child(place))
                                                             .when(closed, |row| row.child(div()
                                                                 .id(SharedString::from(format!("assistant-thread-closed-{id}")))
-                                                                .test_support().aria_label("Tab Closed")
-                                                                .flex_shrink_0().child("Tab Closed")))
+                                                                .test_support().aria_label("Tab closed")
+                                                                .flex_shrink_0().child("Tab closed")))
                                                             .child(div()
                                                                 .id(SharedString::from(format!("assistant-thread-age-{id}")))
                                                                 .test_support().flex_shrink_0()

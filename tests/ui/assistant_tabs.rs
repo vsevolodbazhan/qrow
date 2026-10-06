@@ -79,7 +79,7 @@ fn query_dots_keep_sql_state_while_their_conversation_works_or_waits(cx: &mut Te
     app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
         codex.marked("first-reply-pending")
     });
-    app.wait_label(cx, "Toggle Assistant, working");
+    app.wait_label(cx, "Toggle assistant, working");
     app.update(cx, |window, cx| {
         assert_tab_dot(window, tab, None);
         // The password is missing in the synthetic store. Hide the tab before
@@ -171,7 +171,7 @@ fn a_conversation_keeps_its_tab_when_another_tab_is_renamed_and_selected(cx: &mu
     codex.mark("retarget-ready");
 
     // The request waits in the conversation tab. The selected tab does not show it.
-    app.wait_label(cx, "Toggle Assistant, waiting for approval");
+    app.wait_label(cx, "Toggle assistant, waiting for approval");
     app.update(cx, |window, _| {
         assert_eq!(approval(window), None, "The request showed in another tab")
     });
@@ -226,7 +226,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     app.send(cx, "Hold parallel Alpha");
     app.wait_for(cx, "assistant-working");
-    app.wait_label(cx, "Toggle Assistant, working");
+    app.wait_label(cx, "Toggle assistant, working");
     app.update(cx, |window, _| {
         assert_tab_dot(window, tab_of(&app, alpha).unwrap().id, None)
     });
@@ -243,7 +243,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     codex.mark("release-Beta");
     app.wait_label_containing(cx, "Alpha, assistant waiting for approval");
     app.wait_label_containing(cx, "Beta, assistant waiting for approval");
-    app.wait_label(cx, "Toggle Assistant, waiting for approval");
+    app.wait_label(cx, "Toggle assistant, waiting for approval");
     app.show_conversation(cx);
     // Each conversation changed only its own tab.
     app.wait_editor(cx, "SELECT 22");
@@ -273,7 +273,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.show_conversation(cx);
     app.click(cx, "assistant-cancel-query");
     app.wait_reply(cx, "Finished Alpha: approval_cancelled");
-    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_label(cx, "Toggle assistant, reply ready");
     app.show_threads(cx);
     let beta_tab = tab_of(&app, beta).unwrap().id;
     let beta_thread = app
@@ -287,7 +287,7 @@ fn two_conversations_work_at_the_same_time_in_their_own_tabs(cx: &mut TestAppCon
     app.click(cx, format!("assistant-thread-{beta_thread}"));
     app.show_conversation(cx);
     app.wait_reply(cx, "Finished Beta: approval_cancelled");
-    app.wait_label(cx, "Toggle Assistant");
+    app.wait_label(cx, "Toggle assistant");
     assert!(
         !codex.marked("duplicate-answer"),
         "Qrow answered a replayed tool call twice"
@@ -393,7 +393,7 @@ fn new_conversation_tabs_take_generated_titles(cx: &mut TestAppContext) {
     app.wait_gone(cx, "rename-conversation-name");
     tab_label_is(&app, cx, "Sales summary");
     app.click(cx, "assistant-conversation-menu");
-    app.choose(cx, "popup-menu", "Regenerate Title");
+    app.choose(cx, "popup-menu", "Regenerate title");
     tab_label_is(&app, cx, &format!("{TITLE} (Copy)"));
 
     // A failed title keeps the default tab name.
@@ -485,7 +485,7 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
     let reopened = app.saved().assistant.conversations[0].tab_id.unwrap();
 
     app.context_menu_labelled(cx, title);
-    app.choose_in_submenu(cx, "Move to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Move to connection…", "Beta");
     app.wait_until(cx, "the moved conversation", REPLY_TIMEOUT, |_, _| {
         let saved = app.saved();
         saved.assistant.conversations[0].tab_id == Some(reopened)
@@ -500,12 +500,12 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
 
     // A tab with a conversation cannot start another one. The item ignores the click.
     app.context_menu_labelled(cx, title);
-    app.choose(cx, "popup-menu", "Start Conversation");
+    app.choose(cx, "popup-menu", "Start conversation");
     app.settle(cx);
     app.update(cx, |window, _| {
         assert!(
             window.try_find("popup-menu").is_some(),
-            "Start Conversation was available"
+            "Start conversation was available"
         )
     });
     app.press(cx, "escape");
@@ -524,7 +524,7 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
     app.wait_gone(cx, "assistant-composer");
     app.type_sql(cx, "SELECT 7;");
     app.context_menu_labelled(cx, title);
-    app.choose(cx, "popup-menu", "Start Conversation");
+    app.choose(cx, "popup-menu", "Start conversation");
     app.wait_gone(cx, "popup-menu");
     app.show_conversation(cx);
     app.send(cx, "Report the tab SQL");

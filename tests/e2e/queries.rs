@@ -23,7 +23,7 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
         assert_workspace_divider_alignment(window, cx);
     });
     let assert_tooltip = |cx: &mut TestAppContext, expected| {
-        if expected == "Not Connected" {
+        if expected == "Not connected" {
             app.hover_labelled(cx, "Query 1");
         } else {
             app.update(cx, |window, cx| {
@@ -68,7 +68,7 @@ fn query_metadata_separates_status_detail_duration_and_counts(cx: &mut TestAppCo
     assert_tooltip(cx, "Idle");
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
-    assert_tooltip(cx, "Not Connected");
+    assert_tooltip(cx, "Not connected");
 }
 
 #[gpui_kit::test]
@@ -83,11 +83,11 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 0")
+            Some("Visible Rows: 0")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded rows: 0")
+            Some("Loaded Rows: 0")
         );
         assert!(window.try_find("result-detail-elapsed").is_none());
     });
@@ -98,11 +98,11 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 1–1000")
+            Some("Visible Rows: 1–1000")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded rows: 1000")
+            Some("Loaded Rows: 1000")
         );
         assert_eq!(
             label(window, "result-detail-columns").as_deref(),
@@ -115,12 +115,12 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         cx,
         "the fetched page in Result Details",
         QUERY_TIMEOUT,
-        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded rows: 1001"),
+        |window, _| label(window, "result-detail-loaded").as_deref() == Some("Loaded Rows: 1001"),
     );
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 1001–1001")
+            Some("Visible Rows: 1001–1001")
         );
         assert_eq!(cell(window, 0, 1).as_deref(), Some("1000"));
     });
@@ -130,11 +130,11 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 0")
+            Some("Visible Rows: 0")
         );
         assert_eq!(
             label(window, "result-detail-loaded").as_deref(),
-            Some("Loaded rows: 0")
+            Some("Loaded Rows: 0")
         );
         assert_eq!(
             label(window, "result-detail-columns").as_deref(),
@@ -143,7 +143,7 @@ fn result_details_follow_fetched_pages_and_empty_results(cx: &mut TestAppContext
         assert!(
             label(window, "result-detail-elapsed")
                 .unwrap()
-                .starts_with("Query duration: ")
+                .starts_with("Query Duration: ")
         );
     });
 }

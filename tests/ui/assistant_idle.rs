@@ -92,7 +92,7 @@ fn codex_stops_after_the_pane_stays_closed(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "toggle-assistant").as_deref(),
-            Some("Toggle Assistant")
+            Some("Toggle assistant")
         );
     });
 
@@ -180,7 +180,7 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "toggle-assistant").as_deref(),
-            Some("Toggle Assistant, working")
+            Some("Toggle assistant, working")
         );
     });
     assert_connected_on_open(&app, cx, &codex, pid);
@@ -190,7 +190,7 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
     codex.mark("notify-idle-history");
     codex.mark("first-reply-release");
     app.wait_until(cx, "the reply", REPLY_TIMEOUT, |window, _| {
-        label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
+        label(window, "toggle-assistant").as_deref() == Some("Toggle assistant, reply ready")
     });
     app.wait_until(cx, "the history after the reply", REPLY_TIMEOUT, |_, _| {
         app.saved()
@@ -207,7 +207,7 @@ fn codex_keeps_running_while_a_conversation_starts_or_works(cx: &mut TestAppCont
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "toggle-assistant").as_deref(),
-            Some("Toggle Assistant, reply ready")
+            Some("Toggle assistant, reply ready")
         );
     });
     app.open_assistant(cx);

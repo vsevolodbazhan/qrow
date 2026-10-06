@@ -59,13 +59,13 @@ impl AssistantPane {
                                 .child(
                                     Button::new("assistant-sign-in-reopen")
                                         .label("Reopen page")
-                                        .tooltip("Reopen Sign-In Page")
+                                        .tooltip("Reopen sign-in page")
                                         .on_click(move |_, _, cx| cx.open_url(&url)),
                                 )
                                 .child(
                                     Button::new("assistant-sign-in-cancel")
                                         .label("Cancel")
-                                        .accessibility_label("Cancel Sign-In")
+                                        .accessibility_label("Cancel sign-in")
                                         .on_click(on_qrow(&self.qrow, |this, _, _, cx| {
                                             this.cancel_assistant_sign_in(cx)
                                         })),

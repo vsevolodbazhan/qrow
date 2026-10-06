@@ -120,7 +120,7 @@ fn a_message_sends_the_notes_only_when_they_are_new_to_the_conversation(cx: &mut
 
     // Beta has no notes, so the move removes the notes of Alpha.
     app.context_menu_labelled(cx, "Query 1");
-    app.choose_in_submenu(cx, "Move to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Move to connection…", "Beta");
     app.wait_until(cx, "the moved conversation", REPLY_TIMEOUT, |_, _| {
         let saved = app.saved();
         let tab = saved.assistant.conversations[0].tab_id;

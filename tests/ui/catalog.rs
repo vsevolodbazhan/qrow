@@ -481,7 +481,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         MemoryCredentials::default(),
     );
 
-    app.fill_labelled(cx, "Search Tables", "orders");
+    app.fill_labelled(cx, "Search tables", "orders");
     wait_shows(&app, cx, "orders");
     wait_shows(&app, cx, "orders_2020");
     app.update(cx, |window, _| {
@@ -490,7 +490,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
     });
 
     for search in ["t", "wide.t"] {
-        app.fill_labelled(cx, "Search Tables", search);
+        app.fill_labelled(cx, "Search tables", search);
         app.wait_until(
             cx,
             "the match limit",
@@ -518,7 +518,7 @@ fn search_finds_tables_in_every_cache_and_limits_the_matches(cx: &mut TestAppCon
         assert!(!shows(window, "Refine your search"));
     });
 
-    app.fill_labelled(cx, "Search Tables", "");
+    app.fill_labelled(cx, "Search tables", "");
     app.wait_until(
         cx,
         "the search to end",
@@ -571,7 +571,7 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         "`integrations`.`bookings`",
         "tions.book",
     ] {
-        app.fill_labelled(cx, "Search Tables", search);
+        app.fill_labelled(cx, "Search tables", search);
         wait_shows(&app, cx, "bookings");
         app.update(cx, |window, _| {
             assert!(labelled(window, "finance").is_none());
@@ -587,17 +587,17 @@ fn search_finds_qualified_tables_in_collapsed_connections(cx: &mut TestAppContex
         }
     }
 
-    app.fill_labelled(cx, "Search Tables", "integrations.daily");
+    app.fill_labelled(cx, "Search tables", "integrations.daily");
     wait_shows(&app, cx, "daily");
     app.update(cx, |window, _| {
         assert!(labelled(window, "bookings").is_none())
     });
 
-    app.fill_labelled(cx, "Search Tables", "bookings");
+    app.fill_labelled(cx, "Search tables", "bookings");
     wait_shows(&app, cx, "bookings_other");
     wait_shows(&app, cx, "bookings_archive");
 
-    app.fill_labelled(cx, "Search Tables", "missing.bookings");
+    app.fill_labelled(cx, "Search tables", "missing.bookings");
     app.update(cx, |window, _| {
         assert!(labelled(window, "integrations").is_none());
         assert!(labelled(window, "bookings").is_none());
@@ -617,7 +617,7 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
         MemoryCredentials::default(),
     );
 
-    app.fill_labelled(cx, "Search Tables", "missing.bookings");
+    app.fill_labelled(cx, "Search tables", "missing.bookings");
     app.toggle_connection(cx, profile.id);
     wait_shows(&app, cx, "No matches");
     app.update(cx, |window, _| {
@@ -635,12 +635,12 @@ fn expanding_a_connection_without_search_matches_shows_a_notice(cx: &mut TestApp
     app.toggle_connection(cx, profile.id);
     wait_shows(&app, cx, "No matches");
 
-    app.fill_labelled(cx, "Search Tables", "avia.bookings");
+    app.fill_labelled(cx, "Search tables", "avia.bookings");
     wait_shows(&app, cx, "bookings");
     app.update(cx, |window, _| {
         assert!(labelled(window, "No matches").is_none())
     });
-    app.fill_labelled(cx, "Search Tables", "");
+    app.fill_labelled(cx, "Search tables", "");
     wait_shows(&app, cx, "avia");
     app.update(cx, |window, _| {
         assert!(labelled(window, "No matches").is_none())
@@ -684,7 +684,7 @@ fn plain_notices_align_with_the_parent_label_at_each_zoom(cx: &mut TestAppContex
                 "Schema notice is too far right at scale {scale}"
             );
         });
-        app.fill_labelled(cx, "Search Tables", "missing.bookings");
+        app.fill_labelled(cx, "Search tables", "missing.bookings");
         wait_shows(&app, cx, "No matches");
         app.update(cx, |window, _| {
             let notice = bounds_of(
@@ -718,7 +718,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     wait_shows(&app, cx, "gate STRING");
 
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Copy Qualified Name");
+    app.choose(cx, "popup-menu", "Copy qualified name");
     app.settle(cx);
     assert_eq!(
         cx.read_from_clipboard()
@@ -728,7 +728,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
     );
 
     app.context_menu_labelled(cx, "daily");
-    app.choose(cx, "popup-menu", "Insert into Editor");
+    app.choose(cx, "popup-menu", "Insert into editor");
     app.wait_until(cx, "the inserted name", Duration::from_secs(10), |_, _| {
         app.saved().tabs[0].sql == "`avia`.`daily`"
     });
@@ -866,9 +866,9 @@ fn the_search_limit_does_not_apply_without_a_search(cx: &mut TestAppContext) {
         assert!(!shows(window, "Refine your search"));
     });
     // The 600th schema is in the tree: a search for its table finds it.
-    app.fill_labelled(cx, "Search Tables", "schema_599");
+    app.fill_labelled(cx, "Search tables", "schema_599");
     wait_shows(&app, cx, "schema_599");
-    app.fill_labelled(cx, "Search Tables", "");
+    app.fill_labelled(cx, "Search tables", "");
     app.wait_until(cx, "the full tree", Duration::from_secs(10), |window, _| {
         labelled(window, "schema_000").is_some() && !shows(window, "Refine your search")
     });
@@ -1157,7 +1157,7 @@ fn schema_refreshes_go_to_activity_and_not_to_tab_logs(cx: &mut TestAppContext) 
         )
     });
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Show Activity");
+    app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
     assert!(app.copy_activity(cx).contains("Schema refresh failed"));
 }
@@ -1270,7 +1270,7 @@ fn collapse_all_closes_the_rows_below_a_connection_or_a_schema(cx: &mut TestAppC
     wait_shows(&app, cx, "avia");
 
     // A search expands the schemas with matches. Collapse closes them too.
-    app.fill_labelled(cx, "Search Tables", "book");
+    app.fill_labelled(cx, "Search tables", "book");
     wait_shows(&app, cx, "bookings");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Collapse");
@@ -1535,7 +1535,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     app.hover_labelled(cx, "Closing, refreshing schemas");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
-    assert_eq!(tooltip(&app, cx).as_deref(), Some("In Use"));
+    assert_eq!(tooltip(&app, cx).as_deref(), Some("In use"));
     app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
@@ -1562,7 +1562,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         "the unread error status in the tooltip",
         Duration::from_secs(20),
         |window, _| {
-            label(window, "status-tooltip-status").as_deref() == Some("Unread Error")
+            label(window, "status-tooltip-status").as_deref() == Some("Unread error")
                 && label(window, connection_row(profile.id)).as_deref()
                     == Some("Closing, schema refresh error")
         },
@@ -1570,7 +1570,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("Unread Error")
+            Some("Unread error")
         );
         assert_eq!(
             label(window, connection_row(profile.id)).as_deref(),

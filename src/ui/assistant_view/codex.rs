@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) fn reasoning_effort_label(id: &str) -> String {
     match id {
-        "xhigh" => "Extra High".into(),
+        "xhigh" => "Extra high".into(),
         _ => id
             .split(['_', '-', ' '])
             .filter(|part| !part.is_empty())
@@ -393,7 +393,7 @@ mod tests {
         assert_eq!(reasoning_effort_label("low"), "Low");
         assert_eq!(reasoning_effort_label("medium"), "Medium");
         assert_eq!(reasoning_effort_label("high"), "High");
-        assert_eq!(reasoning_effort_label("xhigh"), "Extra High");
+        assert_eq!(reasoning_effort_label("xhigh"), "Extra high");
         assert_eq!(reasoning_effort_label("max"), "Max");
     }
 }

@@ -33,7 +33,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.wait_until(cx, "the held reply", QUERY_TIMEOUT, |_, _| {
         codex.marked("first-reply-pending")
     });
-    app.wait_label(cx, "Toggle Assistant, working");
+    app.wait_label(cx, "Toggle assistant, working");
     app.wait_label(cx, "Activity, in use");
     app.hover_labelled(cx, "Activity, in use");
     cx.executor().advance_clock(Duration::from_millis(800));
@@ -41,7 +41,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("In Use")
+            Some("In use")
         );
     });
     app.update(cx, |window, cx| {
@@ -71,7 +71,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
         assert!(window.try_find("status-tooltip-shortcut").is_none());
         assert_tooltip_header_center(window, cx, "status-tooltip-status");
     });
-    app.hover_labelled(cx, "Toggle Assistant, working");
+    app.hover_labelled(cx, "Toggle assistant, working");
     cx.executor().advance_clock(Duration::from_millis(800));
     app.settle(cx);
     app.update(cx, |window, cx| {
@@ -98,7 +98,7 @@ fn assistant_turns_leave_a_connected_query_tab_idle_until_sql_runs(cx: &mut Test
     app.click(cx, "toggle-assistant");
     app.wait_gone(cx, "assistant-composer");
     codex.mark("first-reply-release");
-    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_label(cx, "Toggle assistant, reply ready");
     app.update(cx, |window, cx| {
         assert_tab_dot(window, tab, Some(cx.theme().info.opacity(0.4)))
     });
@@ -158,8 +158,8 @@ fn the_assistant_runs_approved_and_automatic_queries_in_its_tab(cx: &mut TestApp
 
     app.choose_send_mode(cx, "Run automatically");
     app.click(cx, "confirm-conversation-auto-run");
-    app.wait_until(cx, "SQL Mode: Auto Run", QUERY_TIMEOUT, |window, _| {
-        label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto Run")
+    app.wait_until(cx, "SQL Mode: Auto run", QUERY_TIMEOUT, |window, _| {
+        label(window, "assistant-send-mode").as_deref() == Some("SQL Mode: Auto run")
     });
     app.type_sql(cx, "SELECT 2 AS assistant_value");
     app.send(cx, "Run selected SQL automatically");

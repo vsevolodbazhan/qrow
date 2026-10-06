@@ -195,14 +195,14 @@ fn the_sign_ins_button_counts_the_sign_ins_that_need_attention(cx: &mut TestAppC
     let app = launch(cx, &provider, workspace);
     // A connection uses the sign-in, and nobody signed in.
     app.wait_until(cx, "the attention count", WAIT, |window, _| {
-        label(window, "show-sign-ins").as_deref() == Some("Sign-ins, 1 sign-in needs attention")
+        label(window, "show-sign-ins").as_deref() == Some("Sign-Ins, 1 sign-in needs attention")
     });
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Not signed in");
     app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     app.wait_until(cx, "no attention count", WAIT, |window, _| {
-        label(window, "show-sign-ins").as_deref() == Some("Sign-ins")
+        label(window, "show-sign-ins").as_deref() == Some("Sign-Ins")
     });
 }
 
@@ -280,7 +280,7 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
             let sign_out = window.find("sign-in-account-sign-out").bounds();
             assert!(
                 status.right() < sign_out.left(),
-                "Sign Out follows the status"
+                "Sign out follows the status"
             );
             assert!(
                 f32::from(status.center().y - sign_out.center().y).abs() < 1.,
@@ -325,7 +325,7 @@ fn a_failed_sign_in_shows_the_reason_and_can_be_retried(cx: &mut TestAppContext)
     wait_row(&app, cx, &sign_in, "The last action failed");
     // The failure needs the user, so the status bar counts it.
     app.wait_until(cx, "the attention count", WAIT, |window, _| {
-        label(window, "show-sign-ins").as_deref() == Some("Sign-ins, 1 sign-in needs attention")
+        label(window, "show-sign-ins").as_deref() == Some("Sign-Ins, 1 sign-in needs attention")
     });
     open_settings(&app, cx, &sign_in);
     app.wait_until(cx, "the reason", WAIT, |window, _| {
@@ -1031,7 +1031,7 @@ fn copy_settings_puts_the_sign_in_without_its_account_on_the_clipboard(cx: &mut 
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
-    app.choose(cx, "popup-menu", "Copy Settings");
+    app.choose(cx, "popup-menu", "Copy settings");
     app.wait_gone(cx, "popup-menu");
     let copied = cx
         .read_from_clipboard()

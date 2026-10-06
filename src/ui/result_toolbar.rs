@@ -1,10 +1,10 @@
 use super::*;
 use gpui_kit::component::{h_flex, popover::Popover, tag::Tag, v_flex};
 
-const VISIBLE_ROWS: &str = "Visible rows";
-const LOADED_ROWS: &str = "Loaded rows";
+const VISIBLE_ROWS: &str = "Visible Rows";
+const LOADED_ROWS: &str = "Loaded Rows";
 const COLUMNS: &str = "Columns";
-const QUERY_DURATION: &str = "Query duration";
+const QUERY_DURATION: &str = "Query Duration";
 
 struct ResultSummary {
     range: String,
@@ -199,8 +199,8 @@ impl Qrow {
                             .ghost()
                             .small()
                             .icon(IconName::Info)
-                            .accessibility_label("Result Details")
-                            .tooltip("Result Details"),
+                            .accessibility_label("Show result details")
+                            .tooltip("Show result details"),
                     )
                     .content(move |_, _, cx| {
                         let Some(qrow) = qrow.upgrade() else {
@@ -236,16 +236,16 @@ impl Qrow {
                             .small()
                             .ghost()
                             .icon(IconName::ChevronLeft)
-                            .tooltip("Previous Page")
-                            .accessibility_label("Previous Page")
+                            .tooltip("Previous page")
+                            .accessibility_label("Previous page")
                             .disabled(page == 0)
                             .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
                         Button::new("next-page")
                             .small()
                             .ghost()
                             .icon(IconName::ChevronRight)
-                            .tooltip("Next Page")
-                            .accessibility_label("Next Page")
+                            .tooltip("Next page")
+                            .accessibility_label("Next page")
                             .disabled(page + 1 >= pages && (!tab.more || tab.busy))
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
                         cx,

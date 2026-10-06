@@ -48,7 +48,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
         for (id, expected) in [
             ("assistant-model", "Model: waiting for Codex"),
             ("assistant-reasoning", "Reasoning: waiting for Codex"),
-            ("assistant-tier", "Service tier: waiting for Codex"),
+            ("assistant-tier", "Service Tier: waiting for Codex"),
         ] {
             assert_eq!(label(window, id).as_deref(), Some(expected));
             // A control that waits for Codex does not open its menu.
@@ -95,7 +95,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
         for (id, expected) in [
             ("assistant-model", "Model: Synthetic Model"),
             ("assistant-reasoning", "Reasoning: Medium"),
-            ("assistant-tier", "Service tier: Default"),
+            ("assistant-tier", "Service Tier: Default"),
         ] {
             assert_eq!(label(window, id).as_deref(), Some(expected));
         }
@@ -107,7 +107,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
     app.click(cx, "assistant-tier");
     app.choose(cx, "popup-menu", "Fast");
     app.wait_until(cx, "the Fast tier", Duration::from_secs(10), |window, _| {
-        label(window, "assistant-tier").as_deref() == Some("Service tier: Fast")
+        label(window, "assistant-tier").as_deref() == Some("Service Tier: Fast")
     });
     app.wait_until(cx, "the saved tier", Duration::from_secs(10), |_, _| {
         app.saved().settings.assistant.service_tier.as_deref() == Some("fast")
@@ -139,13 +139,13 @@ fn a_hidden_turn_reports_its_state_on_the_toggle(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "toggle-assistant").as_deref(),
-            Some("Toggle Assistant, working")
+            Some("Toggle assistant, working")
         );
         assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
     });
     codex.mark("latest-release");
     app.wait_until(cx, "the reply-ready toggle", REPLY_TIMEOUT, |window, _| {
-        label(window, "toggle-assistant").as_deref() == Some("Toggle Assistant, reply ready")
+        label(window, "toggle-assistant").as_deref() == Some("Toggle assistant, reply ready")
     });
     app.update(cx, |window, _| {
         assert_eq!(bounds_of(window, "toggle-assistant"), idle_button);
@@ -166,7 +166,7 @@ fn the_narrow_thread_list_keeps_a_reply_unread_after_activity_closes(cx: &mut Te
     app.wait_for(cx, "assistant-working");
     app.show_threads(cx);
     codex.mark("latest-release");
-    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_label(cx, "Toggle assistant, reply ready");
     app.update(cx, |window, _| {
         assert!(
             window
@@ -181,10 +181,10 @@ fn the_narrow_thread_list_keeps_a_reply_unread_after_activity_closes(cx: &mut Te
     app.press(cx, "escape");
     app.wait_gone(cx, "activity");
     app.wait_for(cx, "assistant-thread-list");
-    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_label(cx, "Toggle assistant, reply ready");
     app.show_conversation(cx);
     app.wait_reply(cx, "I can help with this query");
-    app.wait_label(cx, "Toggle Assistant");
+    app.wait_label(cx, "Toggle assistant");
 }
 
 #[gpui_kit::test]
@@ -196,12 +196,12 @@ fn widening_the_window_reads_the_revealed_assistant_reply(cx: &mut TestAppContex
     cx.simulate_window_resize(app.window, size(px(1100.), px(820.)));
     app.show_threads(cx);
     codex.mark("latest-release");
-    app.wait_label(cx, "Toggle Assistant, reply ready");
+    app.wait_label(cx, "Toggle assistant, reply ready");
     app.wait_gone(cx, "assistant-transcript");
 
     cx.simulate_window_resize(app.window, size(px(1280.), px(820.)));
     app.wait_reply(cx, "I can help with this query");
-    app.wait_label(cx, "Toggle Assistant");
+    app.wait_label(cx, "Toggle assistant");
 }
 
 #[gpui_kit::test]
@@ -242,7 +242,7 @@ fn the_append_tool_writes_sql_and_undo_removes_it_in_one_step(cx: &mut TestAppCo
     app.wait_reply(cx, "I updated the SQL.");
 
     // A tool call is a full-width card that starts collapsed.
-    let card = "Tool call: Append query";
+    let card = "Tool Call: Append query";
     app.wait_until(cx, card, REPLY_TIMEOUT, |window, _| {
         labelled(window, card).is_some()
     });

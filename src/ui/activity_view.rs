@@ -463,9 +463,9 @@ impl ActivityView {
                 Button::new("activity-copy-all")
                     .ghost()
                     .small()
-                    .label("Copy All")
+                    .label("Copy all")
                     .disabled(empty)
-                    .accessibility_label("Copy All Activity")
+                    .accessibility_label("Copy all activity")
                     .on_click(cx.listener(|this, _, _, cx| this.copy_all(cx))),
             )
             .child(
@@ -474,7 +474,7 @@ impl ActivityView {
                     .small()
                     .label("Clear")
                     .disabled(log_empty)
-                    .accessibility_label("Clear Activity")
+                    .accessibility_label("Clear activity")
                     .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
             )
             .child(
@@ -484,12 +484,12 @@ impl ActivityView {
                     .icon(IconName::Close)
                     .map(|mut button| {
                         button.interactivity().tooltip(
-                            StatusTooltip::new("Close Activity", "")
+                            StatusTooltip::new("Close activity", "")
                                 .for_action(&CloseActivity, Some(CONTEXT)),
                         );
                         button
                     })
-                    .accessibility_label("Close Activity")
+                    .accessibility_label("Close activity")
                     .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
             )
     }
@@ -522,8 +522,8 @@ impl ActivityView {
                         view.read(cx).row(index, &view, cx)
                     },
                 )
-                .with_jump_button_label("Jump to Latest")
-                .with_jump_button_renderer(|button| button.accessibility_label("Jump to Latest"))
+                .with_jump_button_label("Jump to latest")
+                .with_jump_button_renderer(|button| button.accessibility_label("Jump to latest"))
                 .with_list_style(StyleRefinement::default().py_2())
                 .with_row_style(StyleRefinement::default().px_3().pb_0()),
             )
@@ -595,7 +595,7 @@ impl ActivityView {
                         .ghost()
                         .xsmall()
                         .label("Copy")
-                        .accessibility_label("Copy Error")
+                        .accessibility_label("Copy error")
                         .on_click(move |_, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(error.clone()));
                         }),
@@ -607,8 +607,8 @@ impl ActivityView {
                     Button::new(("activity-show-tab", entry.id()))
                         .ghost()
                         .xsmall()
-                        .label("Show Tab")
-                        .accessibility_label("Show Tab")
+                        .label("Show tab")
+                        .accessibility_label("Show tab")
                         .on_click(move |_, _, cx| {
                             let _ = view.update(cx, |_, cx| {
                                 cx.emit(ActivityViewEvent::ShowTab(tab));

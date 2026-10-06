@@ -57,11 +57,11 @@ fn main() {
                 app.click(&mut cx, "show-connections");
                 for (target, title, secondary) in [
                     (name.as_str(), name.as_str(), "status-tooltip-status"),
-                    ("New Tab", "New Tab", "status-tooltip-shortcut"),
-                    ("Run", "Run Query", "status-tooltip-shortcut"),
-                    ("Close Query 1", "Close Tab", "status-tooltip-shortcut"),
+                    ("New tab", "New tab", "status-tooltip-shortcut"),
+                    ("Run", "Run query", "status-tooltip-shortcut"),
+                    ("Close Query 1", "Close tab", "status-tooltip-shortcut"),
                     ("Activity", "Activity", "status-tooltip-shortcut"),
-                    ("Toggle Assistant", "Assistant", "status-tooltip-shortcut"),
+                    ("Toggle assistant", "Assistant", "status-tooltip-shortcut"),
                 ] {
                     app.hover_labelled(&mut cx, target);
                     cx.executor().advance_clock(Duration::from_millis(800));

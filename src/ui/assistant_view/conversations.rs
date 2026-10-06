@@ -11,7 +11,7 @@ pub(in crate::ui) struct ConversationEditor {
 pub(super) const CONVERSATION_RENAME: tab_view::RenameDialog = tab_view::RenameDialog {
     key: "conversation",
     label: "Conversation Name",
-    tooltip: "Rename Conversation",
+    tooltip: "Rename conversation",
     form: |this| {
         this.assistant_state
             .rename_form
@@ -59,7 +59,7 @@ impl ConversationMenu {
         };
         menu.item(item("Rename…", &self.rename, self.busy))
             .item(item(
-                "Regenerate Title",
+                "Regenerate title",
                 &self.regenerate,
                 !self.can_regenerate,
             ))

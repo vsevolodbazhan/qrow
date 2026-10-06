@@ -59,7 +59,7 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
         );
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("Unread Error")
+            Some("Unread error")
         );
         assert_eq!(
             label(window, "status-tooltip-Host").as_deref(),

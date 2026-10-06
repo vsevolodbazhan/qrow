@@ -27,7 +27,7 @@ automatically**.
 ## Work with SQL
 
 Select a query tab. Click the assistant button near the right end of the
-status bar, select **Toggle Assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
+status bar, select **Toggle assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
 **⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
 **Cancel**. While Codex starts a new conversation after its first message, you
 cannot send or cancel. Type a follow-up and press **Enter** to steer the current turn.
@@ -194,10 +194,10 @@ does not guess the names. It uses these tools:
   with the type and comment of each column.
 
 Each result tells when Qrow read the data, and whether it is older than the
-**Refresh period** of the connection. The tools read the catalog of any
+**Refresh Period** of the connection. The tools read the catalog of any
 connection that browses schemas, also a [shared
 catalog](connections.md#share-schemas). They do not read the catalog of a
-connection with **Schema refresh** set to **Disabled**. A result includes
+connection with **Schema Refresh** set to **Disabled**. A result includes
 only the errors of the refreshes that its connection ran, as the sidebar
 does.
 
@@ -240,7 +240,7 @@ Use the thread list to change conversations. The list is to the right of the cur
 conversation when the pane is wide. Qrow lists recent conversations first.
 Each row shows the conversation title, its connection, the time of its last
 activity, and its [state](#conversation-state). The connection and age use
-separate labels. **Tab Closed** shows beside the connection when its tab is
+separate labels. **Tab closed** shows beside the connection when its tab is
 closed. Older saved conversations
 without an activity time show **Earlier**. On a narrow pane, select **Toggle
 Conversation List** to open the list. When you select a conversation there,
@@ -249,7 +249,7 @@ wide pane, the list stays open. Search the list by title or connection name.
 When you send the first message, Qrow sends it to Codex in a separate, unsaved
 title request. Codex returns a short title. Qrow shows
 this title in the pane header and in the thread list. If you opened the tab with
-**New Conversation**, its name follows the conversation title until you rename
+**New conversation**, its name follows the conversation title until you rename
 the tab. The tab name has a
 limit of 60 characters. If another tab on the same connection has the name,
 Qrow adds a copy suffix. This request uses the selected model. It does not
@@ -271,7 +271,7 @@ conversation while it works or waits for approval. Two conversations can have th
 **Rename…** opens the same dialog as a query tab rename. Type a title with 1 to
 120 characters and select **Rename** or press **⌘Enter**.
 Automatic title requests do not replace a title that you set. Select
-**Regenerate Title** to ask Codex for a new title from the conversation
+**Regenerate title** to ask Codex for a new title from the conversation
 messages. This title replaces a title that you set. If the conversation is not
 open, Qrow first reads its messages from Codex. If Codex cannot make a title,
 Qrow keeps the current title and shows a notice. When you
@@ -295,7 +295,7 @@ to Latest** to return to the newest message.
 Qrow scrolls to the latest message when you send a message or Codex starts a
 new reply. New text in that reply follows the bottom while you stay near it.
 
-The SQL mode menu beside **Send** shows **Ask First** or **Auto Run**. Select
+The SQL mode menu beside **Send** shows **Ask first** or **Auto run**. Select
 **Ask before running** or **Run automatically** from this menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
 and service tier below the message field. Codex supplies
@@ -322,9 +322,9 @@ conversation of the selected tab.
 - If the selected tab does not have a conversation, the pane shows a new
   conversation. Your first message starts the conversation in this tab. The
   assistant can then work with the SQL that is already in the tab.
-- Select **New Conversation** in the pane header to open a new tab under the
+- Select **New conversation** in the pane header to open a new tab under the
   current connection. The pane shows the new conversation.
-- Right-click a tab and select **Start Conversation** to open the pane for that
+- Right-click a tab and select **Start conversation** to open the pane for that
   tab. This item is available only for a tab without a conversation.
 - An unsent message stays with its tab when you select another tab.
 
@@ -342,9 +342,9 @@ conversation title for the new tab if a title is available. Qrow does not
 keep the SQL of the closed tab.
 
 To move a conversation to another connection, right-click its tab and select
-**Move to Connection…**. The next message uses the new connection. You cannot
+**Move to connection…**. The next message uses the new connection. You cannot
 move the tab while its conversation works or waits for approval.
-**Duplicate** and **Copy to Connection…** do not copy the conversation.
+**Duplicate** and **Copy to connection…** do not copy the conversation.
 
 ## Conversation state
 
