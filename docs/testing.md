@@ -623,17 +623,21 @@ and the two `ui` jobs lint the application on their Mac architecture. A
 report-only suite runs, and its measurements go into the run summary. Its
 failure does not fail the job.
 
-A `plan` job selects the jobs of a pull request from its changed files. It
-always selects `static`. Changes to Rust sources or `.cargo/config.toml`
-select all jobs. Changes to the server fixture or the E2E scripts select
-`backend` and both E2E jobs. Changes
-under `tests/desktop/` select both E2E jobs. Changes to the packaging or probe
-scripts, `assets/`, `LICENSE`, or `NOTICE` select both package jobs. Changes to the
+A `plan` job selects the jobs of a pull request from its changed files.
+Pull requests do not run the Intel jobs, because the Intel runners are slower.
+Pushes, manual runs, and releases run all jobs, so the run on `main` after a
+merge finds Intel failures. To run the Intel jobs before a merge, start the
+test workflow manually on the branch.
+
+For a pull request, the plan always selects `static`. Changes to Rust
+sources or `.cargo/config.toml` select all pull request jobs. Changes to the
+server fixture or the E2E scripts select `backend` and `e2e`. Changes under
+`tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
+`assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
-jobs. A
-selected job also selects the jobs that it waits for. A job that the plan does
-not select shows as skipped. Pushes, manual runs, and releases run all jobs.
-To see the plan of your changes, run `./qtest ci plan`.
+pull request jobs. A selected job also selects the jobs that it waits for. A
+job that the plan does not select shows as skipped. To see the plan of your
+changes, run `./qtest ci plan`.
 
 In CI, qtest uses the `ci` nextest profile. The server jobs skip pull requests
 from forks, because they run repository code in Docker and through macOS

@@ -292,6 +292,8 @@ class CiJob:
     needs: tuple[str, ...] = ()
     # A pull request runs the job when it changes a path that matches.
     paths: str = r"^"
+    # False keeps the job out of pull requests. Pushes, manual runs, and releases run every job.
+    pull_requests: bool = True
     runtime: str = "auto"
 
 
@@ -310,11 +312,12 @@ CI_JOBS = {
         CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
         CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
-        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), paths=RUST_PATHS),
+        # The Intel runners are slower, so pull requests do not use them.
+        CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), pull_requests=False),
         CiJob("package-intel", "macos-15-intel", ("package",), report_only=("perf-app",), needs=("core",),
-              paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
+              pull_requests=False),
         CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop"), report_only=("perf-e2e",),
-              needs=("package-intel",), paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
+              needs=("package-intel",), runtime="native", pull_requests=False),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.
@@ -322,12 +325,13 @@ CI_ALL_PATHS = r"^(\.github/workflows/|scripts/qtest/|qtest$|scripts/core/|pypro
 
 
 def ci_jobs_for_changes(paths):
-    """Return the CI jobs for the changed paths, with the jobs that they wait for."""
+    """Return the pull request jobs for the changed paths, with the jobs that they wait for."""
+    jobs = {name: job for name, job in CI_JOBS.items() if job.pull_requests}
     selected = {"static"}
     for path in paths:
         if re.search(CI_ALL_PATHS, path):
-            return list(CI_JOBS)
-        selected.update(name for name, job in CI_JOBS.items() if re.search(job.paths, path))
+            return list(jobs)
+        selected.update(name for name, job in jobs.items() if re.search(job.paths, path))
     pending = list(selected)
     while pending:
         for need in CI_JOBS[pending.pop()].needs:
