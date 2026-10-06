@@ -40,6 +40,8 @@ const MAX_SHEET_WIDTH: f32 = 760.;
 /// The lines of SQL in one row of the list. The SQL scrolls with the rest
 /// of the sheet, and the list lays out only the rows on screen.
 const SQL_CHUNK_LINES: usize = 30;
+/// The line height of names and descriptions, relative to the text size.
+const TEXT_LINE_HEIGHT: f32 = 1.5;
 /// How far above and below the screen the list lays out rows, so that they
 /// do not appear late during a scroll.
 const OVERDRAW: f32 = 600.;
@@ -637,8 +639,13 @@ impl DbtDetailsView {
                     .pt_3()
                     .gap_1()
                     .text_sm()
+                    // The name and the description share a line height, so
+                    // the space above and below the description is even.
+                    .line_height(relative(TEXT_LINE_HEIGHT))
                     .child(
                         h_flex()
+                            .id(SharedString::from(format!("{id}-header")))
+                            .test_support()
                             .gap_2()
                             .child(div().font_semibold().child(column.name.clone()))
                             .when_some(column.data_type.clone(), |row, data_type| {
@@ -646,18 +653,25 @@ impl DbtDetailsView {
                             }),
                     )
                     .when(!column.description.is_empty(), |row| {
-                        row.child(markdown(
-                            format!("{id}-description"),
-                            column.description.clone(),
-                        ))
+                        row.child(
+                            div()
+                                .id(SharedString::from(format!("{id}-text")))
+                                .test_support()
+                                .child(markdown(
+                                    format!("{id}-description"),
+                                    column.description.clone(),
+                                )),
+                        )
                     })
                     .when(!column.tests.is_empty(), |row| {
-                        row.child(tests_element(
+                        // A tag has no leading above it, so it moves down by
+                        // the leading under the text above it.
+                        row.child(div().mt_1().child(tests_element(
                             &format!("{id}-tests"),
                             &column.tests,
                             &self.code_font,
                             muted,
-                        ))
+                        )))
                     })
                     .into_any_element()
             }
@@ -933,6 +947,7 @@ fn markdown(id: String, text: SharedString) -> TextView {
         )
         .selectable(true)
         .text_sm()
+        .line_height(relative(TEXT_LINE_HEIGHT))
         .min_w_0()
         .max_w_full()
 }

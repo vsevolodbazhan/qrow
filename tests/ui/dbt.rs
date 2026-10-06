@@ -462,6 +462,27 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         !crate::support::present(window, &"dbt-details-sql".into())
     });
 
+    // The space above a column description and the space below it look the
+    // same: the name and the description share a line height, and the tests
+    // move down by the leading that a line of text has and a tag does not.
+    app.update(cx, |window, _| {
+        let bounds = |suffix: &str| {
+            window
+                .find(gpui_kit::ElementId::from(format!(
+                    "dbt-details-column-id{suffix}"
+                )))
+                .bounds()
+        };
+        let (header, text, tests) = (bounds("-header"), bounds("-text"), bounds("-tests"));
+        let lines = text.size.height / header.size.height;
+        assert!((lines - lines.round()).abs() < 0.01, "{header:?} {text:?}");
+        let above = text.top() - header.bottom();
+        let below = tests.top() - text.bottom();
+        assert!(
+            (below - above * 2.).abs() < gpui_kit::px(0.5),
+            "{above:?} {below:?}"
+        );
+    });
     app.fill(cx, "dbt-details-filter", "col_001");
     app.wait_until(cx, "the filtered columns", TIMEOUT, |window, _| {
         !crate::support::present(window, &column_id("id"))
