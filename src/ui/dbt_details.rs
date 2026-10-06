@@ -126,6 +126,8 @@ pub(super) struct DbtDetailsView {
     list: ListState,
     /// Whether the facts tell that the manifest changed since the read.
     shown_changed: bool,
+    /// The rem size of the last frame. Row heights follow it.
+    rem_size: Option<gpui_kit::Pixels>,
     /// Whether the SQL part is open.
     sql_open: bool,
     sql: Sql,
@@ -234,6 +236,7 @@ impl DbtDetailsView {
             rows: Vec::new(),
             list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)).measure_all(),
             shown_changed: false,
+            rem_size: None,
             sql_open: false,
             sql: Sql::Unread,
             sql_read: 0,
@@ -263,6 +266,7 @@ impl DbtDetailsView {
         self.matching = self.matching_columns(cx);
         self.rows = self.make_rows();
         self.list.reset(self.rows.len());
+        self.keep_filter_rendered(cx);
     }
 
     fn matching_columns(&self, cx: &App) -> Vec<usize> {
@@ -329,6 +333,9 @@ impl DbtDetailsView {
         self.rows = self.make_rows();
         let new = Self::column_rows(&self.rows);
         self.list.splice(old, new.len());
+        // A splice leaves the new rows unmeasured, and the scrollbar counts
+        // them with no height.
+        self.list.remeasure_items(new);
         cx.notify();
     }
 
@@ -381,6 +388,16 @@ impl DbtDetailsView {
             }
         }
         cx.notify();
+    }
+
+    /// Give the list the focus handle of the filter, so that the list
+    /// keeps the filter row and its keyboard input when the user scrolls
+    /// it out of view.
+    fn keep_filter_rendered(&self, cx: &App) {
+        if let Some(title) = self.rows.iter().position(|row| *row == Row::ColumnsTitle) {
+            let focus = gpui_kit::Focusable::focus_handle(self.filter.read(cx), cx);
+            self.list.splice_focusable(title..title + 1, [Some(focus)]);
+        }
     }
 
     /// Whether the manifest file changed after Qrow read it.
@@ -692,7 +709,17 @@ impl DbtDetailsView {
 }
 
 impl Render for DbtDetailsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The interface scale changes the rem size but not the width, and
+        // the list measures rows again only on a new width.
+        let rem_size = window.rem_size();
+        if self
+            .rem_size
+            .replace(rem_size)
+            .is_some_and(|old| old != rem_size)
+        {
+            self.list.remeasure();
+        }
         let rows = list(
             self.list.clone(),
             // GPUI's list lays a row out at the width of its content, so
