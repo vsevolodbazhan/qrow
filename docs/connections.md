@@ -340,28 +340,39 @@ details**. A panel opens at the right side of the window. It shows:
 - The kind, the materialization, the relation, the unique ID, and the tags of
   the resource.
 - The full description.
-- The SQL of the model, in two closed parts: **Compiled SQL** has the SQL
-  that dbt compiled, without Jinja, and **Raw SQL** has the SQL of the model
-  file, with Jinja. Click a part to open it, and click its copy button to copy
-  the SQL. Both parts show the SQL with syntax highlighting, without the empty
-  lines at the start and at the end. A manifest from `dbt parse` has no
-  compiled SQL, so the **Compiled SQL** part tells why it is empty. When the
-  manifest changed after Qrow read it, Qrow reads the manifest again first,
-  then shows the SQL. When dbt writes the manifest again while the panel is
-  open, the panel keeps its place, and an open part shows its old SQL until
-  Qrow has read the new SQL.
-- The tests of the table. A test with arguments shows each argument under its
-  name.
-- The documented columns, with their types, descriptions, and tests. Type in
-  **Filter columns** to find columns by name or description. Columns whose
-  name matches come first.
-- The parents and children, with the materialization of each model or the
-  kind of each other resource. Click a parent or a child to show its details
-  in the panel. To go back, click the back button next to the close button
-  of the panel, or close the panel. The tooltip of the back button shows the
-  name of the resource that you came from. The panel then shows that
-  resource, with its column filter, its open SQL parts, and the row that you
-  clicked. Close the panel of the first resource to close it.
+- Parts that you open with a click. All parts are closed when the panel
+  opens, so you can go to a part without a scroll through the others. The
+  titles of **Tests**, **Columns**, **Parents**, and **Children** show the
+  count of their items:
+  - **Compiled SQL** has the SQL that dbt compiled, without Jinja, and
+    **Raw SQL** has the SQL of the model file, with Jinja. Click the copy
+    button of a part to copy the SQL. Both parts show the SQL with syntax
+    highlighting, without the empty lines at the start and at the end. A
+    manifest from `dbt parse` has no compiled SQL, so the **Compiled SQL**
+    part tells why it is empty. When the manifest changed after Qrow read
+    it, Qrow reads the manifest again first, then shows the SQL. When dbt
+    writes the manifest again while the panel is open, the panel keeps its
+    place, and an open part shows its old SQL until Qrow has read the new
+    SQL.
+  - **Tests** has the tests of the table. A test with arguments shows each
+    argument under its name.
+  - **Columns** has the documented columns, with their types, descriptions,
+    and tests. Type in **Filter columns** to find columns by name or
+    description. Columns whose name matches come first.
+  - **Parents** and **Children** have the lineage, with the materialization
+    of each model or the kind of each other resource. Click a parent or a
+    child to show its details in the panel. **Tests**, **Columns**,
+    **Parents**, and **Children** stay open or closed, so you can follow the
+    lineage further. The SQL parts close. To go back, click the back
+    button next to the close button of the panel, or close the panel. The
+    tooltip of the back button shows the name of the resource that you came
+    from. The panel then shows that resource, with its column filter, its
+    open parts, and the row that you clicked. Close the panel of the first
+    resource to close it.
+
+Qrow reads the SQL and prepares the column descriptions when you move the
+pointer onto the title of a closed part, so the part opens quickly. A part
+that you close releases them.
 
 The panel takes almost half of the window width, so make the window wider to
 read long text more easily.
