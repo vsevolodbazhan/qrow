@@ -309,15 +309,18 @@ case does not matter.
 
 When the connection [shows schemas](#browse-schemas), **Tables** in the form
 shows how many models, seeds, snapshots, and sources match tables in the
-catalog. A match has the mapped schema and the alias or identifier of the
-model. Qrow does not use the database of a model, because Spark has no level
-above schemas. Ephemeral models do not count. Click **Show unmatched** to see
-the models without a match, with their mapped schema. The summary follows the
-rules as you type them.
+catalog. A bar shows the percentage, so that rules that find almost no tables
+are easy to see. A match has the mapped schema and the alias or identifier of
+the model. Qrow does not use the database of a model, because Spark has no
+level above schemas. Ephemeral models do not count. Click **Show unmatched**
+to see the models without a match, with their mapped schema. The summary
+follows the rules as you type them. An incorrect rule shows its error in the
+place of the summary.
 
 Qrow can match only the schemas and tables that it has read. Refresh the
 schemas of the connection first. A model in a schema without loaded tables
-does not count as a match or as a failure.
+does not count as a match or as a failure. A line below the bar shows how
+many models are in such schemas.
 
 ### See dbt models in the schema tree
 

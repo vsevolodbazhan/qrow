@@ -147,8 +147,21 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "10 of 16 models and sources match tables in the catalog. 1 is in a schema without loaded tables.",
+        "10 of 16 models and sources matched \u{b7} 63%",
     );
+    // The bar, the numbers, and the button share the leading edge of the
+    // field.
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "connection-dbt-not-loaded").as_deref(),
+            Some("1 model or source is in a schema without loaded tables.")
+        );
+        let left = |id: &str| window.find(id.to_owned()).bounds().left();
+        let field = left("connection-dbt-rules");
+        assert_eq!(left("connection-dbt-match-ratio"), field);
+        assert_eq!(left("connection-dbt-matches"), field);
+        assert_eq!(left("connection-dbt-unmatched"), field);
+    });
     app.scroll_to(cx, "connection-dbt-unmatched");
     app.click(cx, "connection-dbt-unmatched");
     app.wait_for(cx, "connection-dbt-unmatched-list");
@@ -179,7 +192,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "0 of 16 models and sources match tables in the catalog. 1 is in a schema without loaded tables.",
+        "0 of 16 models and sources matched \u{b7} 0%",
     );
     app.click(cx, "cancel-profile");
     app.wait_gone(cx, "connection-name");

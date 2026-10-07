@@ -17,6 +17,7 @@ use gpui_kit::component::{
     form::{Field, Form},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
+    progress::Progress,
     select::{SearchableVec, Select, SelectState},
     v_flex,
 };
@@ -276,7 +277,7 @@ impl Qrow {
         let rules = parse_schema_rules(form.dbt.rules.read(cx).value().as_ref());
         let matches = match (&state, rules) {
             (_, Err(error)) => Some(Matches {
-                text: error.to_string(),
+                result: MatchResult::Error(error.to_string()),
                 unmatched: 0,
                 rows: vec![],
             }),
@@ -381,50 +382,99 @@ impl Qrow {
             )
             .when_some(matches, |form_element, matches| {
                 let Matches {
-                    text,
+                    result,
                     unmatched,
                     rows,
                 } = matches;
-                form_element.child(
-                    Field::new().label("Tables").child(
+                let line = |id: &'static str, text: String, color| {
+                    div()
+                        .id(id)
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(text.clone())
+                        .w_full()
+                        .text_sm()
+                        .text_color(color)
+                        .child(text)
+                };
+                let result = match result {
+                    MatchResult::Note(text) => {
+                        line("connection-dbt-matches", text, muted).into_any_element()
+                    }
+                    MatchResult::Error(text) => {
+                        line("connection-dbt-matches", text, cx.theme().danger).into_any_element()
+                    }
+                    MatchResult::Summary {
+                        matched,
+                        total,
+                        not_loaded,
+                    } => {
+                        let percent = percent(matched, total);
                         v_flex()
                             .w_full()
                             .gap_1()
                             .child(
-                                h_flex()
+                                // Progress has no element ID setter for
+                                // tests, so this element gives tests one.
+                                div()
+                                    .id("connection-dbt-match-ratio")
+                                    .test_support()
                                     .w_full()
-                                    .gap_2()
                                     .child(
-                                        div()
-                                            .id("connection-dbt-matches")
-                                            .test_support()
-                                            .role(Role::Status)
-                                            .aria_label(text.clone())
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .child(text),
-                                    )
-                                    .when(unmatched > 0, |row| {
-                                        row.child(
-                                            Button::new("connection-dbt-unmatched")
-                                                .small()
-                                                .ghost()
-                                                .label(if form.dbt.unmatched_open {
-                                                    "Hide unmatched"
-                                                } else {
-                                                    "Show unmatched"
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    if let Some(form) = &mut this.form {
-                                                        form.dbt.unmatched_open =
-                                                            !form.dbt.unmatched_open;
-                                                    }
-                                                    cx.notify();
-                                                })),
-                                        )
-                                    }),
+                                        Progress::new("connection-dbt-match-ratio-bar")
+                                            .xsmall()
+                                            .value(percent as f32)
+                                            .accessibility_label(
+                                                "Models and sources that match tables",
+                                            ),
+                                    ),
                             )
+                            .child(line(
+                                "connection-dbt-matches",
+                                format!(
+                                    "{} of {} models and sources matched \u{b7} {percent}%",
+                                    group(matched),
+                                    group(total)
+                                ),
+                                muted,
+                            ))
+                            .when(not_loaded > 0, |summary| {
+                                summary.child(line(
+                                    "connection-dbt-not-loaded",
+                                    not_loaded_text(not_loaded),
+                                    muted,
+                                ))
+                            })
+                            .into_any_element()
+                    }
+                };
+                form_element.child(
+                    Field::new().label("Tables").child(
+                        v_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(result)
+                            .when(unmatched > 0, |field| {
+                                field.child(
+                                    h_flex().child(
+                                        Button::new("connection-dbt-unmatched")
+                                            .small()
+                                            .ghost()
+                                            .label(if form.dbt.unmatched_open {
+                                                "Hide unmatched"
+                                            } else {
+                                                "Show unmatched"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                if let Some(form) = &mut this.form {
+                                                    form.dbt.unmatched_open =
+                                                        !form.dbt.unmatched_open;
+                                                }
+                                                cx.notify();
+                                            })),
+                                    ),
+                                )
+                            })
                             .when(!rows.is_empty(), |list| {
                                 list.child(
                                     v_flex()
@@ -459,7 +509,7 @@ impl Qrow {
     /// without a match when `rows` is true.
     fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject, rows: bool) -> Matches {
         let note = |text: &str| Matches {
-            text: text.into(),
+            result: MatchResult::Note(text.into()),
             unmatched: 0,
             rows: vec![],
         };
@@ -474,19 +524,6 @@ impl Qrow {
             return note("Refresh the schemas of the connection to match models with tables.");
         };
         let summary = matching::summary(index, project, &CatalogNames::of(catalog));
-        let mut text = format!(
-            "{} of {} models and sources match tables in the catalog.",
-            group(summary.matched),
-            group(summary.total)
-        );
-        match summary.not_loaded {
-            0 => {}
-            1 => text.push_str(" 1 is in a schema without loaded tables."),
-            count => text.push_str(&format!(
-                " {} are in schemas without loaded tables.",
-                group(count)
-            )),
-        }
         let mut list = Vec::new();
         if rows {
             list = summary
@@ -515,7 +552,11 @@ impl Qrow {
             }
         }
         Matches {
-            text,
+            result: MatchResult::Summary {
+                matched: summary.matched,
+                total: summary.total,
+                not_loaded: summary.not_loaded,
+            },
             unmatched: summary.unmatched.len(),
             rows: list,
         }
@@ -530,11 +571,53 @@ impl Qrow {
 
 /// The match summary that the form shows.
 struct Matches {
-    text: String,
+    result: MatchResult,
     /// The number of resources without a match.
     unmatched: usize,
     /// The resources without a match, when the list is open.
     rows: Vec<String>,
+}
+
+/// What the form can tell about the matches.
+enum MatchResult {
+    /// The counts of the resources with a match, of all resources, and of
+    /// the resources in schemas without loaded tables.
+    Summary {
+        matched: usize,
+        total: usize,
+        not_loaded: usize,
+    },
+    /// What the user must do before the form can match the resources.
+    Note(String),
+    /// The schema mapping rules are not valid.
+    Error(String),
+}
+
+/// The share of the resources with a match, in whole percent. A share that
+/// is not zero does not show as 0%, and a share that is not all does not
+/// show as 100%.
+fn percent(matched: usize, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    let percent = (matched * 100 + total / 2) / total;
+    match percent {
+        0 if matched > 0 => 1,
+        100 if matched < total => 99,
+        percent => percent,
+    }
+}
+
+/// The note about the resources in schemas without loaded tables.
+fn not_loaded_text(count: usize) -> String {
+    if count == 1 {
+        "1 model or source is in a schema without loaded tables.".into()
+    } else {
+        format!(
+            "{} models and sources are in schemas without loaded tables.",
+            group(count)
+        )
+    }
 }
 
 /// What the schema tree shows for a table that a dbt resource builds.
@@ -783,6 +866,17 @@ fn group(count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_match_share_shows_some_and_not_all() {
+        assert_eq!(percent(0, 0), 0);
+        assert_eq!(percent(0, 10), 0);
+        assert_eq!(percent(10, 10), 100);
+        assert_eq!(percent(26, 2_244), 1);
+        assert_eq!(percent(1, 2_244), 1);
+        assert_eq!(percent(2_243, 2_244), 99);
+        assert_eq!(percent(10, 16), 63);
+    }
 
     #[test]
     fn the_status_follows_the_field_and_the_manifest() {
