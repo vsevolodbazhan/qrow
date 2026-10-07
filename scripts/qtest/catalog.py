@@ -200,7 +200,7 @@ SUITES = {
               prepare=(Step(("cargo", "test", "--locked", "--no-default-features", "--no-run", "--test", "integration")),)),
         Suite("e2e", "The real Qrow window, headless, against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & not test(/^perf::/)", "--run-ignored", "only"),),
+              (nextest("binary(e2e) & not test(/^perf::/) & not test(/^postgres::/)", "--run-ignored", "only"),),
               macos_only=True, explicit_only=True, fixture="any",
               prepare=(E2E_BUILD,)),
         Suite("perf-ui", "Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build.",

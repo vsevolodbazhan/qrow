@@ -64,6 +64,13 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
 
+    def test_postgres_has_its_own_docker_suite_and_backend_ci_job(self):
+        postgres = catalog.SUITES["postgres"]
+        self.assertTrue(postgres.explicit_only)
+        self.assertIn("docker", postgres.requires)
+        self.assertIsNone(postgres.fixture)
+        self.assertIn("postgres", catalog.CI_JOBS["backend"].suites)
+
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
         self.assertIn("write-a-ui-test", topics)
@@ -149,6 +156,17 @@ class SelectionTests(unittest.TestCase):
         with patch.dict(os.environ, {"CI": "true"}):
             command = runner.render_command(step, {}, "queries", ["--no-capture"])
         self.assertEqual(command[-5:], ["--profile", "ci", "-E", "(binary(ui)) and test(queries)", "--no-capture"])
+
+    def test_e2e_test_filters_keep_the_kyuubi_fixture_boundary(self):
+        step = catalog.SUITES["e2e"].steps[0]
+        for selected in [None, "postgres", "queries"]:
+            with self.subTest(selected=selected):
+                command = runner.render_command(step, {}, selected, [])
+                expression = command[command.index("-E") + 1]
+                self.assertIn("not test(/^postgres::/)", expression)
+                self.assertIn("not test(/^perf::/)", expression)
+                if selected:
+                    self.assertTrue(expression.endswith(f" and test({selected})"))
 
     def test_other_braces_stay_in_commands(self):
         command = runner.render_command(catalog.SUITES["scripts"].steps[0], {}, None, [])

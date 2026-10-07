@@ -321,6 +321,10 @@ runtime. It removes the container, its volumes, and certificates after the run.
 The backend CI job includes the connector tests. The Postgres UI tests require
 a local macOS run with Docker.
 
+The `e2e` suite selects tests for the Kyuubi fixture. The `postgres` suite
+selects the Postgres tests from the same test binary and supplies their server.
+Postgres tests fail if their fixture settings are missing.
+
 ## Run the desktop suite
 
 The `desktop` suite operates the packaged app with real keyboard and pointer
