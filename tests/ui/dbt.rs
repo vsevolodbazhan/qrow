@@ -149,8 +149,8 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         "connection-dbt-matches",
         "10 of 16 models and sources matched \u{b7} 63%",
     );
-    // The bar, the numbers, and the button share the leading edge of the
-    // field.
+    // The bar, the numbers, and the button label share the leading edge of
+    // the field. The padding of the small ghost button is outside it.
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "connection-dbt-not-loaded").as_deref(),
@@ -160,7 +160,8 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         let field = left("connection-dbt-rules");
         assert_eq!(left("connection-dbt-match-ratio"), field);
         assert_eq!(left("connection-dbt-matches"), field);
-        assert_eq!(left("connection-dbt-unmatched"), field);
+        let padding = window.rem_size() * 0.5;
+        assert_eq!(left("connection-dbt-unmatched") + padding, field);
     });
     app.scroll_to(cx, "connection-dbt-unmatched");
     app.click(cx, "connection-dbt-unmatched");
@@ -557,6 +558,13 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         assert_eq!(
             crate::support::value(window, "dbt-details-filter").as_deref(),
             Some("")
+        );
+        // The chevron of the back button lines up with the rows below it.
+        // The padding of the small ghost button is outside them.
+        let left = |id: &str| window.find(id.to_owned()).bounds().left();
+        assert_eq!(
+            left("dbt-details-back") + window.rem_size() * 0.5,
+            left("dbt-details-description")
         );
     });
     app.click(cx, "dbt-details-back");

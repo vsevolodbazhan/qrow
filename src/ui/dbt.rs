@@ -460,6 +460,11 @@ impl Qrow {
                                         Button::new("connection-dbt-unmatched")
                                             .small()
                                             .ghost()
+                                            // The label lines up with the
+                                            // text above. The margin takes
+                                            // back the padding of a small
+                                            // button.
+                                            .ml_neg_2()
                                             .label(if form.dbt.unmatched_open {
                                                 "Hide unmatched"
                                             } else {

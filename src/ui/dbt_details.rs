@@ -873,6 +873,10 @@ impl DbtDetailsView {
                 Button::new("dbt-details-back")
                     .ghost()
                     .small()
+                    // The chevron lines up with the rows below. The margin
+                    // takes back the padding of a small button, so that its
+                    // hover background keeps the padding.
+                    .ml_neg_2()
                     .icon(IconName::ChevronLeft)
                     .label(format!("Back to {title}"))
                     .on_click(cx.listener(|this, _, window, cx| {
