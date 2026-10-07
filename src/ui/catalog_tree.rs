@@ -1542,7 +1542,14 @@ impl Truncation {
 #[derive(Clone, PartialEq)]
 enum RowTooltip {
     Text(String),
+    Tree(TreeTip),
     Status(StatusTooltip),
+}
+
+impl From<TreeTip> for RowTooltip {
+    fn from(tip: TreeTip) -> Self {
+        Self::Tree(tip)
+    }
 }
 
 impl From<String> for RowTooltip {
@@ -1588,6 +1595,7 @@ impl Render for LiveTooltip {
                 if self.shown.as_ref().is_none_or(|(shown, _)| *shown != text) {
                     let view = match &text {
                         RowTooltip::Text(text) => row_tooltip_view(text, window, cx),
+                        RowTooltip::Tree(tip) => tree_tooltip_view(tip, window, cx),
                         RowTooltip::Status(tooltip) => tooltip.build(None, window, cx),
                     };
                     self.shown = Some((text, view));
@@ -1682,7 +1690,7 @@ fn render_entry(
         Option<String>,
         bool,
         Option<String>,
-        Option<String>,
+        Option<TreeTip>,
     ) = match node {
         Node::Schema {
             name,
@@ -1709,15 +1717,9 @@ fn render_entry(
         } => {
             // The dbt description adds a line. The details sheet has the
             // full text of a long description.
-            let description = dbt.as_ref().and_then(|dbt| {
-                let description = dbt.description.as_deref()?;
-                Some(if dbt.description_cut {
-                    format!("{description}\nShow dbt details has the full text.")
-                } else {
-                    description.to_owned()
-                })
-            });
-            let comment = match (comment.as_deref(), description.as_deref()) {
+            let description = dbt.as_ref().and_then(|dbt| dbt.description.as_deref());
+            let cut = dbt.as_ref().is_some_and(|dbt| dbt.description_cut);
+            let comment = match (comment.as_deref(), description) {
                 (Some(comment), Some(description)) => Some(format!("{comment}\n{description}")),
                 (comment, description) => comment.or(description).map(str::to_owned),
             };
@@ -1730,7 +1732,8 @@ fn render_entry(
                 dbt.as_ref().map(|dbt| dbt.detail.clone()),
                 *loading,
                 error.clone(),
-                row_tooltip(name, comment.as_deref(), error.as_deref()),
+                row_tooltip(name, comment.as_deref(), error.as_deref())
+                    .map(|tip| tip.hint(cut.then_some(DESCRIPTION_HINT))),
             )
         }
         Node::Column {
@@ -1891,6 +1894,41 @@ fn render_entry(
         .into_any_element()
 }
 
+/// The tooltip view of a schema, table, or column row: its name leads, and
+/// a hint is secondary. Its text is an observed element, so tests can find
+/// the tooltip that a hover opens.
+fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyView {
+    let tip = tip.clone();
+    Tooltip::element(move |_, cx| {
+        // Long comments wrap instead of making the tooltip as wide as the
+        // window.
+        v_flex()
+            .id("catalog-tooltip")
+            .max_w(rems(TOOLTIP_WIDTH_REMS))
+            .test_support()
+            .aria_label(tip.text())
+            .gap_0p5()
+            .child(
+                div()
+                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                    .child(tip.title.clone()),
+            )
+            .children(tip.lines.iter().map(|line| div().child(line.clone())))
+            .when_some(tip.hint, |tooltip, hint| {
+                tooltip.child(
+                    div()
+                        .id("catalog-tooltip-hint")
+                        .test_support()
+                        .aria_label(hint)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(hint),
+                )
+            })
+    })
+    .build(window, cx)
+}
+
 /// The tooltip view of a tree row. Its text is an observed element, so tests
 /// can find the tooltip that a hover opens.
 fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
@@ -1949,18 +1987,46 @@ pub(super) fn error_summary(error: &str) -> String {
     summary
 }
 
+/// The hint under a dbt description that the tooltip cuts.
+const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
+
+/// The tooltip of a schema, table, or column row.
+#[derive(Clone, Debug, PartialEq)]
+struct TreeTip {
+    /// The full name, which the row can truncate.
+    title: String,
+    /// The comment and the error.
+    lines: Vec<String>,
+    hint: Option<&'static str>,
+}
+
+impl TreeTip {
+    fn hint(mut self, hint: Option<&'static str>) -> Self {
+        self.hint = hint;
+        self
+    }
+
+    /// All the text, one part on each line.
+    fn text(&self) -> String {
+        std::iter::once(self.title.as_str())
+            .chain(self.lines.iter().map(String::as_str))
+            .chain(self.hint)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
 /// The tooltip of a tree row: its full name, which the row can truncate,
 /// then its comment or its error.
-fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<String> {
-    let mut text = name.to_owned();
-    for line in [comment.map(str::to_owned), error.map(error_summary)]
-        .into_iter()
-        .flatten()
-    {
-        text.push('\n');
-        text.push_str(&line);
-    }
-    Some(text)
+fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<TreeTip> {
+    Some(TreeTip {
+        title: name.to_owned(),
+        lines: [comment.map(str::to_owned), error.map(error_summary)]
+            .into_iter()
+            .flatten()
+            .collect(),
+        hint: None,
+    })
 }
 
 /// A fixed trailing lane for a tree status icon or count.

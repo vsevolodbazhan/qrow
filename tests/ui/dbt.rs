@@ -650,6 +650,26 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         DbtRefresh::Automatic,
     );
     let alias = show_model_table(&app, cx, id);
+    // The tooltip has the start of the long description, then a smaller
+    // hint below it.
+    app.hover_labelled(cx, &alias);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.wait_for(cx, "catalog-tooltip-hint");
+    app.update(cx, |window, _| {
+        let hint = "Open dbt details to see the full description.";
+        assert_eq!(label(window, "catalog-tooltip-hint").as_deref(), Some(hint));
+        let tooltip = label(window, "catalog-tooltip").unwrap_or_default();
+        assert!(
+            tooltip.starts_with(&format!("{alias}\nParagraph 0:")),
+            "{tooltip}"
+        );
+        assert!(tooltip.ends_with(&format!("…\n{hint}")), "{tooltip}");
+        let tooltip = window.find("catalog-tooltip").bounds();
+        let hint = window.find("catalog-tooltip-hint").bounds();
+        assert!(hint.bottom() <= tooltip.bottom(), "{tooltip:?} {hint:?}");
+        assert!(hint.size.height < window.rem_size() * 1.25, "{hint:?}");
+    });
     app.context_menu_labelled(cx, &alias);
     app.choose(cx, "popup-menu", "Show dbt details");
     app.wait_for(cx, "dbt-details-description");
