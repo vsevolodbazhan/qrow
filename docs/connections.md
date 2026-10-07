@@ -264,7 +264,7 @@ Qrow does not run dbt, and it does not read the other files of the project.
 2. In **Manifest**, enter the path of `manifest.json`, or click **Choose…**.
    The file is usually in the `target` folder of the project. Any manifest
    works, for example one from CI.
-3. Select **Manifest refresh**:
+3. Select **Manifest Refresh**:
    - **Automatic**: Qrow reads the manifest again when dbt writes it.
    - **Manual**: Qrow reads the manifest again only when you select
      **Refresh**, and at launch when its saved copy does not agree with the
@@ -281,7 +281,7 @@ wrote it, the dbt version, and the number of models. It shows an error when
 the file is missing, has another schema version, or is not a valid manifest.
 When a refresh fails, Qrow keeps the data of the last manifest that it read.
 To read the manifest again now, click **Refresh** in the form, or right-click
-the connection and select **Refresh Manifest** in the **dbt** section. Each
+the connection and select **Refresh manifest** in the **dbt** section. Each
 refresh is in the [Activity](activity.md) of the connection, with its
 duration and result.
 
@@ -311,7 +311,7 @@ When the connection [shows schemas](#browse-schemas), **Tables** in the form
 shows how many models, seeds, snapshots, and sources match tables in the
 catalog. A match has the mapped schema and the alias or identifier of the
 model. Qrow does not use the database of a model, because Spark has no level
-above schemas. Ephemeral models do not count. Click **Show Unmatched** to see
+above schemas. Ephemeral models do not count. Click **Show unmatched** to see
 the models without a match, with their mapped schema. The summary follows the
 rules as you type them.
 

@@ -186,7 +186,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
 
     // Each refresh is in Activity, also one from the sidebar.
     app.context_menu(cx, connection_row(id));
-    app.choose(cx, "popup-menu", "Refresh Manifest");
+    app.choose(cx, "popup-menu", "Refresh manifest");
     app.wait_until(cx, "the second refresh", TIMEOUT, |_, _| true);
     let activity = (0..200)
         .map(|_| {

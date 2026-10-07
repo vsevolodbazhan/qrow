@@ -276,13 +276,13 @@ impl Qrow {
             )
             .child(
                 Field::new()
-                    .label("Manifest refresh")
+                    .label("Manifest Refresh")
                     .child(
                         Select::new(&form.dbt.refresh)
                             .id("connection-dbt-refresh")
                             .w_full()
                             .disabled(saving)
-                            .accessibility_label("Manifest refresh"),
+                            .accessibility_label("Manifest Refresh"),
                     )
                     .description(if automatic {
                         "Reads the manifest again when dbt writes it."
@@ -292,7 +292,7 @@ impl Qrow {
             )
             .child(
                 Field::new()
-                    .label("Schema mapping")
+                    .label("Schema Mapping")
                     .child(
                         // The textarea has no element ID setter in GPUI Kit
                         // 0.6.6, so this element gives tests one.
@@ -305,7 +305,7 @@ impl Qrow {
                                     .w_full()
                                     .disabled(saving)
                                     .font_family("Menlo")
-                                    .aria_label("Schema mapping"),
+                                    .aria_label("Schema Mapping"),
                             ),
                     )
                     .description(
@@ -344,9 +344,9 @@ impl Qrow {
                                                 .small()
                                                 .ghost()
                                                 .label(if form.dbt.unmatched_open {
-                                                    "Hide Unmatched"
+                                                    "Hide unmatched"
                                                 } else {
-                                                    "Show Unmatched"
+                                                    "Show unmatched"
                                                 })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     if let Some(form) = &mut this.form {
@@ -397,7 +397,7 @@ impl Qrow {
             rows: vec![],
         };
         if !self.profile_browses(profile) {
-            return note("Turn on Schema refresh to match models with tables.");
+            return note("Turn on Schema Refresh to match models with tables.");
         }
         let Some(catalog) = self
             .catalog

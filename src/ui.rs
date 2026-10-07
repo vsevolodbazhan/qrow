@@ -2364,7 +2364,7 @@ impl Qrow {
                     })
                     .when(has_dbt, |menu| {
                         menu.separator().item(menu_section("dbt")).item(
-                            PopupMenuItem::new("Refresh Manifest")
+                            PopupMenuItem::new("Refresh manifest")
                                 .on_click(refresh_dbt)
                                 .disabled(dbt_parsing),
                         )
