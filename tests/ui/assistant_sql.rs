@@ -185,7 +185,7 @@ fn a_long_tab_sends_a_bounded_part_and_the_assistant_reads_the_rest(cx: &mut Tes
     app.send(cx, "Report the tab SQL window");
     app.wait_reply(cx, ", 32768 of 56000 bytes, truncated True");
     app.wait_idle(cx);
-    // read_tab_sql returns the SQL in parts of at most 32 KB.
+    // tab-read-sql returns the SQL in parts of at most 32 KB.
     app.send(cx, "Read the tab SQL in pages");
     app.wait_reply(cx, "Read 56000 of 56000 bytes in 2 pages.");
 }

@@ -10,14 +10,14 @@ pub const MAX_TEXT_EDITS: usize = 64;
 pub const MAX_EDIT_BYTES: usize = 1024 * 1024;
 pub const MAX_SQL_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_TOOL_ROWS: usize = 100;
-/// Leading rows that a finished query returns, so a short result needs no `read_results` call.
+/// Leading rows that a finished query returns, so a short result needs no `query-read-results` call.
 pub const MAX_PREVIEW_ROWS: usize = 20;
 pub const MAX_PREVIEW_BYTES: usize = 16 * 1024;
 pub const MAX_CONTEXT_STATEMENTS: usize = 100;
-/// The largest part of the tab SQL in the workspace context. `read_tab_sql`
+/// The largest part of the tab SQL in the workspace context. `tab-read-sql`
 /// reads the other parts.
 pub const MAX_CONTEXT_SQL_BYTES: usize = 32 * 1024;
-/// The largest part of the tab SQL that one `read_tab_sql` call returns.
+/// The largest part of the tab SQL that one `tab-read-sql` call returns.
 pub const MAX_SQL_PAGE_BYTES: usize = 32 * 1024;
 pub const MAX_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 pub const MAX_HARNESS_ID_BYTES: usize = 256;
@@ -80,7 +80,7 @@ pub struct SelectedTabContext {
     /// Whether `sql` holds only a part of the SQL of the tab.
     pub sql_truncated: bool,
     pub selected_range: Option<Range<usize>>,
-    /// Byte ranges that `run_selected_tab_query` accepts as `statement_range`.
+    /// Byte ranges that `query-run` accepts as `statement_range`.
     /// When `sql_truncated` is true, only the statements in `sql`.
     pub statement_ranges: Vec<Range<usize>>,
     pub statement_ranges_truncated: bool,
@@ -101,6 +101,9 @@ pub struct WorkspaceContext {
     /// The schema catalog of the connection of `selected_tab`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog: Option<super::catalog::CatalogContext>,
+    /// The dbt project of the connection of `selected_tab`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dbt: Option<super::dbt::DbtContext>,
     /// The assistant notes of the connection of `selected_tab`, when they
     /// are new to the conversation. An empty text removes earlier notes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -172,6 +175,7 @@ impl WorkspaceContext {
             tabs,
             selected_tab,
             catalog: None,
+            dbt: None,
             connection_notes: None,
             connection_notes_unchanged: false,
         }
@@ -179,6 +183,11 @@ impl WorkspaceContext {
 
     pub fn with_catalog(mut self, catalog: Option<super::catalog::CatalogContext>) -> Self {
         self.catalog = catalog;
+        self
+    }
+
+    pub fn with_dbt(mut self, dbt: Option<super::dbt::DbtContext>) -> Self {
+        self.dbt = dbt;
         self
     }
 

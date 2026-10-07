@@ -618,7 +618,7 @@ mod tests {
                 call_id: "call".into(),
                 thread_id: "thread".into(),
                 turn_id: "turn".into(),
-                name: "run_selected_tab_query".into(),
+                name: "query-run".into(),
                 arguments: Value::Null,
             },
             tab_id: Uuid::new_v4(),

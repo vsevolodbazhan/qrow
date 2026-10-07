@@ -28,25 +28,32 @@ pub(in crate::ui) enum ToolKind {
     ListSchemas,
     ListRelations,
     DescribeRelation,
+    SearchModels,
+    DescribeModel,
+    ReadLineage,
     Other,
 }
 
 impl ToolKind {
     pub fn from_name(name: &str) -> Self {
+        let name = crate::assistant::tools::canonical_name(name);
         match name {
-            "get_workspace_context" => Self::Workspace,
-            "read_tab_sql" => Self::ReadQuery,
-            "append_selected_tab_sql" => Self::AppendQuery,
-            "edit_selected_tab_sql" => Self::EditQuery,
-            "run_selected_tab_query" => Self::RunQuery,
-            "cancel_selected_tab_query" => Self::CancelQuery,
-            "get_query_status" => Self::QueryStatus,
-            "read_results" => Self::ReadResults,
-            "fetch_more_results" => Self::FetchRows,
-            "read_query_logs" => Self::ReadLogs,
-            "list_schemas" => Self::ListSchemas,
-            "list_relations" => Self::ListRelations,
-            "describe_relation" => Self::DescribeRelation,
+            "workspace-read-context" => Self::Workspace,
+            "tab-read-sql" => Self::ReadQuery,
+            "tab-append-sql" => Self::AppendQuery,
+            "tab-edit-sql" => Self::EditQuery,
+            "query-run" => Self::RunQuery,
+            "query-cancel" => Self::CancelQuery,
+            "query-read-status" => Self::QueryStatus,
+            "query-read-results" => Self::ReadResults,
+            "query-fetch-results" => Self::FetchRows,
+            "query-read-logs" => Self::ReadLogs,
+            "catalog-list-schemas" => Self::ListSchemas,
+            "catalog-list-relations" => Self::ListRelations,
+            "catalog-describe-relation" => Self::DescribeRelation,
+            "dbt-search-models" => Self::SearchModels,
+            "dbt-describe-model" => Self::DescribeModel,
+            "dbt-read-lineage" => Self::ReadLineage,
             _ => Self::Other,
         }
     }
@@ -66,6 +73,9 @@ impl ToolKind {
             Self::ListSchemas => "List schemas",
             Self::ListRelations => "List tables",
             Self::DescribeRelation => "Describe table",
+            Self::SearchModels => "Search dbt models",
+            Self::DescribeModel => "Describe dbt model",
+            Self::ReadLineage => "Read dbt lineage",
             Self::Other => "Use tool",
         }
     }
@@ -85,6 +95,9 @@ impl ToolKind {
             Self::ListSchemas => AssetIconName::Database,
             Self::ListRelations => AssetIconName::Table2,
             Self::DescribeRelation => AssetIconName::Columns3,
+            Self::SearchModels => AssetIconName::Search,
+            Self::DescribeModel => AssetIconName::BookOpen,
+            Self::ReadLineage => AssetIconName::Network,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }
@@ -457,6 +470,9 @@ mod tests {
             ToolKind::ListSchemas,
             ToolKind::ListRelations,
             ToolKind::DescribeRelation,
+            ToolKind::SearchModels,
+            ToolKind::DescribeModel,
+            ToolKind::ReadLineage,
             ToolKind::Other,
         ];
         for kind in kinds {
@@ -475,6 +491,9 @@ mod tests {
                 | ToolKind::ListSchemas
                 | ToolKind::ListRelations
                 | ToolKind::DescribeRelation
+                | ToolKind::SearchModels
+                | ToolKind::DescribeModel
+                | ToolKind::ReadLineage
                 | ToolKind::Other => {}
             }
             let path = kind.icon().path();
@@ -507,14 +526,16 @@ mod tests {
         entry.set_tool_state(ToolState::Failed);
         assert_eq!(entry.text, "Run query: Failed");
         let edit = TranscriptEntry::tool(
-            tool(
-                ToolKind::from_name("edit_selected_tab_sql"),
-                ToolState::Done(None),
-            ),
+            tool(ToolKind::from_name("tab-edit-sql"), ToolState::Done(None)),
             "turn-1".into(),
         );
         assert_eq!(edit.text, "Edit query");
         assert_eq!(ToolKind::from_name("unknown_tool"), ToolKind::Other);
+        // An older conversation calls the earlier name.
+        assert_eq!(
+            ToolKind::from_name("edit_selected_tab_sql"),
+            ToolKind::EditQuery
+        );
         assert!(
             TranscriptEntry::new(Speaker::Error, "Failed", None)
                 .tool

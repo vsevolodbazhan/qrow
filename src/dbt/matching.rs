@@ -116,12 +116,6 @@ pub fn summary(index: &Index, project: &DbtProject, names: &CatalogNames) -> Sum
 /// The dbt resource of the catalog relation `relation` in `schema`. A model
 /// comes before a snapshot, a seed, and a source of the same relation.
 pub fn entry_for(index: &Index, project: &DbtProject, schema: &str, relation: &str) -> Option<u32> {
-    let rank = |kind| match kind {
-        Kind::Model => 0,
-        Kind::Snapshot => 1,
-        Kind::Seed => 2,
-        Kind::Source => 3,
-    };
     let (schema, relation) = (schema.to_lowercase(), relation.to_lowercase());
     index
         .entries()
@@ -134,4 +128,38 @@ pub fn entry_for(index: &Index, project: &DbtProject, schema: &str, relation: &s
         })
         .min_by_key(|(_, entry)| rank(entry.kind))
         .map(|(position, _)| position as u32)
+}
+
+fn rank(kind: Kind) -> u8 {
+    match kind {
+        Kind::Model => 0,
+        Kind::Snapshot => 1,
+        Kind::Seed => 2,
+        Kind::Source => 3,
+    }
+}
+
+/// The dbt resource of each catalog relation, by lowercase schema and
+/// relation, for many lookups. It chooses like [`entry_for`].
+pub fn relations(index: &Index, project: &DbtProject) -> HashMap<(String, String), u32> {
+    let mut relations: HashMap<(String, String), u32> = HashMap::new();
+    for (position, entry) in index.entries().iter().enumerate() {
+        if is_ephemeral(entry) {
+            continue;
+        }
+        let key = (
+            mapped_schema(index, entry, project).to_lowercase(),
+            entry.identifier.to_lowercase(),
+        );
+        let position = position as u32;
+        relations
+            .entry(key)
+            .and_modify(|known| {
+                if rank(entry.kind) < rank(index.entry(*known).kind) {
+                    *known = position;
+                }
+            })
+            .or_insert(position);
+    }
+    relations
 }

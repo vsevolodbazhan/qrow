@@ -70,27 +70,27 @@ impl Missing {
         match self {
             Missing::Schemas => (
                 "not_cached",
-                "Qrow has not read the schemas of this connection, and no tab of the connection is connected. Ask the user to refresh the connection in the Connections sidebar, or run SHOW SCHEMAS with run_selected_tab_query.",
+                "Qrow has not read the schemas of this connection, and no tab of the connection is connected. Ask the user to refresh the connection in the Connections sidebar, or run SHOW SCHEMAS with query-run.",
             ),
             Missing::SchemaNotFound => (
                 "not_found",
-                "The cached schema list does not have this schema. Check the name with list_schemas. The schema can be new; then ask the user to refresh the connection.",
+                "The cached schema list does not have this schema. Check the name with catalog-list-schemas. The schema can be new; then ask the user to refresh the connection.",
             ),
             Missing::SchemaHidden => (
                 "schema_hidden",
-                "The Show schemas or Hide schemas settings of this connection hide this schema. Ask the user to change them, or run SHOW TABLES with run_selected_tab_query.",
+                "The Show schemas or Hide schemas settings of this connection hide this schema. Ask the user to change them, or run SHOW TABLES with query-run.",
             ),
             Missing::Relations(_) => (
                 "not_cached",
-                "Qrow has not read the relations of this schema, and no tab of the connection is connected. Ask the user to refresh the schema in the Connections sidebar, or run SHOW TABLES with run_selected_tab_query.",
+                "Qrow has not read the relations of this schema, and no tab of the connection is connected. Ask the user to refresh the schema in the Connections sidebar, or run SHOW TABLES with query-run.",
             ),
             Missing::RelationNotFound => (
                 "not_found",
-                "The cached relation list of this schema does not have this relation. Check the name with list_relations. The relation can be new; then ask the user to refresh the schema.",
+                "The cached relation list of this schema does not have this relation. Check the name with catalog-list-relations. The relation can be new; then ask the user to refresh the schema.",
             ),
             Missing::Columns(_) => (
                 "not_cached",
-                "Qrow has not read the columns of this relation, and no tab of the connection is connected. Ask the user to refresh it in the Connections sidebar, or run DESCRIBE with run_selected_tab_query.",
+                "Qrow has not read the columns of this relation, and no tab of the connection is connected. Ask the user to refresh it in the Connections sidebar, or run DESCRIBE with query-run.",
             ),
         }
     }
@@ -376,7 +376,7 @@ impl CatalogContext {
 /// The names in `sql` that can be relations: `a.b`, `a.b.c` (the last two
 /// parts), and single names. Comments and string literals are skipped.
 /// Backticks quote a name.
-fn names(sql: &str) -> Vec<Vec<String>> {
+pub(super) fn names(sql: &str) -> Vec<Vec<String>> {
     let chars: Vec<char> = sql.chars().collect();
     let mut names: Vec<Vec<String>> = Vec::new();
     let mut current: Vec<String> = Vec::new();

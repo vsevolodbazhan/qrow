@@ -161,6 +161,24 @@ impl Qrow {
         }
     }
 
+    /// The dbt project of `profile` for the assistant, when Qrow has an
+    /// index of its manifest.
+    pub(super) fn dbt_project<'a>(
+        &self,
+        profile: &'a crate::model::Profile,
+        state: Option<&'a Arc<ManifestState>>,
+    ) -> Option<crate::assistant::dbt::Project<'a>> {
+        let project = profile.dbt.as_ref()?;
+        let state = state?;
+        let index = state.index.as_ref()?;
+        Some(crate::assistant::dbt::Project::new(
+            index,
+            project,
+            state.refreshed,
+            !state.is_current(),
+        ))
+    }
+
     /// Whether Qrow parses the manifest of `profile` now.
     pub(super) fn dbt_parsing(&self, profile: Uuid) -> bool {
         self.dbt.state(profile).is_some_and(|state| state.parsing)

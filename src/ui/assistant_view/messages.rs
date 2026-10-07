@@ -390,9 +390,26 @@ impl Qrow {
                 crate::catalog::now(),
             ))
         });
+        let dbt = conversation_tab.and_then(|index| {
+            let tab = &self.tabs[index];
+            let profile = self
+                .profiles
+                .iter()
+                .find(|profile| Some(profile.id) == tab.saved.profile)?;
+            let state = profile.dbt.as_ref().and(self.dbt.state(profile.id))?;
+            let project = self.dbt_project(profile, Some(state));
+            Some(crate::assistant::dbt::context(
+                profile.id,
+                state,
+                project.as_ref(),
+                &tab.input.read(cx).value(),
+                &profile.database,
+            ))
+        });
         serde_json::to_value(
             WorkspaceContext::new(self.settings.sql_style(), connections, tabs, selected_tab)
                 .with_catalog(catalog)
+                .with_dbt(dbt)
                 .with_notes(notes),
         )
         .unwrap_or(json!({"version": 1}))
