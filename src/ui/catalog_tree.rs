@@ -90,7 +90,7 @@ pub(super) enum Node {
 
 impl Node {
     /// The name that Copy gives and the name for SQL, for a node with a name.
-    fn names(&self, kind: crate::model::DatabaseType) -> Option<(String, String)> {
+    fn names(&self, kind: crate::model::DatabaseType, catalog: &str) -> Option<(String, String)> {
         match self {
             Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Relation { schema, name, .. } => {
@@ -99,6 +99,11 @@ impl Node {
                     kind.quote_identifier(schema),
                     kind.quote_identifier(name)
                 );
+                let qualified = if kind == crate::model::DatabaseType::Trino {
+                    format!("{}.{}", kind.quote_identifier(catalog), qualified)
+                } else {
+                    qualified
+                };
                 Some((qualified.clone(), qualified))
             }
             Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
@@ -1164,12 +1169,8 @@ impl Qrow {
             | Node::Column { profile, .. } => *profile,
             _ => return None,
         };
-        node.names(
-            self.profiles
-                .iter()
-                .find(|profile| profile.id == id)?
-                .database_type,
-        )
+        let profile = self.profiles.iter().find(|profile| profile.id == id)?;
+        node.names(profile.database_type, &profile.database)
     }
 
     /// The names of the row that the tree selects.

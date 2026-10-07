@@ -77,7 +77,10 @@ pub fn tokens_for(
                 }
             }
             Kind::Comment
-        } else if bytes[i] == b'$' && dollar_quote_end(sql, i).is_some() {
+        } else if database_type != crate::model::DatabaseType::Trino
+            && bytes[i] == b'$'
+            && dollar_quote_end(sql, i).is_some()
+        {
             let (delimiter_end, string_end) = dollar_quote_end(sql, i).unwrap();
             i = string_end.unwrap_or(bytes.len()).max(delimiter_end);
             Kind::String
@@ -88,7 +91,10 @@ pub fn tokens_for(
                 if bytes[i] == b'\\'
                     && quote != b'`'
                     && (database_type == crate::model::DatabaseType::Kyuubi
-                        || (quote == b'\'' && start > 0 && matches!(bytes[start - 1], b'E' | b'e')))
+                        || (database_type == crate::model::DatabaseType::Postgres
+                            && quote == b'\''
+                            && start > 0
+                            && matches!(bytes[start - 1], b'E' | b'e')))
                 {
                     i = (i + 2).min(bytes.len());
                 } else if bytes[i] == quote {
@@ -103,7 +109,7 @@ pub fn tokens_for(
                 }
             }
             if quote == b'`'
-                || (quote == b'"' && database_type == crate::model::DatabaseType::Postgres)
+                || (quote == b'"' && database_type != crate::model::DatabaseType::Kyuubi)
             {
                 Kind::Identifier
             } else {
@@ -1033,5 +1039,24 @@ mod dialect_tests {
             2
         );
         validate_single_for(r"SELECT E'a\';b'", DatabaseType::Postgres).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod trino_tests {
+    use super::*;
+    use crate::model::DatabaseType;
+    #[test]
+    fn trino_uses_standard_strings_and_double_quoted_names() {
+        let sql = r#"SELECT 'a\' AS "odd;name"; SELECT 2"#;
+        assert_eq!(statement_ranges_for(sql, DatabaseType::Trino).len(), 2);
+        assert!(validate_single_for(sql, DatabaseType::Trino).is_err());
+        assert!(
+            tokens_for(sql, DatabaseType::Trino)
+                .iter()
+                .any(|(range, kind)| *kind == Kind::Identifier
+                    && &sql[range.clone()] == "\"odd;name\"")
+        );
+        assert!(validate_single_for("SELECT '$x$'; SELECT 2", DatabaseType::Trino).is_err());
     }
 }

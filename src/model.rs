@@ -354,6 +354,8 @@ pub struct Profile {
     pub port: u16,
     pub username: String,
     pub database: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trino_schema: String,
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
@@ -548,6 +550,7 @@ pub enum DatabaseType {
     #[default]
     Kyuubi,
     Postgres,
+    Trino,
 }
 
 impl DatabaseType {
@@ -555,6 +558,7 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => "Spark (HiveServer2)",
             Self::Postgres => "Postgres",
+            Self::Trino => "Trino",
         }
     }
 
@@ -562,6 +566,7 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => "spark_kyuubi",
             Self::Postgres => "postgres",
+            Self::Trino => "trino",
         }
     }
 
@@ -569,13 +574,14 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => 10009,
             Self::Postgres => 5432,
+            Self::Trino => 8080,
         }
     }
 
     pub fn quote_identifier(self, name: &str) -> String {
         let quote = match self {
             Self::Kyuubi => '`',
-            Self::Postgres => '"',
+            Self::Postgres | Self::Trino => '"',
         };
         format!(
             "{quote}{}{quote}",
@@ -875,6 +881,7 @@ impl Default for Profile {
             port: 10009,
             username: String::new(),
             database: "avia".into(),
+            trino_schema: String::new(),
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
@@ -911,6 +918,8 @@ impl Profile {
             && self.port == other.port
             && self.username == other.username
             && self.database == other.database
+            && (self.database_type != DatabaseType::Trino
+                || self.trino_schema == other.trino_schema)
             && self.parameters == other.parameters
             && if self.database_type == DatabaseType::Postgres {
                 self.postgres_ssl_mode() == other.postgres_ssl_mode()
@@ -946,6 +955,12 @@ impl Profile {
             self.database_type != DatabaseType::Postgres
                 || self.authentication == Authentication::Password,
             "Postgres connections use password authentication."
+        );
+        anyhow::ensure!(
+            self.database_type != DatabaseType::Trino
+                || self.authentication == Authentication::Password
+                || self.tls,
+            "Trino sign-ins require TLS."
         );
         self.lifecycle.validate()?;
         if let Some(dbt) = &self.dbt {
@@ -2851,5 +2866,39 @@ mod database_type_tests {
             DatabaseType::Kyuubi.quote_identifier("odd`name"),
             "`odd``name`"
         );
+    }
+}
+
+#[cfg(test)]
+mod trino_tests {
+    use super::*;
+    #[test]
+    fn profiles_round_trip_and_schema_changes_replace_the_session() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Trino,
+            host: "localhost".into(),
+            username: "qrow".into(),
+            database: "tpch".into(),
+            trino_schema: "tiny".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Profile>(&serde_json::to_string(&profile).unwrap()).unwrap(),
+            profile
+        );
+        let old = profile.clone();
+        profile.trino_schema = "sf1".into();
+        assert!(!profile.connection_identity_eq(&old));
+        profile.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(profile.validate().is_err());
+        profile.tls = true;
+        profile.validate().unwrap();
+        assert_eq!(
+            DatabaseType::Trino.quote_identifier("odd\"name"),
+            "\"odd\"\"name\""
+        );
+        assert_eq!(DatabaseType::Trino.default_port(), 8080);
     }
 }

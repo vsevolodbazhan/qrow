@@ -1,13 +1,13 @@
 # Connections
 
-A connection profile stores the settings for a Kyuubi or Postgres server. Each connection
+A connection profile stores the settings for a Kyuubi, Postgres, or Trino server. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
 bar, press **⌘B**, or select **View → Connections**.
 
 The connection icon identifies the connection type. Kyuubi connections use the
-Spark icon. Postgres connections use the elephant icon.
+Spark icon. Postgres connections use the elephant icon. Trino connections use the rabbit icon.
 
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
@@ -45,15 +45,15 @@ search field above the pages to find a field.
 1. Click **+** beside Connections.
 2. On the **General** page, select **Connection Type**.
 3. Enter a name, the server hostname or IP address, and the port.
-4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
+4. For Kyuubi or Trino, turn on **TLS** if the server accepts TLS on this port.
    For Postgres, select a [TLS Mode](#use-postgres).
 5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
    - **Sign-in (OpenID Connect)**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
 
-   For Postgres, enter the role name and password.
-6. Enter the initial database.
+   For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
+6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
    to the **Catalog** page and set **Schema Refresh** to **Manual** or **While
@@ -134,6 +134,62 @@ names. Use qualified names when a different `search_path` applies.
 - A late cancellation request can cancel the next query in the same session.
 - A SQL error in an explicit transaction keeps that transaction in the failed
   state. Qrow does not run `ROLLBACK` automatically.
+
+## Use Trino
+
+Select **Trino** in **Connection Type**. Enter the hostname and port of the
+coordinator. The default port is 8080. **TLS** selects HTTPS and checks the
+server certificate and hostname against the system trust store.
+
+Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
+want to use unqualified table names, for example `tiny`. The schema is optional.
+The schema browser reads the initial catalog. SQL names from the browser include
+the catalog, schema, and table, with double quotes.
+
+For **Password** authentication, enter the username. Leave the password blank
+if the server accepts a username without a password. Turn on **TLS** when you
+enter a password. Passwords use macOS Keychain.
+
+For **Sign-in (OpenID Connect)**, select an existing sign-in and enter the
+Trino username. Turn on **TLS**. The coordinator must accept the access token
+of that provider. The database hosts of the sign-in must include the
+coordinator hostname. This option uses the existing provider sign-in. It does
+not use Trino's external-authentication challenge flow.
+
+Enter session properties as a JSON object with string values. For example:
+
+```json
+{"query_max_run_time": "10m", "join_distribution_type": "AUTOMATIC"}
+```
+
+Each tab has separate session settings. `USE`, `SET SESSION`, `RESET SESSION`,
+prepared statements, roles, and transaction commands update that tab. A
+keep-alive does not replace its result cursor. Disconnect cancels an active
+query and sends `ROLLBACK` for an open transaction. The assistant receives
+`trino` as the connector type and the initial catalog and schema as context.
+
+### Trino limits
+
+- The schema browser reads one catalog. It shows schemas, tables, views, and
+  column types. It does not read table or column comments.
+- Qrow reads all result pages before it shows the first page. It keeps up to
+  100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
+  without keeping them. The result limits do not reduce server work.
+- Each HTTP response has a 16 MiB limit before JSON decoding. Decoding and one
+  response page use memory in addition to the retained result limits.
+- Nested values use JSON text. Binary and temporal values use the server's
+  JSON representation. Nulls remain distinct from empty strings.
+- **Response Timeout** bounds each HTTP request. It does not bound total query
+  time. Use the `query_max_run_time` session property for that limit.
+- Qrow does not retry a failed HTTP request or follow redirects. A result URL
+  must use the same scheme, hostname, and port as the coordinator. Configure
+  reverse proxies to return URLs for that origin.
+- Cancellation sends HTTP `DELETE` to the query cursor. It cannot undo completed
+  SQL. A request already in progress can wait until its response timeout.
+- Client certificates, Kerberos, Trino external-authentication challenges, and
+  the result spooling protocol are not supported.
+- Automatic assistant relation context uses the initial schema. It does not
+  track `USE` commands. Use qualified names after a schema change.
 
 ## Sign in with OpenID Connect
 

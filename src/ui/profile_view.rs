@@ -150,11 +150,13 @@ impl Qrow {
         qrow: &WeakEntity<Qrow>,
         cx: &mut Context<Self>,
     ) -> SettingPage {
-        let postgres = connection_form::chosen(
+        let database_type = connection_form::chosen(
             &form.database_type,
             &connection_form::database_type_choices(),
             cx,
-        ) == crate::model::DatabaseType::Postgres;
+        );
+        let postgres = database_type == crate::model::DatabaseType::Postgres;
+        let trino = database_type == crate::model::DatabaseType::Trino;
         let uses_sign_in = !postgres && connection_form::uses_sign_in(&form.authentication, cx);
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
@@ -308,7 +310,11 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "Password",
-                    "The password for this account.",
+                    if trino {
+                        "Leave blank if the server needs only a username."
+                    } else {
+                        "The password for this account."
+                    },
                     &["ldap", "secret"],
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
@@ -316,12 +322,36 @@ impl Qrow {
             }))
             .item(connection_row(
                 qrow,
-                "Initial Database",
+                if trino {
+                    "Initial Catalog"
+                } else {
+                    "Initial Database"
+                },
                 "Selected when the session opens.",
                 &["schema", "database", "use"],
                 false,
-                |_, form, _, _| form_input(form, 5, "Initial Database"),
+                move |_, form, _, _| {
+                    form_input(
+                        form,
+                        5,
+                        if trino {
+                            "Initial Catalog"
+                        } else {
+                            "Initial Database"
+                        },
+                    )
+                },
             ))
+            .items(trino.then(|| {
+                connection_row(
+                    qrow,
+                    "Initial Schema",
+                    "Optional schema in the initial catalog.",
+                    &["schema", "trino"],
+                    false,
+                    |_, form, _, _| form_input(form, 15, "Initial Schema"),
+                )
+            }))
             .item(connection_row(
                 qrow,
                 "Session Parameters",
@@ -399,11 +429,7 @@ impl Qrow {
                 vec![]
             });
         SettingPage::new("General")
-            .description(if postgres {
-                "Postgres"
-            } else {
-                "Spark (HiveServer2)"
-            })
+            .description(database_type.label())
             // Space the engine name like the help text under a field.
             .header_style(&StyleRefinement::default().gap_0())
             .default_open(true)

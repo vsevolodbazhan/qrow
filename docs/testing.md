@@ -46,6 +46,7 @@ accept a test filter.
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
 | `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
+| `trino` | Trino connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
@@ -102,6 +103,20 @@ They check token removal when another executable created the item. They do not
 change the default keychain or its search list. A separate password test uses
 the real macOS Keychain, so no suite runs it. Run that test with
 `cargo test --test integration keychain:: -- --ignored`.
+
+## Trino tests
+
+Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
+the real window against a disposable Trino 483 coordinator. The suite uses
+synthetic credentials, a temporary certificate authority, and a loopback HTTPS
+port. It checks password authentication, certificate checks, types, pagination,
+session changes, transactions, prepared statements, metadata, cancellation,
+and result limits. It removes the container after the run.
+
+The suite needs Docker and OpenSSL. It builds the tests before the server
+starts. The Linux backend CI job runs its connector tests. The real-window
+Trino tests run locally on macOS with Docker. The Kyuubi `e2e` suite excludes
+Postgres and Trino tests because each connector has its own fixture.
 
 ## Groups
 
@@ -657,7 +672,7 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend`, `postgres` with Docker | `core` |
+| `backend` | Linux | `backend`, `postgres`, `trino` with Docker | `core` |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
 | `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |

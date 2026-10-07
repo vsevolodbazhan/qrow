@@ -2653,6 +2653,7 @@ impl Qrow {
             settings.refresh_minutes.to_string(),
             settings.timeout_minutes.to_string(),
             profile.lifecycle.response_timeout_seconds.to_string(),
+            profile.trino_schema.clone(),
         ];
         let fields = values
             .into_iter()
@@ -2788,6 +2789,7 @@ impl Qrow {
                             let default_name = |kind| match kind {
                                 crate::model::DatabaseType::Kyuubi => "Spark",
                                 crate::model::DatabaseType::Postgres => "Postgres",
+                                crate::model::DatabaseType::Trino => "Trino",
                             };
                             if form.is_new
                                 && form.fields[0].read(cx).value().as_ref()
@@ -2808,6 +2810,7 @@ impl Qrow {
                                 == match previous {
                                     crate::model::DatabaseType::Kyuubi => "avia",
                                     crate::model::DatabaseType::Postgres => "postgres",
+                                    crate::model::DatabaseType::Trino => "tpch",
                                 }
                             {
                                 form.fields[5].update(cx, |field, cx| {
@@ -2815,6 +2818,7 @@ impl Qrow {
                                         match selected {
                                             crate::model::DatabaseType::Kyuubi => "avia",
                                             crate::model::DatabaseType::Postgres => "postgres",
+                                            crate::model::DatabaseType::Trino => "tpch",
                                         },
                                         window,
                                         cx,
@@ -2997,6 +3001,7 @@ impl Qrow {
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
+        profile.trino_schema = values[15].trim().into();
         let parse = (|| -> anyhow::Result<()> {
             profile.port = values[2]
                 .trim()
@@ -3105,7 +3110,8 @@ impl Qrow {
             }
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
-            profile.authentication = if profile.database_type == crate::model::DatabaseType::Kyuubi
+            profile.authentication = if profile.database_type
+                != crate::model::DatabaseType::Postgres
                 && connection_form::uses_sign_in(&form.authentication, cx)
             {
                 let sign_in =
@@ -3146,6 +3152,7 @@ impl Qrow {
         if profile.authentication == Authentication::Password
             && needs_password
             && password.is_empty()
+            && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
             form.error = Some("Enter the password for this connection.".into());
@@ -3160,7 +3167,12 @@ impl Qrow {
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
         std::thread::spawn(move || {
-            let result = if !demo && !password.is_empty() {
+            let result = if !demo
+                && (!password.is_empty()
+                    || (needs_password
+                        && profile.database_type == crate::model::DatabaseType::Trino
+                        && profile.authentication == Authentication::Password))
+            {
                 credentials
                     .set_password(profile.id, &password)
                     .map_err(|e| e.to_string())

@@ -38,7 +38,7 @@ impl CatalogIdentity {
     pub fn of(profile: &Profile) -> Self {
         Self {
             database_type: profile.database_type,
-            database: (profile.database_type == crate::model::DatabaseType::Postgres)
+            database: (profile.database_type != crate::model::DatabaseType::Kyuubi)
                 .then(|| profile.database.clone()),
             host: profile.host.clone(),
             port: profile.port,

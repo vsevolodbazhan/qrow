@@ -71,6 +71,13 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(postgres.fixture)
         self.assertIn("postgres", catalog.CI_JOBS["backend"].suites)
 
+    def test_trino_has_its_own_docker_suite_and_backend_ci_job(self):
+        trino = catalog.SUITES["trino"]
+        self.assertTrue(trino.explicit_only)
+        self.assertIn("docker", trino.requires)
+        self.assertIsNone(trino.fixture)
+        self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
+
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
         self.assertIn("write-a-ui-test", topics)
@@ -159,11 +166,12 @@ class SelectionTests(unittest.TestCase):
 
     def test_e2e_test_filters_keep_the_kyuubi_fixture_boundary(self):
         step = catalog.SUITES["e2e"].steps[0]
-        for selected in [None, "postgres", "queries"]:
+        for selected in [None, "postgres", "trino", "queries"]:
             with self.subTest(selected=selected):
                 command = runner.render_command(step, {}, selected, [])
                 expression = command[command.index("-E") + 1]
                 self.assertIn("not test(/^postgres::/)", expression)
+                self.assertIn("not test(/^trino::/)", expression)
                 self.assertIn("not test(/^perf::/)", expression)
                 if selected:
                     self.assertTrue(expression.endswith(f" and test({selected})"))

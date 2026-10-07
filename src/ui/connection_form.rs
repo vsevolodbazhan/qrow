@@ -132,7 +132,7 @@ use gpui_kit::{
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 15] = [
+pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -148,6 +148,7 @@ pub(super) const FIELD_IDS: [&str; 15] = [
     "connection-refresh-period",
     "connection-refresh-timeout",
     "connection-response-timeout",
+    "connection-trino-schema",
 ];
 const PASSWORD: &str = "Password";
 const SIGN_IN: &str = "Sign-in (OpenID Connect)";
@@ -769,10 +770,14 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
 
 pub(super) fn database_type_choices() -> Vec<(crate::model::DatabaseType, String)> {
     use crate::model::DatabaseType;
-    [DatabaseType::Kyuubi, DatabaseType::Postgres]
-        .into_iter()
-        .map(|kind| (kind, kind.label().into()))
-        .collect()
+    [
+        DatabaseType::Kyuubi,
+        DatabaseType::Postgres,
+        DatabaseType::Trino,
+    ]
+    .into_iter()
+    .map(|kind| (kind, kind.label().into()))
+    .collect()
 }
 
 pub(super) fn postgres_ssl_mode_choices() -> Vec<(crate::model::PostgresSslMode, String)> {
