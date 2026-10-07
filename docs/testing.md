@@ -111,7 +111,12 @@ the real window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. It checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
-and result limits. It removes the container after the run.
+and result limits. It then runs the same disposable coordinator with OAuth2
+and a synthetic confidential client. An injectable browser follows the
+coordinator and provider redirects over verified HTTPS. Tests check browser
+progress, token reuse, and renewal without another browser login.
+The fixture provider uses only synthetic accounts and an HTTPS callback at
+Trino. It removes the container after the run.
 
 The suite needs Docker and OpenSSL. It builds the tests before the server
 starts. The Linux backend CI job runs its connector tests. The real-window

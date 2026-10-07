@@ -150,3 +150,66 @@ fn byte_limit_keeps_the_last_retained_batch_in_the_results_table(cx: &mut TestAp
         assert_eq!(cell(window, 0, 1).as_deref(), Some("x"));
     });
 }
+
+#[path = "../support/trino_oidc.rs"]
+mod trino_oidc;
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppContext) {
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+        time::{Duration, Instant},
+    };
+    let (profile, sign_in, trust) = trino_oidc::configuration();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let browser = trino_oidc::browser(trust.clone(), opens.clone());
+    let release = Arc::new(AtomicBool::new(false));
+    let browser_release = release.clone();
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT current_user AS value".into();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            sign_ins: vec![sign_in],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            trust,
+            Some(Arc::new(move |url| {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                while !browser_release.load(Ordering::SeqCst) {
+                    anyhow::ensure!(
+                        Instant::now() < deadline,
+                        "Fixture browser was not released"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                browser(url)
+            })),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Waiting for browser sign-in");
+    release.store(true, Ordering::SeqCst);
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "alice");
+    app.click(cx, "disconnect");
+    app.wait_status(cx, "Disconnected");
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.wait_cell(cx, 0, 1, "42");
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    app.click(cx, "show-sign-ins");
+    app.wait_label(cx, "Signed in through Trino");
+    assert!(app.saved().sign_ins[0].identity.is_none());
+    assert!(
+        !serde_json::to_string(&app.saved())
+            .unwrap()
+            .contains("Bearer")
+    );
+}

@@ -163,3 +163,43 @@ fn cancellation_and_row_limits_leave_the_session_usable() -> Result<()> {
 }
 
 mod protocol;
+
+#[path = "../support/trino_oidc.rs"]
+mod trino_oidc;
+#[test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn external_browser_confidential_oidc_login_cache_and_renewal() -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let (profile, sign_in, trust) = trino_oidc::configuration();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let service =
+        qrow::external_auth::Service::new(Some(trino_oidc::browser(trust.clone(), opens.clone())));
+    service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&profile),
+    );
+    let connector = DatabaseConnector::new(trust);
+    let secret = service.secret(&profile)?;
+    let mut session = connector.connect(&profile, secret.clone())?;
+    complete(&mut *session, "SELECT current_user")?;
+    assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("alice"));
+    let mut other = connector.connect(&profile, secret)?;
+    complete(&mut *other, "SELECT 42")?;
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    let refresh_grants = trino_oidc::refresh_grants()?;
+    std::thread::sleep(Duration::from_secs(5));
+    complete(&mut *session, "SELECT 43")?;
+    assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("43"));
+    assert!(trino_oidc::refresh_grants()? > refresh_grants);
+    assert_eq!(
+        opens.load(Ordering::SeqCst),
+        1,
+        "Trino renewal must not reopen the browser"
+    );
+    session.close()?;
+    other.close()?;
+    Ok(())
+}
