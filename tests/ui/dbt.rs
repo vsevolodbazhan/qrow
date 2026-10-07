@@ -417,7 +417,7 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(crate::support::labelled(window, "Open Model SQL").is_none());
     });
-    app.choose(cx, "popup-menu", "Show dbt Details");
+    app.choose(cx, "popup-menu", "Show dbt details");
     app.wait_until(cx, "the dbt details", TIMEOUT, |window, _| {
         label(window, "dbt-details-description").as_deref() == Some(model.description.trim())
     });

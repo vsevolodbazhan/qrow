@@ -327,7 +327,7 @@ source builds shows its kind after its name, for example `dbt incremental` or
 cut to a few lines.
 
 To read the full description, right-click the table and select **Show dbt
-Details**. A panel opens at the right side of the window. It shows:
+details**. A panel opens at the right side of the window. It shows:
 
 - The kind, the materialization, the relation, the unique ID, and the tags of
   the resource.

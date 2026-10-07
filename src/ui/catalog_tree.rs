@@ -1250,7 +1250,7 @@ impl Qrow {
                 match details {
                     Some(details) => menu
                         .separator()
-                        .item(PopupMenuItem::new("Show dbt Details").on_click(details)),
+                        .item(PopupMenuItem::new("Show dbt details").on_click(details)),
                     None => menu,
                 }
             },
@@ -1712,7 +1712,7 @@ fn render_entry(
             let description = dbt.as_ref().and_then(|dbt| {
                 let description = dbt.description.as_deref()?;
                 Some(if dbt.description_cut {
-                    format!("{description}\nShow dbt Details has the full text.")
+                    format!("{description}\nShow dbt details has the full text.")
                 } else {
                     description.to_owned()
                 })
