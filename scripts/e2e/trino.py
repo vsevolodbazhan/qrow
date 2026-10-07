@@ -1,4 +1,5 @@
 """Run Trino connector and real-window tests with a disposable Docker coordinator."""
+import json
 import os
 from pathlib import Path
 import platform
@@ -126,7 +127,12 @@ def main():
                 try:
                     with urllib.request.urlopen(f"https://localhost:{oidc_port}/jwks", context=context, timeout=5):
                         pass
-                    urllib.request.urlopen(urllib.request.Request(origin + "/v1/statement", data=b"SELECT 1", headers={"X-Trino-User": "alice"}), context=context, timeout=5)
+                    # Authentication challenges can precede OAuth2 client
+                    # initialization during catalog startup.
+                    with urllib.request.urlopen(origin + "/v1/info", context=context, timeout=5) as response:
+                        ready = json.load(response).get("starting", True) is False
+                    if ready:
+                        urllib.request.urlopen(urllib.request.Request(origin + "/v1/statement", data=b"SELECT 1", headers={"X-Trino-User": "alice"}), context=context, timeout=5)
                 except urllib.error.HTTPError as error:
                     if error.code == 401 and "x_token_server" in error.headers.get("WWW-Authenticate", ""):
                         break
