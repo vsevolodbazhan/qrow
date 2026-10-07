@@ -81,13 +81,40 @@ impl Qrow {
         let weak = cx.weak_entity();
         window.open_sheet(cx, move |sheet, window, cx| {
             let close = weak.clone();
-            let title = view.read(cx).title.clone();
+            let details = view.read(cx);
+            let title = details.title.clone();
+            let back = details.history.last().map(|visit| visit.title.clone());
+            // The title fills the title bar, so that the back button stands
+            // next to the close button of the sheet.
+            let title_bar = h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .pr_1()
+                .child(div().flex_1().min_w_0().truncate().child(title))
+                .when_some(back, |bar, back| {
+                    let view = view.clone();
+                    let label = format!("Back to {back}");
+                    bar.child(
+                        Button::new("dbt-details-back")
+                            .ghost()
+                            .small()
+                            .icon(IconName::ChevronLeft)
+                            .tooltip(label.clone())
+                            .accessibility_label(label)
+                            .on_click(move |_, window, cx| {
+                                view.update(cx, |view, cx| {
+                                    view.back(window, cx);
+                                });
+                            }),
+                    )
+                });
             sheet
                 .size(
                     (window.viewport_size().width * SHEET_WIDTH)
                         .clamp(px(MIN_SHEET_WIDTH), px(MAX_SHEET_WIDTH)),
                 )
-                .title(title)
+                .title(title_bar)
                 .child(view.clone())
                 .on_close(move |_, window, cx| {
                     let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
@@ -229,8 +256,6 @@ struct TestView {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Row {
-    /// The button back to the resource that the user came from.
-    Back,
     Missing,
     Facts,
     Description,
@@ -594,9 +619,6 @@ impl DbtDetailsView {
 
     fn make_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
-        if !self.history.is_empty() {
-            rows.push(Row::Back);
-        }
         let Some(data) = &self.data else {
             rows.push(Row::Missing);
             return rows;
@@ -862,30 +884,6 @@ impl DbtDetailsView {
         }
     }
 
-    /// The button back to the resource that the user came from.
-    fn back_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(Visit { title, .. }) = self.history.last() else {
-            return div().into_any_element();
-        };
-        h_flex()
-            .pb_2()
-            .child(
-                Button::new("dbt-details-back")
-                    .ghost()
-                    .small()
-                    // The chevron lines up with the rows below. The margin
-                    // takes back the padding of a small button, so that its
-                    // hover background keeps the padding.
-                    .ml_neg_2()
-                    .icon(IconName::ChevronLeft)
-                    .label(format!("Back to {title}"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.back(window, cx);
-                    })),
-            )
-            .into_any_element()
-    }
-
     /// Open or close the SQL part `kind`.
     fn toggle_sql(&mut self, kind: SqlKind, cx: &mut Context<Self>) {
         let current = self.state.as_ref().is_some_and(|state| state.is_current());
@@ -1029,9 +1027,6 @@ impl DbtDetailsView {
         let Some(row) = self.rows.get(position).copied() else {
             return div().into_any_element();
         };
-        if row == Row::Back {
-            return self.back_row(cx);
-        }
         let Some(data) = &self.data else {
             let text = format!("The dbt manifest does not have {} now.", self.unique_id);
             return div()
@@ -1045,7 +1040,7 @@ impl DbtDetailsView {
                 .into_any_element();
         };
         match row {
-            Row::Missing | Row::Back => div().into_any_element(),
+            Row::Missing => div().into_any_element(),
             Row::Facts => {
                 let changed = self.shown_changed;
                 v_flex()

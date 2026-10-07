@@ -559,14 +559,21 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
             crate::support::value(window, "dbt-details-filter").as_deref(),
             Some("")
         );
-        // The chevron of the back button lines up with the rows below it.
-        // The padding of the small ghost button is outside them.
-        let left = |id: &str| window.find(id.to_owned()).bounds().left();
-        assert_eq!(
-            left("dbt-details-back") + window.rem_size() * 0.5,
-            left("dbt-details-description")
+        // The back button stands next to the close button of the sheet.
+        let back = window.find("dbt-details-back").bounds();
+        let close = window.find("close").bounds();
+        assert!(back.right() < close.left(), "{back:?} {close:?}");
+        assert!(
+            close.left() - back.right() < window.rem_size(),
+            "{back:?} {close:?}"
         );
+        assert_eq!(back.center().y, close.center().y);
     });
+    // The button and its tooltip name the model.
+    app.hover_labelled(cx, &format!("Back to {}", dbt_manifest::model_name(1)));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(800));
+    app.wait_for(cx, "tooltip");
     app.click(cx, "dbt-details-back");
     app.wait_until(cx, "the model details", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").as_deref()
