@@ -548,6 +548,12 @@ impl<'a> Project<'a> {
                 continue;
             };
             let entry = self.index.entry(position);
+            if database_type == crate::model::DatabaseType::Postgres
+                && (matching::mapped_schema(self.index, entry, self.project) != schema
+                    || entry.identifier.as_ref() != relation)
+            {
+                continue;
+            }
             if found
                 .iter()
                 .any(|model| *model.unique_id == *entry.unique_id)

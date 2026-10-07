@@ -339,7 +339,11 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Response Timeout",
-                "Seconds to wait for a server response, from 10 to 3600.",
+                if postgres {
+                    "Seconds to wait for setup and cancellation, from 10 to 3600."
+                } else {
+                    "Seconds to wait for a server response, from 10 to 3600."
+                },
                 &["timeout", "seconds"],
                 false,
                 |_, form, _, _| form_input(form, 14, "Response Timeout in Seconds"),

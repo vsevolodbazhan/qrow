@@ -923,6 +923,10 @@ pub(super) fn setting_row<E: IntoElement>(
                 |label| {
                     label.child(
                         div()
+                            .id(SharedString::from(format!("setting-help-{title}")))
+                            .test_support()
+                            .role(Role::Label)
+                            .aria_label(description.clone())
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(description.clone()),

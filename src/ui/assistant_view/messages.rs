@@ -412,7 +412,11 @@ impl Qrow {
                 state,
                 project.as_ref(),
                 &tab.input.read(cx).value(),
-                &profile.database,
+                if profile.database_type == crate::model::DatabaseType::Postgres {
+                    "public"
+                } else {
+                    &profile.database
+                },
                 profile.database_type,
             ))
         });

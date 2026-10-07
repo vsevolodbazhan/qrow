@@ -405,7 +405,11 @@ pub(super) fn names(sql: &str, database_type: crate::model::DatabaseType) -> Vec
             crate::sql::Kind::Plain
                 if text.starts_with(|c: char| c.is_alphabetic() || c == '_') =>
             {
-                Some(text.to_owned())
+                Some(if database_type == crate::model::DatabaseType::Postgres {
+                    text.to_lowercase()
+                } else {
+                    text.to_owned()
+                })
             }
             _ => None,
         };
@@ -867,8 +871,8 @@ mod tests {
                 crate::model::DatabaseType::Postgres,
             ),
             vec![
-                vec!["SELECT".to_owned()],
-                vec!["FROM".to_owned()],
+                vec!["select".to_owned()],
+                vec!["from".to_owned()],
                 vec!["\"sales".to_owned(), "orders\"".to_owned()],
             ]
         );

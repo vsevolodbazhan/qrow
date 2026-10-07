@@ -20,6 +20,7 @@ fn fill_connection(app: &TestApp, cx: &mut TestAppContext, name: &str) {
     app.fill(cx, "connection-host", "127.0.0.1");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "synthetic-user");
+    app.scroll_to(cx, "connection-password");
     app.fill(cx, "connection-password", "synthetic-password");
 }
 
@@ -247,6 +248,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
         app.context_menu(cx, connection_row(original));
         app.choose(cx, "popup-menu", "Duplicate");
         app.wait_for(cx, "connection-password");
+        app.scroll_to(cx, "connection-password");
         app.fill(cx, "connection-password", "copy-password");
         app.click(cx, "save-profile");
         app.wait_gone(cx, "save-profile");
@@ -487,13 +489,13 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
         "Session Parameters",
     ];
     let shared = app.update(cx, |window, _| {
-        fields.map(|field| label(window, format!("connection-help-{field}")).unwrap())
+        fields.map(|field| label(window, format!("setting-help-{field}")).unwrap())
     });
     app.select(cx, "connection-database-type", "Postgres");
     app.update(cx, |window, _| {
         for (field, expected) in fields.into_iter().zip(shared) {
             assert_eq!(
-                label(window, format!("connection-help-{field}")).as_deref(),
+                label(window, format!("setting-help-{field}")).as_deref(),
                 Some(expected.as_str())
             );
         }
@@ -503,7 +505,7 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
                 element
                     .path()
                     .iter()
-                    .any(|id| format!("{id:?}").contains("connection-help-"))
+                    .any(|id| format!("{id:?}").contains("setting-help-"))
             })
         {
             let text = help.label().unwrap_or_default();

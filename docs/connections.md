@@ -381,8 +381,7 @@ When the connection [shows schemas](#browse-schemas), the form shows below
 the schema mapping how many dbt models, seeds, snapshots, and sources match
 tables in the catalog. A bar shows the percentage, so that rules that find
 almost no tables are easy to see. A match has the mapped schema and the alias
-or identifier of the model. Qrow does not use the database of a model,
-because Spark has no level above schemas. Ephemeral models do not count. The
+or identifier of the model. Qrow does not use the database of a model. Ephemeral models do not count. The
 summary follows the rules as you type them. An incorrect rule shows its error
 in the place of the summary.
 
@@ -444,6 +443,10 @@ read long text more easily.
 ### dbt limitations
 
 - A connection can have only one dbt project.
+- Catalog matching ignores letter case. Ambiguous matches with names that differ
+  only by letter case are omitted. Postgres SQL context keeps the case of quoted names
+  and converts unquoted names to lowercase. Its default schema is `public`;
+  use qualified names when another `search_path` applies.
 - Qrow reads only the manifest. It does not resolve Jinja, run dbt, or read
   the YAML or SQL files of the project.
 - Two paths to the same manifest, for example through a symbolic link to its

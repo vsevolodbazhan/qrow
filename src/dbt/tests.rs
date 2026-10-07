@@ -606,6 +606,26 @@ mod matching {
     }
 
     #[test]
+    fn case_distinct_catalog_names_are_ambiguous() {
+        let index = parse_value(&manifest());
+        let project = project(vec![]);
+        let (_, orders) = entry(&index, "model.tiny_lake.orders");
+        let relations = catalog(&[("core", Some(&["fct_orders", "FCT_ORDERS"]))]);
+        assert_eq!(
+            matching::find(&index, orders, &project, &CatalogNames::of(&relations)),
+            Match::NoRelation
+        );
+        let schemas = catalog(&[
+            ("core", Some(&["fct_orders"])),
+            ("CORE", Some(&["fct_orders"])),
+        ]);
+        assert_eq!(
+            matching::find(&index, orders, &project, &CatalogNames::of(&schemas)),
+            Match::NoSchema
+        );
+    }
+
+    #[test]
     fn resources_match_relations_after_the_schema_mapping() {
         let index = parse_value(&manifest());
         // The catalog of production: dbt writes to dev_core in development.
