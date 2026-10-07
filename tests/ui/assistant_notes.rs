@@ -30,6 +30,7 @@ fn edit_notes(app: &TestApp, cx: &mut TestAppContext, profile: Uuid, notes: &str
     app.context_menu(cx, connection_row(profile));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Assistant");
     app.scroll_to(cx, "connection-assistant-notes");
     app.update(cx, |window, cx| {
         assert!(
@@ -186,6 +187,7 @@ fn the_notes_field_rejects_notes_above_the_limit(cx: &mut TestAppContext) {
     app.context_menu(cx, connection_row(alpha));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Assistant");
     app.scroll_to(cx, "connection-assistant-notes");
     app.update(cx, |window, cx| {
         window.click("connection-assistant-notes", cx);

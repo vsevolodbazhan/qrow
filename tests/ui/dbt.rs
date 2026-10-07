@@ -78,6 +78,7 @@ fn edit(app: &TestApp, cx: &mut TestAppContext, profile: uuid::Uuid) {
     app.context_menu(cx, connection_row(profile));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "dbt");
     app.scroll_to(cx, "connection-dbt-manifest");
 }
 

@@ -1,6 +1,7 @@
 //! The dbt projects of connections: the worker that keeps the index of each
 //! manifest, and the dbt group of Connection Settings.
 
+use super::profile_view::connection_row;
 use super::{ProfileEditor, Qrow, connection_form};
 use crate::{
     activity::ActivityEntry,
@@ -14,16 +15,16 @@ use crate::{
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
     button::Button,
-    form::{Field, Form},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
     progress::Progress,
     select::{SearchableVec, Select, SelectState},
+    setting::{SettingGroup, SettingPage},
     v_flex,
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, IntoElement, PathPromptOptions, Role, TestSupportExt as _,
-    Window, div, prelude::*,
+    WeakEntity, Window, div, prelude::*,
 };
 use std::{
     collections::HashMap,
@@ -252,8 +253,8 @@ impl Qrow {
         .detach();
     }
 
-    pub(super) fn render_dbt(&self, form: &ProfileEditor, cx: &mut Context<Self>) -> AnyElement {
-        let saving = form.saving.is_some();
+    /// What the dbt page shows about the manifest in the form.
+    fn dbt_view(&self, form: &ProfileEditor, cx: &App) -> DbtView {
         let profile = form.profile.id;
         let typed = expand_home(form.dbt.manifest.read(cx).value().trim());
         // The form shows the state of the saved manifest only while the
@@ -270,7 +271,6 @@ impl Qrow {
         let state = saved.and_then(|_| self.dbt.state(profile)).cloned();
         let status = manifest_status(&typed, saved.is_some(), state.as_deref());
         let parsing = state.as_ref().is_some_and(|state| state.parsing);
-        let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
         let rules = parse_schema_rules(form.dbt.rules.read(cx).value().as_ref());
         let matches = match (&state, rules) {
             (_, Err(error)) => Some(MatchResult::Error(error.to_string())),
@@ -284,170 +284,208 @@ impl Qrow {
             }),
             _ => None,
         };
-        let muted = cx.theme().muted_foreground;
-        Form::vertical()
-            .w_full()
-            .child(
-                Field::new().label("Manifest").child(
+        DbtView {
+            saved: saved.is_some(),
+            status,
+            parsing,
+            matches,
+        }
+    }
+
+    /// The dbt project of the connection: the manifest, its refresh, the
+    /// schema mapping, and the tables that match its models.
+    pub(super) fn dbt_page(
+        &self,
+        form: &ProfileEditor,
+        qrow: &WeakEntity<Qrow>,
+        cx: &App,
+    ) -> SettingPage {
+        let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
+        let project = SettingGroup::new()
+            .title("Project")
+            .item(connection_row(
+                qrow,
+                "Manifest",
+                "The manifest.json file that dbt writes in the target folder of the project.",
+                &["dbt", "manifest", "json", "project", "target"],
+                true,
+                |this, form, _, cx| this.dbt_manifest_field(form, cx),
+            ))
+            .item(connection_row(
+                qrow,
+                "Manifest Refresh",
+                if automatic {
+                    "Reads the manifest again when dbt writes it."
+                } else {
+                    "Reads the manifest again only when you select Refresh."
+                },
+                &["dbt", "manifest", "automatic", "manual", "watch"],
+                false,
+                |_, form, _, _| {
+                    Select::new(&form.dbt.refresh)
+                        .id("connection-dbt-refresh")
+                        .w_full()
+                        .disabled(form.saving.is_some())
+                        .accessibility_label("Manifest Refresh")
+                        .into_any_element()
+                },
+            ))
+            .item(connection_row(
+                qrow,
+                "Schema Mapping",
+                "Rules like dbt_dev_* = * or analytics = prod. The first match applies.",
+                &[
+                    "dbt", "schema", "mapping", "rules", "prefix", "tables", "match",
+                ],
+                true,
+                |this, form, _, cx| {
                     v_flex()
                         .w_full()
-                        .gap_1()
+                        .gap_3()
                         .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(
-                                    Input::new(&form.dbt.manifest)
-                                        .id("connection-dbt-manifest")
-                                        .flex_1()
-                                        .disabled(saving)
-                                        .aria_label("Manifest"),
-                                )
-                                .child(
-                                    Button::new("connection-dbt-choose")
-                                        .label("Choose…")
-                                        .disabled(saving)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.choose_dbt_manifest(window, cx)
-                                        })),
-                                )
-                                .when(saved.is_some(), |row| {
-                                    row.child(
-                                        Button::new("connection-dbt-refresh-now")
-                                            .label("Refresh")
-                                            .disabled(saving || parsing)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.refresh_dbt(profile);
-                                                cx.notify();
-                                            })),
-                                    )
-                                }),
-                        )
-                        .child(
+                            // The textarea has no element ID setter in GPUI
+                            // Kit 0.6.6, so this element gives tests one.
                             div()
-                                .id("connection-dbt-status")
+                                .id("connection-dbt-rules")
                                 .test_support()
-                                .role(Role::Status)
-                                .aria_label(status.clone())
-                                .text_sm()
-                                .text_color(muted)
-                                .child(status),
-                        ),
-                ),
-            )
+                                .w_full()
+                                .child(
+                                    Textarea::new(&form.dbt.rules)
+                                        .w_full()
+                                        .disabled(form.saving.is_some())
+                                        .font_family("Menlo")
+                                        .aria_label("Schema Mapping"),
+                                ),
+                        )
+                        // The share of the resources that the rules match.
+                        .children(this.dbt_tables_field(form, cx))
+                        .into_any_element()
+                },
+            ));
+        SettingPage::new("dbt").resettable(false).group(project)
+    }
+
+    /// The manifest path, its buttons, and the state of the manifest.
+    fn dbt_manifest_field(&self, form: &ProfileEditor, cx: &mut Context<Self>) -> AnyElement {
+        let saving = form.saving.is_some();
+        let profile = form.profile.id;
+        let view = self.dbt_view(form, cx);
+        let muted = cx.theme().muted_foreground;
+        v_flex()
+            .w_full()
+            .gap_1()
             .child(
-                Field::new()
-                    .label("Manifest Refresh")
+                h_flex()
+                    .w_full()
+                    .gap_2()
                     .child(
-                        Select::new(&form.dbt.refresh)
-                            .id("connection-dbt-refresh")
-                            .w_full()
+                        Input::new(&form.dbt.manifest)
+                            .id("connection-dbt-manifest")
+                            .flex_1()
                             .disabled(saving)
-                            .accessibility_label("Manifest Refresh"),
+                            .aria_label("Manifest"),
                     )
-                    .description(if automatic {
-                        "Reads the manifest again when dbt writes it."
-                    } else {
-                        "Reads the manifest again only when you select Refresh."
+                    .child(
+                        Button::new("connection-dbt-choose")
+                            .label("Choose…")
+                            .disabled(saving)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.choose_dbt_manifest(window, cx)
+                            })),
+                    )
+                    .when(view.saved, |row| {
+                        row.child(
+                            Button::new("connection-dbt-refresh-now")
+                                .label("Refresh")
+                                .disabled(saving || view.parsing)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.refresh_dbt(profile);
+                                    cx.notify();
+                                })),
+                        )
                     }),
             )
             .child(
-                Field::new()
-                    .label("Schema Mapping")
+                div()
+                    .id("connection-dbt-status")
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(view.status.clone())
+                    .text_sm()
+                    .text_color(muted)
+                    .child(view.status),
+            )
+            .into_any_element()
+    }
+
+    /// The share of the dbt resources that match tables, below the schema
+    /// mapping that it follows.
+    fn dbt_tables_field(&self, form: &ProfileEditor, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let result = self.dbt_view(form, cx).matches?;
+        let muted = cx.theme().muted_foreground;
+        let line = |id: &'static str, text: String, color| {
+            div()
+                .id(id)
+                .test_support()
+                .role(Role::Status)
+                .aria_label(text.clone())
+                .text_sm()
+                .text_color(color)
+                .child(text)
+        };
+        Some(match result {
+            MatchResult::Note(text) => {
+                line("connection-dbt-matches", text, muted).into_any_element()
+            }
+            MatchResult::Error(text) => {
+                line("connection-dbt-matches", text, cx.theme().danger).into_any_element()
+            }
+            MatchResult::Summary { matched, total } => {
+                let percent = percent(matched, total);
+                v_flex()
+                    .w_full()
+                    .gap_1()
                     .child(
-                        // The textarea has no element ID setter in GPUI Kit
-                        // 0.6.6, so this element gives tests one.
+                        // Progress has no element ID setter for tests, so
+                        // this element gives tests one.
                         div()
-                            .id("connection-dbt-rules")
+                            .id("connection-dbt-match-ratio")
                             .test_support()
                             .w_full()
                             .child(
-                                Textarea::new(&form.dbt.rules)
-                                    .w_full()
-                                    .disabled(saving)
-                                    .font_family("Menlo")
-                                    .aria_label("Schema Mapping"),
+                                Progress::new("connection-dbt-match-ratio-bar")
+                                    .xsmall()
+                                    .value(percent as f32)
+                                    .accessibility_label("dbt resources that matched the catalog"),
                             ),
                     )
-                    .description(
-                        "Rules like dbt_dev_* = * or analytics = prod. The first match applies.",
-                    ),
-            )
-            .when_some(matches, |form_element, result| {
-                let line = |id: &'static str, text: String, color| {
-                    div()
-                        .id(id)
-                        .test_support()
-                        .role(Role::Status)
-                        .aria_label(text.clone())
-                        .text_sm()
-                        .text_color(color)
-                        .child(text)
-                };
-                let result = match result {
-                    MatchResult::Note(text) => {
-                        line("connection-dbt-matches", text, muted).into_any_element()
-                    }
-                    MatchResult::Error(text) => {
-                        line("connection-dbt-matches", text, cx.theme().danger).into_any_element()
-                    }
-                    MatchResult::Summary { matched, total } => {
-                        let percent = percent(matched, total);
-                        v_flex()
+                    // The percentage ends with the bar.
+                    .child(
+                        h_flex()
                             .w_full()
-                            .gap_1()
+                            .items_start()
+                            .justify_between()
+                            .gap_2()
                             .child(
-                                // Progress has no element ID setter for
-                                // tests, so this element gives tests one.
-                                div()
-                                    .id("connection-dbt-match-ratio")
-                                    .test_support()
-                                    .w_full()
-                                    .child(
-                                        Progress::new("connection-dbt-match-ratio-bar")
-                                            .xsmall()
-                                            .value(percent as f32)
-                                            .accessibility_label(
-                                                "dbt resources that matched the catalog",
-                                            ),
+                                line(
+                                    "connection-dbt-matches",
+                                    format!(
+                                        "{} of {} dbt resources matched the catalog",
+                                        group(matched),
+                                        group(total)
                                     ),
+                                    muted,
+                                )
+                                .min_w_0(),
                             )
-                            // The percentage ends with the bar.
                             .child(
-                                h_flex()
-                                    .w_full()
-                                    .items_start()
-                                    .justify_between()
-                                    .gap_2()
-                                    .child(
-                                        line(
-                                            "connection-dbt-matches",
-                                            format!(
-                                                "{} of {} dbt resources matched the catalog",
-                                                group(matched),
-                                                group(total)
-                                            ),
-                                            muted,
-                                        )
-                                        .min_w_0(),
-                                    )
-                                    .child(
-                                        line(
-                                            "connection-dbt-match-percent",
-                                            format!("{percent}%"),
-                                            muted,
-                                        )
-                                        .flex_shrink_0(),
-                                    ),
-                            )
-                            .into_any_element()
-                    }
-                };
-                // The summary follows the schema mapping, so it needs no
-                // label of its own.
-                form_element.child(Field::new().child(result))
-            })
-            .into_any_element()
+                                line("connection-dbt-match-percent", format!("{percent}%"), muted)
+                                    .flex_shrink_0(),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        })
     }
 
     /// The match summary of a connection.
@@ -475,6 +513,15 @@ impl Qrow {
             .iter()
             .any(|candidate| candidate.id == profile && candidate.catalog.browses())
     }
+}
+
+/// What the dbt page shows about the manifest in the form.
+struct DbtView {
+    /// Whether the field has the path of the saved manifest.
+    saved: bool,
+    status: String,
+    parsing: bool,
+    matches: Option<MatchResult>,
 }
 
 /// What the form can tell about the matches.

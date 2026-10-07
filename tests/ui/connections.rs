@@ -313,3 +313,18 @@ fn the_response_timeout_is_validated_and_saved(cx: &mut TestAppContext) {
             .any(|profile| profile.lifecycle.response_timeout_seconds == 600)
     });
 }
+
+#[gpui_kit::test]
+fn connection_settings_open_on_the_general_page(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.connection_page(cx, "dbt");
+    app.wait_for(cx, "connection-dbt-manifest");
+    app.wait_gone(cx, "connection-name");
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "save-profile");
+    open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-dbt-manifest").is_none());
+    });
+}

@@ -111,19 +111,21 @@ pub(super) fn parse_lifecycle(
     Ok(policy)
 }
 
+use super::profile_view::{connection_row, form_input};
 use super::{ProfileEditor, Qrow};
 use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn};
 use gpui_kit::component::{
     ActiveTheme as _, IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
-    form::{Field, Form},
     input::{Input, Textarea},
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    setting::{SettingGroup, SettingPage},
+    v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Div, Entity, FontWeight, IntoElement, Role, SharedString,
-    TestSupportExt as _, WeakEntity, Window, div, prelude::*,
+    AnyElement, App, Context, Entity, IntoElement, Role, SharedString, TestSupportExt as _,
+    WeakEntity, Window, div, prelude::*,
 };
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
@@ -513,24 +515,6 @@ pub(super) fn keeps_connected(select: &ChoiceSelect, cx: &App) -> bool {
         .is_some_and(|choice| choice == KEEP_CONNECTED)
 }
 
-fn field(label: &'static str, description: Option<&'static str>, control: AnyElement) -> Field {
-    Field::new()
-        .label(label)
-        .child(control)
-        .when_some(description, |field, description| {
-            field.description(description)
-        })
-}
-
-/// The title of a group of fields, like the connector above the first group.
-pub(super) fn section_title(title: &'static str, cx: &App) -> Div {
-    div()
-        .text_base()
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(cx.theme().muted_foreground)
-        .child(title)
-}
-
 /// The notes length from which the form shows the byte count.
 const NOTES_COUNT_FROM: usize = MAX_ASSISTANT_NOTES_BYTES * 3 / 4;
 
@@ -564,88 +548,184 @@ fn group_digits(value: usize) -> String {
     grouped
 }
 
-pub(super) fn render_assistant(form: &ProfileEditor, cx: &App) -> impl IntoElement {
-    let bytes = form.assistant_notes.read(cx).value().len();
-    Form::vertical().w_full().child(field_with(
-        "Assistant Notes",
-        notes_description(bytes),
-        // The textarea has no element ID setter in GPUI Kit 0.6.6, so this
-        // element gives tests one.
-        div()
-            .id("connection-assistant-notes")
-            .test_support()
-            .w_full()
-            .child(
-                Textarea::new(&form.assistant_notes)
+/// The notes that the assistant reads about the connection.
+pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
+    SettingPage::new("Assistant")
+        .resettable(false)
+        .group(SettingGroup::new().title("Notes").item(connection_row(
+            qrow,
+            "Assistant Notes",
+            "Sent to Codex and saved as plain text. Do not enter secrets.",
+            &["assistant", "notes", "codex", "context"],
+            true,
+            |_, form, _, cx| {
+                let bytes = form.assistant_notes.read(cx).value().len();
+                // The textarea has no element ID setter in GPUI Kit 0.6.6, so
+                // this element gives tests one.
+                v_flex()
                     .w_full()
-                    .disabled(form.saving.is_some())
-                    .aria_label("Assistant Notes"),
-            )
-            .into_any_element(),
-    ))
+                    .gap_1()
+                    .child(
+                        div()
+                            .id("connection-assistant-notes")
+                            .test_support()
+                            .w_full()
+                            .child(
+                                Textarea::new(&form.assistant_notes)
+                                    .w_full()
+                                    .disabled(form.saving.is_some())
+                                    .aria_label("Assistant Notes"),
+                            ),
+                    )
+                    .when(counts_notes(bytes), |notes| {
+                        notes.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(notes_description(bytes)),
+                        )
+                    })
+                    .into_any_element()
+            },
+        )))
 }
 
-fn field_with(label: &'static str, description: String, control: AnyElement) -> Field {
-    Field::new()
-        .label(label)
-        .child(control)
-        .description(description)
-}
-
-pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> impl IntoElement {
-    let saving = form.saving.is_some();
-    let keep = keeps_connected(&form.idle_behavior, cx);
-    let input = |index: usize, label: &'static str| {
-        Input::new(&form.fields[index])
-            .id(FIELD_IDS[index])
-            .w_full()
-            .disabled(saving)
-            .aria_label(label)
-            .into_any_element()
-    };
-
-    Form::vertical()
-        .w_full()
-        .child(field(
-            "Idle Behavior",
-            Some("Releasing keeps SQL and results, but drops temporary views and unfetched rows."),
-            Select::new(&form.idle_behavior)
-                .id("connection-idle-behavior")
-                .w_full()
-                .disabled(saving)
-                .accessibility_label("Idle Behavior")
-                .into_any_element(),
-        ))
-        .when(!keep, |el| {
-            el.child(field(
-                "Idle Timeout",
-                Some("Seconds of inactivity before the session is released."),
-                input(7, "Idle Timeout in Seconds"),
-            ))
-        })
-        .when(keep, |el| {
-            el.child(field(
-                "Keep-Alive Interval",
-                Some("Seconds between keep-alive queries."),
-                input(8, "Keep-Alive Interval in Seconds"),
-            ))
-            .child(field(
-                "Keep-Alive Query",
-                Some("A light, read-only query that keeps the engine active while idle."),
-                input(9, "Keep-Alive Query"),
-            ))
-        })
-}
-
-pub(super) fn render_schemas(
-    form: &ProfileEditor,
-    qrow: WeakEntity<Qrow>,
-    cx: &App,
-) -> impl IntoElement {
-    let saving = form.saving.is_some();
+/// The schema browsing of the connection: the refresh, the shared catalog,
+/// and the schemas that the tree shows.
+pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &App) -> SettingPage {
     let mode = refresh_mode(&form.schema_refresh, cx);
     let catalog = chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
-    let catalog_label = form
+    let shared = catalog != CatalogChoice::Private;
+    let browses = mode != RefreshMode::Disabled;
+    let refresh = SettingGroup::new()
+        .title("Refresh")
+        .item(connection_row(
+            qrow,
+            "Schema Refresh",
+            mode.help(),
+            &["schemas", "introspect", "catalog", "browse"],
+            false,
+            |_, form, _, _| {
+                Select::new(&form.schema_refresh)
+                    .id("connection-schema-refresh")
+                    .w_full()
+                    .disabled(form.saving.is_some())
+                    .accessibility_label("Schema Refresh")
+                    .into_any_element()
+            },
+        ))
+        .items((mode == RefreshMode::WhileConnected).then(|| {
+            connection_row(
+                qrow,
+                "Refresh Period",
+                "Minutes between automatic schema refreshes, from 5 to 10080.",
+                &["schemas", "minutes", "automatic"],
+                false,
+                |_, form, _, _| form_input(form, 12, "Refresh Period in Minutes"),
+            )
+        }))
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Refresh Timeout",
+                "Minutes before a schema refresh stops, from 1 to 1440.",
+                &["schemas", "minutes"],
+                false,
+                |_, form, _, _| form_input(form, 13, "Refresh Timeout in Minutes"),
+            )
+        }))
+        .items(browses.then(|| {
+            connection_row(
+                qrow,
+                "Column Reads",
+                "Per-relation reads use less driver memory; schema reads send fewer requests.",
+                &["columns", "memory", "driver", "requests"],
+                false,
+                |_, form, _, _| {
+                    Select::new(&form.column_reads)
+                        .id("connection-column-reads")
+                        .w_full()
+                        .disabled(form.saving.is_some())
+                        .accessibility_label("Column Reads")
+                        .into_any_element()
+                },
+            )
+        }));
+    let sharing = SettingGroup::new()
+        .title("Shared Catalog")
+        .item(connection_row(
+            qrow,
+            "Schema Catalog",
+            if shared {
+                "Connections that share this catalog must read the same metastore with the same permissions."
+            } else {
+                "Connections that read the same metastore can share one catalog."
+            },
+            &["shared", "catalog", "metastore"],
+            false,
+            |_, form, _, cx| catalog_field(form, cx),
+        ))
+        .items(if shared { vec![connection_row(
+                    qrow,
+                    "Shared Catalog Name",
+                    "Shown in the settings of each connection that uses the catalog.",
+                    &["shared", "catalog"],
+                    false,
+                    |_, form, _, _| {
+                        Input::new(&form.shared_name)
+                            .id("connection-shared-catalog-name")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .aria_label("Shared Catalog Name")
+                            .into_any_element()
+                    },
+                ), connection_row(
+                    qrow,
+                    "Preferred Connection",
+                    "Automatic refreshes use this connection first while it is connected.",
+                    &["shared", "catalog", "refresh"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.preferred_select)
+                            .id("connection-preferred-catalog-connection")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("Preferred Connection")
+                            .into_any_element()
+                    },
+                )] } else { vec![] });
+    let visible = SettingGroup::new()
+        .title("Schema Filters")
+        .item(connection_row(
+            qrow,
+            "Visible Schemas",
+            "Patterns separated by commas, for example sales_*. Empty shows all schemas.",
+            &["schemas", "filter", "patterns", "include"],
+            false,
+            |_, form, _, _| form_input(form, 10, "Visible Schemas"),
+        ))
+        .item(connection_row(
+            qrow,
+            "Hidden Schemas",
+            "Patterns separated by commas. Hides a schema also when Visible Schemas matches it.",
+            &["schemas", "filter", "patterns", "exclude"],
+            false,
+            |_, form, _, _| form_input(form, 11, "Hidden Schemas"),
+        ));
+    SettingPage::new("Catalog")
+        .resettable(false)
+        .group(refresh)
+        .groups(if browses {
+            vec![sharing, visible]
+        } else {
+            vec![]
+        })
+}
+
+/// The list of schema catalogs, with a button that adds a shared catalog.
+fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
+    let catalog = chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
+    let label = form
         .catalog_choices
         .iter()
         .find(|(choice, _)| *choice == catalog)
@@ -655,127 +735,40 @@ pub(super) fn render_schemas(
         .catalog_choices
         .iter()
         .any(|(choice, _)| *choice == CatalogChoice::New);
-    let shared = catalog != CatalogChoice::Private;
-    let input = |index: usize, label: &'static str| {
-        Input::new(&form.fields[index])
-            .id(FIELD_IDS[index])
-            .w_full()
-            .disabled(saving)
-            .aria_label(label)
-            .into_any_element()
-    };
-    Form::vertical()
+    let qrow = cx.weak_entity();
+    // The combobox has no accessibility of its own in GPUI Kit 0.6.6, so this
+    // element names it and gives its value.
+    div()
+        .id("connection-schema-catalog")
+        .test_support()
+        .role(Role::ComboBox)
+        .aria_label("Schema Catalog")
+        .aria_value(label)
         .w_full()
-        .child(field(
-            "Schema Refresh",
-            Some(mode.help()),
-            Select::new(&form.schema_refresh)
-                .id("connection-schema-refresh")
+        .child(
+            Combobox::new(&form.catalog_select)
                 .w_full()
-                .disabled(saving)
-                .accessibility_label("Schema Refresh")
-                .into_any_element(),
-        ))
-        .when(mode != RefreshMode::Disabled, |el| {
-            el.child(field(
-                "Schema Catalog",
-                Some(if shared {
-                    "Connections that share this catalog must read the same metastore with the same permissions."
-                } else {
-                    "Connections that read the same metastore can share one catalog."
-                }),
-                // The combobox has no accessibility of its own in GPUI Kit
-                // 0.6.6, so this element names it and gives its value.
-                div()
-                    .id("connection-schema-catalog")
-                    .test_support()
-                    .role(Role::ComboBox)
-                    .aria_label("Schema Catalog")
-                    .aria_value(catalog_label)
-                    .w_full()
-                    .child(
-                        Combobox::new(&form.catalog_select)
+                .disabled(form.saving.is_some())
+                .search_placeholder("Search catalogs…")
+                // One save makes at most one new shared catalog.
+                .when(!has_new, |list| {
+                    list.footer(move |_, _| {
+                        let qrow = qrow.clone();
+                        Button::new("connection-new-shared-catalog")
+                            .ghost()
+                            .small()
                             .w_full()
-                            .disabled(saving)
-                            .search_placeholder("Search catalogs…")
-                            // One save makes at most one new shared catalog.
-                            .when(!has_new, |list| list.footer(move |_, _| {
-                                let qrow = qrow.clone();
-                                Button::new("connection-new-shared-catalog")
-                                    .ghost()
-                                    .small()
-                                    .w_full()
-                                    .justify_start()
-                                    .icon(IconName::Plus)
-                                    .label("New shared catalog…")
-                                    .on_click(move |_, window, cx| {
-                                        let _ = qrow.update(cx, |this, cx| {
-                                            this.new_shared_catalog(window, cx)
-                                        });
-                                    })
-                            })),
-                    )
-                    .into_any_element(),
-            ))
-        })
-        .when(mode != RefreshMode::Disabled && shared, |el| {
-            el.child(field(
-                "Shared Catalog Name",
-                Some("Shown in the settings of each connection that uses the catalog."),
-                Input::new(&form.shared_name)
-                    .id("connection-shared-catalog-name")
-                    .w_full()
-                    .disabled(saving)
-                    .aria_label("Shared Catalog Name")
-                    .into_any_element(),
-            ))
-            .child(field(
-                "Preferred Connection",
-                Some("Automatic refreshes use this connection first while it is connected."),
-                Select::new(&form.preferred_select)
-                    .id("connection-preferred-catalog-connection")
-                    .w_full()
-                    .disabled(saving)
-                    .accessibility_label("Preferred Connection")
-                    .into_any_element(),
-            ))
-        })
-        .when(mode == RefreshMode::WhileConnected, |el| {
-            el.child(field(
-                "Refresh Period",
-                Some("Minutes between automatic schema refreshes, from 5 to 10080."),
-                input(12, "Refresh Period in Minutes"),
-            ))
-        })
-        .when(mode != RefreshMode::Disabled, |el| {
-            el.child(field(
-                "Column Reads",
-                Some("Per-relation reads use less driver memory; schema reads send fewer requests."),
-                Select::new(&form.column_reads)
-                    .id("connection-column-reads")
-                    .w_full()
-                    .disabled(saving)
-                    .accessibility_label("Column Reads")
-                    .into_any_element(),
-            ))
-            .child(field(
-                "Visible Schemas",
-                Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
-                input(10, "Visible Schemas"),
-            ))
-            .child(field(
-                "Hidden Schemas",
-                Some("Patterns separated by commas. Hides a schema also when Visible Schemas matches it."),
-                input(11, "Hidden Schemas"),
-            ))
-            .child(field(
-                "Refresh Timeout",
-                Some(
-                    "Minutes before a schema refresh stops, from 1 to 1440.",
-                ),
-                input(13, "Refresh Timeout in Minutes"),
-            ))
-        })
+                            .justify_start()
+                            .icon(IconName::Plus)
+                            .label("New shared catalog…")
+                            .on_click(move |_, window, cx| {
+                                let _ =
+                                    qrow.update(cx, |this, cx| this.new_shared_catalog(window, cx));
+                            })
+                    })
+                }),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]

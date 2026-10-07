@@ -565,12 +565,11 @@ impl Qrow {
             let close = weak.clone();
             let body = weak.clone();
             let footer = weak.update(cx, |this, cx| this.settings_footer(cx)).ok();
-            let rem = window.rem_size();
+            let (width, height) = settings_dialog_size(window);
             let viewport = window.viewport_size();
-            let height = (rem * DIALOG_HEIGHT_REMS).min(viewport.height - rem * 4.);
             dialog
                 .title("Settings")
-                .w(Rows::dialog_width(window, DIALOG_REMS))
+                .w(width)
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
                 .overlay_closable(false)
@@ -650,7 +649,6 @@ impl Qrow {
                 state.set_selected_value(&keyword_case.to_owned(), window, cx)
             });
         }
-        let rem = window.rem_size();
         // Match the gap the dialog leaves above the footer, which the dialog
         // adds to the smaller gap below the title.
         div()
@@ -661,12 +659,7 @@ impl Qrow {
             .border_1()
             .border_color(cx.theme().border)
             .child(
-                SettingsPanel::new("settings")
-                    // Kit tints the sidebar. The dialog is one surface, so the
-                    // divider alone separates the section list from the page.
-                    .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
-                    .sidebar_width(rem * SIDEBAR_REMS)
-                    .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+                settings_panel("settings", window, cx)
                     .page(appearance_page(form))
                     .page(assistant_page(
                         form,
@@ -903,36 +896,73 @@ fn setting_item<E: IntoElement>(
     keywords: &[&'static str],
     field: impl Fn(&mut Window, &mut App) -> E + 'static,
 ) -> SettingItem {
+    setting_row(title.into(), description.into(), keywords, false, field)
+}
+
+/// A setting row like [`setting_item`], with a description that can change.
+/// A `stacked` row puts its control below the label at the full width, for
+/// controls that need more room than the control column, like a text area.
+pub(super) fn setting_row<E: IntoElement>(
+    title: SharedString,
+    description: SharedString,
+    keywords: &[&'static str],
+    stacked: bool,
+    field: impl Fn(&mut Window, &mut App) -> E + 'static,
+) -> SettingItem {
+    let searchable: Vec<SharedString> = [title.clone(), description.clone()]
+        .into_iter()
+        .chain(keywords.iter().map(|keyword| SharedString::from(*keyword)))
+        .collect();
     SettingItem::render(
         move |options: &RenderOptions, window: &mut Window, cx: &mut App| {
             let rem = window.rem_size();
-            let label = v_flex().child(Label::new(title).text_sm()).child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(description),
+            let label = v_flex().child(Label::new(title.clone()).text_sm()).when(
+                !description.is_empty(),
+                |label| {
+                    label.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(description.clone()),
+                    )
+                },
             );
             let control = div().child(field(window, cx));
-            match options.layout() {
-                Axis::Horizontal => h_flex()
+            if stacked || options.layout() == Axis::Vertical {
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(label.w_full())
+                    .child(control.w_full())
+            } else {
+                h_flex()
                     .w_full()
                     .justify_between()
                     .gap_3()
                     .child(label.flex_1().min_w_0().max_w_3_5())
-                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0()),
-                Axis::Vertical => v_flex()
-                    .w_full()
-                    .gap_3()
-                    .child(label.w_full())
-                    .child(control.w_full()),
+                    .child(control.w(rem * CONTROL_REMS).flex_shrink_0())
             }
         },
     )
-    .keywords(
-        [title, description]
-            .into_iter()
-            .chain(keywords.iter().copied()),
-    )
+    .keywords(searchable)
+}
+
+/// The Settings panel at the size and look of the Settings dialog.
+pub(super) fn settings_panel(id: &'static str, window: &Window, cx: &App) -> SettingsPanel {
+    let rem = window.rem_size();
+    SettingsPanel::new(id)
+        // Kit tints the sidebar. The dialog is one surface, so the divider
+        // alone separates the section list from the page.
+        .sidebar_style(&StyleRefinement::default().bg(cx.theme().background))
+        .sidebar_width(rem * SIDEBAR_REMS)
+        .sidebar_size_range((rem * SIDEBAR_MIN_REMS)..(rem * SIDEBAR_MAX_REMS))
+}
+
+/// The width and height of a settings dialog in `window`.
+pub(super) fn settings_dialog_size(window: &Window) -> (Pixels, Pixels) {
+    let rem = window.rem_size();
+    let height = (rem * DIALOG_HEIGHT_REMS).min(window.viewport_size().height - rem * 4.);
+    (Rows::dialog_width(window, DIALOG_REMS), height)
 }
 
 fn number_field(
