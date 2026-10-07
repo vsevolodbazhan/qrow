@@ -583,15 +583,16 @@ impl Builder<'_> {
             Some(columns) => {
                 for (ix, column) in columns.iter().enumerate() {
                     let item_id = child_id(id, &format!("{ix}{SEPARATOR}{}", column.name));
+                    let data_type = display_type(&column.data_type);
                     children.push(self.add(
                         item_id,
-                        format!("{} {}", column.name, column.data_type),
+                        format!("{} {data_type}", column.name),
                         Node::Column {
                             profile,
                             schema: schema.into(),
                             relation: relation.into(),
                             name: column.name.clone(),
-                            data_type: column.data_type.clone(),
+                            data_type,
                             comment: column.comment.clone(),
                         },
                     ));
@@ -1616,7 +1617,8 @@ fn render_entry(
             )
         });
     // Each level indents by the disclosure and the gap after it, so the
-    // disclosure of a row is under the icon of its parent.
+    // disclosure of a row is under the icon of its parent. Column rows have
+    // no disclosure lane, so their icon is under the icon of their relation.
     let indent = ui_px(8. + (16. + ROW_GAP) * entry.depth() as f32);
     let Some(node) = nodes.get(&id) else {
         return div().h(ui_px(ROW_HEIGHT)).into_any_element();
@@ -1736,6 +1738,7 @@ fn render_entry(
     }
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
+    let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
@@ -1752,7 +1755,7 @@ fn render_entry(
             el.hover(|el| el.bg(cx.theme().tokens.list_hover))
         })
         .text_color(cx.theme().sidebar_foreground)
-        .child(disclosure)
+        .when(!leaf, |el| el.child(disclosure))
         .child(
             div()
                 .id(child_id(&id, "icon"))
@@ -1851,6 +1854,27 @@ fn row_tooltip_view(text: &str, window: &mut Window, cx: &mut App) -> AnyView {
             .child(text.clone())
     })
     .build(window, cx)
+}
+
+/// A column type in lowercase, so that all connection types look the same.
+/// Quoted names, such as a PostgreSQL type `"MyEnum"`, keep their case.
+fn display_type(data_type: &str) -> String {
+    let mut quote = None;
+    data_type
+        .chars()
+        .map(|c| {
+            match quote {
+                Some(open) if c == open => quote = None,
+                None if c == '"' || c == '`' => quote = Some(c),
+                _ => {}
+            }
+            if quote.is_some() {
+                c
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect()
 }
 
 /// The longest error summary in a tooltip, in characters.
@@ -2241,5 +2265,14 @@ mod tests {
         let long = "x".repeat(ERROR_SUMMARY_CHARS + 1);
         let summary = error_summary(&long);
         assert_eq!(summary, format!("{}…", "x".repeat(ERROR_SUMMARY_CHARS)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_column_type_shows_in_lowercase_outside_quotes() {
+        assert_eq!(display_type("DECIMAL(38,2)"), "decimal(38,2)");
+        assert_eq!(display_type("STRUCT<A:INT>"), "struct<a:int>");
+        assert_eq!(display_type("text"), "text");
+        assert_eq!(display_type("\"MyEnum\"[]"), "\"MyEnum\"[]");
+        assert_eq!(display_type("STRUCT<`Key`:INT>"), "struct<`Key`:int>");
     }
 }
