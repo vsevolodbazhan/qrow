@@ -282,11 +282,11 @@ The servers keep the Spark engine of a user for 10 minutes after its last
 session, so tests that follow each other do not wait for an engine start.
 The Spark worker has room for one engine and two executor cores.
 
-Catalog tests and assistant tests that read live columns run one at a time
-in the same test group. Each test uses a unique schema name. Spark lists all
-schemas before Qrow applies a connection's catalog filter. If another test
-drops a schema during that list, the catalog request can fail. Other E2E
-tests can run at the same time.
+Catalog tests, dbt tests, and assistant tests that read live columns run one
+at a time in the same test group. Each test uses a unique schema name.
+Spark lists all schemas before Qrow applies a connection's catalog filter.
+If another test drops a schema during that list, the catalog request can fail.
+Other E2E tests can run at the same time.
 
 The Docker runtime binds ports to loopback, and each run gets its own
 Compose project and network. The servers write the execution evidence to a
