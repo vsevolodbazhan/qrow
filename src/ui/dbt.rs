@@ -29,6 +29,7 @@ use gpui_kit::{
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
 };
 use uuid::Uuid;
@@ -301,6 +302,10 @@ impl Qrow {
         cx: &App,
     ) -> SettingPage {
         let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
+        // The Manifest and Schema Mapping fields share one view, because
+        // matching reads every resource of the manifest.
+        let view = Rc::new(self.dbt_view(form, cx));
+        let manifest_view = view.clone();
         let project = SettingGroup::new()
             .item(connection_row(
                 qrow,
@@ -308,7 +313,7 @@ impl Qrow {
                 "The manifest.json file that dbt writes in the target folder of the project.",
                 &["dbt", "manifest", "json", "project", "target"],
                 true,
-                |this, form, _, cx| this.dbt_manifest_field(form, cx),
+                move |this, form, _, cx| this.dbt_manifest_field(form, &manifest_view, cx),
             ))
             .item(connection_row(
                 qrow,
@@ -337,7 +342,7 @@ impl Qrow {
                     "dbt", "schema", "mapping", "rules", "prefix", "tables", "match",
                 ],
                 true,
-                |this, form, _, cx| {
+                move |this, form, _, cx| {
                     v_flex()
                         .w_full()
                         .gap_3()
@@ -357,7 +362,7 @@ impl Qrow {
                                 ),
                         )
                         // The share of the resources that the rules match.
-                        .children(this.dbt_tables_field(form, cx))
+                        .children(this.dbt_tables_field(&view, cx))
                         .into_any_element()
                 },
             ));
@@ -365,10 +370,14 @@ impl Qrow {
     }
 
     /// The manifest path, its buttons, and the state of the manifest.
-    fn dbt_manifest_field(&self, form: &ProfileEditor, cx: &mut Context<Self>) -> AnyElement {
+    fn dbt_manifest_field(
+        &self,
+        form: &ProfileEditor,
+        view: &DbtView,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let saving = form.saving.is_some();
         let profile = form.profile.id;
-        let view = self.dbt_view(form, cx);
         let muted = cx.theme().muted_foreground;
         v_flex()
             .w_full()
@@ -412,15 +421,15 @@ impl Qrow {
                     .aria_label(view.status.clone())
                     .text_sm()
                     .text_color(muted)
-                    .child(view.status),
+                    .child(view.status.clone()),
             )
             .into_any_element()
     }
 
     /// The share of the dbt resources that match tables, below the schema
     /// mapping that it follows.
-    fn dbt_tables_field(&self, form: &ProfileEditor, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let result = self.dbt_view(form, cx).matches?;
+    fn dbt_tables_field(&self, view: &DbtView, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let result = view.matches.clone()?;
         let muted = cx.theme().muted_foreground;
         let line = |id: &'static str, text: String, color| {
             div()
@@ -524,6 +533,7 @@ struct DbtView {
 }
 
 /// What the form can tell about the matches.
+#[derive(Clone)]
 enum MatchResult {
     /// The counts of the resources with a match and of all resources.
     Summary { matched: usize, total: usize },
