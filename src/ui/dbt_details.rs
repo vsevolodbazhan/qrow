@@ -300,6 +300,11 @@ impl SqlKind {
         self as usize
     }
 
+    /// Whether another SQL part comes after this one.
+    fn followed(self) -> bool {
+        self.position() + 1 < Self::ALL.len()
+    }
+
     /// What the part shows, or why the manifest does not have it.
     fn note(self, available: bool) -> &'static str {
         match (self, available) {
@@ -1265,8 +1270,18 @@ impl DbtDetailsView {
                 )
                 .into_any_element(),
         });
+        // The parts are one group: a closed part stands close to the next
+        // one, and an open part ends with space before the next one.
+        let space_after = open && kind.followed() && !matches!(part.sql, Sql::Read(_));
         v_flex()
-            .pt_4()
+            .map(|part| {
+                if kind.position() == 0 {
+                    part.pt_4()
+                } else {
+                    part.pt_1()
+                }
+            })
+            .when(space_after, |part| part.pb_3())
             .gap_2()
             .child(header)
             .children(body)
@@ -1299,6 +1314,8 @@ impl DbtDetailsView {
                 chunk.mt_1().pt_2().border_t_1().rounded_t_md()
             })
             .when(last, |chunk| chunk.pb_2().border_b_1().rounded_b_md())
+            // The space between the SQL and the next part.
+            .when(last && kind.followed(), |chunk| chunk.mb_3())
             .font_family(self.code_font.clone())
             .text_xs()
             .child(

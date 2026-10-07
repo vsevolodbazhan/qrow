@@ -472,6 +472,12 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     });
     app.click(cx, "dbt-details-compiled-sql-toggle");
     app.wait_gone(cx, "dbt-details-compiled-sql-note");
+    // The closed parts stand close together.
+    app.update(cx, |window, _| {
+        let compiled = window.find("dbt-details-compiled-sql-toggle").bounds();
+        let raw = window.find("dbt-details-raw-sql-toggle").bounds();
+        assert_eq!(raw.top() - compiled.bottom(), window.rem_size() * 0.25);
+    });
     // The raw SQL opens in the sheet and can be copied, without the empty
     // line at its end.
     let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
