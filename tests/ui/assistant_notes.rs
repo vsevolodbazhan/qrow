@@ -47,7 +47,7 @@ fn edit_notes(app: &TestApp, cx: &mut TestAppContext, profile: Uuid, notes: &str
         }
     });
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved notes", Duration::from_secs(10), |_, _| {
         app.saved()
             .profiles

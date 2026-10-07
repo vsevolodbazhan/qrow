@@ -60,6 +60,7 @@ fn a_dbt_project_matches_the_tables_of_the_server(cx: &mut TestAppContext) {
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "dbt");
     app.scroll_to(cx, "connection-dbt-manifest");
     app.wait_until(cx, "the manifest", QUERY_TIMEOUT, |window, _| {
         label(window, "connection-dbt-status").as_deref()
@@ -72,6 +73,6 @@ fn a_dbt_project_matches_the_tables_of_the_server(cx: &mut TestAppContext) {
             && label(window, "connection-dbt-match-percent").as_deref() == Some("50%")
     });
     app.click(cx, "cancel-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }

@@ -37,7 +37,7 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
     }
     app.wait_gone(cx, "connection-new-sign-in");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved sign-in", Duration::from_secs(20), |_, _| {
         app.saved().profiles[0].authentication == Authentication::Oidc { sign_in: id }
     });
@@ -354,7 +354,7 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     }
     app.wait_gone(cx, "connection-new-sign-in");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     let sign_in = app.saved().sign_ins[0].id;
     app.wait_until(
         cx,

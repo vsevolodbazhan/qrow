@@ -43,7 +43,7 @@ fn wait_tab_sql(app: &TestApp, cx: &mut TestAppContext, profile: &Profile, title
 
 fn save_form(app: &TestApp, cx: &mut TestAppContext) {
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
 }
 
 #[gpui_kit::test]

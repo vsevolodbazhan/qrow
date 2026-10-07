@@ -22,6 +22,7 @@ fn assistant_notes_save_in_connection_settings_without_interrupting_queries(
     app.context_menu(cx, connection_row(connection));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Assistant");
     app.scroll_to(cx, "connection-assistant-notes");
     app.update(cx, |window, cx| {
         assert!(labels(window).iter().any(|text| text == "Assistant Notes"));
@@ -29,7 +30,7 @@ fn assistant_notes_save_in_connection_settings_without_interrupting_queries(
         window.input("Dates are UTC.", cx);
     });
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved notes", QUERY_TIMEOUT, |_, _| {
         app.saved().profiles[0].assistant_notes == "Dates are UTC."
     });

@@ -67,7 +67,7 @@ fn keep_alive_runs_while_the_connection_is_hidden(cx: &mut TestAppContext) {
         &format!("SELECT qrow_keep_alive(id, '{keep_alive}', CAST(30000 AS BIGINT)) FROM range(1)"),
     );
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
 
     app.run_complete(
         cx,
