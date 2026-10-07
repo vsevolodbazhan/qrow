@@ -1717,11 +1717,14 @@ impl Qrow {
         }
         self.run_tab_query(self.active, window, cx)
     }
-    /// Runs the selected SQL of a tab, or its last statement when nothing is
+    /// Runs the selected SQL of a tab, or the statement at its cursor when nothing is
     /// selected.
     fn run_tab_query(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
+        }
+        if self.demo {
+            return self.run_tab_sql(index, String::new(), false, cx);
         }
         let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
@@ -1730,13 +1733,29 @@ impl Qrow {
                 .filter(|s| !s.range.is_empty());
             selected
                 .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
+                .map(Ok)
                 .unwrap_or_else(|| {
                     let text = s.value();
-                    sql::last_statement_range(&text)
+                    sql::statement_range_at(&text, s.selected_range().start)
                         .map(|range| text[range].to_string())
-                        .unwrap_or_default()
+                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
+                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
                 })
         });
+        let query = match query {
+            Ok(query) => query,
+            Err(message) => {
+                let active = index == self.active && !self.activity.read(cx).is_open();
+                Self::record_log(
+                    tab,
+                    LogEvent::new(None, Severity::Error, LogKind::Error, message),
+                );
+                Self::record_failure(tab, active);
+                tab.set_status_detail("Rejected", message);
+                cx.notify();
+                return false;
+            }
+        };
         self.run_tab_sql(index, query, false, cx)
     }
     /// Runs `query` in the tab `index`. A connection whose sign-in needs the

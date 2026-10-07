@@ -256,9 +256,7 @@ impl Qrow {
                         .map(|mut button| {
                             button.interactivity().tooltip(
                                 StatusTooltip::new("Run query", "")
-                                    .detail(
-                                        "Run the selected SQL or the last statement in the editor.",
-                                    )
+                                    .detail("Run the selected SQL or the statement at the cursor.")
                                     .for_action(&RunQuery, None),
                             );
                             button

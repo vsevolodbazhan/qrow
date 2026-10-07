@@ -10,19 +10,43 @@ use std::time::Duration;
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn run_executes_the_last_statement_unless_text_is_selected(cx: &mut TestAppContext) {
-    let sql = "SELECT '最初😀;' AS value;\nSELECT '最後😀;' AS value;\n\n-- trailing ;\n/* trailing ; /* nested ; */ */\n";
+fn run_executes_the_cursor_statement_unless_text_is_selected(cx: &mut TestAppContext) {
+    let sql = "SELECT '最初😀;' AS value;\n\nSELECT\n  'middle😀;' AS value;\n\n-- between queries;\nSELECT 3 AS value;\n";
     let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "sql-editor");
     app.press(cx, "cmd-a");
     app.press(cx, "left");
+    for _ in 0..3 {
+        app.press(cx, "down");
+    }
     app.press(cx, "cmd-enter");
     app.wait_status(cx, "Complete");
-    app.wait_cell(cx, 0, 1, "最後😀;");
+    app.wait_cell(cx, 0, 1, "middle😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
 
-    // The caret is at the start. Select the first line through the editor.
+    // Run uses the same cursor position after the editor loses focus.
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "middle😀;");
+
+    // A blank line or standalone comment must not submit SQL.
+    let submissions = app.logs(cx).matches("Submitted query:").count();
+    for line in [4, 5, 7] {
+        app.click(cx, "sql-editor");
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        for _ in 0..line {
+            app.press(cx, "down");
+        }
+        app.press(cx, "cmd-enter");
+        app.wait_status(cx, "Rejected");
+        let logs = app.logs(cx);
+        assert!(logs.contains("Move the cursor into a SQL statement or select SQL to run."));
+        assert_eq!(logs.matches("Submitted query:").count(), submissions);
+    }
+
+    // Select the first line through the editor, including Unicode text.
     app.click(cx, "sql-editor");
     app.press(cx, "cmd-a");
     app.press(cx, "left");
@@ -32,9 +56,13 @@ fn run_executes_the_last_statement_unless_text_is_selected(cx: &mut TestAppConte
     app.wait_cell(cx, 0, 1, "最初😀;");
     assert_eq!(app.saved().tabs[0].sql, sql);
 
-    // Run has the same default, including a statement without a separator.
+    // An unterminated statement still runs when the cursor is inside it.
     let sql = "invalid earlier SQL;\nSELECT 3 AS value\n-- trailing ;\n";
     app.type_sql(cx, sql);
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.press(cx, "down");
+    app.press(cx, "right");
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "3");

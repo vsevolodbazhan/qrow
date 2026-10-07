@@ -9,12 +9,17 @@ concurrently.
 1. Select a [connection profile](connections.md). Qrow shows that connection's tabs.
 2. Select or create a tab under that connection.
 3. Enter SQL in the editor.
-4. Select the text to run, if you want to run only part of the editor.
+4. Put the cursor in the statement to run, or select SQL text.
 5. Click **Run** or press **⌘Enter**.
 
-Without a selection, Qrow runs the last SQL statement in the editor.
-The cursor position does not change which statement runs. Blank lines and
-comments after the statement do not change which statement runs.
+Without a selection, Qrow runs the full SQL statement at the cursor.
+The statement can extend across several lines. Semicolons in quoted text
+or comments do not end a statement. Spaces before or after a statement on
+the same line belong to that statement.
+
+If the cursor is on a blank line or a comment between statements, Qrow does
+not run SQL. Move the cursor into a statement, or select SQL text.
+Blank lines and comments inside a statement belong to that statement.
 
 If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends

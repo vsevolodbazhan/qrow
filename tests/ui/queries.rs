@@ -17,7 +17,7 @@ use std::{
 };
 
 #[gpui_kit::test]
-fn run_uses_the_last_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
+fn run_uses_the_cursor_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.type_sql(cx, "SELECT '日本語😀;';\nSELECT 2;\n-- trailing ;\n");
     app.press(cx, "cmd-a");
@@ -61,6 +61,52 @@ fn run_uses_the_last_statement_and_rejects_invalid_selections(cx: &mut TestAppCo
         );
         assert_eq!(app.credentials.reads(), 0);
     }
+}
+
+#[gpui_kit::test]
+fn run_uses_a_multiline_cursor_statement_and_rejects_gaps(cx: &mut TestAppContext) {
+    let sql =
+        "SELECT '最初😀;';\n\nSELECT\n  'middle😀;' AS value;\n\n-- between queries;\nSELECT 3;\n";
+    let profile = crate::support::offline_profile("Cursor query");
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = sql.into();
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    for _ in 0..3 {
+        app.press(cx, "down");
+    }
+    app.press(cx, "cmd-enter");
+    app.wait_status(cx, "Error");
+    assert!(app.logs(cx).contains("SELECT\n  'middle😀;' AS value;"));
+    assert!(!app.logs(cx).contains("SELECT 3;"));
+    let reads = app.credentials.reads();
+
+    // The blank line and standalone comment do not submit another query.
+    for line in [4, 5, 7] {
+        app.click(cx, "sql-editor");
+        app.press(cx, "cmd-a");
+        app.press(cx, "left");
+        for _ in 0..line {
+            app.press(cx, "down");
+        }
+        app.click(cx, "run");
+        assert!(
+            app.logs(cx)
+                .contains("Move the cursor into a SQL statement or select SQL to run.")
+        );
+        assert_eq!(app.credentials.reads(), reads);
+        assert!(!app.logs(cx).contains("SELECT 3;"));
+    }
+    assert_eq!(app.saved().tabs[0].sql, sql);
 }
 
 #[gpui_kit::test]
