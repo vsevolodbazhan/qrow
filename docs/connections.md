@@ -121,7 +121,7 @@ To add a sign-in that a colleague sent to you:
 
 1. Copy the text of the message.
 2. Open the **Sign-Ins** sidebar and click the paste button beside **+**.
-   When the sidebar is empty, click **Paste sign-in…**.
+   When the sidebar is empty, click **Paste**.
 3. Sign-in Settings opens with the values. Make sure that you trust the
    issuer and the database hosts. Qrow sends your access tokens to these
    hosts.

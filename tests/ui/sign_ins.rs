@@ -1117,6 +1117,14 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
     let provider = Provider::start();
     let app = launch(cx, &provider, Workspace::default());
     open_sign_ins(&app, cx);
+    // The empty sidebar shows the short paste button beside the main action.
+    app.update(cx, |window, _| {
+        assert!(present(window, &"add-first-sign-in".into()));
+        assert_eq!(
+            label(window, "paste-first-sign-in").as_deref(),
+            Some("Paste sign-in")
+        );
+    });
     for (clipboard, reason) in [
         ("SELECT 1".to_owned(), "does not contain sign-in settings"),
         (

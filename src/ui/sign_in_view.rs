@@ -888,8 +888,11 @@ impl Qrow {
                                         })),
                                 )
                                 .child(
+                                    // Adding a sign-in is the main action.
                                     Button::new("paste-first-sign-in")
-                                        .label("Paste sign-in…")
+                                        .ghost()
+                                        .label("Paste")
+                                        .accessibility_label("Paste sign-in")
                                         .disabled(self.demo)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.paste_sign_in(window, cx)
