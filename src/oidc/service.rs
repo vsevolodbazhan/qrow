@@ -160,13 +160,18 @@ impl Service {
     pub fn configure(&self, sign_ins: &[SignIn]) {
         let mut records = lock(&self.records);
         records.retain(|id, record| {
-            let keep = sign_ins.iter().any(|sign_in| sign_in.id == *id);
+            let keep = sign_ins.iter().any(|sign_in| {
+                sign_in.id == *id && sign_in.provider == crate::model::SignInProvider::Oidc
+            });
             if !keep {
                 record.generation.fetch_add(1, Ordering::SeqCst);
             }
             keep
         });
-        for sign_in in sign_ins {
+        for sign_in in sign_ins
+            .iter()
+            .filter(|sign_in| sign_in.provider == crate::model::SignInProvider::Oidc)
+        {
             match records.get(&sign_in.id) {
                 Some(record) => {
                     let mut config = lock(&record.config);

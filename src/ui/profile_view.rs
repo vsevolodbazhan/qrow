@@ -161,9 +161,18 @@ impl Qrow {
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
         let sign_in_description = chosen_sign_in
-            .map(|id| match self.oidc.identity(id) {
-                Some(identity) => format!("Signed in as {}.", identity.display()),
-                None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
+            .map(|id| {
+                if self.sign_ins.iter().any(|sign_in| {
+                    sign_in.id == id
+                        && sign_in.provider == crate::model::SignInProvider::TrinoExternal
+                }) {
+                    "Trino opens the browser when authentication is necessary.".to_owned()
+                } else {
+                    match self.oidc.identity(id) {
+                        Some(identity) => format!("Signed in as {}.", identity.display()),
+                        None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
+                    }
+                }
             })
             .unwrap_or_else(|| {
                 if form.sign_in_choices.is_empty() {

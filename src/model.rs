@@ -608,13 +608,15 @@ pub enum Authentication {
     Password,
     /// An access token of a reusable sign-in, in the SASL password field.
     Oidc { sign_in: Uuid },
+    /// Browser authentication delegated to the Trino coordinator.
+    TrinoExternal { sign_in: Uuid },
 }
 
 impl Authentication {
     pub fn sign_in(self) -> Option<Uuid> {
         match self {
             Self::Password => None,
-            Self::Oidc { sign_in } => Some(sign_in),
+            Self::Oidc { sign_in } | Self::TrinoExternal { sign_in } => Some(sign_in),
         }
     }
 }
@@ -962,6 +964,11 @@ impl Profile {
                 || self.tls,
             "Trino sign-ins require TLS."
         );
+        anyhow::ensure!(
+            !matches!(self.authentication, Authentication::TrinoExternal { .. })
+                || self.database_type == DatabaseType::Trino,
+            "Browser sign-in through Trino requires a Trino connection."
+        );
         self.lifecycle.validate()?;
         if let Some(dbt) = &self.dbt {
             dbt.validate()?;
@@ -993,16 +1000,34 @@ impl Profile {
     }
 }
 
-/// A reusable OpenID Connect sign-in. Several connections can use it. Each
-/// connection keeps its own database username. Tokens are in macOS Keychain,
-/// not in the workspace.
+/// The protocol used by a reusable sign-in.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInProvider {
+    #[default]
+    Oidc,
+    TrinoExternal,
+}
+impl SignInProvider {
+    fn is_oidc(&self) -> bool {
+        *self == Self::Oidc
+    }
+}
+
+/// A reusable sign-in. Each connection keeps its database username. Direct
+/// OIDC tokens use Keychain; external authentication tokens stay in memory.
+/// Tokens are never stored in the workspace.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SignIn {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub provider: SignInProvider,
     /// The issuer identifier of the provider, for example a Keycloak realm URL.
+    #[serde(default)]
     pub issuer: String,
     /// The public client registered for Qrow. Qrow uses no client secret.
+    #[serde(default)]
     pub client_id: String,
     /// Scopes in addition to [`BASE_SCOPES`].
     #[serde(default)]
@@ -1049,6 +1074,7 @@ impl Default for SignIn {
         Self {
             id: Uuid::new_v4(),
             name: String::new(),
+            provider: SignInProvider::Oidc,
             issuer: String::new(),
             client_id: String::new(),
             scopes: vec![],
@@ -1065,6 +1091,7 @@ impl SignIn {
     /// any of these fields makes the stored tokens unusable.
     pub fn token_requirements_eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && self.provider == other.provider
             && self.issuer == other.issuer
             && self.client_id == other.client_id
             && extra_scopes(&self.scopes) == extra_scopes(&other.scopes)
@@ -1093,38 +1120,40 @@ impl SignIn {
             self.name.chars().count() <= MAX_SIGN_IN_NAME,
             "Sign-in name must be {MAX_SIGN_IN_NAME} characters or fewer."
         );
-        let issuer = url::Url::parse(&self.issuer)
-            .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
-        anyhow::ensure!(
-            issuer.scheme() == "https"
-                && issuer.host_str().is_some()
-                && issuer.query().is_none()
-                && issuer.fragment().is_none()
-                && issuer.username().is_empty()
-                && issuer.password().is_none(),
-            "Enter the issuer as an HTTPS URL without a query or fragment."
-        );
-        anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
-        anyhow::ensure!(
-            self.client_id.chars().all(|c| (' '..='~').contains(&c)),
-            "The client ID can contain only printable ASCII characters."
-        );
-        for scope in &self.scopes {
+        if self.provider == SignInProvider::Oidc {
+            let issuer = url::Url::parse(&self.issuer)
+                .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
             anyhow::ensure!(
-                !scope.is_empty()
-                    && scope
-                        .chars()
-                        .all(|c| c == '!' || ('#'..='[').contains(&c) || (']'..='~').contains(&c)),
-                "Scope \"{scope}\" contains a character that a scope cannot contain."
+                issuer.scheme() == "https"
+                    && issuer.host_str().is_some()
+                    && issuer.query().is_none()
+                    && issuer.fragment().is_none()
+                    && issuer.username().is_empty()
+                    && issuer.password().is_none(),
+                "Enter the issuer as an HTTPS URL without a query or fragment."
             );
-        }
-        if let Some(resource) = &self.resource {
-            let parsed = url::Url::parse(resource)
-                .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+            anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
             anyhow::ensure!(
-                parsed.fragment().is_none(),
-                "The resource cannot contain a fragment."
+                self.client_id.chars().all(|c| (' '..='~').contains(&c)),
+                "The client ID can contain only printable ASCII characters."
             );
+            for scope in &self.scopes {
+                anyhow::ensure!(
+                    !scope.is_empty()
+                        && scope.chars().all(|c| c == '!'
+                            || ('#'..='[').contains(&c)
+                            || (']'..='~').contains(&c)),
+                    "Scope \"{scope}\" contains a character that a scope cannot contain."
+                );
+            }
+            if let Some(resource) = &self.resource {
+                let parsed = url::Url::parse(resource)
+                    .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+                anyhow::ensure!(
+                    parsed.fragment().is_none(),
+                    "The resource cannot contain a fragment."
+                );
+            }
         }
         anyhow::ensure!(
             !self.allowed_hosts.is_empty(),
@@ -1165,7 +1194,7 @@ fn callback_ports<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<V
 }
 
 /// The format version of shared sign-in settings.
-pub const SHARED_SIGN_IN_VERSION: u32 = 1;
+pub const SHARED_SIGN_IN_VERSION: u32 = 2;
 /// The longest text that Qrow reads as shared sign-in settings.
 const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
 
@@ -1176,7 +1205,11 @@ struct SharedSignIn {
     /// Marks the text as sign-in settings and gives the format version.
     qrow_sign_in: u32,
     name: String,
+    #[serde(default, skip_serializing_if = "SignInProvider::is_oidc")]
+    provider: SignInProvider,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     issuer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     client_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     scopes: Vec<String>,
@@ -1191,8 +1224,13 @@ impl SignIn {
     /// The settings of this sign-in as text that another user can paste.
     pub fn to_shared_text(&self) -> String {
         let shared = SharedSignIn {
-            qrow_sign_in: SHARED_SIGN_IN_VERSION,
+            qrow_sign_in: if self.provider == SignInProvider::Oidc {
+                1
+            } else {
+                SHARED_SIGN_IN_VERSION
+            },
             name: self.name.clone(),
+            provider: self.provider,
             issuer: self.issuer.clone(),
             client_id: self.client_id.clone(),
             scopes: extra_scopes(&self.scopes)
@@ -1227,6 +1265,7 @@ impl SignIn {
             .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
         let sign_in = Self {
             name: shared.name.trim().to_owned(),
+            provider: shared.provider,
             issuer: shared.issuer.trim().to_owned(),
             client_id: shared.client_id.trim().to_owned(),
             scopes: shared.scopes,
@@ -2093,7 +2132,7 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "qrow_sign_in": SHARED_SIGN_IN_VERSION,
+                "qrow_sign_in": 1,
                 "name": "Company",
                 "issuer": "https://id.example.test/realms/data",
                 "client_id": "qrow-desktop",
@@ -2171,7 +2210,7 @@ mod tests {
         json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION);
         json.as_object_mut().unwrap().remove("client_id");
         let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
-        assert!(error.to_string().contains("client_id"), "{error}");
+        assert!(error.to_string().contains("client ID"), "{error}");
         // The settings pass the same checks as Sign-in Settings.
         json["client_id"] = serde_json::json!("qrow-desktop");
         json["issuer"] = serde_json::json!("http://id.example.test");
@@ -2900,5 +2939,56 @@ mod trino_tests {
             "\"odd\"\"name\""
         );
         assert_eq!(DatabaseType::Trino.default_port(), 8080);
+    }
+}
+
+#[cfg(test)]
+mod external_auth_tests {
+    use super::*;
+    #[test]
+    fn legacy_oidc_and_external_sign_ins_round_trip_without_client_settings() {
+        let old = SignIn {
+            name: "OIDC".into(),
+            issuer: "https://id.example".into(),
+            client_id: "desktop".into(),
+            allowed_hosts: vec!["trino.example".into()],
+            ..SignIn::default()
+        };
+        let mut value = serde_json::to_value(&old).unwrap();
+        value.as_object_mut().unwrap().remove("provider");
+        let restored: SignIn = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.provider, SignInProvider::Oidc);
+        restored.validate().unwrap();
+        let external = SignIn {
+            name: "Trino".into(),
+            provider: SignInProvider::TrinoExternal,
+            allowed_hosts: vec!["trino.example".into()],
+            ..SignIn::default()
+        };
+        external.validate().unwrap();
+        let shared = external.to_shared_text();
+        assert!(!shared.contains("client_id") && !shared.contains("issuer"));
+        let restored = SignIn::from_shared_text(&shared).unwrap();
+        assert_eq!(restored.provider, SignInProvider::TrinoExternal);
+        let profile = Profile {
+            name: "Trino".into(),
+            host: "trino.example".into(),
+            username: "alice".into(),
+            database_type: DatabaseType::Trino,
+            tls: true,
+            authentication: Authentication::TrinoExternal {
+                sign_in: external.id,
+            },
+            ..Profile::default()
+        };
+        profile.validate().unwrap();
+        let restored: Profile =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(restored.authentication, profile.authentication);
+        let unsupported = Profile {
+            database_type: DatabaseType::Kyuubi,
+            ..profile
+        };
+        assert!(unsupported.validate().is_err());
     }
 }

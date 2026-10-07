@@ -601,7 +601,7 @@ fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     app.fill(cx, "connection-host", "127.0.0.1");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "kyuubi-analytics-xl");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.scroll_to(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
@@ -658,7 +658,7 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
     app.fill(cx, "connection-host", "kyuubi.example.test");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "kyuubi-analytics-xl");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.update(cx, |window, _| {
         assert!(!crate::support::present(
@@ -1179,4 +1179,136 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
     }
     assert!(!app.update(cx, |window, _| present(window, &"sign-ins-list".into())));
     assert!(app.saved().sign_ins.is_empty());
+}
+
+#[gpui_kit::test]
+fn trino_external_provider_saves_restores_and_hides_oidc_fields(cx: &mut TestAppContext) {
+    use qrow::model::SignInProvider;
+    let app = TestApp::launch(cx, Workspace::default());
+    open_sign_ins(&app, cx);
+    app.click(cx, "add-sign-in");
+    app.wait_for(cx, "sign-in-name");
+    app.select(cx, "sign-in-provider", "Browser sign-in through Trino");
+    app.wait_gone(cx, "sign-in-issuer");
+    app.wait_gone(cx, "sign-in-client-id");
+    app.wait_gone(cx, "sign-in-callback-ports");
+    app.fill(cx, "sign-in-name", "Trino browser");
+    app.fill(cx, "sign-in-database-hosts", "localhost");
+    app.click(cx, "save-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.wait_until(cx, "saved Trino sign-in", WAIT, |_, _| {
+        !app.saved().sign_ins.is_empty()
+    });
+    let saved = app.saved().sign_ins[0].clone();
+    assert_eq!(saved.provider, SignInProvider::TrinoExternal);
+    assert!(saved.issuer.is_empty() && saved.client_id.is_empty() && saved.identity.is_none());
+    open_settings(&app, cx, &saved);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "sign-in-provider").as_deref(),
+            Some("Browser sign-in through Trino")
+        );
+        assert!(!present(window, &"sign-in-issuer".into()));
+    });
+    app.click(cx, "cancel-sign-in-editor");
+}
+
+#[gpui_kit::test]
+fn trino_external_authentication_progress_can_be_cancelled_before_connect(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server};
+    use qrow::model::{DatabaseType, SignInProvider};
+    let mut replies = vec![Reply { status: 401, body: String::new(), headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into() }];
+    replies.extend((0..300).map(|_| Reply::page(serde_json::json!({"nextUri":"{origin}/token"}))));
+    let mut server = Server::new(true, replies);
+    let sign_in = SignIn {
+        name: "Trino browser".into(),
+        provider: SignInProvider::TrinoExternal,
+        allowed_hosts: vec!["localhost".into()],
+        ..SignIn::default()
+    };
+    server.profile.authentication = Authentication::TrinoExternal {
+        sign_in: sign_in.id,
+    };
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = "SELECT 42".into();
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let browser_opens = opens.clone();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            sign_ins: vec![sign_in.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            trust(),
+            Some(Arc::new(move |_| {
+                browser_opens.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Waiting for browser sign-in");
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "Waiting for Trino sign-in…");
+    app.click(cx, "cancel");
+    app.wait_status(cx, "Cancelled");
+    app.wait_until(cx, "authentication stopped", WAIT, |window, _| {
+        label(window, row_account(&sign_in)).as_deref() == Some("Not signed in")
+    });
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    assert_eq!(app.saved().profiles[0].database_type, DatabaseType::Trino);
+}
+
+#[gpui_kit::test]
+fn trino_connection_selects_and_restores_external_authentication(cx: &mut TestAppContext) {
+    use qrow::model::{DatabaseType, SignInProvider};
+    let sign_in = SignIn {
+        name: "Trino browser".into(),
+        provider: SignInProvider::TrinoExternal,
+        allowed_hosts: vec!["localhost".into()],
+        ..SignIn::default()
+    };
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            sign_ins: vec![sign_in.clone()],
+            ..Workspace::default()
+        },
+    );
+    app.click(cx, "add-connection");
+    app.wait_for(cx, "connection-name");
+    app.select(cx, "connection-database-type", "Trino");
+    app.fill(cx, "connection-host", "localhost");
+    app.fill(cx, "connection-username", "alice");
+    app.click(cx, "connection-tls");
+    app.select(cx, "connection-authentication", "Sign-in");
+    app.wait_for(cx, "connection-sign-in");
+    choose_sign_in(&app, cx, "Trino browser");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "saved external connection", WAIT, |_, _| {
+        !app.saved().profiles.is_empty()
+    });
+    let profile = app.saved().profiles[0].clone();
+    assert_eq!(profile.database_type, DatabaseType::Trino);
+    assert_eq!(
+        profile.authentication,
+        Authentication::TrinoExternal {
+            sign_in: sign_in.id
+        }
+    );
+    app.context_menu(cx, crate::support::connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-sign-in");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-sign-in").as_deref(),
+            Some("Trino browser")
+        )
+    });
+    app.click(cx, "cancel-profile");
 }

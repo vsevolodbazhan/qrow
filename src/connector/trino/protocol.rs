@@ -1,11 +1,18 @@
-use super::Page;
+use super::{Page, external};
 use crate::{connector::Secret, model::Profile, tls::Trust};
 use anyhow::{Context, Result};
 use reqwest::{
     Client, Method,
     header::{HeaderMap, HeaderValue},
 };
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 use url::Url;
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -17,6 +24,9 @@ pub(super) struct Http {
     pub timeout: Duration,
     username: String,
     secret: Secret,
+    trust: Trust,
+    allow_authentication: AtomicBool,
+    cleanup_token: Mutex<Option<zeroize::Zeroizing<String>>>,
 }
 
 impl Http {
@@ -57,6 +67,9 @@ impl Http {
             timeout,
             username: profile.username.clone(),
             secret,
+            trust: trust.clone(),
+            allow_authentication: AtomicBool::new(true),
+            cleanup_token: Mutex::default(),
         };
         // Authenticated Trino coordinators require HTTPS. Never send a credential
         // to a plain endpoint, including through a server-provided nextUri.
@@ -66,6 +79,10 @@ impl Http {
             "Trino passwords and sign-in tokens require TLS."
         );
         Ok(http)
+    }
+
+    pub fn disable_authentication(&self) {
+        self.allow_authentication.store(false, Ordering::SeqCst);
     }
 
     pub fn cursor(&self, text: &str) -> Result<Url> {
@@ -86,8 +103,10 @@ impl Http {
         url: &Url,
         sql: Option<&str>,
         headers: &SessionHeaders,
+        authenticate: bool,
     ) -> Result<reqwest::Response> {
         self.cursor(url.as_str())?;
+        let authenticate = authenticate && self.allow_authentication.load(Ordering::SeqCst);
         let mut request = self
             .client
             .request(method, url.clone())
@@ -109,11 +128,70 @@ impl Http {
                 .header("Content-Type", "text/plain; charset=utf-8")
                 .body(sql.to_owned());
         }
-        self.runtime
-            .block_on(async { request.send().await })
-            .map_err(|error| {
-                anyhow::Error::new(error.without_url()).context("Trino request failed")
-            })
+        let mut token = match &self.secret {
+            Secret::External(source) if authenticate => source.cached()?,
+            Secret::External(source) => source.cached().ok().flatten().or_else(|| {
+                self.cleanup_token
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .map(|token| zeroize::Zeroizing::new(token.as_str().to_owned()))
+            }),
+            _ => None,
+        };
+        // Rebuild only after an explicit rejection. A network error returns at
+        // once because repeating a submission could execute SQL twice.
+        for attempt in 0..=2 {
+            if authenticate
+                && let Secret::External(source) = &self.secret
+                && source.control().is_cancelled()
+            {
+                return Err(crate::external_auth::Cancelled.into());
+            }
+            if let Some(token) = &token {
+                *self.cleanup_token.lock().unwrap() =
+                    Some(zeroize::Zeroizing::new(token.as_str().to_owned()));
+            }
+            let mut current = request.try_clone().context("Cannot retry Trino request")?;
+            if let Some(token) = &token {
+                current = current.bearer_auth(token.as_str());
+            }
+            let response = self
+                .runtime
+                .block_on(async { current.send().await })
+                .map_err(|error| {
+                    anyhow::Error::new(error.without_url()).context("Trino request failed")
+                })?;
+            if response.status() != reqwest::StatusCode::UNAUTHORIZED || !authenticate {
+                return Ok(response);
+            }
+            let Secret::External(source) = &self.secret else {
+                return Ok(response);
+            };
+            if attempt == 2 {
+                source.reject(token.as_deref().map(String::as_str));
+                anyhow::bail!("Trino rejected the replacement authentication token");
+            }
+            source.reject(token.as_deref().map(String::as_str));
+            let challenge = external::challenge(response.headers(), &self.statement)?;
+            // A separate pool keeps poll dispatchers on the authentication runtime.
+            let client = Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .use_preconfigured_tls((*self.trust.client_config()?).clone())
+                .build()?;
+            let coordinator = self.statement.clone();
+            let browser = source.browser();
+            let timeout = source.timeout();
+            token = Some(source.authenticate(
+                token.as_deref().map(String::as_str),
+                timeout,
+                move |cancel| {
+                    external::authenticate(client, coordinator, challenge, browser, cancel, timeout)
+                },
+            )?);
+        }
+        unreachable!("bounded authentication attempts")
     }
 
     pub fn page(
@@ -123,7 +201,7 @@ impl Http {
         sql: Option<&str>,
         headers: &SessionHeaders,
     ) -> Result<(Page, HeaderMap)> {
-        let mut response = self.request(method, url, sql, headers)?;
+        let mut response = self.request(method, url, sql, headers, true)?;
         anyhow::ensure!(
             response.status().as_u16() == 200,
             "Trino returned HTTP {}",
@@ -158,7 +236,8 @@ impl Http {
     }
 
     pub fn delete(&self, url: &Url) -> Result<()> {
-        let response = self.request(Method::DELETE, url, None, &SessionHeaders::default())?;
+        let response =
+            self.request(Method::DELETE, url, None, &SessionHeaders::default(), false)?;
         anyhow::ensure!(
             response.status().is_success()
                 || response.status().as_u16() == 404

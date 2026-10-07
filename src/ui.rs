@@ -523,6 +523,7 @@ pub struct Qrow {
     /// Reusable sign-ins. The service owns their tokens and identities.
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
+    external_auth: Arc<crate::external_auth::Service>,
     sign_in_ui: sign_in_view::SignInState,
     connector: Arc<DatabaseConnector>,
     sidebar: bool,
@@ -682,6 +683,12 @@ impl Qrow {
                 }
             },
         );
+        let external_auth = Arc::new(crate::external_auth::Service::new(environment.browser()));
+        external_auth.configure(&workspace.sign_ins, &workspace.profiles);
+        let external_wake = wake.clone();
+        external_auth.set_on_change(Arc::new(move || {
+            let _ = external_wake.try_send(());
+        }));
         let oidc = oidc::Service::new(environment.tokens(), environment.trust());
         oidc.configure(&workspace.sign_ins);
         let status_wake = wake.clone();
@@ -763,6 +770,7 @@ impl Qrow {
             credentials: environment.credentials(),
             sign_ins: workspace.sign_ins,
             oidc,
+            external_auth,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
             connector: Arc::new(DatabaseConnector::new(environment.trust())),
             sidebar: true,
@@ -1145,6 +1153,7 @@ impl Qrow {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.external_auth.configure(&self.sign_ins, &self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
@@ -1333,6 +1342,17 @@ impl Qrow {
                 tab.connected = false;
                 tab.busy = true;
                 tab.set_status("Connecting…");
+            }
+            Event::Authenticating(waiting) => {
+                if waiting {
+                    tab.set_status("Waiting for browser sign-in…");
+                } else if !tab.cancelling {
+                    tab.set_status(if tab.connected {
+                        "Executing…"
+                    } else {
+                        "Connecting…"
+                    });
+                }
             }
             Event::Connected => tab.connected = true,
             Event::Running => {
@@ -1555,6 +1575,7 @@ impl Qrow {
                         }
                     }
                 }
+                self.external_auth.configure(&self.sign_ins, &self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
@@ -1902,6 +1923,7 @@ impl Qrow {
         // account of the sign-in.
         let live = tab.connected && tab.worker_profile == Some(profile.id) && !tab.release_pending;
         if !after_sign_in
+            && matches!(profile.authentication, Authentication::Oidc { .. })
             && let Some(sign_in) = profile.authentication.sign_in()
             && (self.sign_in_changing(sign_in) || !live && self.sign_in_needs_browser(sign_in))
         {
@@ -2745,7 +2767,8 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
+        let sign_in_choices =
+            connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
             profile.authentication.sign_in().is_some(),
             window,
@@ -2828,6 +2851,10 @@ impl Qrow {
                             form.profile.database_type = selected;
                         }
                     }
+                    let selected = this.form.as_ref().and_then(|form| {
+                        connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                    });
+                    this.replace_sign_in_list(selected, window, cx);
                     cx.notify();
                 }
             });
@@ -3124,8 +3151,13 @@ impl Qrow {
                     sign_in.name,
                     profile.host
                 );
-                Authentication::Oidc {
-                    sign_in: sign_in.id,
+                match sign_in.provider {
+                    crate::model::SignInProvider::Oidc => Authentication::Oidc {
+                        sign_in: sign_in.id,
+                    },
+                    crate::model::SignInProvider::TrinoExternal => Authentication::TrinoExternal {
+                        sign_in: sign_in.id,
+                    },
                 }
             } else {
                 Authentication::Password

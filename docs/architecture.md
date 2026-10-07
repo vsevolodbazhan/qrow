@@ -22,6 +22,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [Connector boundary](../src/connector/mod.rs) | Define session operations independently of the UI. |
 | [HiveServer2 connector](../src/connector/hive.rs) | Implement authentication, session work, and result decoding for Kyuubi. |
 | [Postgres connector](../src/connector/postgres.rs) | Implement password authentication, TLS modes, cancellation, and text results for Postgres. |
+| [External authentication](../src/external_auth.rs) | Share in-memory tokens and cancellable browser work; let each connector implement its challenge protocol. |
 | [Trino connector](../src/connector/trino.rs) | Implement HTTP statements, session headers, cancellation, metadata, and bounded temporary results. |
 | [SASL transport](../src/connector/sasl.rs) | Open plain or TLS transports and send the SASL PLAIN password or access token. |
 | [TLS](../src/tls.rs) | Verify servers against the macOS trust store, or a synthetic authority in tests. |

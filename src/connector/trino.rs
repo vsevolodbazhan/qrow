@@ -1,4 +1,5 @@
 //! Trino's HTTP statement protocol and per-tab session state.
+mod external;
 mod protocol;
 
 use super::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session};
@@ -369,6 +370,7 @@ impl Session for TrinoSession {
         Self::stop(&mut self.keep_alive)
     }
     fn close(&mut self) -> Result<()> {
+        self.http.disable_authentication();
         self.close_keep_alive()?;
         self.close_operation()?;
         if self.headers.in_transaction() {

@@ -125,6 +125,7 @@ pub trait TokenSource: Send + Sync {
 pub enum Secret {
     Password(Arc<Zeroizing<String>>),
     Token(Arc<dyn TokenSource>),
+    External(crate::external_auth::Source),
 }
 
 impl Secret {
@@ -132,11 +133,22 @@ impl Secret {
         Self::Password(Arc::new(Zeroizing::new(password.into())))
     }
 
+    /// Bind a worker's cancellation and progress before opening its session.
+    pub fn with_control(self, control: crate::external_auth::Control) -> Self {
+        match self {
+            Self::External(source) => Self::External(source.with_control(control)),
+            secret => secret,
+        }
+    }
+
     /// The password, or an access token that is valid now.
     pub fn value(&self) -> Result<Zeroizing<String>> {
         match self {
             Self::Password(password) => Ok(Zeroizing::new(password.as_str().to_owned())),
             Self::Token(source) => source.access_token(),
+            Self::External(_) => {
+                anyhow::bail!("This connector does not support external authentication")
+            }
         }
     }
 }
@@ -152,6 +164,7 @@ impl std::fmt::Debug for Secret {
         f.write_str(match self {
             Self::Password(_) => "Secret::Password(..)",
             Self::Token(_) => "Secret::Token(..)",
+            Self::External(_) => "Secret::External(..)",
         })
     }
 }

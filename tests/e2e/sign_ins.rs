@@ -334,7 +334,7 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
         window.input(&port, cx);
     });
     app.click(cx, "connection-tls");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
     app.settle(cx);

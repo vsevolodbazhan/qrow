@@ -1,163 +1,9 @@
 use super::*;
 use serde_json::json;
-use std::{
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
-};
-
-trait Stream: Read + Write {}
-impl<T: Read + Write> Stream for T {}
-struct Server {
-    profile: Profile,
-    requests: Arc<Mutex<Vec<String>>>,
-    stop: Arc<AtomicBool>,
-    thread: Option<thread::JoinHandle<()>>,
-}
-struct Reply {
-    body: String,
-    headers: String,
-    status: u16,
-}
-impl Reply {
-    fn page(value: serde_json::Value) -> Self {
-        Self {
-            body: value.to_string(),
-            headers: String::new(),
-            status: 200,
-        }
-    }
-    fn header(mut self, name: &str, value: &str) -> Self {
-        self.headers.push_str(&format!("{name}: {value}\r\n"));
-        self
-    }
-}
-impl Server {
-    fn new(tls: bool, replies: Vec<Reply>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let requests = Arc::new(Mutex::new(Vec::new()));
-        let recorded = requests.clone();
-        let stop = Arc::new(AtomicBool::new(false));
-        let stopping = stop.clone();
-        let origin = format!("{}://localhost:{port}", if tls { "https" } else { "http" });
-        let config = crate::oidc_provider::server_config();
-        let thread = thread::spawn(move || {
-            let mut replies = replies.into_iter();
-            while !stopping.load(Ordering::SeqCst) {
-                let tcp: TcpStream = match listener.accept() {
-                    Ok((tcp, _)) => tcp,
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(1));
-                        continue;
-                    }
-                    Err(error) => panic!("{error}"),
-                };
-                tcp.set_nonblocking(false).unwrap();
-                tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-                let mut stream: Box<dyn Stream> = if tls {
-                    Box::new(rustls::StreamOwned::new(
-                        rustls::ServerConnection::new(config.clone()).unwrap(),
-                        tcp,
-                    ))
-                } else {
-                    Box::new(tcp)
-                };
-                let mut request = Vec::new();
-                let mut byte = [0; 1];
-                loop {
-                    if stream.read(&mut byte).unwrap_or(0) == 0 {
-                        break;
-                    }
-                    request.push(byte[0]);
-                    if request.ends_with(b"\r\n\r\n") {
-                        break;
-                    }
-                    assert!(request.len() < 16384);
-                }
-                if request.is_empty() {
-                    continue;
-                }
-                let head = String::from_utf8(request).unwrap();
-                let length = head
-                    .lines()
-                    .find_map(|line| {
-                        line.to_ascii_lowercase()
-                            .strip_prefix("content-length: ")
-                            .and_then(|value| value.parse::<usize>().ok())
-                    })
-                    .unwrap_or(0);
-                let mut body = vec![0; length];
-                stream.read_exact(&mut body).unwrap();
-                recorded
-                    .lock()
-                    .unwrap()
-                    .push(format!("{head}{}", String::from_utf8(body).unwrap()));
-                let reply = replies.next().unwrap_or_else(|| Reply {
-                    status: 204,
-                    body: String::new(),
-                    headers: String::new(),
-                });
-                let body = reply.body.replace("{origin}", &origin);
-                let response = format!(
-                    "HTTP/1.1 {} OK\r\nConnection: close\r\nContent-Length: {}\r\n{}\r\n{}",
-                    reply.status,
-                    body.len(),
-                    reply.headers,
-                    body
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        Self {
-            profile: Profile {
-                database_type: DatabaseType::Trino,
-                name: "Protocol test".into(),
-                host: "localhost".into(),
-                port,
-                username: "qrow".into(),
-                database: "tpch".into(),
-                trino_schema: "tiny".into(),
-                tls,
-                ..Profile::default()
-            },
-            requests,
-            stop,
-            thread: Some(thread),
-        }
-    }
-    fn connect(&self) -> Box<dyn Session> {
-        DatabaseConnector::new(crate::oidc_provider::trust())
-            .connect(
-                &self.profile,
-                Secret::password(if self.profile.tls {
-                    "synthetic-password"
-                } else {
-                    ""
-                }),
-            )
-            .unwrap()
-    }
-    fn requests(&self) -> Vec<String> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-impl Drop for Server {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        self.thread.take().unwrap().join().unwrap();
-    }
-}
-fn done() -> Reply {
-    Reply::page(json!({"columns":[{"name":"value","type":"integer"}],"data":[[1]]}))
-}
-
+use std::sync::Arc;
+#[path = "../../support/trino_protocol.rs"]
+mod fixture;
+use fixture::{Reply, Server, done};
 #[test]
 fn pages_use_the_latest_cursor_and_preserve_values_and_session_headers() -> Result<()> {
     let server = Server::new(
@@ -381,5 +227,341 @@ fn disconnect_rolls_back_an_open_transaction() -> Result<()> {
     assert!(server.requests()[2].ends_with("ROLLBACK"));
     session.close()?;
     assert_eq!(server.requests().len(), 3);
+    Ok(())
+}
+
+fn challenge(redirect: bool) -> Reply {
+    Reply { status: 401, body: String::new(), headers: String::new() }.header("WWW-Authenticate", &format!(
+        "Basic realm=\"test, realm\", Bearer realm=\"Trino\", {}x_token_server=\"{{origin}}/token?secret=test\"",
+        if redirect { "x_redirect_server=\"{origin}/browser?secret=test\", " } else { "" }))
+}
+fn external(
+    server: &mut Server,
+    timeout: Duration,
+    browser: qrow::external_auth::Browser,
+) -> (qrow::external_auth::Service, Secret) {
+    use qrow::model::{Authentication, SignIn, SignInProvider};
+    let sign_in = SignIn {
+        name: "Trino browser".into(),
+        provider: SignInProvider::TrinoExternal,
+        allowed_hosts: vec!["localhost".into()],
+        ..SignIn::default()
+    };
+    server.profile.authentication = Authentication::TrinoExternal {
+        sign_in: sign_in.id,
+    };
+    let service = qrow::external_auth::Service::with_timeout(Some(browser), timeout);
+    service.configure(&[sign_in], std::slice::from_ref(&server.profile));
+    let secret = service.secret(&server.profile).unwrap();
+    (service, secret)
+}
+#[test]
+fn external_initial_pending_token_ack_retry_and_cache_preserve_requests() -> Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(true),
+            Reply::page(json!({"nextUri":"{origin}/token/next"})),
+            Reply {
+                status: 503,
+                body: String::new(),
+                headers: String::new(),
+            },
+            Reply::page(json!({"token":"opaque-trino-encrypted-token"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            done(),
+            done(),
+            done(),
+        ],
+    );
+    server.profile.parameters = [("query_max_run_time".into(), "17m".into())].into();
+    let opens = Arc::new(AtomicUsize::new(0));
+    let counter = opens.clone();
+    let (_service, secret) = external(
+        &mut server,
+        Duration::from_secs(5),
+        Arc::new(move |url| {
+            assert!(url.contains("/browser?"));
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }),
+    );
+    let mut session = server.connect_secret(secret.clone())?;
+    complete(&mut *session, "SELECT 42")?;
+    let _other = server.connect_secret(secret)?;
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    let requests = server.requests();
+    assert!(requests[0].starts_with("POST /v1/statement "));
+    assert!(!requests[0].contains("authorization:"));
+    assert!(requests[1].starts_with("GET /token?"));
+    assert!(requests[2].starts_with("GET /token/next "));
+    assert!(requests[4].starts_with("DELETE /token/next "));
+    for request in &requests[1..=4] {
+        assert!(!request.contains("authorization:"));
+        assert!(!request.contains("x-trino-user:"));
+    }
+    let retried = requests[5].replace("authorization: Bearer opaque-trino-encrypted-token\r\n", "");
+    assert_eq!(requests[0], retried);
+    assert!(requests[6].contains("authorization: Bearer opaque-trino-encrypted-token"));
+    Ok(())
+}
+#[test]
+fn external_renewal_has_no_browser_and_rejected_tokens_are_bounded() {
+    use std::sync::Arc;
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(false),
+            Reply::page(json!({"token":"replacement1"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            challenge(false),
+            Reply::page(json!({"token":"replacement2"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            challenge(false),
+        ],
+    );
+    let (_service, secret) = external(
+        &mut server,
+        Duration::from_secs(3),
+        Arc::new(|_| panic!("renewal must not open a browser")),
+    );
+    let error = server.connect_secret(secret).err().unwrap();
+    assert!(error.to_string().contains("rejected the replacement"));
+    assert_eq!(server.requests().len(), 7);
+}
+#[test]
+fn external_rejection_and_unsafe_polling_urls_do_not_leak_details() {
+    use std::sync::Arc;
+    for response in [
+        json!({"error":"secret-server-error-token"}),
+        json!({"nextUri":"https://attacker.example/token?secret=identifier"}),
+        json!({"nextUri":"{origin}/token#secret"}),
+        json!({}),
+        json!({"token":"bad\r\ntoken"}),
+    ] {
+        let mut server = Server::new(true, vec![challenge(false), Reply::page(response)]);
+        let (_service, secret) =
+            external(&mut server, Duration::from_secs(2), Arc::new(|_| Ok(())));
+        let error = server.connect_secret(secret).err().unwrap().to_string();
+        assert!(!error.contains("secret-server-error-token"));
+        assert!(!error.contains("identifier"));
+        assert!(!error.contains("attacker.example"));
+        assert_eq!(server.requests().len(), 2);
+    }
+}
+#[test]
+fn external_overall_timeout_and_cancellation_before_a_cursor() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(false),
+            Reply::page(json!({"nextUri":"{origin}/token"})),
+        ],
+    );
+    let (_service, secret) = external(&mut server, Duration::from_millis(60), Arc::new(|_| Ok(())));
+    let started = Instant::now();
+    let error = server.connect_secret(secret).err().unwrap();
+    assert!(error.to_string().contains("timed out"));
+    assert!(started.elapsed() < Duration::from_secs(2));
+    let mut server = Server::new(true, vec![challenge(true)]);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let browser_cancel = cancelled.clone();
+    let (_service, secret) = external(
+        &mut server,
+        Duration::from_secs(3),
+        Arc::new(move |_| {
+            browser_cancel.store(true, Ordering::SeqCst);
+            Ok(())
+        }),
+    );
+    let secret = secret.with_control(qrow::external_auth::Control::new(
+        Arc::new(move || cancelled.load(Ordering::SeqCst)),
+        Arc::new(|_| {}),
+    ));
+    assert!(
+        server
+            .connect_secret(secret)
+            .err()
+            .unwrap()
+            .is::<qrow::external_auth::Cancelled>()
+    );
+    assert!(server.requests().len() <= 2);
+    assert!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count()
+            == 1
+    );
+}
+#[test]
+fn external_cleanup_does_not_start_authentication() -> Result<()> {
+    use std::sync::Arc;
+    let mut server = Server::new(
+        true,
+        vec![
+            done(),
+            Reply::page(json!({"nextUri":"{origin}/query/next"})),
+            challenge(true),
+        ],
+    );
+    let (_service, secret) = external(
+        &mut server,
+        Duration::from_secs(2),
+        Arc::new(|_| panic!("cleanup must not open a browser")),
+    );
+    let mut session = server.connect_secret(secret)?;
+    session.execute("SELECT 1")?;
+    assert!(session.close_operation().is_err());
+    assert_eq!(server.requests().len(), 3);
+    Ok(())
+}
+
+#[test]
+fn external_sign_out_keeps_a_cleanup_credential_without_new_login() -> Result<()> {
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(false),
+            Reply::page(json!({"token":"opaque"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            done(),
+            Reply::page(json!({"nextUri":"{origin}/query/active"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+        ],
+    );
+    let (service, secret) = external(
+        &mut server,
+        Duration::from_secs(2),
+        Arc::new(|_| panic!("no browser")),
+    );
+    let mut session = server.connect_secret(secret)?;
+    session.execute("SELECT 1")?;
+    service.clear(server.profile.authentication.sign_in().unwrap());
+    session.close_operation()?;
+    let requests = server.requests();
+    assert!(requests[5].starts_with("DELETE /query/active "));
+    assert!(requests[5].contains("authorization: Bearer opaque"));
+    Ok(())
+}
+
+#[test]
+fn external_settings_invalidation_still_rolls_back_without_authentication() -> Result<()> {
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(false),
+            Reply::page(json!({"token":"opaque"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            done(),
+            done().header("X-Trino-Started-Transaction-Id", "transaction"),
+            done().header("X-Trino-Clear-Transaction-Id", "true"),
+        ],
+    );
+    let (service, secret) = external(
+        &mut server,
+        Duration::from_secs(2),
+        Arc::new(|_| panic!("cleanup must not open a browser")),
+    );
+    let mut session = server.connect_secret(secret)?;
+    complete(&mut *session, "START TRANSACTION")?;
+    let mut changed = server.profile.clone();
+    changed.username = "other-user".into();
+    service.configure(&[], &[changed]);
+    session.close()?;
+    let requests = server.requests();
+    assert!(requests[5].ends_with("ROLLBACK"));
+    assert!(requests[5].contains("authorization: Bearer opaque"));
+    assert_eq!(requests.len(), 6);
+    Ok(())
+}
+
+#[test]
+fn external_rejected_sql_preserves_body_and_updated_session_headers() -> Result<()> {
+    let mut server = Server::new(
+        true,
+        vec![
+            done().header("X-Trino-Set-Schema", "updated"),
+            challenge(true),
+            Reply::page(json!({"token":"opaque"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            done(),
+        ],
+    );
+    let (_service, secret) = external(&mut server, Duration::from_secs(2), Arc::new(|_| Ok(())));
+    let mut session = server.connect_secret(secret)?;
+    complete(&mut *session, "SELECT 42")?;
+    let requests = server.requests();
+    assert!(requests[1].ends_with("SELECT 42"));
+    assert!(requests[1].contains("x-trino-schema: updated"));
+    assert_eq!(
+        requests[1],
+        requests[4].replace("authorization: Bearer opaque\r\n", "")
+    );
+    Ok(())
+}
+#[test]
+fn external_submission_does_not_retry_server_or_network_failure() -> Result<()> {
+    for status in [503, 0] {
+        // Status zero closes the transport after receiving the complete SQL,
+        // which leaves execution uncertain from the client's perspective.
+        let mut server = Server::new(
+            true,
+            vec![
+                done(),
+                Reply {
+                    status,
+                    body: String::new(),
+                    headers: String::new(),
+                },
+                done(),
+            ],
+        );
+        let (_service, secret) = external(
+            &mut server,
+            Duration::from_secs(2),
+            Arc::new(|_| panic!("not an authentication rejection")),
+        );
+        let mut session = server.connect_secret(secret)?;
+        assert!(session.execute("SELECT 42").is_err());
+        assert_eq!(server.requests().len(), 2);
+    }
     Ok(())
 }

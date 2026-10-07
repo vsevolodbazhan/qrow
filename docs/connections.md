@@ -49,7 +49,7 @@ search field above the pages to find a field.
    For Postgres, select a [TLS Mode](#use-postgres).
 5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
-   - **Sign-in (OpenID Connect)**: select a
+   - **Sign-in**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
 
    For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
@@ -150,11 +150,15 @@ For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
 enter a password. Passwords use macOS Keychain.
 
-For **Sign-in (OpenID Connect)**, select an existing sign-in and enter the
-Trino username. Turn on **TLS**. The coordinator must accept the access token
-of that provider. The database hosts of the sign-in must include the
-coordinator hostname. This option uses the existing provider sign-in. It does
-not use Trino's external-authentication challenge flow.
+For sign-in authentication, select a sign-in and enter the Trino username.
+Turn on **TLS**. The database hosts of the sign-in must include the coordinator
+hostname. Choose the provider of the sign-in as follows:
+
+- **Browser sign-in through Trino** uses the coordinator's existing OAuth2
+  configuration, like DBeaver or DataGrip external authentication. See
+  [Trino browser sign-in](#trino-browser-sign-in).
+- **OpenID Connect** uses a public client and the direct provider login below.
+  The coordinator must accept the access token of that provider.
 
 Enter session properties as a JSON object with string values. For example:
 
@@ -181,15 +185,59 @@ query and sends `ROLLBACK` for an open transaction. The assistant receives
   JSON representation. Nulls remain distinct from empty strings.
 - **Response Timeout** bounds each HTTP request. It does not bound total query
   time. Use the `query_max_run_time` session property for that limit.
-- Qrow does not retry a failed HTTP request or follow redirects. A result URL
+- Qrow retries a request only after an explicit authentication rejection. It
+  does not retry an uncertain network failure or follow HTTP redirects. A result URL
   must use the same scheme, hostname, and port as the coordinator. Configure
   reverse proxies to return URLs for that origin.
 - Cancellation sends HTTP `DELETE` to the query cursor. It cannot undo completed
   SQL. A request already in progress can wait until its response timeout.
-- Client certificates, Kerberos, Trino external-authentication challenges, and
-  the result spooling protocol are not supported.
+- Client certificates, Kerberos, and the result spooling protocol are not
+  supported.
 - Automatic assistant relation context uses the initial schema. It does not
   track `USE` commands. Use qualified names after a schema change.
+
+### Trino browser sign-in
+
+Use this provider when the Trino coordinator already has OAuth2 authentication.
+The coordinator sends the browser to the identity provider, handles its
+callback, and exchanges the authorization code. The coordinator keeps its
+client secret. You do not need a new identity-provider client, issuer URL,
+client ID, client secret, or local callback listener.
+
+1. Open **Sign-Ins** and click **+**.
+2. In **Provider**, select **Browser sign-in through Trino**.
+3. Enter a name and the allowed **Database Hosts**, then save.
+4. In a Trino connection, select sign-in authentication and this sign-in.
+   Enter the coordinator hostname, HTTPS port, and database username. Turn on
+   **TLS**.
+5. Run a query. If Trino requires authentication, complete sign-in in the
+   browser. You can also click **Sign in…** in Sign-Ins after a connection
+   uses the sign-in.
+
+The query shows **Waiting for browser sign-in…** while authentication runs.
+**Cancel** stops that query's wait, including before a result cursor exists.
+Other queries can continue the shared sign-in. **Cancel** on the Sign-Ins row
+stops authentication for all connections of that sign-in.
+
+Trino tokens are opaque. Qrow keeps them only in memory. Tokens are shared by
+sessions of the same connection and username. Different connection IDs,
+endpoints, usernames, and connection settings use separate caches. A change
+to these settings or the sign-in's database hosts discards the affected tokens.
+**Sign out** clears the tokens and releases idle sessions. It does not end
+sign-in in the browser or revoke tokens at the identity provider. Restarting
+Qrow also clears this cache.
+
+Trino can renew authentication without opening the browser. The sign-in has
+a two-minute deadline, separate from **Response Timeout**. Temporary polling
+failures can retry within this deadline. Rejected replacement tokens have a
+bounded retry count. Query cancellation, disconnection, and transaction
+cleanup do not start browser sign-in.
+
+Challenge and polling URLs must use the configured coordinator's HTTPS
+scheme, hostname, and port. URLs with credentials or fragments are rejected.
+Each polling continuation has the same checks. Configure a gateway to return
+URLs for that origin. Browser navigation can continue to the identity
+provider; the database HTTP client sends no credentials to it.
 
 ## Sign in with OpenID Connect
 
@@ -212,7 +260,8 @@ sign-ins need attention.
 1. Open the **Sign-Ins** sidebar and click **+**. In Connection Settings, you
    can also click **New sign-in…** at the bottom of the **Sign-In** list. The
    connection then uses the new sign-in.
-2. Enter a name, the issuer URL, and the client ID.
+2. Select **OpenID Connect** in **Provider**. Enter a name, the issuer URL,
+   and the client ID.
 3. Enter other scopes if the server requires them. Qrow always requests
    `openid`, `profile`, and `email`.
 4. Enter the database hosts that can receive the access tokens.
@@ -269,7 +318,7 @@ The **Connections** field shows the number of connections that use the
 sign-in. Neutral tags show the names below the heading. The tags wrap when
 they do not fit on one line.
 
-To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
+To use a sign-in, edit a connection, select **Sign-in** in
 **Authentication**, and select the sign-in in the **Sign-In** list. The host of the connection must be
 one of the database hosts of the sign-in. Qrow does not send a token to
 another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
@@ -1006,11 +1055,11 @@ replace the file, and it does not poll. See the
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable
-preserves access to existing passwords. Sign-in tokens use the separate
+preserves access to existing passwords. Direct OpenID Connect tokens use the separate
 service `io.qrow.sign-in`, keyed by sign-in UUID. Each record holds the
 issuer, client, subject, and token requirements of its tokens.
 
-The [sign-in service](../src/oidc/service.rs) is shared by all tabs. It runs
+The [direct OpenID Connect service](../src/oidc/service.rs) is shared by all tabs. It runs
 one refresh at a time for each sign-in, and discards a result that arrives
 after a sign-out or removal. The [browser flow](../src/oidc/flow.rs) uses
 discovery, PKCE with `S256`, a new `state` and `nonce` for each attempt, and a
@@ -1018,3 +1067,8 @@ callback listener bound to `127.0.0.1` that closes after the attempt. The
 [ID token check](../src/oidc/jwt.rs) verifies the signature (RS256, PS256, or
 ES256), issuer, audience, expiry, and nonce. The worker asks for credentials
 before each new session.
+
+The [external authentication service](../src/external_auth.rs) shares in-memory
+tokens and authentication work for Trino connections. The
+[Trino challenge adapter](../src/connector/trino/external.rs) follows the
+[upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).

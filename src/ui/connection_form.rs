@@ -151,7 +151,7 @@ pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-trino-schema",
 ];
 const PASSWORD: &str = "Password";
-const SIGN_IN: &str = "Sign-in (OpenID Connect)";
+const SIGN_IN: &str = "Sign-in";
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
 const PRIVATE_CATALOG: &str = "This connection";
@@ -409,9 +409,16 @@ pub(super) fn uses_sign_in(select: &AuthenticationSelect, cx: &App) -> bool {
 }
 
 /// The choices of the Sign-in list: each sign-in by name. Names are unique.
-pub(super) fn sign_in_choices(sign_ins: &[SignIn]) -> Vec<(Uuid, String)> {
+pub(super) fn sign_in_choices(
+    sign_ins: &[SignIn],
+    database_type: crate::model::DatabaseType,
+) -> Vec<(Uuid, String)> {
     sign_ins
         .iter()
+        .filter(|sign_in| {
+            sign_in.provider == crate::model::SignInProvider::Oidc
+                || database_type == crate::model::DatabaseType::Trino
+        })
         .map(|sign_in| (sign_in.id, sign_in.name.clone()))
         .collect()
 }

@@ -1182,7 +1182,21 @@ impl Runner {
         }
         if self.session.is_none() {
             let started = Instant::now();
-            let secret = (self.credentials)(&self.profile)?;
+            let cancelled = self.cancelled.clone();
+            let running = self.running.clone();
+            let secret = (self.credentials)(&self.profile)?.with_control(
+                crate::external_auth::Control::new(
+                    Arc::new(move || {
+                        let flag = cancelled.load(Ordering::SeqCst);
+                        flag == CANCEL_ALL
+                            || running
+                                .lock()
+                                .unwrap()
+                                .is_some_and(|(batch, _)| flag == batch)
+                    }),
+                    Arc::new(|_| {}),
+                ),
+            );
             let session = self.connector.connect(&self.profile, secret)?;
             self.session = Some((self.profile.id, session));
             let duration = started.elapsed();
