@@ -147,45 +147,27 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "10 of 16 models and sources matched \u{b7} 63%",
+        "10 of 16 dbt resources matched the catalog",
     );
-    // The bar, the numbers, and the button label share the leading edge of
-    // the field. The padding of the small ghost button is outside it.
+    // The bar and the numbers share the leading edge of the field, and the
+    // percentage ends with the bar.
     app.update(cx, |window, _| {
         assert_eq!(
-            label(window, "connection-dbt-not-loaded").as_deref(),
-            Some("1 model or source is in a schema without loaded tables.")
+            label(window, "connection-dbt-match-percent").as_deref(),
+            Some("63%")
         );
-        let left = |id: &str| window.find(id.to_owned()).bounds().left();
-        let field = left("connection-dbt-rules");
-        assert_eq!(left("connection-dbt-match-ratio"), field);
-        assert_eq!(left("connection-dbt-matches"), field);
-        let padding = window.rem_size() * 0.5;
-        assert_eq!(left("connection-dbt-unmatched") + padding, field);
+        let bounds = |id: &str| window.find(id.to_owned()).bounds();
+        let field = bounds("connection-dbt-rules");
+        let bar = bounds("connection-dbt-match-ratio");
+        assert_eq!(bar.left(), field.left());
+        assert_eq!(bar.right(), field.right());
+        assert_eq!(bounds("connection-dbt-matches").left(), field.left());
+        assert_eq!(bounds("connection-dbt-match-percent").right(), bar.right());
+        assert!(!crate::support::present(
+            window,
+            &"connection-dbt-unmatched".into()
+        ));
     });
-    app.scroll_to(cx, "connection-dbt-unmatched");
-    app.click(cx, "connection-dbt-unmatched");
-    app.wait_for(cx, "connection-dbt-unmatched-list");
-    let rows: Vec<String> = app.update(cx, |window, _| {
-        (0..5usize)
-            .filter_map(|row| label(window, ("connection-dbt-unmatched-row", row)))
-            .collect()
-    });
-    assert_eq!(
-        rows,
-        [
-            format!(
-                "model {}: {}.{} (no table)",
-                dbt_manifest::model_name(5),
-                dbt_manifest::model_schema(5).replace("analytics_", ""),
-                dbt_manifest::model_alias(5)
-            ),
-            "seed seed_0000: analytics.seed_0000 (no schema)".into(),
-            "snapshot snapshot_0000: snapshots.snapshot_0000 (no schema)".into(),
-            "source table_00001: raw_1.table_00001_src (no schema)".into(),
-            "source table_00002: raw_2.table_00002_src (no schema)".into(),
-        ]
-    );
     // An edit of the rules changes the summary before the save.
     rules(&app, cx, "");
     app.scroll_to(cx, "connection-dbt-matches");
@@ -193,7 +175,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         &app,
         cx,
         "connection-dbt-matches",
-        "0 of 16 models and sources matched \u{b7} 0%",
+        "0 of 16 dbt resources matched the catalog",
     );
     app.click(cx, "cancel-profile");
     app.wait_gone(cx, "connection-name");

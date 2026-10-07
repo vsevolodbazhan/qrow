@@ -6,14 +6,14 @@ use crate::{
     activity::ActivityEntry,
     dbt::{
         Entry, Index, Kind,
-        matching::{self, CatalogNames, Match},
+        matching::{self, CatalogNames},
         worker::{self, DbtWorker, Event, ManifestState, Use, manifest_key},
     },
     model::{DbtProject, DbtRefresh, parse_schema_rules},
 };
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     form::{Field, Form},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
@@ -22,8 +22,8 @@ use gpui_kit::component::{
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, PathPromptOptions, Role, SharedString,
-    TestSupportExt as _, Window, div, prelude::*,
+    AnyElement, App, Context, Entity, IntoElement, PathPromptOptions, Role, TestSupportExt as _,
+    Window, div, prelude::*,
 };
 use std::{
     collections::HashMap,
@@ -31,9 +31,6 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
-
-/// The most resources without a match that the form lists.
-const MAX_UNMATCHED_ROWS: usize = 200;
 
 const AUTOMATIC: &str = "Automatic";
 const MANUAL: &str = "Manual";
@@ -276,18 +273,14 @@ impl Qrow {
         let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
         let rules = parse_schema_rules(form.dbt.rules.read(cx).value().as_ref());
         let matches = match (&state, rules) {
-            (_, Err(error)) => Some(Matches {
-                result: MatchResult::Error(error.to_string()),
-                unmatched: 0,
-                rows: vec![],
-            }),
+            (_, Err(error)) => Some(MatchResult::Error(error.to_string())),
             (Some(state), Ok(rules)) => state.index.as_ref().map(|index| {
                 let project = DbtProject {
                     manifest: typed.clone(),
                     refresh: DbtRefresh::Manual,
                     schema_mapping: rules,
                 };
-                self.matches(profile, index, &project, form.dbt.unmatched_open)
+                self.matches(profile, index, &project)
             }),
             _ => None,
         };
@@ -380,19 +373,13 @@ impl Qrow {
                         "Rules like dbt_dev_* = * or analytics = prod. The first match applies.",
                     ),
             )
-            .when_some(matches, |form_element, matches| {
-                let Matches {
-                    result,
-                    unmatched,
-                    rows,
-                } = matches;
+            .when_some(matches, |form_element, result| {
                 let line = |id: &'static str, text: String, color| {
                     div()
                         .id(id)
                         .test_support()
                         .role(Role::Status)
                         .aria_label(text.clone())
-                        .w_full()
                         .text_sm()
                         .text_color(color)
                         .child(text)
@@ -404,11 +391,7 @@ impl Qrow {
                     MatchResult::Error(text) => {
                         line("connection-dbt-matches", text, cx.theme().danger).into_any_element()
                     }
-                    MatchResult::Summary {
-                        matched,
-                        total,
-                        not_loaded,
-                    } => {
+                    MatchResult::Summary { matched, total } => {
                         let percent = percent(matched, total);
                         v_flex()
                             .w_full()
@@ -425,99 +408,51 @@ impl Qrow {
                                             .xsmall()
                                             .value(percent as f32)
                                             .accessibility_label(
-                                                "Models and sources that match tables",
+                                                "dbt resources that matched the catalog",
                                             ),
                                     ),
                             )
-                            .child(line(
-                                "connection-dbt-matches",
-                                format!(
-                                    "{} of {} models and sources matched \u{b7} {percent}%",
-                                    group(matched),
-                                    group(total)
-                                ),
-                                muted,
-                            ))
-                            .when(not_loaded > 0, |summary| {
-                                summary.child(line(
-                                    "connection-dbt-not-loaded",
-                                    not_loaded_text(not_loaded),
-                                    muted,
-                                ))
-                            })
+                            // The percentage ends with the bar.
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_start()
+                                    .justify_between()
+                                    .gap_2()
+                                    .child(
+                                        line(
+                                            "connection-dbt-matches",
+                                            format!(
+                                                "{} of {} dbt resources matched the catalog",
+                                                group(matched),
+                                                group(total)
+                                            ),
+                                            muted,
+                                        )
+                                        .min_w_0(),
+                                    )
+                                    .child(
+                                        line(
+                                            "connection-dbt-match-percent",
+                                            format!("{percent}%"),
+                                            muted,
+                                        )
+                                        .flex_shrink_0(),
+                                    ),
+                            )
                             .into_any_element()
                     }
                 };
-                form_element.child(
-                    Field::new().label("Tables").child(
-                        v_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(result)
-                            .when(unmatched > 0, |field| {
-                                field.child(
-                                    h_flex().child(
-                                        Button::new("connection-dbt-unmatched")
-                                            .small()
-                                            .ghost()
-                                            // The label lines up with the
-                                            // text above. The margin takes
-                                            // back the padding of a small
-                                            // button.
-                                            .ml_neg_2()
-                                            .label(if form.dbt.unmatched_open {
-                                                "Hide unmatched"
-                                            } else {
-                                                "Show unmatched"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                if let Some(form) = &mut this.form {
-                                                    form.dbt.unmatched_open =
-                                                        !form.dbt.unmatched_open;
-                                                }
-                                                cx.notify();
-                                            })),
-                                    ),
-                                )
-                            })
-                            .when(!rows.is_empty(), |list| {
-                                list.child(
-                                    v_flex()
-                                        .id("connection-dbt-unmatched-list")
-                                        .test_support()
-                                        .w_full()
-                                        .gap_0p5()
-                                        .text_sm()
-                                        .font_family("Menlo")
-                                        .text_color(muted)
-                                        .children(rows.into_iter().enumerate().map(
-                                            |(number, row)| {
-                                                div()
-                                                    .id(("connection-dbt-unmatched-row", number))
-                                                    .test_support()
-                                                    .role(Role::ListItem)
-                                                    .aria_label(SharedString::from(row.clone()))
-                                                    .w_full()
-                                                    .truncate()
-                                                    .child(row)
-                                            },
-                                        )),
-                                )
-                            }),
-                    ),
-                )
+                // The summary follows the schema mapping, so it needs no
+                // label of its own.
+                form_element.child(Field::new().child(result))
             })
             .into_any_element()
     }
 
-    /// The match summary of a connection, with the rows of the resources
-    /// without a match when `rows` is true.
-    fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject, rows: bool) -> Matches {
-        let note = |text: &str| Matches {
-            result: MatchResult::Note(text.into()),
-            unmatched: 0,
-            rows: vec![],
-        };
+    /// The match summary of a connection.
+    fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject) -> MatchResult {
+        let note = |text: &str| MatchResult::Note(text.into());
         if !self.profile_browses(profile) {
             return note("Turn on Schema Refresh to match models with tables.");
         }
@@ -529,41 +464,9 @@ impl Qrow {
             return note("Refresh the schemas of the connection to match models with tables.");
         };
         let summary = matching::summary(index, project, &CatalogNames::of(catalog));
-        let mut list = Vec::new();
-        if rows {
-            list = summary
-                .unmatched
-                .iter()
-                .take(MAX_UNMATCHED_ROWS)
-                .map(|(position, schema, found)| {
-                    let entry = index.entry(*position);
-                    let reason = match found {
-                        Match::NoSchema => "no schema",
-                        _ => "no table",
-                    };
-                    format!(
-                        "{} {}: {schema}.{} ({reason})",
-                        entry.kind.name(),
-                        entry.name,
-                        entry.identifier
-                    )
-                })
-                .collect();
-            if summary.unmatched.len() > MAX_UNMATCHED_ROWS {
-                list.push(format!(
-                    "And {} more.",
-                    group(summary.unmatched.len() - MAX_UNMATCHED_ROWS)
-                ));
-            }
-        }
-        Matches {
-            result: MatchResult::Summary {
-                matched: summary.matched,
-                total: summary.total,
-                not_loaded: summary.not_loaded,
-            },
-            unmatched: summary.unmatched.len(),
-            rows: list,
+        MatchResult::Summary {
+            matched: summary.matched,
+            total: summary.total,
         }
     }
 
@@ -574,24 +477,10 @@ impl Qrow {
     }
 }
 
-/// The match summary that the form shows.
-struct Matches {
-    result: MatchResult,
-    /// The number of resources without a match.
-    unmatched: usize,
-    /// The resources without a match, when the list is open.
-    rows: Vec<String>,
-}
-
 /// What the form can tell about the matches.
 enum MatchResult {
-    /// The counts of the resources with a match, of all resources, and of
-    /// the resources in schemas without loaded tables.
-    Summary {
-        matched: usize,
-        total: usize,
-        not_loaded: usize,
-    },
+    /// The counts of the resources with a match and of all resources.
+    Summary { matched: usize, total: usize },
     /// What the user must do before the form can match the resources.
     Note(String),
     /// The schema mapping rules are not valid.
@@ -610,18 +499,6 @@ fn percent(matched: usize, total: usize) -> usize {
         0 if matched > 0 => 1,
         100 if matched < total => 99,
         percent => percent,
-    }
-}
-
-/// The note about the resources in schemas without loaded tables.
-fn not_loaded_text(count: usize) -> String {
-    if count == 1 {
-        "1 model or source is in a schema without loaded tables.".into()
-    } else {
-        format!(
-            "{} models and sources are in schemas without loaded tables.",
-            group(count)
-        )
     }
 }
 
@@ -779,7 +656,6 @@ pub(super) struct DbtForm {
     pub(super) manifest: Entity<InputState>,
     pub(super) refresh: connection_form::ChoiceSelect,
     pub(super) rules: Entity<TextareaState>,
-    pub(super) unmatched_open: bool,
     _subscriptions: Vec<gpui_kit::Subscription>,
 }
 
@@ -833,7 +709,6 @@ impl DbtForm {
             manifest,
             refresh,
             rules,
-            unmatched_open: false,
             _subscriptions: subscriptions,
         }
     }
