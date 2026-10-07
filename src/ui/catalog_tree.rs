@@ -1925,9 +1925,13 @@ fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyVie
             .children(tip.comment.clone())
             .when_some(description.as_ref(), |tooltip, state| {
                 tooltip.child(
+                    // Markdown can have content of any height, like an
+                    // image, so the tooltip shows only its start.
                     div()
                         .id("catalog-tooltip-description")
                         .test_support()
+                        .max_h(rems(TOOLTIP_DESCRIPTION_REMS))
+                        .overflow_hidden()
                         .child(
                             TextView::new(state)
                                 .style(TextViewStyle::default().paragraph_gap(rems(0.)))
@@ -1991,6 +1995,10 @@ fn display_type(data_type: &str) -> String {
 
 /// The widest tree tooltip, at the standard text size.
 const TOOLTIP_WIDTH_REMS: f32 = 26.;
+
+/// The tallest dbt description in a tree tooltip. A cut description has
+/// approximately six lines.
+const TOOLTIP_DESCRIPTION_REMS: f32 = 12.;
 
 /// The longest error summary in a tooltip, in characters.
 const ERROR_SUMMARY_CHARS: usize = 200;

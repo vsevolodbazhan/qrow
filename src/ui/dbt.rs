@@ -731,7 +731,8 @@ fn summary(text: &str, limit: usize) -> (String, bool) {
 
 /// Whether `text` ends inside a code span, a link, or strong text.
 fn markdown_open(text: &str) -> bool {
-    let mut code = false;
+    // The length of the backtick run that opened the code span.
+    let mut code: Option<usize> = None;
     let mut strong = false;
     // In the text of a link, then in its target.
     let (mut link_text, mut link_target) = (false, false);
@@ -739,12 +740,19 @@ fn markdown_open(text: &str) -> bool {
     while let Some(c) = chars.next() {
         match c {
             '`' => {
+                let mut run = 1;
                 while chars.peek() == Some(&'`') {
                     chars.next();
+                    run += 1;
                 }
-                code = !code;
+                // Only a run of the same length closes a code span.
+                code = match code {
+                    None => Some(run),
+                    Some(open) if open == run => None,
+                    open => open,
+                };
             }
-            _ if code => {}
+            _ if code.is_some() => {}
             '\\' => {
                 chars.next();
             }
@@ -763,7 +771,7 @@ fn markdown_open(text: &str) -> bool {
             _ => {}
         }
     }
-    code || strong || link_text || link_target
+    code.is_some() || strong || link_text || link_target
 }
 
 /// The dbt fields of Connection Settings.
@@ -1041,6 +1049,15 @@ mod tests {
         assert_eq!(
             summary("silver__orders has prices", 20),
             ("silver__orders has…".to_owned(), true)
+        );
+        // A code span closes only with as many backticks as it opened with.
+        assert_eq!(
+            summary("Uses ``a ` b c`` and more", 13),
+            ("Uses…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Uses ``a ` b`` and more", 18),
+            ("Uses ``a ` b`` and…".to_owned(), true)
         );
         // Text that is all one open span keeps the first words.
         assert_eq!(
