@@ -422,6 +422,8 @@ impl Qrow {
                 &tab.input.read(cx).value(),
                 if profile.database_type == crate::model::DatabaseType::Postgres {
                     "public"
+                } else if profile.database_type == crate::model::DatabaseType::Trino {
+                    &profile.trino_schema
                 } else {
                     &profile.database
                 },
