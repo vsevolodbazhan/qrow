@@ -26,9 +26,15 @@ impl Http {
         } else {
             "http://localhost"
         })?;
-        statement
-            .set_host(Some(&profile.host))
-            .context("Invalid Trino host")?;
+        if let Ok(address) = profile.host.parse::<std::net::IpAddr>() {
+            statement
+                .set_ip_host(address)
+                .map_err(|()| anyhow::anyhow!("Invalid Trino IP address"))?;
+        } else {
+            statement
+                .set_host(Some(&profile.host))
+                .context("Invalid Trino host")?;
+        }
         statement
             .set_port(Some(profile.port))
             .map_err(|()| anyhow::anyhow!("Invalid Trino port"))?;
@@ -272,6 +278,24 @@ impl SessionHeaders {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coordinator_urls_preserve_ipv6_addresses() -> Result<()> {
+        for host in ["::1", "2001:db8::7", "[::1]"] {
+            let profile = Profile {
+                host: host.into(),
+                port: 8080,
+                ..Profile::default()
+            };
+            let http = Http::new(&profile, Secret::password(""), &Trust::default())?;
+            let expected = host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::Ipv6Addr>()?;
+            assert_eq!(http.statement.host(), Some(url::Host::Ipv6(expected)));
+            assert_eq!(http.statement.port(), Some(8080));
+            assert_eq!(http.statement.path(), "/v1/statement");
+        }
+        Ok(())
+    }
     #[test]
     fn session_headers_reject_injection_and_decode_properties() -> Result<()> {
         let profile = Profile {

@@ -125,7 +125,7 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
 fn byte_limit_keeps_the_last_retained_batch_in_the_results_table(cx: &mut TestAppContext) {
     let app = launch(
         cx,
-        "SELECT repeat('x',100000) AS value FROM UNNEST(sequence(1,700)) t(i)",
+        "SELECT concat(repeat('x',99990), lpad(CAST(i AS varchar),10,'0')) AS value FROM UNNEST(sequence(1,700)) t(i)",
     );
     app.click(cx, "run");
     app.wait_until(

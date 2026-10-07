@@ -11,7 +11,7 @@ use protocol::{Http, SessionHeaders};
 use serde::Deserialize;
 use std::{
     fs::File,
-    io::{Read, Seek, Write},
+    io::{BufReader, BufWriter, Read, Seek, Write},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -79,7 +79,8 @@ impl Cancel {
 struct Operation {
     cancel: Arc<Cancel>,
     columns: Vec<Column>,
-    file: File,
+    writer: Option<BufWriter<File>>,
+    reader: Option<BufReader<File>>,
     rows: usize,
     bytes: usize,
     remaining: usize,
@@ -120,6 +121,10 @@ impl Operation {
                 })
                 .collect();
         }
+        let file = self
+            .writer
+            .as_mut()
+            .context("Trino results are already complete")?;
         for values in page.data.unwrap_or_default() {
             anyhow::ensure!(
                 values.len() == self.columns.len(),
@@ -141,13 +146,13 @@ impl Operation {
                 self.limited = true;
             }
             if !self.limited {
-                self.file.write_all(&(row.len() as u64).to_le_bytes())?;
+                file.write_all(&(row.len() as u64).to_le_bytes())?;
                 for value in row {
                     match value {
-                        None => self.file.write_all(&u64::MAX.to_le_bytes())?,
+                        None => file.write_all(&u64::MAX.to_le_bytes())?,
                         Some(value) => {
-                            self.file.write_all(&(value.len() as u64).to_le_bytes())?;
-                            self.file.write_all(value.as_bytes())?;
+                            file.write_all(&(value.len() as u64).to_le_bytes())?;
+                            file.write_all(value.as_bytes())?;
                         }
                     }
                 }
@@ -156,9 +161,16 @@ impl Operation {
             }
         }
         if self.cancel.next.lock().unwrap().is_none() {
+            let mut file = self
+                .writer
+                .take()
+                .context("No Trino result writer")?
+                .into_inner()
+                .map_err(|error| error.into_error())?;
+            file.rewind()?;
+            self.reader = Some(BufReader::new(file));
             self.finished = true;
             self.remaining = self.rows;
-            self.file.rewind()?;
         }
         Ok(())
     }
@@ -195,20 +207,21 @@ impl Operation {
 
     fn fetch(&mut self, count: usize) -> Result<Batch> {
         anyhow::ensure!(self.finished, "Trino query is still running");
+        let file = self.reader.as_mut().context("No Trino result reader")?;
         let mut rows = Vec::new();
         for _ in 0..count.min(self.remaining) {
             let mut buffer = [0; 8];
-            self.file.read_exact(&mut buffer)?;
+            file.read_exact(&mut buffer)?;
             let width = u64::from_le_bytes(buffer) as usize;
             let mut row = Vec::with_capacity(width);
             for _ in 0..width {
-                self.file.read_exact(&mut buffer)?;
+                file.read_exact(&mut buffer)?;
                 let length = u64::from_le_bytes(buffer);
                 if length == u64::MAX {
                     row.push(None);
                 } else {
                     let mut bytes = vec![0; length as usize];
-                    self.file.read_exact(&mut bytes)?;
+                    file.read_exact(&mut bytes)?;
                     row.push(Some(String::from_utf8(bytes)?));
                 }
             }
@@ -271,7 +284,8 @@ impl TrinoSession {
         let mut operation = Operation {
             cancel,
             columns: Vec::new(),
-            file: tempfile::tempfile()?,
+            writer: Some(BufWriter::new(tempfile::tempfile()?)),
+            reader: None,
             rows: 0,
             bytes: 0,
             remaining: 0,
@@ -422,7 +436,8 @@ mod tests {
                 requested: AtomicBool::new(false),
             }),
             columns: Vec::new(),
-            file: tempfile::tempfile()?,
+            writer: Some(BufWriter::new(tempfile::tempfile()?)),
+            reader: None,
             rows: 0,
             bytes: MAX_RESULT_BYTES - 100,
             remaining: 0,
