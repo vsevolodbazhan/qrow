@@ -99,6 +99,7 @@ fn logs_record_when_older_entries_are_removed(cx: &mut TestAppContext) {
     app.run_complete(cx, "SELECT 'retention-oldest' AS value");
     app.wait_cell(cx, 0, 1, "retention-oldest");
     app.type_sql(cx, "SELECT 'retention-rejected'; SELECT 2");
+    app.press(cx, "cmd-a");
     for _ in 0..100 {
         app.click(cx, "run");
     }

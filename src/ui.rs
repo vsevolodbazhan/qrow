@@ -1717,17 +1717,11 @@ impl Qrow {
         }
         self.run_tab_query(self.active, window, cx)
     }
-    /// Runs the selected SQL of a tab, or all of its SQL when nothing is
-    /// selected. An assistant conversation runs its tab also while a dialog
-    /// is open.
+    /// Runs the selected SQL of a tab, or its last statement when nothing is
+    /// selected.
     fn run_tab_query(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
-        }
-        if self.demo {
-            self.seed_demo(index, cx);
-            cx.notify();
-            return true;
         }
         let tab = &mut self.tabs[index];
         let query = tab.input.update(cx, |s, cx| {
@@ -1736,7 +1730,12 @@ impl Qrow {
                 .filter(|s| !s.range.is_empty());
             selected
                 .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
-                .unwrap_or_else(|| s.value().to_string())
+                .unwrap_or_else(|| {
+                    let text = s.value();
+                    sql::last_statement_range(&text)
+                        .map(|range| text[range].to_string())
+                        .unwrap_or_default()
+                })
         });
         self.run_tab_sql(index, query, false, cx)
     }
@@ -1751,6 +1750,11 @@ impl Qrow {
     ) -> bool {
         if self.tabs.get(index).is_none_or(|tab| tab.busy) {
             return false;
+        }
+        if self.demo {
+            self.seed_demo(index, cx);
+            cx.notify();
+            return true;
         }
         let active = index == self.active && !self.activity.read(cx).is_open();
         let tab = &mut self.tabs[index];

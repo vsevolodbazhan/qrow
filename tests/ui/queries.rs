@@ -17,6 +17,53 @@ use std::{
 };
 
 #[gpui_kit::test]
+fn run_uses_the_last_statement_and_rejects_invalid_selections(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.type_sql(cx, "SELECT '日本語😀;';\nSELECT 2;\n-- trailing ;\n");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.press(cx, "cmd-enter");
+    assert!(
+        app.logs(cx)
+            .contains("Choose a connection before running SQL.")
+    );
+    assert_eq!(app.credentials.reads(), 0);
+
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "cmd-enter");
+    assert!(app.logs(cx).contains("Run one statement at a time."));
+    assert_eq!(app.credentials.reads(), 0);
+
+    for (index, text) in ["", "\n-- only a comment;\n/* another ; */\n", "   "]
+        .into_iter()
+        .enumerate()
+    {
+        if text.is_empty() {
+            app.click(cx, "sql-editor");
+            app.press(cx, "cmd-a");
+            app.press(cx, "backspace");
+            app.wait_until(
+                cx,
+                "the empty editor to be saved",
+                Duration::from_secs(10),
+                |_, _| app.saved().tabs[0].sql.is_empty(),
+            );
+        } else {
+            app.type_sql(cx, text);
+        }
+        app.press(cx, "cmd-enter");
+        assert_eq!(
+            app.logs(cx)
+                .matches("Write or select a SQL statement first.")
+                .count(),
+            index + 1
+        );
+        assert_eq!(app.credentials.reads(), 0);
+    }
+}
+
+#[gpui_kit::test]
 fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppContext) {
     // A loopback socket holds sign-in until the test closes it.
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -491,6 +538,8 @@ fn activity_does_not_read_a_hidden_tabs_local_error(cx: &mut TestAppContext) {
     );
     let idle_button = app.update(cx, |window, _| bounds_of(window, "toggle-activity"));
     assert_eq!(idle_button.size.width, idle_button.size.height);
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
     app.click(cx, "toggle-activity");
     app.wait_for(cx, "activity");
     app.dispatch(cx, qrow::ui::RunQuery);

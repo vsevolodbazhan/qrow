@@ -253,9 +253,16 @@ impl Qrow {
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Run query", "")
-                            .detail("Run the selected SQL or the editor contents. One statement only.")
-                            .for_action(&RunQuery, None)); button })
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("Run query", "")
+                                    .detail(
+                                        "Run the selected SQL or the last statement in the editor.",
+                                    )
+                                    .for_action(&RunQuery, None),
+                            );
+                            button
+                        })
                         .disabled(active.is_none() && !self.demo)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),

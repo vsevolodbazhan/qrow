@@ -191,9 +191,25 @@ fn a_long_tab_sends_a_bounded_part_and_the_assistant_reads_the_rest(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn an_approved_query_runs_with_its_comments_and_unicode(cx: &mut TestAppContext) {
+    let sql = "/* approved prefix */ SELECT '日本語😀;' AS value; -- approved suffix";
+    let (app, _codex) = launch(cx, sql, |_| {});
+    app.open_assistant(cx);
+    app.send(cx, "Run selected SQL without range");
+    app.wait_approval(cx, &format!("Run in Query 1 on Synthetic? {sql}"));
+    app.click(cx, "assistant-approve-query");
+    app.wait_gone(cx, "assistant-query-approval");
+    app.wait_status(cx, "Error");
+    assert!(app.logs(cx).contains(&format!("Submitted query:\n{sql}")));
+    assert_eq!(app.saved().tabs[0].sql, sql);
+}
+
+#[gpui_kit::test]
 fn the_logs_tool_reads_only_the_latest_execution(cx: &mut TestAppContext) {
     let (app, _codex) = launch(cx, "SELECT 1; SELECT 2", |_| {});
     // Rejected SQL makes a Logs group without an execution.
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
     app.click(cx, "run");
     app.type_sql(cx, "SELECT 'logged-query'");
     app.click(cx, "run");

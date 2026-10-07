@@ -727,7 +727,7 @@ impl Qrow {
     fn tool_run(
         &mut self,
         call: &ToolCall,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<ToolResult> {
         let result = (|| {
@@ -806,7 +806,7 @@ impl Qrow {
                 first_row: 0,
             });
             if mode == crate::model::AssistantExecutionMode::RunAutomatically {
-                self.begin_assistant_query(&call.thread_id, window, cx);
+                self.begin_assistant_query(&call.thread_id, cx);
             }
             Ok(())
         })();
@@ -816,13 +816,13 @@ impl Qrow {
     pub(super) fn approve_assistant_query(
         &mut self,
         thread_id: &str,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.approved = true;
         }
-        self.begin_assistant_query(thread_id, window, cx);
+        self.begin_assistant_query(thread_id, cx);
     }
 
     pub(super) fn cancel_assistant_approval(&mut self, thread_id: &str, cx: &mut Context<Self>) {
@@ -842,12 +842,7 @@ impl Qrow {
         cx.notify();
     }
 
-    fn begin_assistant_query(
-        &mut self,
-        thread_id: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn begin_assistant_query(&mut self, thread_id: &str, cx: &mut Context<Self>) {
         let Some(pending) = self
             .thread_run(thread_id)
             .and_then(|run| run.pending_query.as_ref())
@@ -891,11 +886,12 @@ impl Qrow {
             return;
         };
         let kind = pending.kind;
+        let query = pending.sql.clone();
         if let Some(pending) = &mut self.thread_run_mut(thread_id).pending_query {
             pending.started = true;
         }
         let started = match kind {
-            PendingQueryKind::Run => self.run_tab_query(index, window, cx),
+            PendingQueryKind::Run => self.run_tab_sql(index, query, false, cx),
             PendingQueryKind::Fetch => {
                 self.next_tab_page(index, cx);
                 self.tabs[index].busy
@@ -1463,6 +1459,27 @@ mod tests {
     use super::{AppendedQuery, EditorDocument, RunInput, resolve_tab_id, run_request};
     use serde_json::json;
     use uuid::Uuid;
+
+    #[gpui_kit::test]
+    fn approved_demo_sql_keeps_execution_synthetic(cx: &mut gpui_kit::TestAppContext) {
+        use crate::ui::{Environment, Qrow};
+        use gpui_kit::{AppContext, px, size};
+        use std::time::Instant;
+
+        cx.update(crate::ui::init);
+        cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let view = cx.new(|cx| {
+                let mut qrow = Qrow::new(Environment::demo(), Instant::now(), window, cx);
+                let index = qrow.active;
+                assert!(qrow.run_tab_sql(index, "SELECT 1".into(), false, cx));
+                assert_eq!(qrow.tabs[index].status, "Complete");
+                assert_eq!(qrow.tabs[index].status_detail.as_deref(), Some("Demo data"));
+                assert!(qrow.tabs[index].worker.is_none());
+                qrow
+            });
+            crate::ui::root(view, window, cx)
+        });
+    }
 
     #[test]
     fn a_catalog_call_returns_available_schemas_before_its_refresh_is_idle() {

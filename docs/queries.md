@@ -12,9 +12,13 @@ concurrently.
 4. Select the text to run, if you want to run only part of the editor.
 5. Click **Run** or press **⌘Enter**.
 
-Without a selection, Qrow submits the full editor contents. It does not select
-the statement under the cursor. Each execution must contain one SQL statement.
-Qrow rejects multiple statements before sending them to the server.
+Without a selection, Qrow runs the last SQL statement in the editor.
+The cursor position does not change which statement runs. Blank lines and
+comments after the statement do not change which statement runs.
+
+If you select text, Qrow runs that text. Each execution must contain one SQL
+statement. Qrow rejects a selection with multiple statements before it sends
+SQL to the server.
 
 The dot of a tab shows the state of its work. Point to the dot to read the
 tab name and a short status. The tooltip has no query detail line. The bar
