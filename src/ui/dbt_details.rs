@@ -12,24 +12,27 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
-use gpui_kit::base::{SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle};
+use gpui_kit::base::{
+    SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
+};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     clipboard::Clipboard,
     h_flex,
+    highlighter::{HighlightTheme, SyntaxHighlighter},
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement as _,
     tag::Tag,
-    text::{TextView, TextViewStyle},
+    text::{TextView, TextViewState, TextViewStyle},
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, Hsla, IntoElement, ListAlignment, ListState, Render, Role,
-    SharedString, StyleRefinement, Subscription, TestSupportExt as _, Window, div, list,
-    percentage, prelude::*, px, relative, rems,
+    AnyElement, App, Context, Entity, HighlightStyle, Hsla, IntoElement, ListAlignment, ListOffset,
+    ListState, Render, Role, SharedString, StyleRefinement, Subscription, TestSupportExt as _,
+    Window, div, list, percentage, prelude::*, px, relative, rems,
 };
-use std::{ops::Range, sync::Arc};
+use std::{cell::RefCell, collections::HashMap, ops::Range, sync::Arc};
 use uuid::Uuid;
 
 /// The part of the window width that the sheet takes, and its limits in
@@ -136,7 +139,20 @@ pub(super) struct DbtDetailsView {
     /// The unique IDs and the titles of the resources that the user came
     /// from through the lineage, the last one on top.
     history: Vec<(String, SharedString)>,
+    /// The Markdown of the description and of the column descriptions, by
+    /// element ID. A text view without a state of its own parses its text
+    /// again after a frame off the screen, and parses a large text in the
+    /// background. A description that scrolls back in then is empty for a
+    /// moment, and the list moves the rows below it.
+    markdown: RefCell<HashMap<String, Markdown>>,
     _subscription: gpui_kit::Subscription,
+}
+
+/// The Markdown of a row, and its parse.
+struct Markdown {
+    text: SharedString,
+    state: Entity<TextViewState>,
+    _changes: Subscription,
 }
 
 /// The data of a resource that the rows show, read from the index once.
@@ -281,7 +297,7 @@ enum Sql {
     /// The manifest changed after Qrow read it, so the positions of the SQL
     /// are wrong. Qrow reads the manifest again first.
     Refreshing,
-    Read(SqlText),
+    Read(Box<SqlText>),
     Failed(String),
 }
 
@@ -289,23 +305,58 @@ enum Sql {
 /// is a selectable run in reading order, so a selection can go across them.
 struct SqlText {
     full: SharedString,
-    chunks: Vec<SharedString>,
+    chunks: Vec<SqlChunk>,
     /// The selection of each row. A change of a selection draws the sheet
     /// again, so that a drag shows the selection while it grows.
     selections: Vec<TextSelectionHandle>,
     _selection_changes: Vec<Subscription>,
+    /// The syntax tree of the full SQL. A row takes its part of the tree, so
+    /// that a comment or a string that starts in an earlier row has its
+    /// color.
+    highlighter: SyntaxHighlighter,
+    /// The highlight theme of the highlights of the rows.
+    theme: Option<Arc<HighlightTheme>>,
+}
+
+/// One row of SQL: its text, its place in the full SQL, and its syntax
+/// highlights once a frame shows it.
+struct SqlChunk {
+    text: SharedString,
+    range: Range<usize>,
+    highlights: Option<Highlights>,
+}
+
+/// Styles of byte ranges of a row of SQL.
+type Highlights = Arc<[(Range<usize>, HighlightStyle)]>;
+
+/// SQL and its syntax tree, which the read makes in the background.
+struct ParsedSql {
+    text: String,
+    highlighter: SyntaxHighlighter,
+}
+
+impl ParsedSql {
+    fn new(sql: &str) -> Self {
+        let text = display_sql(sql);
+        let mut highlighter = SyntaxHighlighter::new("sql");
+        highlighter.update(None, &Rope::from_str(&text), None);
+        Self { text, highlighter }
+    }
 }
 
 impl SqlText {
-    fn new(sql: String, cx: &mut Context<DbtDetailsView>) -> Self {
-        let lines: Vec<&str> = sql.lines().collect();
-        let chunks: Vec<SharedString> = lines
-            .chunks(SQL_CHUNK_LINES)
-            .map(|chunk| SharedString::from(chunk.join("\n")))
+    fn new(sql: ParsedSql, cx: &mut Context<DbtDetailsView>) -> Self {
+        let chunks: Vec<SqlChunk> = chunk_ranges(&sql.text)
+            .into_iter()
+            .map(|range| SqlChunk {
+                text: sql.text[range.clone()].to_owned().into(),
+                range,
+                highlights: None,
+            })
             .collect();
         let selections: Vec<TextSelectionHandle> = chunks
             .iter()
-            .map(|chunk| TextSelectionHandle::new(chunk.clone(), cx))
+            .map(|chunk| TextSelectionHandle::new(chunk.text.clone(), cx))
             .collect();
         let view = cx.weak_entity();
         let selection_changes = selections
@@ -323,17 +374,96 @@ impl SqlText {
             })
             .collect();
         Self {
-            full: sql.into(),
+            full: sql.text.into(),
             chunks,
             selections,
             _selection_changes: selection_changes,
+            highlighter: sql.highlighter,
+            theme: None,
         }
     }
+
+    /// The syntax highlights of the row `position` in the colors of
+    /// `theme`, relative to the row.
+    fn highlights(&mut self, position: usize, theme: &Arc<HighlightTheme>) -> Highlights {
+        if !self
+            .theme
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, theme))
+        {
+            // The theme changed, and with it the colors.
+            for chunk in &mut self.chunks {
+                chunk.highlights = None;
+            }
+            self.theme = Some(theme.clone());
+        }
+        let chunk = &mut self.chunks[position];
+        chunk
+            .highlights
+            .get_or_insert_with(|| {
+                let styles = self.highlighter.styles(&chunk.range, theme.as_ref());
+                relative_highlights(styles, &chunk.range).into()
+            })
+            .clone()
+    }
+}
+
+/// The SQL as the sheet shows it: without the empty lines at the start and
+/// at the end, which compiled SQL often has where the model file has its
+/// configuration, and with Unix line ends.
+fn display_sql(sql: &str) -> String {
+    let sql = sql.replace("\r\n", "\n");
+    let lines: Vec<&str> = sql.split('\n').collect();
+    let Some(first) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return String::new();
+    };
+    let last = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .unwrap_or(first);
+    lines[first..=last].join("\n")
+}
+
+/// The byte ranges of the rows of `text`, each [`SQL_CHUNK_LINES`] lines
+/// without the line end between two rows.
+fn chunk_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut lines = 0;
+    for (position, byte) in text.bytes().enumerate() {
+        if byte == b'\n' {
+            lines += 1;
+            if lines == SQL_CHUNK_LINES {
+                ranges.push(start..position);
+                start = position + 1;
+                lines = 0;
+            }
+        }
+    }
+    if start < text.len() {
+        ranges.push(start..text.len());
+    }
+    ranges
+}
+
+/// `styles` of the full SQL, relative to the row at `range`.
+fn relative_highlights(
+    styles: Vec<(Range<usize>, HighlightStyle)>,
+    range: &Range<usize>,
+) -> Vec<(Range<usize>, HighlightStyle)> {
+    styles
+        .into_iter()
+        .filter_map(|(style_range, style)| {
+            let start = style_range.start.max(range.start);
+            let end = style_range.end.min(range.end);
+            (start < end).then(|| (start - range.start..end - range.start, style))
+        })
+        .collect()
 }
 
 /// The result of a read of the SQL in the background.
 enum SqlRead {
-    Read(String),
+    Read(Box<ParsedSql>),
     Changed,
     Failed(String),
 }
@@ -371,6 +501,7 @@ impl DbtDetailsView {
             rem_size: None,
             sql: Default::default(),
             history: Vec::new(),
+            markdown: RefCell::default(),
             _subscription: subscription,
         };
         view.rebuild(cx);
@@ -499,9 +630,16 @@ impl DbtDetailsView {
         self.state = state;
         self.project = project;
         if new_index {
-            // The SQL of the old index is old.
+            // dbt writes the manifest again on each run. The user keeps the
+            // place, and an open part shows its old SQL until the new SQL
+            // is read.
+            let anchor = self.scroll_anchor();
             for part in &mut self.sql {
-                part.reset();
+                if part.open && matches!(part.sql, Sql::Read(_)) {
+                    part.read += 1;
+                } else {
+                    part.reset();
+                }
             }
             self.rebuild(cx);
             for kind in SqlKind::ALL {
@@ -509,6 +647,7 @@ impl DbtDetailsView {
                     self.read_sql(kind, cx);
                 }
             }
+            self.restore_scroll(anchor);
             cx.notify();
             return;
         }
@@ -537,6 +676,30 @@ impl DbtDetailsView {
         cx.notify();
     }
 
+    /// The row at the top of the list, and how far the list is scrolled
+    /// into it.
+    fn scroll_anchor(&self) -> Option<(Row, gpui_kit::Pixels)> {
+        let top = self.list.logical_scroll_top();
+        let row = self.rows.get(top.item_ix)?;
+        Some((*row, top.offset_in_item))
+    }
+
+    /// Scroll the list back to `anchor`, and tell whether the rows still
+    /// have its row.
+    fn restore_scroll(&self, anchor: Option<(Row, gpui_kit::Pixels)>) -> bool {
+        let Some((row, offset_in_item)) = anchor else {
+            return false;
+        };
+        let Some(item_ix) = self.rows.iter().position(|candidate| *candidate == row) else {
+            return false;
+        };
+        self.list.scroll_to(ListOffset {
+            item_ix,
+            offset_in_item,
+        });
+        true
+    }
+
     /// Give the list the focus handle of the filter, so that the list
     /// keeps the filter row and its keyboard input when the user scrolls
     /// it out of view.
@@ -560,7 +723,9 @@ impl DbtDetailsView {
             self.history.push(current);
         }
         self.unique_id = unique_id;
-        // The SQL and the column filter belong to the old resource.
+        // The SQL, the Markdown, and the column filter belong to the old
+        // resource.
+        self.markdown.borrow_mut().clear();
         for part in &mut self.sql {
             part.reset();
             part.open = false;
@@ -569,6 +734,51 @@ impl DbtDetailsView {
             .update(cx, |filter, cx| filter.set_value("", window, cx));
         self.rebuild(cx);
         cx.notify();
+    }
+
+    /// The Markdown view `id` of `text` in `row`, with the state that the
+    /// sheet keeps while the text stays the same.
+    fn markdown(
+        &self,
+        id: String,
+        text: &SharedString,
+        row: Row,
+        cx: &mut Context<Self>,
+    ) -> TextView {
+        let mut markdown = self.markdown.borrow_mut();
+        if let Some(current) = markdown.get(&id)
+            && current.text == *text
+        {
+            return markdown_view(&current.state);
+        }
+        let state = cx.new(|cx| TextViewState::markdown(text, cx));
+        let changes = cx.observe(&state, move |this, _, cx| this.markdown_parsed(row, cx));
+        let view = markdown_view(&state);
+        markdown.insert(
+            id,
+            Markdown {
+                text: text.clone(),
+                state,
+                _changes: changes,
+            },
+        );
+        view
+    }
+
+    /// The Markdown of `row` changed, for example after a parse in the
+    /// background. The list measures a row on the screen in each frame,
+    /// but keeps the height of a row off the screen: measure it again, so
+    /// that it does not move the rows when it scrolls back in.
+    fn markdown_parsed(&mut self, row: Row, cx: &mut Context<Self>) {
+        let Some(position) = self.rows.iter().position(|candidate| *candidate == row) else {
+            return;
+        };
+        let on_screen = self.list.item_is_above_viewport(position) == Some(false)
+            && self.list.item_is_below_viewport(position) == Some(false);
+        if !on_screen {
+            self.list.remeasure_items(position..position + 1);
+            cx.notify();
+        }
     }
 
     /// The button back to the resource that the user came from.
@@ -624,11 +834,23 @@ impl DbtDetailsView {
                 .take_while(|row| matches!(row, Row::SqlChunk(..)))
                 .count()
         };
+        // A splice moves the list to the first new row when the top row is
+        // one of the old rows.
+        let anchor = self.scroll_anchor();
         let old = chunks(&self.rows);
         self.rows = self.make_rows();
         let new = chunks(&self.rows);
         self.list.splice(sql + 1..sql + 1 + old, new);
         self.list.remeasure_items(sql..sql + 1 + new);
+        if !self.restore_scroll(anchor)
+            && matches!(anchor, Some((Row::SqlChunk(chunk_kind, _), _)) if chunk_kind == kind)
+        {
+            // The SQL that the user read is gone: show its header.
+            self.list.scroll_to(ListOffset {
+                item_ix: sql,
+                offset_in_item: px(0.),
+            });
+        }
     }
 
     /// Read the SQL of the part `kind` in the background.
@@ -655,9 +877,16 @@ impl DbtDetailsView {
         }
         // The part tells that the manifest has no such SQL.
         let Some(span) = span else {
+            if matches!(part.sql, Sql::Read(_)) {
+                part.sql = Sql::Unread;
+                self.sql_changed(kind);
+            }
             return;
         };
-        part.sql = Sql::Reading;
+        // SQL that the part shows stays until the new SQL replaces it.
+        if !matches!(part.sql, Sql::Read(_)) {
+            part.sql = Sql::Reading;
+        }
         let read = part.read;
         self.sql_changed(kind);
         // Compiled SQL can be large, and the file can be on a slow disk.
@@ -669,7 +898,8 @@ impl DbtDetailsView {
                 return SqlRead::Changed;
             }
             match result {
-                Ok(sql) => SqlRead::Read(sql),
+                // A large model has thousands of lines of SQL.
+                Ok(sql) => SqlRead::Read(Box::new(ParsedSql::new(&sql))),
                 Err(error) => SqlRead::Failed(error.to_string()),
             }
         });
@@ -682,8 +912,8 @@ impl DbtDetailsView {
                 match result {
                     SqlRead::Changed => this.read_sql(kind, cx),
                     SqlRead::Read(sql) => {
-                        let text = SqlText::new(sql, cx);
-                        this.sql[kind.position()].sql = Sql::Read(text);
+                        let text = SqlText::new(*sql, cx);
+                        this.sql[kind.position()].sql = Sql::Read(Box::new(text));
                     }
                     SqlRead::Failed(error) => this.sql[kind.position()].sql = Sql::Failed(error),
                 }
@@ -760,9 +990,11 @@ impl DbtDetailsView {
                         .test_support()
                         .role(Role::Label)
                         .aria_label(description.clone())
-                        .child(markdown(
+                        .child(self.markdown(
                             format!("dbt-description-{}", self.unique_id),
-                            description.clone(),
+                            description,
+                            Row::Description,
+                            cx,
                         ))
                         .into_any_element(),
                 };
@@ -831,9 +1063,11 @@ impl DbtDetailsView {
                             div()
                                 .id(SharedString::from(format!("{id}-text")))
                                 .test_support()
-                                .child(markdown(
+                                .child(self.markdown(
                                     format!("{id}-description"),
-                                    column.description.clone(),
+                                    &column.description,
+                                    Row::Column(position),
+                                    cx,
                                 )),
                         )
                     })
@@ -946,16 +1180,20 @@ impl DbtDetailsView {
 
     /// The rows of SQL form one box. They scroll with the sheet instead of
     /// in a box of their own.
-    fn sql_chunk(&self, kind: SqlKind, position: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Sql::Read(sql) = &self.sql[kind.position()].sql else {
+    fn sql_chunk(&mut self, kind: SqlKind, position: usize, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().highlight_theme.clone();
+        let Sql::Read(sql) = &mut self.sql[kind.position()].sql else {
             return div().into_any_element();
         };
-        let (Some(text), Some(selection)) =
+        let (Some(chunk), Some(selection)) =
             (sql.chunks.get(position), sql.selections.get(position))
         else {
             return div().into_any_element();
         };
+        let text = chunk.text.clone();
+        let selection = selection.clone();
         let last = position + 1 == sql.chunks.len();
+        let highlights = sql.highlights(position, &theme);
         div()
             .w_full()
             .px_2()
@@ -971,9 +1209,10 @@ impl DbtDetailsView {
             .child(
                 SelectableText::with_handle(
                     SharedString::from(format!("dbt-sql-{}-{position}", kind.id())),
-                    selection.clone(),
-                    text.clone(),
+                    selection,
+                    text,
                 )
+                .highlights(highlights.iter().cloned())
                 // The compiled SQL comes before the raw SQL.
                 .document_order(((kind.position() as u64) << 32) + position as u64),
             )
@@ -1013,6 +1252,7 @@ impl Render for DbtDetailsView {
         // of the body and scrolls by itself.
         div()
             .id("dbt-details-list")
+            .test_support()
             .size_full()
             .child(rows)
             .vertical_scrollbar(&self.list)
@@ -1164,8 +1404,9 @@ fn muted_text(text: &str, color: Hsla) -> AnyElement {
 /// A dbt description as Markdown. Its headings stay below the titles of the
 /// sheet, and its code blocks have the size of the SQL part instead of the
 /// larger code size of the theme.
-fn markdown(id: String, text: SharedString) -> TextView {
-    TextView::markdown(SharedString::from(id), text)
+/// A Markdown text view with the state `state`.
+fn markdown_view(state: &Entity<TextViewState>) -> TextView {
+    TextView::new(state)
         .style(
             TextViewStyle::default()
                 .paragraph_gap(rems(0.5))
@@ -1286,7 +1527,46 @@ fn test_tag(name: SharedString) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::argument_pairs;
+    use super::{SQL_CHUNK_LINES, argument_pairs, chunk_ranges, display_sql, relative_highlights};
+    use gpui_kit::HighlightStyle;
+
+    #[test]
+    fn shown_sql_has_no_empty_lines_at_the_ends() {
+        assert_eq!(
+            display_sql("\r\n  \n\nselect 1\r\n\n  from t \n\n \n"),
+            "select 1\n\n  from t "
+        );
+        assert_eq!(display_sql(" \n\t\n"), "");
+    }
+
+    #[test]
+    fn sql_rows_cover_the_text_without_the_line_ends_between_them() {
+        let lines: Vec<String> = (0..SQL_CHUNK_LINES * 2 + 1)
+            .map(|line| format!("line {line}"))
+            .collect();
+        let text = lines.join("\n");
+        let ranges = chunk_ranges(&text);
+        assert_eq!(ranges.len(), 3);
+        assert_eq!(text[ranges[0].clone()], lines[..SQL_CHUNK_LINES].join("\n"));
+        assert_eq!(
+            text[ranges[2].clone()],
+            format!("line {}", SQL_CHUNK_LINES * 2)
+        );
+        for pair in ranges.windows(2) {
+            assert_eq!(&text[pair[0].end..pair[1].start], "\n");
+        }
+        assert_eq!(chunk_ranges(""), Vec::<std::ops::Range<usize>>::new());
+    }
+
+    #[test]
+    fn row_highlights_are_relative_to_the_row() {
+        let bold = HighlightStyle {
+            font_weight: Some(gpui_kit::FontWeight::BOLD),
+            ..Default::default()
+        };
+        let styles = vec![(0..4, bold), (8..14, bold), (20..22, bold)];
+        assert_eq!(relative_highlights(styles, &(10..20)), vec![(0..4, bold)]);
+    }
 
     #[test]
     fn test_arguments_are_names_and_plain_values() {

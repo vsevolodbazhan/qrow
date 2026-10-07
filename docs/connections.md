@@ -335,10 +335,13 @@ details**. A panel opens at the right side of the window. It shows:
 - The SQL of the model, in two closed parts: **Compiled SQL** has the SQL
   that dbt compiled, without Jinja, and **Raw SQL** has the SQL of the model
   file, with Jinja. Click a part to open it, and click its copy button to copy
-  the SQL. A manifest from `dbt parse` has no compiled SQL, so the
-  **Compiled SQL** part tells why it is empty. When the manifest changed
-  after Qrow read it, Qrow reads the manifest again first, then shows the
-  SQL.
+  the SQL. Both parts show the SQL with syntax highlighting, without the empty
+  lines at the start and at the end. A manifest from `dbt parse` has no
+  compiled SQL, so the **Compiled SQL** part tells why it is empty. When the
+  manifest changed after Qrow read it, Qrow reads the manifest again first,
+  then shows the SQL. When dbt writes the manifest again while the panel is
+  open, the panel keeps its place, and an open part shows its old SQL until
+  Qrow has read the new SQL.
 - The tests of the table. A test with arguments shows each argument under its
   name.
 - The documented columns, with their types, descriptions, and tests. Type in

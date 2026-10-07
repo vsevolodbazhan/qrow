@@ -2,8 +2,8 @@
 //! match summary, and the refresh from the sidebar.
 use crate::dbt_manifest::{self, Shape};
 use crate::support::{MemoryCredentials, TestApp, connection_row, label, offline_profile};
-use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
+use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, RelationEntry, RelationKind},
     model::{
@@ -355,19 +355,19 @@ fn the_assistant_reads_the_dbt_meaning_of_the_tables_of_its_tab(cx: &mut TestApp
     );
 }
 
-#[gpui_kit::test]
-fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
+/// Launches a connection with the dbt manifest `bytes`, and waits until it
+/// has read the manifest.
+fn launch_project(
+    cx: &mut TestAppContext,
+    bytes: &[u8],
+    refresh: DbtRefresh,
+) -> (TestApp, PathBuf, uuid::Uuid) {
     let directory = tempfile::tempdir().unwrap();
-    let bytes = dbt_manifest::generate(&shape());
-    let manifest = project(&directory, &bytes);
-    let index = qrow::dbt::parse(&bytes).unwrap();
-    let model = index
-        .entry(index.find(&dbt_manifest::model_id(1)).unwrap())
-        .clone();
+    let manifest = project(&directory, bytes);
     let mut profile = offline_profile("Lake");
     profile.dbt = Some(DbtProject {
         manifest: manifest.to_string_lossy().into_owned(),
-        refresh: DbtRefresh::Manual,
+        refresh,
         schema_mapping: vec![SchemaRule {
             kind: SchemaRuleKind::Prefix,
             from: "analytics_".into(),
@@ -381,6 +381,11 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     app.wait_until(cx, "the dbt index", TIMEOUT, |_, _| {
         std::fs::read_dir(&saved).is_ok_and(|mut files| files.next().is_some())
     });
+    (app, manifest, id)
+}
+
+/// Shows the table of model 1 in the schema tree, and returns its name.
+fn show_model_table(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid) -> String {
     let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
     let alias = dbt_manifest::model_alias(1);
     app.toggle_connection(cx, id);
@@ -391,6 +396,19 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     app.wait_until(cx, "the table", TIMEOUT, |window, _| {
         crate::support::labelled(window, &alias).is_some()
     });
+    alias
+}
+
+#[gpui_kit::test]
+fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
+    let bytes = dbt_manifest::generate(&shape());
+    let index = qrow::dbt::parse(&bytes).unwrap();
+    let model = index
+        .entry(index.find(&dbt_manifest::model_id(1)).unwrap())
+        .clone();
+    let (app, manifest, id) = launch_project(cx, &bytes, DbtRefresh::Manual);
+    let schema = dbt_manifest::model_schema(1).replace("analytics_", "");
+    let alias = show_model_table(&app, cx, id);
     // The row has a detail with the materialization; a unit test checks
     // its text.
     let detail: gpui_kit::ElementId =
@@ -440,8 +458,10 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     });
     app.click(cx, "dbt-details-compiled-sql-toggle");
     app.wait_gone(cx, "dbt-details-compiled-sql-note");
-    // The raw SQL opens in the sheet and can be copied.
+    // The raw SQL opens in the sheet and can be copied, without the empty
+    // line at its end.
     let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
+    let raw = raw.trim_end_matches('\n').to_owned();
     app.click(cx, "dbt-details-raw-sql-toggle");
     app.wait_until(cx, "the model SQL", TIMEOUT, |window, _| {
         label(window, "dbt-details-raw-sql").as_deref() == Some(raw.as_str())
@@ -533,4 +553,136 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
         !crate::support::present(window, &"dbt-details".into())
     });
+}
+
+#[gpui_kit::test]
+fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext) {
+    // A description larger than the text view parses at once, and compiled
+    // SQL with empty lines at the start, as dbt writes for a model with a
+    // configuration block.
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&dbt_manifest::generate(&shape())).unwrap();
+    let description = (0..60)
+        .map(|paragraph| {
+            format!(
+                "Paragraph {paragraph}: one row for each search, with its route, \
+                 its device, and the source of its traffic."
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    assert!(description.len() > 4 * 1024);
+    let sql = (0..120)
+        .map(|line| format!("    column_{line},"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sql = format!("select\n{sql}\n    1 as one\nfrom orders");
+    let node = &mut value["nodes"][dbt_manifest::model_id(1)];
+    node["description"] = description.into();
+    node["compiled_code"] = format!("\n\n{sql}\n\n").into();
+    // dbt writes the manifest again while the panel is open.
+    let (app, manifest, id) = launch_project(
+        cx,
+        &serde_json::to_vec(&value).unwrap(),
+        DbtRefresh::Automatic,
+    );
+    let alias = show_model_table(&app, cx, id);
+    app.context_menu_labelled(cx, &alias);
+    app.choose(cx, "popup-menu", "Show dbt details");
+    app.wait_for(cx, "dbt-details-description");
+    let wheel = |cx: &mut TestAppContext, delta: f32| {
+        app.update(cx, |window, cx| {
+            let position = window.find("dbt-details-list").bounds().center();
+            window.dispatch_event(
+                gpui_kit::ScrollWheelEvent {
+                    position,
+                    delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                        gpui_kit::px(0.),
+                        gpui_kit::px(delta),
+                    )),
+                    ..Default::default()
+                }
+                .to_platform_input(),
+                cx,
+            );
+            // The frame after the wheel, before a parse in the background
+            // can end.
+            window.render_frame(cx);
+        });
+    };
+    let top = |cx: &mut TestAppContext, id: &str| {
+        app.update(cx, |window, _| {
+            window
+                .try_find(id.to_owned())
+                .filter(|element| element.visible())
+                .map(|element| element.bounds().top())
+        })
+    };
+    // The description is taller than the window.
+    for _ in 0..40 {
+        if top(cx, "dbt-details-compiled-sql-toggle").is_some() {
+            break;
+        }
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    // The SQL has no empty lines at the start and at the end.
+    app.wait_until(cx, "the compiled SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-compiled-sql").as_deref() == Some(sql.as_str())
+    });
+
+    // Scroll into the SQL, past the description.
+    for _ in 0..40 {
+        if top(cx, "dbt-details-description").is_none() {
+            break;
+        }
+        wheel(cx, -120.);
+    }
+    for _ in 0..4 {
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    assert!(top(cx, "dbt-details-description").is_none());
+    // Scroll back up. Each step moves the header of the SQL by the same
+    // distance, also when the description comes back.
+    let mut header = top(cx, "dbt-details-compiled-sql-toggle");
+    let mut description_seen = false;
+    for step in 0..80 {
+        wheel(cx, 40.);
+        let next = top(cx, "dbt-details-compiled-sql-toggle");
+        description_seen |= top(cx, "dbt-details-description").is_some();
+        if let (Some(before), Some(after)) = (header, next) {
+            let moved = f32::from(after - before);
+            assert!(
+                (moved - 40.).abs() < 0.5,
+                "step {step}: {before:?} to {after:?}"
+            );
+        }
+        if header.is_some() && next.is_none() {
+            break;
+        }
+        // No background task runs between two steps, as when a trackpad
+        // sends many wheel events quickly.
+        header = next;
+    }
+    assert!(description_seen);
+
+    // dbt compiles the model again. The panel keeps its place and shows
+    // the new SQL.
+    for _ in 0..10 {
+        if top(cx, "dbt-details-compiled-sql-toggle").is_some() {
+            break;
+        }
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    let before = top(cx, "dbt-details-compiled-sql-toggle").expect("the SQL header");
+    let changed = format!("-- compiled again\n{sql}");
+    value["nodes"][dbt_manifest::model_id(1)]["compiled_code"] = changed.clone().into();
+    std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    app.wait_until(cx, "the new compiled SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-compiled-sql").as_deref() == Some(changed.as_str())
+    });
+    assert_eq!(top(cx, "dbt-details-compiled-sql-toggle"), Some(before));
 }
