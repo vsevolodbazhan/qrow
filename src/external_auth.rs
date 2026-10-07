@@ -425,6 +425,8 @@ fn open_browser(url: &str) -> Result<()> {
     let command = "xdg-open";
     let status = std::process::Command::new(command)
         .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map_err(|_| anyhow!("Cannot open the browser"))?;
     anyhow::ensure!(status.success(), "Cannot open the browser");
