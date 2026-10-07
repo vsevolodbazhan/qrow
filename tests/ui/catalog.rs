@@ -1853,3 +1853,38 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
     app.settle(cx);
     assert_eq!(preferred(&app), Some(named_like_any.id));
 }
+
+#[gpui_kit::test]
+fn the_demo_catalog_supports_search_columns_and_copy(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.wait_until(
+        cx,
+        "the initial demo columns",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "booking_id bigint").is_some(),
+    );
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Copy qualified name");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("`avia`.`bookings`")
+    );
+    app.fill_labelled(cx, "Search tables", "finance.payments");
+    app.click_labelled(cx, "payments");
+    app.wait_until(
+        cx,
+        "the payment columns",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "payment_id bigint").is_some(),
+    );
+    app.fill_labelled(cx, "Search tables", "avia.flight_events");
+    app.click_labelled(cx, "flight_events");
+    app.wait_until(
+        cx,
+        "the query table columns",
+        Duration::from_secs(10),
+        |window, _| labelled(window, "departure_date date").is_some(),
+    );
+}

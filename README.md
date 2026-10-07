@@ -6,7 +6,7 @@
 
 A native (no JVM, no Electron) SQL workbench for macOS. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
-![Qrow Demo Build Mode Screenshot](assets/screenshots/demo.png)
+![Qrow demo with the schema catalog](assets/screenshots/demo.png)
 
 ## Why
 
@@ -170,9 +170,15 @@ Intel build. Existing Homebrew releases contain only the ARM64 app.
 
 ## Preview
 
-Launch the demo to inspect syntax highlighting, tabs, and a populated results
-table. It does not connect to a server, access Keychain, or change the saved
-workspace:
+Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
+details. The first connection opens with the columns of `avia.bookings`.
+Expand other tables or use **Search tables…** to inspect the catalog.
+In either Rivendell connection, right-click a table and select **Show dbt
+details** to read its description, columns, tests, lineage, and SQL.
+
+The demo uses synthetic data. It does not connect to a server, access Keychain,
+or change the saved workspace. It writes a temporary dbt manifest and removes
+the file when the window closes:
 
 ```sh
 cargo run --locked --bin qrow -- --demo
@@ -183,6 +189,8 @@ Or, after building the release executable:
 ```sh
 ./target/release/qrow --demo
 ```
+
+![dbt details in the demo](assets/screenshots/demo-dbt.png)
 
 ## Documentation
 

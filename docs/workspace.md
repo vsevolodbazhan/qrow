@@ -151,7 +151,8 @@ For isolated development, see [Development](development.md#check-the-native-ui).
 Passwords and sign-in tokens are keyed by profile and sign-in identifiers, so
 a copy of a workspace shares them with the original.
 The [demo](../README.md#preview) uses an in-memory workspace and does not access
-databases or Keychain.
+databases or Keychain. The demo writes its synthetic dbt manifest to a temporary
+file. It removes this file when the window closes.
 
 ## Design
 

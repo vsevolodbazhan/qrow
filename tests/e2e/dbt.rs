@@ -76,3 +76,54 @@ fn a_dbt_project_matches_the_tables_of_the_server(cx: &mut TestAppContext) {
     app.wait_gone(cx, "save-profile");
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn the_demo_manifest_matches_a_live_catalog_and_opens_model_sql(cx: &mut TestAppContext) {
+    let kyuubi = Kyuubi::get();
+    let schema = format!("qrow_demo_dbt_{}", uuid::Uuid::new_v4().simple());
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("manifest.json");
+    std::fs::write(&path, include_bytes!("../../assets/demo/manifest.json")).unwrap();
+    let (mut workspace, credentials) =
+        kyuubi.workspace("SELECT 1", crate::support::fixture::PASSWORD);
+    let profile = &mut workspace.profiles[0];
+    profile.catalog.include = vec![schema.clone()];
+    profile.catalog.refresh = CatalogRefresh::Manual;
+    profile.dbt = Some(DbtProject {
+        manifest: path.to_string_lossy().into_owned(),
+        refresh: DbtRefresh::Manual,
+        schema_mapping: vec![SchemaRule {
+            kind: SchemaRuleKind::Exact,
+            from: "avia".into(),
+            to: schema.clone(),
+        }],
+    });
+    let id = profile.id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, &format!("CREATE DATABASE {schema}"));
+    app.run_complete(cx, &format!(
+        "CREATE TABLE {schema}.bookings (booking_id BIGINT, gate STRING, amount DECIMAL(12,2), booked_at TIMESTAMP) USING parquet"));
+    app.toggle_connection(cx, id);
+    app.wait_until(cx, "the demo schema", QUERY_TIMEOUT, |window, _| {
+        labelled(window, &schema).is_some()
+    });
+    app.click_labelled(cx, &schema);
+    app.wait_until(cx, "the demo table", QUERY_TIMEOUT, |window, _| {
+        labelled(window, "bookings").is_some()
+    });
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Show dbt details");
+    app.wait_until(cx, "the demo model", QUERY_TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").as_deref() == Some("model.travel.bookings")
+    });
+    app.scroll_to(cx, "dbt-details-raw-sql-toggle");
+    app.click(cx, "dbt-details-raw-sql-toggle");
+    app.wait_until(cx, "the demo model SQL", QUERY_TIMEOUT, |window, _| {
+        label(window, "dbt-details-raw-sql").as_deref() == Some(
+            "select booking_id, gate, amount, booked_at\nfrom {{ source('flights', 'flight_events') }}")
+    });
+    app.press(cx, "escape");
+    app.wait_gone(cx, "dbt-details-Unique ID");
+    app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
+}
