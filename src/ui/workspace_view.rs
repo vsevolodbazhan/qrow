@@ -580,10 +580,15 @@ impl Qrow {
                             .aria_label(workspace_status)
                             .child(workspace_status),
                     )
-                    .when(self.settings.assistant.enabled, |el| {
-                        el.child(self.assistant_button(cx))
-                    })
-                    .child(self.activity_button(cx)),
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .when(self.settings.assistant.enabled, |el| {
+                                el.child(self.assistant_button(cx))
+                            })
+                            .child(self.activity_button(cx)),
+                    ),
             )
     }
 

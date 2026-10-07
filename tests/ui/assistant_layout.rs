@@ -109,3 +109,18 @@ fn a_wide_table_reply_fits_the_transcript_and_scrolls(cx: &mut TestAppContext) {
     app.wait_gone(cx, "add-connection");
     check_wide_table(&app, cx);
 }
+
+#[gpui_kit::test]
+fn status_bar_buttons_at_both_ends_have_the_same_gap(cx: &mut TestAppContext) {
+    let app = launch(cx);
+    let (left, right) = app.update(cx, |window, _| {
+        let gap = |first: &str, second: &str| {
+            bounds_of(window, second).left() - bounds_of(window, first).right()
+        };
+        (
+            gap("show-connections", "show-sign-ins"),
+            gap("toggle-assistant", "toggle-activity"),
+        )
+    });
+    assert_eq!(left, right, "Left gap {left:?}, right gap {right:?}");
+}
