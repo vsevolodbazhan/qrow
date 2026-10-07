@@ -715,7 +715,7 @@ impl Qrow {
                 .connections
                 .entry(key)
                 .or_insert_with(|| CatalogConnection {
-                    catalog: Some(Arc::new(demo_catalog(key))),
+                    catalog: Some(Arc::new(super::demo::catalog(key))),
                     ..CatalogConnection::default()
                 });
             return;
@@ -2369,48 +2369,6 @@ fn notice_row(
         .when_some(tooltip, |el, tooltip| {
             el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
-}
-
-/// A fixed catalog for the demo, which has no server.
-fn demo_catalog(profile: Uuid) -> Catalog {
-    use crate::catalog::{CatalogColumn, RelationEntry};
-    let mut catalog = Catalog::empty(profile, None);
-    let settings = crate::model::CatalogSettings::default();
-    let at = crate::catalog::now();
-    catalog.apply_schemas(vec!["avia".into(), "finance".into()], &settings, at);
-    let table = |name: &str| RelationEntry {
-        name: name.into(),
-        kind: RelationKind::Table,
-        comment: None,
-    };
-    catalog.apply_relations("avia", None, vec![table("bookings"), table("searches")], at);
-    catalog.apply_relations("finance", None, vec![table("payments")], at);
-    let column = |name: &str, data_type: &str| CatalogColumn {
-        name: name.into(),
-        data_type: data_type.into(),
-        comment: None,
-    };
-    catalog.apply_columns(
-        "avia",
-        None,
-        BTreeMap::from([
-            (
-                "bookings".into(),
-                vec![
-                    column("booking_id", "BIGINT"),
-                    column("gate", "STRING"),
-                    column("amount", "DECIMAL(12,2)"),
-                    column("booked_at", "TIMESTAMP"),
-                ],
-            ),
-            (
-                "searches".into(),
-                vec![column("search_id", "BIGINT"), column("origin", "STRING")],
-            ),
-        ]),
-        at,
-    );
-    catalog
 }
 
 #[cfg(test)]

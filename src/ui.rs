@@ -7,6 +7,7 @@ mod catalog_tree;
 mod connection_form;
 mod dbt;
 mod dbt_details;
+mod demo;
 mod environment;
 mod output;
 mod profile_view;
@@ -548,6 +549,7 @@ pub struct Qrow {
     dbt: dbt::DbtProjects,
     /// The dbt resource of the open dbt details sheet.
     dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
+    _demo_manifest: Option<tempfile::NamedTempFile>,
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
@@ -562,6 +564,17 @@ impl Qrow {
         let (wake, notifications) = async_channel::bounded(1);
         let save_wake = wake.clone();
         let demo = environment.is_demo();
+        let (demo_manifest, demo_error) = if demo {
+            match demo::manifest() {
+                Ok(manifest) => (Some(manifest), None),
+                Err(error) => (
+                    None,
+                    Some(format!("Cannot open the demo dbt project: {error}")),
+                ),
+            }
+        } else {
+            (None, None)
+        };
         let (mut workspace, mut message, saver) = if let Some(path) = environment.workspace() {
             let path = path.clone();
             match Saver::open(path, move || {
@@ -577,7 +590,7 @@ impl Qrow {
                 ),
             }
         } else {
-            (demo_workspace(), None, None)
+            (demo_workspace(demo_manifest.as_ref()), demo_error, None)
         };
         let fonts = installed_fonts(cx);
         workspace.normalize();
@@ -750,6 +763,7 @@ impl Qrow {
             _activity_events: activity_events,
             dbt,
             dbt_details: None,
+            _demo_manifest: demo_manifest,
         };
         for tab in workspace.tabs {
             let tab = this.make_tab(tab, window, cx);
@@ -3280,7 +3294,7 @@ fn menu_section(title: &'static str) -> PopupMenuItem {
     .disabled(true)
 }
 
-fn demo_workspace() -> Workspace {
+fn demo_workspace(manifest: Option<&tempfile::NamedTempFile>) -> Workspace {
     let catalog = CatalogSettings {
         refresh: CatalogRefresh::Manual,
         ..CatalogSettings::default()
@@ -3302,12 +3316,19 @@ fn demo_workspace() -> Workspace {
             shared_catalog: name
                 .starts_with("rivendell")
                 .then_some(shared_catalogs[0].id),
+            dbt: manifest
+                .filter(|_| name.starts_with("rivendell"))
+                .map(|manifest| crate::model::DbtProject {
+                    manifest: manifest.path().to_string_lossy().into_owned(),
+                    refresh: crate::model::DbtRefresh::Manual,
+                    schema_mapping: vec![],
+                }),
             ..Default::default()
         })
         .collect();
     let mut tab = SavedTab::new(1, Some(profiles[0].id));
     tab.title = "Route overview".into();
-    tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
+    tab.sql = "-- A quick look at route performance\nSELECT\n    route,\n    COUNT(*) AS departures,\n    ROUND(AVG(fare), 2) AS avg_fare,\n    currency,\n    MAX(updated_at) AS updated_at\nFROM avia.flight_events\nWHERE departure_date >= '2026-09-01'\nGROUP BY route, currency\nORDER BY departures DESC;".into();
     Workspace {
         version: WORKSPACE_VERSION,
         settings: Settings::default(),

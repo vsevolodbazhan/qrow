@@ -3,7 +3,7 @@
 use crate::dbt_manifest::{self, Shape};
 use crate::support::{MemoryCredentials, TestApp, connection_row, label, offline_profile};
 use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{InputEvent as _, TestAppContext};
+use gpui_kit::{AppContext as _, InputEvent as _, TestAppContext};
 use qrow::{
     catalog::{Catalog, RelationEntry, RelationKind},
     model::{
@@ -891,4 +891,91 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     });
     app.settle(cx);
     assert_ne!(parent_top(cx), Some(before));
+}
+
+#[gpui_kit::test]
+fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) {
+    let app = TestApp::launch_demo(cx);
+    app.wait_until(cx, "the expanded demo catalog", TIMEOUT, |window, _| {
+        crate::support::labelled(window, "booking_id bigint").is_some()
+    });
+    app.context_menu_labelled(cx, "rivendell-s");
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "dbt");
+    app.scroll_to(cx, "connection-dbt-manifest");
+    let path = app.update(cx, |window, _| {
+        PathBuf::from(window.find("connection-dbt-manifest").value().unwrap())
+    });
+    assert!(path.is_file());
+    app.scroll_to(cx, "connection-dbt-matches");
+    wait_label(
+        &app,
+        cx,
+        "connection-dbt-matches",
+        "4 of 4 dbt resources matched the catalog",
+    );
+    app.scroll_to(cx, "connection-dbt-refresh-now");
+    app.click(cx, "connection-dbt-refresh-now");
+    wait_label_starting(&app, cx, "connection-dbt-status", "Manifest from ");
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "save-profile");
+
+    app.context_menu_labelled(cx, "bookings");
+    app.choose(cx, "popup-menu", "Show dbt details");
+    wait_label(&app, cx, "dbt-details-Unique ID", "model.travel.bookings");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "dbt-details-description").as_deref(),
+            Some("One row per flight booking. Use booking_id to join payments.")
+        );
+        assert!(crate::support::present(
+            window,
+            &"dbt-details-column-booking_id".into()
+        ));
+    });
+    app.scroll_to(cx, "dbt-details-compiled-sql-toggle");
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    wait_label(
+        &app,
+        cx,
+        "dbt-details-compiled-sql",
+        "select booking_id, gate, amount, booked_at\nfrom avia.flight_events",
+    );
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.click(cx, "dbt-details-raw-sql-toggle");
+    wait_label(
+        &app,
+        cx,
+        "dbt-details-raw-sql",
+        "select booking_id, gate, amount, booked_at\nfrom {{ source('flights', 'flight_events') }}",
+    );
+    app.click(cx, "dbt-details-raw-sql-toggle");
+    app.update(cx, |window, cx| {
+        window.click(("dbt-details-parent", 0usize), cx)
+    });
+    wait_label(
+        &app,
+        cx,
+        "dbt-details-Unique ID",
+        "source.travel.flights.flight_events",
+    );
+    app.click(cx, "dbt-details-back");
+    wait_label(&app, cx, "dbt-details-Unique ID", "model.travel.bookings");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "dbt-details-Unique ID");
+
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "workspace-status").as_deref(),
+            Some("Demo changes are not saved")
+        );
+    });
+    cx.update_window(app.window, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        !path.exists(),
+        "closing the demo removes its temporary manifest"
+    );
 }
