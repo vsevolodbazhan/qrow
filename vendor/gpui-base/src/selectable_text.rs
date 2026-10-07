@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use gpui::{
-    App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, HighlightStyle,
+    App, BorderStyle, Bounds, Corners, CursorStyle, Edges, Element, ElementId, GlobalElementId,
+    HighlightStyle,
     Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
     SharedString, StyledText, TextStyleRefinement, Window, transparent_black,
 };
@@ -215,10 +216,13 @@ impl Element for SelectableText {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         handle: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
+        hitbox: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        // The text cursor tells that the text can be selected, as over
+        // Markdown text.
+        window.set_cursor_style(CursorStyle::IBeam, hitbox);
         let layout = self.styled_text.layout().clone();
         let selected_text_before = TextSelection::selected_text(window, cx);
         let projection = handle.update_runs(

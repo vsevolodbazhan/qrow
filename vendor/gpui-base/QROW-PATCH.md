@@ -42,6 +42,10 @@ Qrow changes these files:
   text. The dbt details sheet uses it to show SQL with syntax highlighting
   that the user can select. Before, selectable text was plain. The file has
   the regression test.
+- `src/selectable_text.rs`: the pointer is a text cursor over selectable
+  text, as over Markdown text. Before, it stayed an arrow, so the SQL of the
+  dbt details sheet did not look selectable. GPUI tests cannot read the
+  cursor, so this change has no test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
