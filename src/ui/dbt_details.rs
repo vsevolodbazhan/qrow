@@ -643,18 +643,20 @@ impl DbtDetailsView {
                 SqlKind::Raw => entry.raw_code,
             }
         });
-        // The part tells that the manifest has no such SQL.
-        let Some(span) = span else {
-            return;
-        };
         let part = &mut self.sql[kind.position()];
         part.read += 1;
+        // A changed manifest can have other SQL, also SQL that the old one
+        // did not have, like the compiled SQL after dbt compile.
         if !state.is_current() {
             self.refresher.refresh(&state.path);
             part.sql = Sql::Refreshing;
             self.sql_changed(kind);
             return;
         }
+        // The part tells that the manifest has no such SQL.
+        let Some(span) = span else {
+            return;
+        };
         part.sql = Sql::Reading;
         let read = part.read;
         self.sql_changed(kind);
@@ -897,6 +899,10 @@ impl DbtDetailsView {
         )
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_sql(kind, cx)));
         let body = open.then(|| match &part.sql {
+            Sql::Refreshing => muted_text(
+                "The dbt manifest changed. Qrow reads it again, then shows the SQL.",
+                muted,
+            ),
             _ if !available => div()
                 .id(SharedString::from(format!(
                     "dbt-details-{}-sql-note",
@@ -910,10 +916,6 @@ impl DbtDetailsView {
                 .child(kind.note(false))
                 .into_any_element(),
             Sql::Unread | Sql::Reading => muted_text("Reading the SQL…", muted),
-            Sql::Refreshing => muted_text(
-                "The dbt manifest changed. Qrow reads it again, then shows the SQL.",
-                muted,
-            ),
             Sql::Failed(error) => muted_text(&format!("Could not read the SQL: {error}"), muted),
             Sql::Read(sql) => h_flex()
                 .id(SharedString::from(format!("dbt-details-{}-sql", kind.id())))

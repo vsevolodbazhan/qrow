@@ -463,6 +463,14 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     let compiled = "select 1 as id";
     value["nodes"][dbt_manifest::model_id(1)]["compiled_code"] = compiled.into();
     std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
+    // The Compiled SQL part reads the manifest again, so it has the compiled
+    // SQL that the old manifest did not have.
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_until(cx, "the compiled SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-compiled-sql").as_deref() == Some(compiled)
+    });
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_gone(cx, "dbt-details-compiled-sql");
     app.click(cx, "dbt-details-raw-sql-toggle");
     app.wait_until(cx, "the new model SQL", TIMEOUT, |window, _| {
         label(window, "dbt-details-raw-sql").as_deref() == Some(changed.as_str())
@@ -471,13 +479,6 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     app.wait_until(cx, "the closed SQL", TIMEOUT, |window, _| {
         !crate::support::present(window, &"dbt-details-raw-sql".into())
     });
-    // Now the Compiled SQL part has the compiled SQL.
-    app.click(cx, "dbt-details-compiled-sql-toggle");
-    app.wait_until(cx, "the compiled SQL", TIMEOUT, |window, _| {
-        label(window, "dbt-details-compiled-sql").as_deref() == Some(compiled)
-    });
-    app.click(cx, "dbt-details-compiled-sql-toggle");
-    app.wait_gone(cx, "dbt-details-compiled-sql");
 
     // The space above a column description and the space below it look the
     // same: the name and the description share a line height, and the tests
