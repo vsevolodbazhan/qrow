@@ -5,6 +5,7 @@ use crate::model::{
 };
 use crate::sql::KeywordCase;
 use crate::themes;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     IndexPath, h_flex,
     input::{NumberInputEvent, StepAction},
@@ -867,6 +868,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
             &["assistant", "codex", "path", "binary"],
             move |_: &mut Window, _: &mut App| {
                 Input::new(&executable)
+                    .focus_ring(false)
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
@@ -1010,6 +1012,7 @@ fn select_field(
     let select = select.clone();
     move |_: &mut Window, _: &mut App| {
         Select::new(&select)
+            .focus_ring(false)
             .id(setting_id(label))
             .w_full()
             .accessibility_label(label)

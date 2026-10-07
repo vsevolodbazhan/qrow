@@ -1,5 +1,6 @@
 //! The list of conversations and its search.
 use super::*;
+use gpui_kit::base::FocusableExt as _;
 
 pub(super) fn conversation_age(last_activity: u64, now: u64) -> String {
     if last_activity == 0 {
@@ -101,6 +102,7 @@ impl AssistantPane {
                     })
                     .child(
                         Input::new(&self.thread_search)
+                            .focus_ring(false)
                             .small()
                             .flex_1()
                             .min_w_0()

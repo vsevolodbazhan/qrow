@@ -12,6 +12,7 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
     SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
 };
@@ -1121,6 +1122,7 @@ impl DbtDetailsView {
             Row::ColumnsTitle => section(
                 &format!("Columns ({})", data.columns.len()),
                 Input::new(&self.filter)
+                    .focus_ring(false)
                     .id("dbt-details-filter")
                     .small()
                     .cleanable(true)

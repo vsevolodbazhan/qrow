@@ -22,6 +22,14 @@ Qrow changes these files:
 - `src/tab/tab_bar.rs`: the first tab of a tab bar without a prefix has no
   left border. Before, the tab bar always assumed a prefix, so the border of
   the first tab and the divider of a sidebar beside the bar made a double line.
+- `src/input/input.rs` and `src/input/textarea.rs`: `focus_ring(false)` turns
+  off only the ring outside the border of an input or a textarea. The focused
+  field keeps its tinted border, as a Select and an InputGroup do. Before, the
+  input lost its focus border too, and a textarea had no way to turn off the
+  ring. Qrow turns off the ring of its fields, because lists and panels that
+  clip their content cut the ring off. The test of each file checks the
+  setting. Run them in a copy of the crate in the GPUI Kit repository, as the
+  tests read files outside the crate.
 - `src/tooltip.rs`: with the `test-support` feature, a tooltip is the observed
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate

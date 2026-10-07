@@ -8,6 +8,7 @@ use crate::{
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ColorName, Icon,
     alert::Alert,
@@ -1519,6 +1520,7 @@ impl Qrow {
             let (id, label, description, _) = field;
             Field::new().label(label).description(description).child(
                 Input::new(&editor.fields[index])
+                    .focus_ring(false)
                     .id(id)
                     .w_full()
                     .disabled(signed_in && TOKEN_FIELDS.contains(&index))

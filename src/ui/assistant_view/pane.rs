@@ -6,6 +6,7 @@
 //! assistant state from Qrow and renders again when Qrow changes. Commands go
 //! to Qrow through [`on_qrow`].
 use super::*;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::message_scroller::{MessageScroller, MessageScrollerState};
 
 pub(super) fn show_thread_list(narrow: bool, override_visibility: Option<bool>) -> bool {
@@ -600,6 +601,7 @@ impl AssistantPane {
                         // message field through its container.
                         div().id("assistant-composer").test_support().key_context("AssistantComposer").child(
                             Textarea::new(&self.composer)
+                                .focus_ring(false)
                                 .h_20()
                                 .w_full()
                                 .aria_label("Assistant Message")),

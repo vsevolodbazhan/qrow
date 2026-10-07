@@ -75,6 +75,13 @@ Use these rules for UI text:
   **Delete assistant conversation?**
 - Product names and acronyms keep their case: **Qrow**, **Codex**, **SQL**.
 
+### Fields
+
+Text fields, text areas, selects, and comboboxes show their focus with a
+tinted border only. Call `.focus_ring(false)` on each new field. The ring of
+GPUI Kit is painted outside the border, so a list or a panel that clips its
+content cuts the ring off.
+
 ## Hooks and continuous integration
 
 The pre-commit hook checks the staged Git snapshot. The pre-push hook checks
