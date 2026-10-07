@@ -137,6 +137,9 @@ pub(super) struct DbtDetailsView {
     /// Counts the reads of the SQL, so that the result of an old read is
     /// dropped.
     sql_read: u64,
+    /// The unique IDs and the titles of the resources that the user came
+    /// from through the lineage, the last one on top.
+    history: Vec<(String, SharedString)>,
     _subscription: gpui_kit::Subscription,
 }
 
@@ -160,11 +163,12 @@ struct ColumnView {
     tests: Vec<TestView>,
 }
 
-/// A parent or a child: its table or unique ID, and its materialization or
-/// kind.
+/// A parent or a child: its table or unique ID, its materialization or
+/// kind, and the unique ID that opens its details.
 struct Linked {
     name: SharedString,
     label: SharedString,
+    unique_id: String,
 }
 
 /// A test, with its arguments as names and values.
@@ -176,6 +180,8 @@ struct TestView {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Row {
+    /// The button back to the resource that the user came from.
+    Back,
     Missing,
     Facts,
     Description,
@@ -290,6 +296,7 @@ impl DbtDetailsView {
             sql_open: false,
             sql: Sql::Unread,
             sql_read: 0,
+            history: Vec::new(),
             _subscription: subscription,
         };
         view.rebuild(cx);
@@ -337,10 +344,15 @@ impl DbtDetailsView {
     }
 
     fn make_rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if !self.history.is_empty() {
+            rows.push(Row::Back);
+        }
         let Some(data) = &self.data else {
-            return vec![Row::Missing];
+            rows.push(Row::Missing);
+            return rows;
         };
-        let mut rows = vec![Row::Facts, Row::Description];
+        rows.extend([Row::Facts, Row::Description]);
         if data.sql.is_some() {
             rows.push(Row::Sql);
             if let (true, Sql::Read(sql)) = (self.sql_open, &self.sql) {
@@ -458,6 +470,46 @@ impl DbtDetailsView {
         self.state.as_ref().is_some_and(|state| !state.is_current())
     }
 
+    /// Show the details of `unique_id` from the top, as the sheet shows a
+    /// resource when it opens. `back` tells that the user goes back to it.
+    fn show(&mut self, unique_id: String, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !back {
+            let current = (self.unique_id.clone(), self.title.clone());
+            self.history.push(current);
+        }
+        self.unique_id = unique_id;
+        // The SQL and the column filter belong to the old resource.
+        self.sql_open = false;
+        self.sql_read += 1;
+        self.sql = Sql::Unread;
+        self.filter
+            .update(cx, |filter, cx| filter.set_value("", window, cx));
+        self.rebuild(cx);
+        cx.notify();
+    }
+
+    /// The button back to the resource that the user came from.
+    fn back_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some((_, title)) = self.history.last() else {
+            return div().into_any_element();
+        };
+        h_flex()
+            .pb_2()
+            .child(
+                Button::new("dbt-details-back")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ChevronLeft)
+                    .label(format!("Back to {title}"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some((unique_id, _)) = this.history.pop() {
+                            this.show(unique_id, true, window, cx);
+                        }
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// Open or close the SQL part.
     fn toggle_sql(&mut self, cx: &mut Context<Self>) {
         self.sql_open = !self.sql_open;
@@ -553,6 +605,9 @@ impl DbtDetailsView {
         let Some(row) = self.rows.get(position).copied() else {
             return div().into_any_element();
         };
+        if row == Row::Back {
+            return self.back_row(cx);
+        }
         let Some(data) = &self.data else {
             let text = format!("The dbt manifest does not have {} now.", self.unique_id);
             return div()
@@ -566,7 +621,7 @@ impl DbtDetailsView {
                 .into_any_element();
         };
         match row {
-            Row::Missing => div().into_any_element(),
+            Row::Missing | Row::Back => div().into_any_element(),
             Row::Facts => {
                 let changed = self.shown_changed;
                 v_flex()
@@ -702,8 +757,18 @@ impl DbtDetailsView {
             }
             Row::ParentsTitle => lineage_title("Parents", data.parents.len(), muted),
             Row::ChildrenTitle => lineage_title("Children", data.children.len(), muted),
-            Row::Parent(position) => linked_row(&data.parents[position], muted),
-            Row::Child(position) => linked_row(&data.children[position], muted),
+            Row::Parent(position) => linked_row(
+                ("dbt-details-parent", position),
+                &data.parents[position],
+                muted,
+                cx,
+            ),
+            Row::Child(position) => linked_row(
+                ("dbt-details-child", position),
+                &data.children[position],
+                muted,
+                cx,
+            ),
         }
     }
 
@@ -902,6 +967,7 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
                         .unwrap_or_else(|| entry.unique_id.to_string())
                         .into(),
                     label: shared(resource_label(index, entry)),
+                    unique_id: entry.unique_id.to_string(),
                 }
             })
             .collect()
@@ -944,13 +1010,32 @@ fn lineage_title(title: &str, count: usize, muted: Hsla) -> AnyElement {
         .into_any_element()
 }
 
-fn linked_row(linked: &Linked, muted: Hsla) -> AnyElement {
-    h_flex()
-        .pt_0p5()
-        .gap_2()
-        .text_sm()
-        .child(div().min_w_0().child(linked.name.clone()))
-        .child(div().text_color(muted).child(linked.label.clone()))
+/// A parent or a child. A click shows its details in the sheet.
+fn linked_row(
+    id: impl Into<gpui_kit::ElementId>,
+    linked: &Linked,
+    muted: Hsla,
+    cx: &mut Context<DbtDetailsView>,
+) -> AnyElement {
+    let unique_id = linked.unique_id.clone();
+    Button::new(id)
+        .ghost()
+        .small()
+        .w_full()
+        .justify_start()
+        .accessibility_label(format!("{}, {}", linked.name, linked.label))
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .gap_2()
+                .text_sm()
+                .child(div().min_w_0().truncate().child(linked.name.clone()))
+                .child(div().text_color(muted).child(linked.label.clone())),
+        )
+        .on_click(
+            cx.listener(move |this, _, window, cx| this.show(unique_id.clone(), false, window, cx)),
+        )
         .into_any_element()
 }
 

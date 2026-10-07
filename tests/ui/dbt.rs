@@ -491,6 +491,26 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         assert!(crate::support::present(window, &column_id("col_001")));
         assert!(!crate::support::present(window, &column_id("col_002")));
     });
+
+    // A parent opens its details in the sheet, and the back button returns
+    // to the model without the filter.
+    let parent = index
+        .entry(*model.parents.first().expect("the model has a parent"))
+        .unique_id
+        .to_string();
+    app.click(cx, ("dbt-details-parent", 0usize));
+    app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").as_deref() == Some(parent.as_str())
+    });
+    app.click(cx, "dbt-details-back");
+    app.wait_until(cx, "the model details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").as_deref()
+            == Some(dbt_manifest::model_id(1).as_str())
+    });
+    app.update(cx, |window, _| {
+        assert!(crate::support::present(window, &column_id("col_002")));
+        assert!(!crate::support::present(window, &"dbt-details-back".into()));
+    });
     app.press(cx, "escape");
     app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
         !crate::support::present(window, &"dbt-details".into())

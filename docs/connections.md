@@ -342,7 +342,8 @@ details**. A panel opens at the right side of the window. It shows:
 - The documented columns, with their types, descriptions, and tests. Type in
   **Filter columns** to find columns by name or description.
 - The parents and children, with the materialization of each model or the
-  kind of each other resource.
+  kind of each other resource. Click a parent or a child to show its details
+  in the panel. Click **Back to** and the name to go back.
 
 The panel takes almost half of the window width, so make the window wider to
 read long text more easily.
