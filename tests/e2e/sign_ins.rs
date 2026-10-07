@@ -314,7 +314,7 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
         "Use this sign-in:\n{shared}"
     )));
     app.click(cx, "show-sign-ins");
-    app.click(cx, "paste-first-sign-in");
+    app.click(cx, "paste-sign-in");
     app.wait_for(cx, "sign-in-pasted-note");
     app.click(cx, "save-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
