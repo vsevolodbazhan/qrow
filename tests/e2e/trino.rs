@@ -90,6 +90,7 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
     let id = app.saved().profiles[0].id;
     app.context_menu(cx, connection_row(id));
     app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Catalog");
     app.scroll_to(cx, "connection-schema-refresh");
     app.select(cx, "connection-schema-refresh", "Manual");
     app.scroll_to(cx, "connection-show-schemas");
