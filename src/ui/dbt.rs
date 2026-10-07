@@ -302,7 +302,6 @@ impl Qrow {
     ) -> SettingPage {
         let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
         let project = SettingGroup::new()
-            .title("Project")
             .item(connection_row(
                 qrow,
                 "Manifest",

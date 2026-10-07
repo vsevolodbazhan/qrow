@@ -552,7 +552,7 @@ fn group_digits(value: usize) -> String {
 pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
     SettingPage::new("Assistant")
         .resettable(false)
-        .group(SettingGroup::new().title("Notes").item(connection_row(
+        .group(SettingGroup::new().item(connection_row(
             qrow,
             "Assistant Notes",
             "Sent to Codex and saved as plain text. Do not enter secrets.",
@@ -597,8 +597,7 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
     let catalog = chosen_catalog(&form.catalog_select, &form.catalog_choices, cx);
     let shared = catalog != CatalogChoice::Private;
     let browses = mode != RefreshMode::Disabled;
-    let refresh = SettingGroup::new()
-        .title("Refresh")
+    let fields = SettingGroup::new()
         .item(connection_row(
             qrow,
             "Schema Refresh",
@@ -650,10 +649,8 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                         .into_any_element()
                 },
             )
-        }));
-    let sharing = SettingGroup::new()
-        .title("Shared Catalog")
-        .item(connection_row(
+        }))
+        .items(browses.then(|| connection_row(
             qrow,
             "Schema Catalog",
             if shared {
@@ -664,8 +661,8 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
             &["shared", "catalog", "metastore"],
             false,
             |_, form, _, cx| catalog_field(form, cx),
-        ))
-        .items(if shared { vec![connection_row(
+        )))
+        .items(if browses && shared { vec![connection_row(
                     qrow,
                     "Shared Catalog Name",
                     "Shown in the settings of each connection that uses the catalog.",
@@ -693,33 +690,24 @@ pub(super) fn catalog_page(form: &ProfileEditor, qrow: &WeakEntity<Qrow>, cx: &A
                             .accessibility_label("Preferred Connection")
                             .into_any_element()
                     },
-                )] } else { vec![] });
-    let visible = SettingGroup::new()
-        .title("Schema Filters")
-        .item(connection_row(
+                )] } else { vec![] })
+        .items(browses.then(|| connection_row(
             qrow,
             "Visible Schemas",
             "Patterns separated by commas, for example sales_*. Empty shows all schemas.",
             &["schemas", "filter", "patterns", "include"],
             false,
             |_, form, _, _| form_input(form, 10, "Visible Schemas"),
-        ))
-        .item(connection_row(
+        )))
+        .items(browses.then(|| connection_row(
             qrow,
             "Hidden Schemas",
             "Patterns separated by commas. Hides a schema also when Visible Schemas matches it.",
             &["schemas", "filter", "patterns", "exclude"],
             false,
             |_, form, _, _| form_input(form, 11, "Hidden Schemas"),
-        ));
-    SettingPage::new("Catalog")
-        .resettable(false)
-        .group(refresh)
-        .groups(if browses {
-            vec![sharing, visible]
-        } else {
-            vec![]
-        })
+        )));
+    SettingPage::new("Catalog").resettable(false).group(fields)
 }
 
 /// The list of schema catalogs, with a button that adds a shared catalog.

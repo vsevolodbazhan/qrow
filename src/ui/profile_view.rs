@@ -164,8 +164,7 @@ impl Qrow {
                 }
             });
         let keep = connection_form::keeps_connected(&form.idle_behavior, cx);
-        let connection = SettingGroup::new()
-            .title("Connection")
+        let fields = SettingGroup::new()
             .item(connection_row(
                 qrow,
                 "Name",
@@ -260,9 +259,7 @@ impl Qrow {
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
                 )
-            }));
-        let session = SettingGroup::new()
-            .title("Session")
+            }))
             .item(connection_row(
                 qrow,
                 "Initial Database",
@@ -345,8 +342,7 @@ impl Qrow {
             .description("Spark (HiveServer2)")
             .default_open(true)
             .resettable(false)
-            .group(connection)
-            .group(session)
+            .group(fields)
     }
 
     /// The sign-in list, with a button that adds a sign-in.
