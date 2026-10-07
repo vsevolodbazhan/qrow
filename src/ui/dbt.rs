@@ -52,10 +52,16 @@ impl DbtProjects {
     /// `directory` keeps the saved indexes, or `None` to keep them only in
     /// memory.
     pub(super) fn new(directory: Option<PathBuf>, wake: async_channel::Sender<()>) -> Self {
+        // The worker thread keeps only a weak sender. When the thread ends,
+        // it then cannot close the channel and wake the UI task from another
+        // thread.
+        let wake = wake.downgrade();
         let worker = DbtWorker::new(
             directory,
             Arc::new(move || {
-                let _ = wake.try_send(());
+                if let Some(wake) = wake.upgrade() {
+                    let _ = wake.try_send(());
+                }
             }),
         );
         Self {
