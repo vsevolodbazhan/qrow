@@ -761,4 +761,36 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     assert_eq!(parent_top(cx), Some(before));
     let raw_top_again = top(cx, "dbt-details-raw-sql-toggle");
     assert_eq!(raw_top_again, Some(raw_top));
+
+    // The user scrolls before the SQL is read again. The read does not move
+    // the list back to the old place.
+    app.click(cx, ("dbt-details-parent", 0usize));
+    app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
+    });
+    app.update(cx, |window, cx| {
+        window.press("escape", cx);
+        window.render_frame(cx);
+        let position = window.find("dbt-details-list").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-120.),
+                )),
+                ..Default::default()
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    app.wait_until(cx, "the model SQL read", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").is_none()
+            && crate::support::present(window, &"dbt-details-description".into())
+    });
+    app.settle(cx);
+    assert!(top(cx, "dbt-details-description").is_some());
+    assert_eq!(parent_top(cx), None);
 }

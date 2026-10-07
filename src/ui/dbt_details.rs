@@ -161,8 +161,9 @@ pub(super) struct DbtDetailsView {
     /// The resources that the user came from through the lineage, the last
     /// one on top.
     history: Vec<Visit>,
-    /// The place of a resource that the user went back to, in rows of SQL
-    /// that its read has not brought yet.
+    /// The place of a resource that the user went back to, while the reads
+    /// of its open SQL parts go on. Without their rows, the list can stop
+    /// above the place, or not have the row of the place.
     pending_anchor: Option<(Row, gpui_kit::Pixels)>,
     /// The Markdown of the description and of the column descriptions, by
     /// element ID. A text view without a state of its own parses its text
@@ -541,6 +542,12 @@ impl DbtDetailsView {
             markdown: RefCell::default(),
             _subscription: subscription,
         };
+        // The user moves the list: the place that waits for a read must not
+        // move it back.
+        let weak = cx.weak_entity();
+        view.list.set_scroll_handler(move |_, _, cx| {
+            let _ = weak.update(cx, |this, _| this.pending_anchor = None);
+        });
         view.rebuild(cx);
         view
     }
@@ -772,8 +779,9 @@ impl DbtDetailsView {
             return false;
         };
         self.open(visit.unique_id, &visit.filter, visit.sql_open, window, cx);
+        self.restore_scroll(visit.anchor);
         // The rows of an open SQL part come after the read.
-        if !self.restore_scroll(visit.anchor) {
+        if self.reading() {
             self.pending_anchor = visit.anchor;
         }
         true
@@ -917,18 +925,13 @@ impl DbtDetailsView {
         self.list.remeasure_items(sql..sql + 1 + new);
         // The place of a resource that the user went back to waits only for
         // the reads that started with it.
-        let reading = self
-            .sql
-            .iter()
-            .any(|part| matches!(part.sql, Sql::Reading | Sql::Refreshing));
-        let pending = if reading {
+        let pending = if self.reading() {
             self.pending_anchor
         } else {
             self.pending_anchor.take()
         };
-        if pending.is_some() && self.restore_scroll(pending) {
-            self.pending_anchor = None;
-        } else if !self.restore_scroll(anchor)
+        if !(pending.is_some() && self.restore_scroll(pending))
+            && !self.restore_scroll(anchor)
             && matches!(anchor, Some((Row::SqlChunk(chunk_kind, _), _)) if chunk_kind == kind)
         {
             // The SQL that the user read is gone: show its header.
@@ -937,6 +940,13 @@ impl DbtDetailsView {
                 offset_in_item: px(0.),
             });
         }
+    }
+
+    /// Whether a SQL part reads its SQL.
+    fn reading(&self) -> bool {
+        self.sql
+            .iter()
+            .any(|part| matches!(part.sql, Sql::Reading | Sql::Refreshing))
     }
 
     /// Read the SQL of the part `kind` in the background.
@@ -1317,6 +1327,11 @@ impl Render for DbtDetailsView {
             .is_some_and(|old| old != rem_size)
         {
             self.list.remeasure();
+        }
+        // The scrollbar does not tell the list handler that the user moves
+        // the list.
+        if self.list.is_scrollbar_dragging() {
+            self.pending_anchor = None;
         }
         let rows = list(
             self.list.clone(),
