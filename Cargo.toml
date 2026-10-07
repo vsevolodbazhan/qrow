@@ -29,7 +29,9 @@ rustls = { version = "0.23.45", default-features = false, features = ["ring", "s
 rustls-native-certs = "0.8"
 rustls-pki-types = { version = "1", features = ["std"] }
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = { version = "1", features = ["raw_value"] }
+# JSON objects keep the order of the file, such as the columns of a dbt model.
+# GPUI turns this on for the app; the core library must not depend on it.
+serde_json = { version = "1", features = ["preserve_order", "raw_value"] }
 sqlformat = "0.5"
 tempfile = "3"
 thrift = { version = "0.24", default-features = false }
