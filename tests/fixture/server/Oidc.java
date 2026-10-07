@@ -467,7 +467,8 @@ public final class Oidc {
         }
         String refresh = rotate(family);
         count("refresh_token");
-        return Response.json(200, tokens(family, scope, refresh, null));
+        return Response.json(200, tokens(family, scope, refresh,
+            TRINO_ORIGIN == null ? null : idToken(family.user, null)));
     }
 
     String rotate(Family family) {
@@ -505,12 +506,15 @@ public final class Oidc {
     }
 
     String idToken(Code code) {
+        return idToken(code.user(), code.nonce());
+    }
+
+    String idToken(User user, String nonce) {
         long issued = now();
-        User user = code.user();
         return jwt("JWT", String.join(",",
             field("iss", issuer), field("sub", user.subject()), field("aud", CLIENT), field("azp", CLIENT),
             raw("iat", Long.toString(issued)), raw("exp", Long.toString(issued + ID_TOKEN_SECONDS)),
-            field("nonce", code.nonce() == null ? "" : code.nonce()), field("name", user.displayName()), field("email", user.email()),
+            field("nonce", nonce == null ? "" : nonce), field("name", user.displayName()), field("email", user.email()),
             field("preferred_username", user.name())));
     }
 
