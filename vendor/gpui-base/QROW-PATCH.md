@@ -23,6 +23,15 @@ Qrow changes these files:
   its own face. Before, the wrapper measured it in the regular body face, which
   is narrower. A line with bold text then became wider than the column, and
   the column clipped its end.
+- `src/text/inline_flow.rs`: Markdown text breaks lines with its own line
+  wrapper instead of GPUI's. The new wrapper adds the same widths, but finds
+  the breaks with the punctuation rules of the Unicode line breaking
+  algorithm (UAX #14), and does not break inside a grapheme. Before, a line
+  could start with `?`, also after a space, as in `сегодня ?`. Bold or
+  styled text is a row of elements for the wrapper, and GPUI's wrapper
+  allowed a break before each element after a space. A bold `«Aviasales»`
+  then broke after `«`. The tests of the file check the rules and both
+  cases.
 - `src/text/inline.rs`: Markdown text paints its selection under the glyphs,
   as the input does. Before, the selection was painted over the glyphs and
   dimmed the selected text. `src/text/text_view.rs` adds the regression test.

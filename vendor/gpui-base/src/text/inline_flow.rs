@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ops::Range,
     sync::{Arc, Mutex},
 };
@@ -6,8 +7,8 @@ use unicode_segmentation::UnicodeSegmentation as _;
 
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
-    FontId, GlobalElementId, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
-    LayoutId, LineFragment as WrapLineFragment, ObjectFit, ParentElement as _, Pixels,
+    GlobalElementId, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
+    LayoutId, ObjectFit, ParentElement as _, Pixels,
     Refineable as _, ShapedLine, SharedString, Size, StatefulInteractiveElement as _, Styled,
     StyledImage as _, TextRun, TextStyle, WhiteSpace, Window, div, img, point,
     prelude::FluentBuilder as _, px, relative, size,
@@ -937,9 +938,7 @@ fn line_ranges(
     let rem_size = window.rem_size();
     let font_size = text_style.font_size.to_pixels(rem_size);
     let font_id = window.text_system().resolve_font(&text_style.font());
-    let mut wrapper = window
-        .text_system()
-        .line_wrapper(text_style.font(), font_size);
+    let mut char_widths = HashMap::new();
     let mut ranges = Vec::new();
 
     for hard_line in hard_lines {
@@ -967,19 +966,17 @@ fn line_ranges(
                         }
                     }
                     MeasureItem::Object { .. } => {
-                        wrap_fragments.push(WrapLineFragment::element(
-                            objects[ix].as_ref().unwrap().metrics.size.width,
-                            IMAGE_LEN,
-                        ));
+                        wrap_fragments.push(WrapFragment::Object {
+                            width: objects[ix].as_ref().unwrap().metrics.size.width,
+                        });
                     }
                     MeasureItem::Image { .. } => {
                         if hard_line.start <= item_start && item_end <= hard_line.end {
-                            wrap_fragments.push(WrapLineFragment::element(
-                                image_sizes[ix]
+                            wrap_fragments.push(WrapFragment::Object {
+                                width: image_sizes[ix]
                                     .expect("image size should be measured before wrapping")
                                     .width,
-                                IMAGE_LEN,
-                            ));
+                            });
                         }
                     }
                 }
@@ -987,86 +984,298 @@ fn line_ranges(
             item_start = item_end;
         }
 
-        let boundaries = wrapper
-            .wrap_line(&wrap_fragments, wrap_width)
-            .map(|boundary| {
-                (
-                    hard_line.start + boundary.ix.min(hard_line.len()),
-                    boundary.next_indent,
-                )
+        let units = wrap_units(&wrap_fragments, |character| {
+            *char_widths.entry(character).or_insert_with(|| {
+                window
+                    .text_system()
+                    .layout_width(font_id, font_size, character)
             })
-            .collect::<Vec<_>>();
-        let widths = wrapped_line_widths(
-            &wrap_fragments,
-            hard_line.start,
-            &boundaries,
-            font_id,
-            font_size,
-            window,
-        );
+        });
+        let (starts, widths) = wrap_line(&units, wrap_width);
+        let ends = starts
+            .into_iter()
+            .map(|start| hard_line.start + start)
+            .chain(std::iter::once(hard_line.end));
         let mut start = hard_line.start;
-
-        for ((end, _), width) in boundaries.iter().copied().zip(&widths) {
-            if start < end {
-                ranges.push((start..end, *width));
+        for (end, width) in ends.zip(widths) {
+            if start < end || hard_line.is_empty() {
+                ranges.push((start..end, width));
             }
             start = end;
-        }
-
-        if start < hard_line.end || hard_line.is_empty() {
-            ranges.push((
-                start..hard_line.end,
-                widths.last().copied().unwrap_or_default(),
-            ));
         }
     }
 
     ranges
 }
 
-/// Adds the widths of `fragments` as the line wrapper does, one sum per line.
-/// `boundaries` are the wrapper's line ends and next-line indents. The result
-/// has one width more than `boundaries`, for the line after the last one.
-fn wrapped_line_widths(
-    fragments: &[WrapLineFragment],
-    start: usize,
-    boundaries: &[(usize, u32)],
-    font_id: FontId,
-    font_size: Pixels,
-    window: &Window,
-) -> Vec<Pixels> {
-    let text_system = window.text_system();
-    let mut widths = vec![Pixels::ZERO; boundaries.len() + 1];
-    let mut line = 0;
-    let mut ix = start;
-    let mut add = |ix: usize, width: Pixels, widths: &mut Vec<Pixels>| {
-        while boundaries.get(line).is_some_and(|(end, _)| ix >= *end) {
-            let indent = boundaries[line].1;
-            line += 1;
-            if indent > 0 {
-                widths[line] = text_system.layout_width(font_id, font_size, ' ') * indent as f32;
-            }
-        }
-        widths[line] += width;
-    };
+/// A part of a hard line for the line wrapper.
+enum WrapFragment<'a> {
+    /// Text in the body face. The wrapper measures it one character at a
+    /// time.
+    Text(&'a str),
+    /// Text that the wrapper measured as a whole, for example in another
+    /// face. The line can break only at its edges, where its text decides,
+    /// or after it if it is white space.
+    Element { width: Pixels, text: &'a str },
+    /// An inline object or an image. The line can break before and after it.
+    Object { width: Pixels },
+}
+
+/// The smallest part of a line for the line wrapper: a grapheme of body
+/// text, an element, or an object.
+#[derive(Clone, Copy, Debug)]
+struct WrapUnit {
+    len: usize,
+    width: Pixels,
+    /// The first and the last character, which decide the breaks before
+    /// and after the unit. An object is [`OBJECT`].
+    first: char,
+    last: char,
+    /// Whether the unit is white space, where the line can break.
+    space: bool,
+}
+
+/// The character of an inline object or an image for the line breaking
+/// rules.
+const OBJECT: char = '\u{FFFC}';
+
+/// The wrap units of `fragments`, with the width of a body character from
+/// `char_width`.
+fn wrap_units(
+    fragments: &[WrapFragment],
+    mut char_width: impl FnMut(char) -> Pixels,
+) -> Vec<WrapUnit> {
+    let mut units = Vec::new();
     for fragment in fragments {
         match fragment {
-            WrapLineFragment::Text { text } => {
-                for character in text.chars() {
-                    if character != '\n' {
-                        let width = text_system.layout_width(font_id, font_size, character);
-                        add(ix, width, &mut widths);
-                    }
-                    ix += character.len_utf8();
+            WrapFragment::Text(text) => {
+                for grapheme in text.graphemes(true) {
+                    let Some(first) = grapheme.chars().next() else {
+                        continue;
+                    };
+                    units.push(WrapUnit {
+                        len: grapheme.len(),
+                        width: grapheme.chars().map(&mut char_width).sum(),
+                        first,
+                        last: grapheme.chars().last().unwrap_or(first),
+                        space: grapheme.chars().all(is_break_space),
+                    });
                 }
             }
-            WrapLineFragment::Element { width, len_utf8 } => {
-                add(ix, *width, &mut widths);
-                ix += len_utf8;
+            WrapFragment::Element { width, text } => {
+                let Some(first) = text.chars().next() else {
+                    continue;
+                };
+                units.push(WrapUnit {
+                    len: text.len(),
+                    width: *width,
+                    first,
+                    last: text.chars().last().unwrap_or(first),
+                    // The words of a long code span are elements, and so
+                    // are the spaces between them.
+                    space: text.chars().all(is_break_space),
+                });
             }
+            WrapFragment::Object { width } => units.push(WrapUnit {
+                len: IMAGE_LEN,
+                width: *width,
+                first: OBJECT,
+                last: OBJECT,
+                space: false,
+            }),
         }
     }
-    widths
+    units
+}
+
+/// Breaks a hard line of `units` into lines that are not wider than
+/// `wrap_width`, at the last place before the overflow where
+/// [`can_break`] allows a break. A line without such a place breaks before
+/// the unit that overflows it. White space stays at the end of its line.
+///
+/// Returns the start of each line after the first, as an offset in the hard
+/// line, and the width of each line: the sum of the widths of its units.
+fn wrap_line(units: &[WrapUnit], wrap_width: Pixels) -> (Vec<usize>, Vec<Pixels>) {
+    let mut starts = Vec::new();
+    let mut widths = Vec::new();
+    let mut width = Pixels::ZERO;
+    let mut offset = 0;
+    let mut line_start = 0;
+    // The last place in the line where it can break, and the width before it.
+    let mut candidate: Option<(usize, Pixels)> = None;
+    // The last character of the last unit that is not white space, and
+    // whether white space comes after it.
+    let mut before: Option<char> = None;
+    let mut after_space = false;
+    for unit in units {
+        if !unit.space
+            && before.is_some_and(|before| can_break(before, after_space, unit.first))
+        {
+            candidate = Some((offset, width));
+        }
+        width += unit.width;
+        if width > wrap_width && offset > line_start {
+            let (start, width_before) = candidate
+                .take()
+                .filter(|(start, _)| *start > line_start)
+                .unwrap_or((offset, width - unit.width));
+            widths.push(width_before);
+            width -= width_before;
+            starts.push(start);
+            line_start = start;
+        }
+        if unit.space {
+            after_space = true;
+        } else {
+            before = Some(unit.last);
+            after_space = false;
+        }
+        offset += unit.len;
+    }
+    widths.push(width);
+    (starts, widths)
+}
+
+/// Whether a line can break before the character `next`, after the
+/// character `before` and, if `after_space`, white space. The rules follow
+/// the Unicode line breaking algorithm (UAX #14) for punctuation: closing
+/// punctuation, `?`, and `!` stay with the word before them, also after a
+/// space, and opening punctuation stays with the word after it. Other text
+/// can break as GPUI's line wrapper allows: at white space, before most
+/// symbols, and around CJK characters.
+fn can_break(before: char, after_space: bool, next: char) -> bool {
+    if closes(next) {
+        return false;
+    }
+    if after_space {
+        return true;
+    }
+    if opens(before) || glues(before) || glues(next) {
+        return false;
+    }
+    // A bracket after a word belongs to it, as in `f(x)`.
+    if opens(next) && before.is_alphanumeric() {
+        return false;
+    }
+    breaks_around(before) || breaks_around(next) || !is_word_char(next)
+}
+
+/// Characters that do not start a line: closing brackets and quotation
+/// marks, the marks that end a sentence or a clause, and `%`.
+fn closes(character: char) -> bool {
+    matches!(
+        character,
+        ')' | ']'
+            | '}'
+            | '!'
+            | '?'
+            | ','
+            | '.'
+            | ':'
+            | ';'
+            | '%'
+            | '‰'
+            | '…'
+            | '»'
+            | '”'
+            | '’'
+            | '›'
+            | '、'
+            | '。'
+            | '，'
+            | '．'
+            | '：'
+            | '；'
+            | '！'
+            | '？'
+            | '）'
+            | '］'
+            | '｝'
+            | '」'
+            | '』'
+            | '】'
+            | '〕'
+            | '〉'
+            | '》'
+            | '〗'
+            | '〙'
+            | '〛'
+            | '｠'
+            | '｡'
+            | '｣'
+    )
+}
+
+/// Characters that do not end a line: opening brackets and quotation marks,
+/// and the Spanish inverted marks.
+fn opens(character: char) -> bool {
+    matches!(
+        character,
+        '(' | '['
+            | '{'
+            | '«'
+            | '“'
+            | '‘'
+            | '‹'
+            | '„'
+            | '‚'
+            | '¿'
+            | '¡'
+            | '（'
+            | '［'
+            | '｛'
+            | '「'
+            | '『'
+            | '【'
+            | '〔'
+            | '〈'
+            | '《'
+            | '〖'
+            | '〘'
+            | '〚'
+            | '｟'
+            | '｢'
+    )
+}
+
+/// Characters that join the text on both sides: no-break spaces and
+/// hyphens, the word joiner, and the quotation marks that can open or close.
+fn glues(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00A0}' | '\u{202F}' | '\u{2007}' | '\u{2011}' | '\u{2060}' | '\u{FEFF}' | '"' | '\''
+    )
+}
+
+/// White space where a line can break. The no-break spaces glue instead.
+fn is_break_space(character: char) -> bool {
+    (character.is_whitespace() && !glues(character)) || character == '\u{200B}'
+}
+
+/// Characters with a break before and after them: CJK characters, which
+/// do not use spaces between words, and objects.
+fn breaks_around(character: char) -> bool {
+    matches!(
+        character,
+        '\u{2E80}'..='\u{9FFF}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF01}'..='\u{FF60}'
+            | '\u{20000}'..='\u{3FFFF}'
+            | OBJECT
+    )
+}
+
+/// Characters that do not start a new line after other text without white
+/// space: letters, digits, and the joining symbols of names, numbers, and
+/// words, like `a-b`, `var_name`, `I'm`, `100%`, or `3.14`.
+fn is_word_char(character: char) -> bool {
+    character.is_alphanumeric()
+        || matches!(
+            character,
+            '-' | '_' | '.' | '\'' | '’' | '‘' | '$' | '%' | '@' | '#' | '^' | '~' | ',' | '='
+                | ':' | ';' | '!' | ')' | ']' | '}' | '"' | '”' | '»' | '…' | '⋯'
+        )
 }
 
 /// Appends the wrap fragments for `range` of `text`. The line wrapper
@@ -1077,7 +1286,7 @@ fn wrapped_line_widths(
 /// boundaries. Oversized words can break at grapheme boundaries without
 /// splitting Unicode.
 fn push_text_wrap_fragments<'a>(
-    fragments: &mut Vec<WrapLineFragment<'a>>,
+    fragments: &mut Vec<WrapFragment<'a>>,
     text: &'a str,
     highlights: &[(Range<usize>, InlineHighlight)],
     range: Range<usize>,
@@ -1100,7 +1309,7 @@ fn push_text_wrap_fragments<'a>(
             continue;
         }
         if cursor < start {
-            fragments.push(WrapLineFragment::text(&text[cursor..start]));
+            fragments.push(WrapFragment::Text(&text[cursor..start]));
         }
         let span = &text[start..end];
         let measure = |text: &str, styled: bool| {
@@ -1125,18 +1334,18 @@ fn push_text_wrap_fragments<'a>(
         };
         let width = measure(span, true) + padding;
         if changes_family && width <= wrap_width {
-            fragments.push(WrapLineFragment::element(width, span.len()));
+            fragments.push(WrapFragment::Element { width, text: span });
         } else if changes_family {
             for word in span.split_word_bounds() {
                 let width = measure(word, true) + padding;
                 if width <= wrap_width {
-                    fragments.push(WrapLineFragment::element(width, word.len()));
+                    fragments.push(WrapFragment::Element { width, text: word });
                 } else {
                     for grapheme in word.graphemes(true) {
-                        fragments.push(WrapLineFragment::element(
-                            measure(grapheme, true) + padding,
-                            grapheme.len(),
-                        ));
+                        fragments.push(WrapFragment::Element {
+                            width: measure(grapheme, true) + padding,
+                            text: grapheme,
+                        });
                     }
                 }
             }
@@ -1149,35 +1358,35 @@ fn push_text_wrap_fragments<'a>(
             let mut pending = Pixels::ZERO;
             for word in span.split_word_bounds() {
                 if word.chars().all(char::is_whitespace) {
-                    fragments.push(WrapLineFragment::text(word));
+                    fragments.push(WrapFragment::Text(word));
                     let excess = measure(word, true) - measure(word, false);
                     match last_element.and_then(|ix| fragments.get_mut(ix)) {
-                        Some(WrapLineFragment::Element { width, .. }) => *width += excess,
+                        Some(WrapFragment::Element { width, .. }) => *width += excess,
                         _ => pending += excess,
                     }
                     continue;
                 }
                 let width = measure(word, true);
                 let parts = if width <= wrap_width {
-                    vec![(width, word.len())]
+                    vec![(width, word)]
                 } else {
                     word.graphemes(true)
-                        .map(|grapheme| (measure(grapheme, true), grapheme.len()))
+                        .map(|grapheme| (measure(grapheme, true), grapheme))
                         .collect()
                 };
-                for (width, len) in parts {
+                for (width, text) in parts {
                     last_element = Some(fragments.len());
-                    fragments.push(WrapLineFragment::element(
-                        width + std::mem::take(&mut pending),
-                        len,
-                    ));
+                    fragments.push(WrapFragment::Element {
+                        width: width + std::mem::take(&mut pending),
+                        text,
+                    });
                 }
             }
         }
         cursor = end;
     }
     if cursor < range.end {
-        fragments.push(WrapLineFragment::text(&text[cursor..range.end]));
+        fragments.push(WrapFragment::Text(&text[cursor..range.end]));
     }
 }
 
@@ -1714,6 +1923,179 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(lines, expected_lines, "wrap width {wrap_width:?}");
         }
+    }
+
+    /// The lines of `fragments` at `wrap_width`, with one pixel for each
+    /// body character.
+    fn wrapped(fragments: &[WrapFragment], wrap_width: f32) -> Vec<String> {
+        let text: String = fragments
+            .iter()
+            .map(|fragment| match fragment {
+                WrapFragment::Text(text) | WrapFragment::Element { text, .. } => *text,
+                WrapFragment::Object { .. } => "#",
+            })
+            .collect();
+        let units = wrap_units(fragments, |_| px(1.));
+        let (starts, widths) = wrap_line(&units, px(wrap_width));
+        assert_eq!(widths.len(), starts.len() + 1);
+        let mut lines = Vec::new();
+        let mut start = 0;
+        for end in starts.into_iter().chain(std::iter::once(text.len())) {
+            lines.push(text[start..end].trim_end().to_owned());
+            start = end;
+        }
+        lines
+    }
+
+    #[test]
+    fn closing_marks_stay_with_the_word_before_them() {
+        // A question mark after a space does not start a line.
+        assert_eq!(
+            wrapped(&[WrapFragment::Text("Сколько букингов было сегодня ?")], 30.),
+            ["Сколько букингов было", "сегодня ?"]
+        );
+        assert_eq!(
+            wrapped(&[WrapFragment::Text("сколько букингов?")], 16.),
+            ["сколько", "букингов?"]
+        );
+        assert_eq!(
+            wrapped(&[WrapFragment::Text("гейт «Aviasales» (gate_id)")], 17.),
+            ["гейт «Aviasales»", "(gate_id)"]
+        );
+        // A bracket after a word belongs to it.
+        assert_eq!(wrapped(&[WrapFragment::Text("call f(x)")], 6.), ["call", "f(x)"]);
+    }
+
+    #[test]
+    fn opening_marks_stay_with_the_element_after_them() {
+        // Bold text is a row of elements: the opening and the closing quote,
+        // and the word between them.
+        let element = |text| WrapFragment::Element {
+            width: px(text_width(text)),
+            text,
+        };
+        let fragments = [
+            WrapFragment::Text("гейт "),
+            element("«"),
+            element("Aviasales"),
+            element("»"),
+            WrapFragment::Text(" сегодня"),
+        ];
+        assert_eq!(wrapped(&fragments, 12.), ["гейт", "«Aviasales»", "сегодня"]);
+        // The spaces of a long code span are elements too.
+        let fragments = [element("select"), element(" "), element("pdate")];
+        assert_eq!(wrapped(&fragments, 8.), ["select", "pdate"]);
+    }
+
+    fn text_width(text: &str) -> f32 {
+        text.chars().count() as f32
+    }
+
+    #[test]
+    fn lines_break_between_cjk_characters_and_inside_long_words() {
+        assert_eq!(wrapped(&[WrapFragment::Text("中文中文")], 2.), ["中文", "中文"]);
+        assert_eq!(
+            wrapped(&[WrapFragment::Text("abcdefgh")], 3.),
+            ["abc", "def", "gh"]
+        );
+        // A line does not break inside a grapheme.
+        assert_eq!(
+            wrapped(&[WrapFragment::Text("e\u{301}e\u{301}e\u{301}")], 3.),
+            ["e\u{301}", "e\u{301}", "e\u{301}"]
+        );
+        // Objects have breaks before and after them.
+        assert_eq!(
+            wrapped(
+                &[
+                    WrapFragment::Text("ab"),
+                    WrapFragment::Object { width: px(1.) },
+                    WrapFragment::Text("cd"),
+                ],
+                2.
+            ),
+            ["ab", "#", "cd"]
+        );
+        // The white space at the start of a line is not a break.
+        assert_eq!(wrapped(&[WrapFragment::Text("  abcd")], 4.), ["  ab", "cd"]);
+    }
+
+    #[test]
+    fn closing_and_opening_marks_follow_the_breaking_rules() {
+        assert!(!can_break('я', true, '?'));
+        assert!(!can_break('я', false, '!'));
+        assert!(!can_break('«', false, 'А'));
+        assert!(!can_break('с', false, '»'));
+        assert!(!can_break('a', false, '\u{00A0}'));
+        assert!(can_break('a', true, '«'));
+        assert!(can_break('a', true, 'b'));
+        assert!(!can_break('a', false, 'b'));
+        assert!(can_break('a', false, '/'));
+        assert!(can_break('中', false, '文'));
+        assert!(!can_break('中', false, '。'));
+        assert!(!can_break('「', false, '中'));
+    }
+
+    /// A bold quotation is three elements for the wrapper: the opening
+    /// quote, the word, and the closing quote. The line must not break after
+    /// the opening quote.
+    #[test]
+    fn bold_quotation_does_not_break_after_its_opening_quote() {
+        use super::super::inline::test_fonts::{BODY, WideMonoTextSystem};
+        use gpui::{AbsoluteLength, Empty, FontWeight, HighlightStyle, TestApp};
+
+        let mut app = TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        let mut window = app.open_window(|_, _| Empty);
+
+        let font_size = px(10.);
+        let text_style = TextStyle {
+            font_family: SharedString::from(BODY),
+            font_size: AbsoluteLength::Pixels(font_size),
+            ..Default::default()
+        };
+        let text = "лидирует гейт «Aviasales» сегодня";
+        let bold = text.find('«').unwrap();
+        let bold_end = text.find('»').unwrap() + '»'.len_utf8();
+        let items = vec![MeasureItem::Text {
+            text: SharedString::from(text),
+            links: vec![],
+            highlights: vec![(
+                bold..bold_end,
+                InlineHighlight {
+                    style: HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        ..Default::default()
+                    },
+                    font_family: None,
+                    font_size_scale: None,
+                },
+            )],
+        }];
+        let body_char = WideMonoTextSystem::width_of("x", BODY, font_size);
+        // "лидирует гейт «" fits, but the bold word after it does not.
+        let wrap_width = body_char * 20.;
+        let layout = window.update(|_, window, cx| {
+            layout_flow(&items, &[None], &text_style, Some(wrap_width), window, cx)
+        });
+        let mut lines: Vec<(Pixels, String)> = Vec::new();
+        for fragment in &layout.fragments {
+            if let PositionedFragment::Text {
+                text,
+                selection_bounds,
+                ..
+            } = fragment
+            {
+                let y = selection_bounds.origin.y;
+                match lines.last_mut() {
+                    Some((line_y, line)) if *line_y == y => line.push_str(text),
+                    _ => lines.push((y, text.to_string())),
+                }
+            }
+        }
+        let lines = lines
+            .iter()
+            .map(|(_, line)| line.trim())
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["лидирует гейт", "«Aviasales»", "сегодня"]);
     }
 
     #[test]
