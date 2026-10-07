@@ -353,7 +353,8 @@ details**. A panel opens at the right side of the window. It shows:
 - The tests of the table. A test with arguments shows each argument under its
   name.
 - The documented columns, with their types, descriptions, and tests. Type in
-  **Filter columns** to find columns by name or description.
+  **Filter columns** to find columns by name or description. Columns whose
+  name matches come first.
 - The parents and children, with the materialization of each model or the
   kind of each other resource. Click a parent or a child to show its details
   in the panel. To go back, click the back button next to the close button

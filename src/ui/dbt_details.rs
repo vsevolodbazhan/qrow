@@ -605,21 +605,26 @@ impl DbtDetailsView {
         self.keep_filter_rendered(cx);
     }
 
+    /// The positions of the columns that match the filter. Columns whose
+    /// name matches come first, the closest names on top. Then come the
+    /// columns that match only by their description. Each group keeps the
+    /// order of the manifest.
     fn matching_columns(&self, cx: &App) -> Vec<usize> {
-        let query = self.filter.read(cx).value().trim().to_owned();
+        let query = self.filter.read(cx).value().trim().to_lowercase();
         let Some(data) = &self.data else {
             return Vec::new();
         };
-        data.columns
+        let mut ranked: Vec<(ColumnMatch, usize)> = data
+            .columns
             .iter()
             .enumerate()
-            .filter(|(_, column)| {
-                query.is_empty()
-                    || contains_folded(&column.name, &query)
-                    || contains_folded(&column.description, &query)
+            .filter_map(|(position, column)| {
+                column_match(&column.name, &column.description, &query).map(|rank| (rank, position))
             })
-            .map(|(position, _)| position)
-            .collect()
+            .collect();
+        // A stable sort keeps the order of the manifest in each group.
+        ranked.sort_by_key(|(rank, _)| *rank);
+        ranked.into_iter().map(|(_, position)| position).collect()
     }
 
     fn make_rows(&self) -> Vec<Row> {
@@ -1456,6 +1461,35 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
     })
 }
 
+/// How a column matches the filter, the best match first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ColumnMatch {
+    Name,
+    NameStart,
+    NamePart,
+    Description,
+}
+
+/// How the column `name` with `description` matches `query`, which is in
+/// lowercase. An empty query matches all columns by name.
+fn column_match(name: &str, description: &str, query: &str) -> Option<ColumnMatch> {
+    if query.is_empty() {
+        return Some(ColumnMatch::Name);
+    }
+    let name = name.to_lowercase();
+    if name == query {
+        Some(ColumnMatch::Name)
+    } else if name.starts_with(query) {
+        Some(ColumnMatch::NameStart)
+    } else if name.contains(query) {
+        Some(ColumnMatch::NamePart)
+    } else if contains_folded(description, query) {
+        Some(ColumnMatch::Description)
+    } else {
+        None
+    }
+}
+
 /// A titled part of the sheet.
 fn section(title: &str, content: AnyElement) -> impl IntoElement {
     v_flex()
@@ -1640,8 +1674,33 @@ fn test_tag(name: SharedString) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{SQL_CHUNK_LINES, argument_pairs, chunk_ranges, display_sql, relative_highlights};
+    use super::{
+        ColumnMatch, SQL_CHUNK_LINES, argument_pairs, chunk_ranges, column_match, display_sql,
+        relative_highlights,
+    };
     use gpui_kit::HighlightStyle;
+
+    #[test]
+    fn columns_that_match_by_name_come_before_columns_that_match_by_description() {
+        let rank = |name, description| column_match(name, description, "pdate");
+        assert_eq!(rank("PDATE", ""), Some(ColumnMatch::Name));
+        assert_eq!(rank("pdate_utc", ""), Some(ColumnMatch::NameStart));
+        assert_eq!(rank("max_pdate", ""), Some(ColumnMatch::NamePart));
+        assert_eq!(
+            rank("booked_at", "Use `pdate` to filter."),
+            Some(ColumnMatch::Description)
+        );
+        assert_eq!(rank("booked_at", "The time of the booking."), None);
+        assert!(ColumnMatch::Name < ColumnMatch::NameStart);
+        assert!(ColumnMatch::NameStart < ColumnMatch::NamePart);
+        assert!(ColumnMatch::NamePart < ColumnMatch::Description);
+        // Other letters than ASCII match in their lowercase form.
+        assert_eq!(
+            column_match("id", "Идентификатор бронирования", "бронирования"),
+            Some(ColumnMatch::Description)
+        );
+        assert_eq!(column_match("any", "", ""), Some(ColumnMatch::Name));
+    }
 
     #[test]
     fn shown_sql_has_no_empty_lines_at_the_ends() {
