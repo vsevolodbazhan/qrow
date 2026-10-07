@@ -2,17 +2,17 @@ use super::Page;
 use crate::{connector::Secret, model::Profile, tls::Trust};
 use anyhow::{Context, Result};
 use reqwest::{
-    Method,
-    blocking::Client,
+    Client, Method,
     header::{HeaderMap, HeaderValue},
 };
-use std::{collections::BTreeMap, io::Read, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 use url::Url;
 
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Http {
     client: Client,
+    runtime: tokio::runtime::Runtime,
     pub statement: Url,
     pub timeout: Duration,
     username: String,
@@ -50,6 +50,9 @@ impl Http {
         }
         let http = Self {
             client: builder.build()?,
+            runtime: tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?,
             statement,
             timeout,
             username: profile.username.clone(),
@@ -83,7 +86,7 @@ impl Http {
         url: &Url,
         sql: Option<&str>,
         headers: &SessionHeaders,
-    ) -> Result<reqwest::blocking::Response> {
+    ) -> Result<reqwest::Response> {
         self.cursor(url.as_str())?;
         let mut request = self
             .client
@@ -106,9 +109,11 @@ impl Http {
                 .header("Content-Type", "text/plain; charset=utf-8")
                 .body(sql.to_owned());
         }
-        request.send().map_err(|error| {
-            anyhow::Error::new(error.without_url()).context("Trino request failed")
-        })
+        self.runtime
+            .block_on(async { request.send().await })
+            .map_err(|error| {
+                anyhow::Error::new(error.without_url()).context("Trino request failed")
+            })
     }
 
     pub fn page(
@@ -118,7 +123,7 @@ impl Http {
         sql: Option<&str>,
         headers: &SessionHeaders,
     ) -> Result<(Page, HeaderMap)> {
-        let response = self.request(method, url, sql, headers)?;
+        let mut response = self.request(method, url, sql, headers)?;
         anyhow::ensure!(
             response.status().as_u16() == 200,
             "Trino returned HTTP {}",
@@ -131,14 +136,21 @@ impl Http {
                 "Trino response exceeds 16 MiB"
             );
         }
-        let mut bytes = Vec::new();
-        response
-            .take((MAX_RESPONSE_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)?;
-        anyhow::ensure!(
-            bytes.len() <= MAX_RESPONSE_BYTES,
-            "Trino response exceeds 16 MiB"
-        );
+        let bytes = self.runtime.block_on(async {
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| error.without_url())?
+            {
+                anyhow::ensure!(
+                    bytes.len().saturating_add(chunk.len()) <= MAX_RESPONSE_BYTES,
+                    "Trino response exceeds 16 MiB"
+                );
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok::<_, anyhow::Error>(bytes)
+        })?;
         Ok((
             serde_json::from_slice(&bytes).context("Invalid Trino result response")?,
             headers,

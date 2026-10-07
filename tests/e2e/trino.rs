@@ -123,9 +123,15 @@ fn schema_browser_reads_the_initial_catalog_and_copies_three_part_names(cx: &mut
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run trino"]
 fn byte_limit_keeps_the_last_retained_batch_in_the_results_table(cx: &mut TestAppContext) {
+    // Short values reach the byte budget through row storage with less transfer.
+    let columns = 4000;
+    let projection = (0..columns)
+        .map(|index| format!("'x' AS c{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
     let app = launch(
         cx,
-        "SELECT concat(repeat('x',99990), lpad(CAST(i AS varchar),10,'0')) AS value FROM UNNEST(sequence(1,700)) t(i)",
+        &format!("SELECT {projection} FROM UNNEST(sequence(1,680)) t(i)"),
     );
     app.click(cx, "run");
     app.wait_until(
@@ -136,11 +142,11 @@ fn byte_limit_keeps_the_last_retained_batch_in_the_results_table(cx: &mut TestAp
     );
     app.update(cx, |window, _| {
         let expected =
-            qrow::model::MAX_RESULT_BYTES / (100000 + std::mem::size_of::<Option<String>>());
+            qrow::model::MAX_RESULT_BYTES / (columns * (1 + std::mem::size_of::<Option<String>>()));
         assert_eq!(
             crate::support::label(window, "result-loaded").as_deref(),
             Some(format!("{expected} loaded").as_str())
         );
-        assert!(cell(window, 0, 1).unwrap().starts_with("xxx"));
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("x"));
     });
 }
