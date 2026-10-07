@@ -327,8 +327,9 @@ many models are in such schemas.
 In the schema tree, a table or view that a dbt model, seed, snapshot, or
 source builds shows its kind after its name, for example `dbt incremental` or
 `dbt source`. Its tooltip shows the name in bold, then the first paragraph
-of the dbt description, cut to a few lines. A cut description has a small
-note below it that tells you to open the dbt details.
+of the dbt description, cut to a few lines. The tooltip shows the Markdown of
+the description, for example code and bold text. A cut description has a
+small note below it that tells you to open the dbt details.
 
 To read the full description, right-click the table and select **Show dbt
 details**. A panel opens at the right side of the window. It shows:

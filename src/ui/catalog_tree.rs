@@ -17,8 +17,14 @@ use gpui_kit::base::{
     ElementExt as _, Tree, TreeEntry, TreeEntryState, TreeEvent, TreeItem, TreeState,
 };
 use gpui_kit::component::{
-    Icon, button::ButtonCustomVariant, h_flex, scroll::ScrollableElement as _, spinner::Spinner,
-    tooltip::Tooltip, v_flex,
+    Icon,
+    button::ButtonCustomVariant,
+    h_flex,
+    scroll::ScrollableElement as _,
+    spinner::Spinner,
+    text::{TextView, TextViewState, TextViewStyle},
+    tooltip::Tooltip,
+    v_flex,
 };
 use std::{
     cell::RefCell,
@@ -1717,12 +1723,8 @@ fn render_entry(
         } => {
             // The dbt description adds a line. The details sheet has the
             // full text of a long description.
-            let description = dbt.as_ref().and_then(|dbt| dbt.description.as_deref());
+            let description = dbt.as_ref().and_then(|dbt| dbt.description.clone());
             let cut = dbt.as_ref().is_some_and(|dbt| dbt.description_cut);
-            let comment = match (comment.as_deref(), description) {
-                (Some(comment), Some(description)) => Some(format!("{comment}\n{description}")),
-                (comment, description) => comment.or(description).map(str::to_owned),
-            };
             (
                 Some(match kind {
                     RelationKind::Table => AssetIconName::Table,
@@ -1732,8 +1734,10 @@ fn render_entry(
                 dbt.as_ref().map(|dbt| dbt.detail.clone()),
                 *loading,
                 error.clone(),
-                row_tooltip(name, comment.as_deref(), error.as_deref())
-                    .map(|tip| tip.hint(cut.then_some(DESCRIPTION_HINT))),
+                row_tooltip(name, comment.as_deref(), error.as_deref()).map(|tip| {
+                    tip.description(description)
+                        .hint(cut.then_some(DESCRIPTION_HINT))
+                }),
             )
         }
         Node::Column {
@@ -1899,6 +1903,11 @@ fn render_entry(
 /// the tooltip that a hover opens.
 fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyView {
     let tip = tip.clone();
+    // The parse of the short description happens once for each tooltip.
+    let description = tip
+        .description
+        .as_deref()
+        .map(|text| cx.new(|cx| TextViewState::markdown(text, cx)));
     Tooltip::element(move |_, cx| {
         // Long comments wrap instead of making the tooltip as wide as the
         // window.
@@ -1913,7 +1922,20 @@ fn tree_tooltip_view(tip: &TreeTip, window: &mut Window, cx: &mut App) -> AnyVie
                     .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                     .child(tip.title.clone()),
             )
-            .children(tip.lines.iter().map(|line| div().child(line.clone())))
+            .children(tip.comment.clone())
+            .when_some(description.as_ref(), |tooltip, state| {
+                tooltip.child(
+                    div()
+                        .id("catalog-tooltip-description")
+                        .test_support()
+                        .child(
+                            TextView::new(state)
+                                .style(TextViewStyle::default().paragraph_gap(rems(0.)))
+                                .selectable(false),
+                        ),
+                )
+            })
+            .children(tip.error.clone())
             .when_some(tip.hint, |tooltip, hint| {
                 tooltip.child(
                     div()
@@ -1995,12 +2017,19 @@ const DESCRIPTION_HINT: &str = "Open dbt details to see the full description.";
 struct TreeTip {
     /// The full name, which the row can truncate.
     title: String,
-    /// The comment and the error.
-    lines: Vec<String>,
+    comment: Option<String>,
+    /// The dbt description, in Markdown.
+    description: Option<String>,
+    error: Option<String>,
     hint: Option<&'static str>,
 }
 
 impl TreeTip {
+    fn description(mut self, description: Option<String>) -> Self {
+        self.description = description;
+        self
+    }
+
     fn hint(mut self, hint: Option<&'static str>) -> Self {
         self.hint = hint;
         self
@@ -2008,11 +2037,17 @@ impl TreeTip {
 
     /// All the text, one part on each line.
     fn text(&self) -> String {
-        std::iter::once(self.title.as_str())
-            .chain(self.lines.iter().map(String::as_str))
-            .chain(self.hint)
-            .collect::<Vec<_>>()
-            .join("\n")
+        [
+            Some(self.title.as_str()),
+            self.comment.as_deref(),
+            self.description.as_deref(),
+            self.error.as_deref(),
+            self.hint,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n")
     }
 }
 
@@ -2021,10 +2056,9 @@ impl TreeTip {
 fn row_tooltip(name: &str, comment: Option<&str>, error: Option<&str>) -> Option<TreeTip> {
     Some(TreeTip {
         title: name.to_owned(),
-        lines: [comment.map(str::to_owned), error.map(error_summary)]
-            .into_iter()
-            .flatten()
-            .collect(),
+        comment: comment.map(str::to_owned),
+        description: None,
+        error: error.map(error_summary),
         hint: None,
     })
 }

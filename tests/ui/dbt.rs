@@ -628,7 +628,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     let description = (0..60)
         .map(|paragraph| {
             format!(
-                "Paragraph {paragraph}: one row for each search, with its route, \
+                "Paragraph {paragraph}: one row for each search, with its `route`, \
                  its device, and the source of its traffic."
             )
         })
@@ -661,7 +661,9 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         assert_eq!(label(window, "catalog-tooltip-hint").as_deref(), Some(hint));
         let tooltip = label(window, "catalog-tooltip").unwrap_or_default();
         assert!(
-            tooltip.starts_with(&format!("{alias}\nParagraph 0:")),
+            tooltip.starts_with(&format!(
+                "{alias}\nParagraph 0: one row for each search, with its `route`,"
+            )),
             "{tooltip}"
         );
         assert!(tooltip.ends_with(&format!("…\n{hint}")), "{tooltip}");
@@ -669,6 +671,14 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         let hint = window.find("catalog-tooltip-hint").bounds();
         assert!(hint.bottom() <= tooltip.bottom(), "{tooltip:?} {hint:?}");
         assert!(hint.size.height < window.rem_size() * 1.25, "{hint:?}");
+        let description = window.find("catalog-tooltip-description").bounds();
+        // The Markdown description wraps at the width of the tooltip.
+        assert_eq!(description.size.width, tooltip.size.width);
+        assert!(tooltip.size.width <= window.rem_size() * 26., "{tooltip:?}");
+        assert!(
+            description.size.height > window.rem_size() * 2.,
+            "{description:?}"
+        );
     });
     app.context_menu_labelled(cx, &alias);
     app.choose(cx, "popup-menu", "Show dbt details");

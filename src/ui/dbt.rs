@@ -687,13 +687,18 @@ pub(super) fn resource_label<'a>(index: &'a Index, entry: &'a Entry) -> &'a str 
 }
 
 /// The first paragraph of `text` on one line, cut at a word to `limit`
-/// characters, and whether it drops a part of `text`.
+/// characters, and whether it drops a part of `text`. The tooltip shows it
+/// as Markdown, so the cut is outside a code span, a link, and strong text
+/// when the text has such a place.
 fn summary(text: &str, limit: usize) -> (String, bool) {
     let text = text.trim();
     let paragraph = text.split("\n\n").next().unwrap_or_default();
     let words: Vec<&str> = paragraph.split_whitespace().collect();
     let mut summary = String::new();
     let mut taken = 0;
+    // The length and the word count of the longest part that is complete
+    // Markdown.
+    let mut complete = (0, 0);
     for word in &words {
         let length = summary.chars().count() + usize::from(taken > 0) + word.chars().count();
         if length > limit {
@@ -704,6 +709,13 @@ fn summary(text: &str, limit: usize) -> (String, bool) {
         }
         summary.push_str(word);
         taken += 1;
+        if !markdown_open(&summary) {
+            complete = (summary.len(), taken);
+        }
+    }
+    if taken < words.len() && complete.1 > 0 {
+        summary.truncate(complete.0);
+        taken = complete.1;
     }
     let mut cut = taken < words.len() || paragraph.len() < text.len();
     // A first word longer than the limit is cut inside the word.
@@ -715,6 +727,43 @@ fn summary(text: &str, limit: usize) -> (String, bool) {
         summary.push('…');
     }
     (summary, cut)
+}
+
+/// Whether `text` ends inside a code span, a link, or strong text.
+fn markdown_open(text: &str) -> bool {
+    let mut code = false;
+    let mut strong = false;
+    // In the text of a link, then in its target.
+    let (mut link_text, mut link_target) = (false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {
+                while chars.peek() == Some(&'`') {
+                    chars.next();
+                }
+                code = !code;
+            }
+            _ if code => {}
+            '\\' => {
+                chars.next();
+            }
+            // Double underscores are common in identifiers, such as
+            // silver__orders, where they are not emphasis.
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                strong = !strong;
+            }
+            '[' if !link_target => link_text = true,
+            ']' if link_text => {
+                link_text = false;
+                link_target = chars.peek() == Some(&'(');
+            }
+            ')' if link_target => link_target = false,
+            _ => {}
+        }
+    }
+    code || strong || link_text || link_target
 }
 
 /// The dbt fields of Connection Settings.
@@ -967,6 +1016,37 @@ mod tests {
             ("Words that…".to_owned(), true)
         );
         assert_eq!(summary("Ünïcödé_wörd", 4), ("Ünïc…".to_owned(), true));
+    }
+
+    #[test]
+    fn a_summary_does_not_cut_markdown() {
+        // A code span, a link, and strong text stay whole or go.
+        assert_eq!(
+            summary("Uses `a long code span` here", 14),
+            ("Uses…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("See [the guide](https://example.com/guide) now", 20),
+            ("See…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Very **important text** here", 18),
+            ("Very…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Has `code` and more words", 14),
+            ("Has `code` and…".to_owned(), true)
+        );
+        // Identifiers with underscores are not emphasis.
+        assert_eq!(
+            summary("silver__orders has prices", 20),
+            ("silver__orders has…".to_owned(), true)
+        );
+        // Text that is all one open span keeps the first words.
+        assert_eq!(
+            summary("`one two three four`", 9),
+            ("`one two…".to_owned(), true)
+        );
     }
 
     #[test]
