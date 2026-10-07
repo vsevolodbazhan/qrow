@@ -93,6 +93,29 @@ pub fn present(window: &Window, id: &ElementId) -> bool {
             .any(|element| element.path().contains(id))
 }
 
+/// A point in the visible part of the open settings page, where the wheel
+/// scrolls the page.
+fn settings_page_position(window: &Window) -> Option<Point<Pixels>> {
+    let settings = ElementId::Name("gpui_component::setting::settings::Settings".into());
+    let page = ElementId::NamedInteger("resizable-panel".into(), 1);
+    let middle = f32::from(window.viewport_size().height) / 2.;
+    elements(window)
+        .into_iter()
+        .filter(|element| {
+            let size = element.bounds().size;
+            element.visible()
+                && element.path().contains(&settings)
+                && element.path().contains(&page)
+                && f32::from(size.width) >= 4.
+                && f32::from(size.height) >= 4.
+        })
+        .min_by(|a, b| {
+            let distance = |e: &ElementSnapshot| (f32::from(e.bounds().center().y) - middle).abs();
+            distance(a).total_cmp(&distance(b))
+        })
+        .map(|element| element.bounds().center())
+}
+
 /// Every observed element of the last frame.
 pub fn elements(window: &Window) -> Vec<ElementSnapshot> {
     gpui_kit::base::test_support::snapshots(window)
@@ -663,7 +686,45 @@ impl TestApp {
 
     pub fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let id = id.into();
+        self.reveal(cx, &id);
         self.update(cx, |window, cx| window.click(id, cx));
+    }
+
+    /// Scrolls the element `id` into view when it is in the window but out of
+    /// the visible part of its scroll container, like a row low on a
+    /// settings page.
+    pub fn reveal(&self, cx: &mut TestAppContext, id: &ElementId) {
+        let hidden = self.update(cx, |window, _| match window.try_find(id.clone()) {
+            Some(element) => !element.visible(),
+            None => settings_page_position(window).is_some(),
+        });
+        if hidden && let ElementId::Name(name) = id {
+            self.scroll_to(cx, name.as_ref());
+        }
+    }
+
+    /// Opens the page `title` of the Connection Settings dialog with its
+    /// sidebar item.
+    pub fn connection_page(&self, cx: &mut TestAppContext, title: &str) {
+        let index = ["General", "Catalog", "dbt", "Assistant"]
+            .iter()
+            .position(|page| *page == title)
+            .unwrap_or_else(|| panic!("No connection page {title}"));
+        let item = ElementId::Name(format!("0-{index}").into());
+        self.update(cx, |window, cx| {
+            let element = elements(window)
+                .into_iter()
+                .find(|element| {
+                    element.path().last() == Some(&item)
+                        && element
+                            .path()
+                            .contains(&ElementId::Name("connection-settings".into()))
+                })
+                .unwrap_or_else(|| panic!("No sidebar item for the connection page {title}"));
+            click_element(window, &element, cx);
+            window.render_frame(cx);
+        });
+        self.settle(cx);
     }
 
     pub fn press(&self, cx: &mut TestAppContext, key: &str) {
@@ -727,6 +788,7 @@ impl TestApp {
     /// A list without a confirmed option needs one more step to reach its
     /// first option, so an attempt that confirms nothing adds a step.
     pub fn select(&self, cx: &mut TestAppContext, id: &str, option: &str) {
+        self.reveal(cx, &id.to_owned().into());
         let chosen = |app: &Self, cx: &mut TestAppContext| {
             app.settle(cx);
             app.update(cx, |window, _| {
@@ -832,7 +894,11 @@ impl TestApp {
         let mut extra_step = true;
         for _ in 0..30 {
             let position = self.update(cx, |window, _| {
-                let element = window.try_find(target.to_owned())?;
+                // A settings page renders only the groups near its visible
+                // part, so a row lower on the page is not in the frame yet.
+                let Some(element) = window.try_find(target.to_owned()) else {
+                    return settings_page_position(window).map(|position| (position, true));
+                };
                 let low = element.bounds().center().y > window.viewport_size().height / 2.;
                 if element.visible() && !extra_step {
                     return None;
@@ -840,11 +906,25 @@ impl TestApp {
                 if element.visible() {
                     extra_step = false;
                 }
+                // A settings page scrolls in a list inside the page panel of
+                // the Settings component.
                 let depth = element
                     .path()
                     .iter()
                     .rposition(|id| format!("{id:?}").contains("Scrollable"))
-                    .expect("The target is not in a scroll container");
+                    .or_else(|| {
+                        element
+                            .path()
+                            .iter()
+                            .rposition(|id| format!("{id:?}").contains("resizable-panel"))
+                            .map(|depth| depth + 1)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "The target is not in a scroll container: {:?}",
+                            element.path()
+                        )
+                    });
                 let container = &element.path()[..=depth];
                 // The visible element nearest the middle of the window is in
                 // the scroll area. One at its edge can be under a footer, and
@@ -1010,6 +1090,7 @@ impl TestApp {
     /// Clicks `id`, selects its text, and types `text` in its place. Masked
     /// inputs do not publish their value, so only unmasked values are checked.
     pub fn fill(&self, cx: &mut TestAppContext, id: &'static str, text: &str) {
+        self.reveal(cx, &id.into());
         self.update(cx, |window, cx| {
             window.click(id, cx);
             window.press("cmd-a", cx);

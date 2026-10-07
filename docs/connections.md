@@ -34,8 +34,13 @@ last selected tab. The other tabs keep their unread outcomes.
 
 ## Create a profile
 
+Connection Settings has pages in a sidebar: **General**, **Catalog**, **dbt**,
+and **Assistant**. The **Assistant** page shows only while the
+[assistant](assistant.md) is on. Click a page to show its fields. Type in the
+search field above the pages to find a field.
+
 1. Click **+** beside Connections.
-2. Enter a name for the profile.
+2. On the **General** page, enter a name for the profile.
 3. Enter the Kyuubi host and port.
 4. Turn on **TLS** if the server accepts TLS on this port.
 5. Select the authentication:
@@ -44,12 +49,13 @@ last selected tab. The other tabs keep their unread outcomes.
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
 6. Enter the initial database.
 7. Enter session parameters as a JSON object with string values.
-8. Optional: To [browse the schemas](#browse-schemas) of the connection, set
-   **Schema Refresh** to **Manual** or **While connected**. Then you can enter
-   [schema patterns](#show-or-hide-schemas).
-9. Optional: Attach a [dbt project](#attach-a-dbt-project).
-10. Optional: When the [assistant](assistant.md) is on, enter **Assistant
-    notes**. See [Give the assistant facts about a
+8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
+   to the **Catalog** page and set **Schema Refresh** to **Manual** or **While
+   connected**. Then you can enter [schema patterns](#show-or-hide-schemas).
+9. Optional: On the **dbt** page, attach a
+   [dbt project](#attach-a-dbt-project).
+10. Optional: On the **Assistant** page, enter **Assistant Notes**. See
+    [Give the assistant facts about a
     connection](#give-the-assistant-facts-about-a-connection).
 11. Click **Save**.
 
@@ -243,8 +249,8 @@ Limitations:
 
 Use **Assistant Notes** to tell the assistant facts about the data of a
 connection, for example "Dates in `avia` are in UTC" or "`bookings.status = 3`
-means cancelled". The field is at the end of
-Connection Settings. It shows only while the assistant is on.
+means cancelled". The field is on the **Assistant** page of Connection
+Settings. The page shows only while the assistant is on.
 
 The notes can have up to 16 KB. Near the limit, the help text below the field
 shows the number of bytes. Qrow saves the notes as plain text in the
@@ -260,7 +266,7 @@ A connection can have one dbt project. Qrow reads the `manifest.json` file
 that dbt writes, with the descriptions, tests, lineage, and SQL of the models.
 Qrow does not run dbt, and it does not read the other files of the project.
 
-1. In Connection Settings, go to **dbt Project**.
+1. In Connection Settings, go to the **dbt** page.
 2. In **Manifest**, enter the path of `manifest.json`, or click **Choose…**.
    The file is usually in the `target` folder of the project. Any manifest
    works, for example one from CI.
@@ -380,8 +386,8 @@ duplicate keeps the sign-in, the dbt project, and the assistant notes of the
 source.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name, the Connection Lifecycle fields, the Schemas fields, the dbt project, or
-the assistant notes. The worker applies the new lifecycle
+name, **Response Timeout**, **Idle Behavior**, the idle and keep-alive fields, the
+fields of the **Catalog** page, the dbt project, or the assistant notes. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -406,11 +412,12 @@ views.
 
 Schema browsing is off for a new connection. To turn it on, open the
 connection settings and set **Schema Refresh**, the first field of the
-Schemas section:
+**Catalog** page:
 
 - **Disabled**: Qrow does not read or show the schemas of the connection. The
   connection row has no arrow, and its menu has no **Schemas** section. The
-  other Schemas fields do not show, and they keep their values. Qrow keeps
+  other fields of the **Catalog** page do not show, and they keep their
+  values. Qrow keeps
   the copy of the schemas on your computer, so the tree shows it again when
   you turn browsing on.
 - **Manual**: Qrow reads the schemas when you select **Refresh**, or when you
@@ -470,8 +477,8 @@ the columns of each table or view in a separate request. Each request ends
 before the next starts. This reduces the column result that the Spark driver
 holds in memory.
 
-For fewer requests, set **Column Reads** to **Whole schema** in the
-connection's **Schemas** section. This reads all columns of a schema in one
+For fewer requests, set **Column Reads** to **Whole schema** on the
+**Catalog** page of the connection settings. This reads all columns of a schema in one
 request. Large schemas can exhaust the memory of a small driver. If a request
 fails and the session stays available, Qrow reads each table separately.
 Per-relation reads can take longer because they send more requests. The same
@@ -559,7 +566,7 @@ the shared catalog. An unfinished refresh starts again when the first
 member connects after all members disconnected. Another member that
 connects while the catalog stays connected does not start a new attempt.
 
-Set these fields in the Schemas section of the connection settings:
+Set these fields on the **Catalog** page of the connection settings:
 
 - **Refresh Period**: the minutes between automatic refreshes, from 5 to
   10,080 (7 days). The default is 60. This field shows only for **While

@@ -107,7 +107,7 @@ fn choose_catalog(app: &TestApp, cx: &mut TestAppContext, option: &str) {
         app.press(cx, "escape");
     }
     app.wait_gone(cx, "connection-new-shared-catalog");
-    app.wait_for(cx, "connection-name");
+    app.wait_for(cx, "save-profile");
 }
 
 /// Scrolls the connection form to its end with the wheel over the refresh
@@ -834,10 +834,12 @@ fn hidden_schemas_leave_the_tree_when_the_connection_is_saved(cx: &mut TestAppCo
 
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Catalog");
     app.scroll_to(cx, "connection-hide-schemas");
     app.fill(cx, "connection-hide-schemas", "fin*, scratch");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(
         cx,
         "finance to leave",
@@ -1301,6 +1303,8 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     let edit = |cx: &mut TestAppContext| {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        app.connection_page(cx, "Catalog");
         app.scroll_to(cx, "connection-schema-refresh");
     };
     let saved = |app: &TestApp| app.saved().profiles[0].catalog.clone();
@@ -1360,7 +1364,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
     scroll_form_to_end(&app, cx);
     app.fill(cx, "connection-refresh-timeout", "45");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved policy", Duration::from_secs(10), |_, _| {
         let saved = saved(&app);
         saved.refresh == CatalogRefresh::WhileConnected
@@ -1393,7 +1397,7 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         app.wait_gone(cx, hidden);
     }
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(
         cx,
         "the disabled policy",
@@ -1421,11 +1425,12 @@ fn the_schema_refresh_policy_is_validated_and_saved(cx: &mut TestAppContext) {
         CatalogColumnReads::Schema
     );
     app.click(cx, "cancel-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
 
     // A new connection does not browse schemas.
     app.click(cx, "add-connection");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Catalog");
     app.scroll_to(cx, "connection-schema-refresh");
     app.update(cx, |window, _| {
         assert_eq!(
@@ -1449,10 +1454,12 @@ fn turning_schema_browsing_off_and_on_shows_the_cache_again(cx: &mut TestAppCont
     let set_mode = |cx: &mut TestAppContext, mode: &str| {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        app.connection_page(cx, "Catalog");
         app.scroll_to(cx, "connection-schema-refresh");
         app.select(cx, "connection-schema-refresh", mode);
         app.click(cx, "save-profile");
-        app.wait_gone(cx, "connection-name");
+        app.wait_gone(cx, "save-profile");
     };
     app.toggle_connection(cx, profile.id);
     app.wait_until(
@@ -1616,6 +1623,8 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     let edit = |cx: &mut TestAppContext, profile: &Profile| {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        app.connection_page(cx, "Catalog");
         app.scroll_to(cx, "connection-schema-catalog");
     };
 
@@ -1669,7 +1678,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     app.click(cx, "connection-new-shared-catalog");
     app.wait_for(cx, "connection-shared-catalog-name");
     app.wait_gone(cx, "connection-new-shared-catalog");
-    app.wait_for(cx, "connection-name");
+    app.wait_for(cx, "save-profile");
     app.click(cx, "save-profile");
     app.wait_until(
         cx,
@@ -1685,7 +1694,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     app.scroll_to(cx, "connection-hide-schemas");
     app.fill(cx, "connection-hide-schemas", "scratch");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the shared catalog", Duration::from_secs(10), |_, _| {
         let saved = app.saved();
         saved.shared_catalogs.len() == 1
@@ -1717,7 +1726,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
         );
     });
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the second member", Duration::from_secs(10), |_, _| {
         app.saved().profiles[1].shared_catalog == Some(lake.id)
     });
@@ -1730,7 +1739,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     choose_catalog(&app, cx, "This connection");
     app.wait_gone(cx, "connection-shared-catalog-name");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the first to leave", Duration::from_secs(10), |_, _| {
         let saved = app.saved();
         saved.profiles[0].shared_catalog.is_none() && saved.shared_catalogs.len() == 1
@@ -1741,7 +1750,7 @@ fn connections_share_a_catalog_and_its_cache_follows_them(cx: &mut TestAppContex
     edit(cx, &second);
     choose_catalog(&app, cx, "This connection");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "no shared catalog", Duration::from_secs(10), |_, _| {
         app.saved().shared_catalogs.is_empty()
     });
@@ -1784,6 +1793,8 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
     let edit = |cx: &mut TestAppContext| {
         app.context_menu(cx, connection_row(edited.id));
         app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        app.connection_page(cx, "Catalog");
         app.scroll_to(cx, "connection-preferred-catalog-connection");
     };
     let preferred = |app: &TestApp| app.saved().shared_catalogs[0].preferred;
@@ -1798,7 +1809,7 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
         );
     });
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.settle(cx);
     let catalog = app.saved().shared_catalogs[0].clone();
     assert_eq!(catalog.preferred, Some(off.id));
@@ -1813,7 +1824,7 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
         "Any connected connection",
     );
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "no preference", Duration::from_secs(10), |_, _| {
         preferred(&app).is_none()
     });
@@ -1832,13 +1843,13 @@ fn saving_a_member_keeps_the_shared_preference_and_hidden_period(cx: &mut TestAp
     app.press(cx, "enter");
     app.settle(cx);
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the member", Duration::from_secs(10), |_, _| {
         preferred(&app) == Some(named_like_any.id)
     });
     edit(cx);
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.settle(cx);
     assert_eq!(preferred(&app), Some(named_like_any.id));
 }

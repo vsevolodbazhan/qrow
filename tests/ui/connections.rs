@@ -31,7 +31,7 @@ fn wait_error(app: &TestApp, cx: &mut TestAppContext, expected: &str) {
 
 fn cancel_form(app: &TestApp, cx: &mut TestAppContext) {
     app.click(cx, "cancel-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
 }
 
 fn saved_names(app: &TestApp) -> Vec<String> {
@@ -176,7 +176,7 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
     // The shortcut closes the form under the pointer, so the Save button
     // never gets a hover-out. The tooltip closes with the form.
     app.press(cx, "cmd-enter");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.settle(cx);
     app.update(cx, |window, _| {
         assert!(window.try_find("tooltip").is_none())
@@ -249,7 +249,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
         app.wait_for(cx, "connection-password");
         app.fill(cx, "connection-password", "copy-password");
         app.click(cx, "save-profile");
-        app.wait_gone(cx, "connection-name");
+        app.wait_gone(cx, "save-profile");
         app.wait_until(cx, expected, Duration::from_secs(10), |_, _| {
             app.saved().profiles.iter().any(|p| p.name == expected)
         });
@@ -305,11 +305,26 @@ fn the_response_timeout_is_validated_and_saved(cx: &mut TestAppContext) {
     app.scroll_to(cx, "connection-response-timeout");
     app.fill(cx, "connection-response-timeout", "600");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved timeout", Duration::from_secs(10), |_, _| {
         app.saved()
             .profiles
             .iter()
             .any(|profile| profile.lifecycle.response_timeout_seconds == 600)
+    });
+}
+
+#[gpui_kit::test]
+fn connection_settings_open_on_the_general_page(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.connection_page(cx, "dbt");
+    app.wait_for(cx, "connection-dbt-manifest");
+    app.wait_gone(cx, "connection-name");
+    app.click(cx, "cancel-profile");
+    app.wait_gone(cx, "save-profile");
+    open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-dbt-manifest").is_none());
     });
 }

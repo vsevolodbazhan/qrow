@@ -597,7 +597,7 @@ fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
         value(window, "connection-sign-in").as_deref() == Some("Company")
     });
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved connection", WAIT, |_, _| {
         app.saved()
             .profiles
@@ -653,7 +653,7 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
     });
     app.fill(cx, "connection-host", "127.0.0.1");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     let saved = || {
         app.saved()
             .profiles

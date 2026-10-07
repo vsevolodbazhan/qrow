@@ -464,10 +464,12 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
     ] {
         app.context_menu(cx, connection_row(profile.id));
         app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        app.connection_page(cx, "Catalog");
         app.scroll_to(cx, "connection-column-reads");
         app.select(cx, "connection-column-reads", label);
         app.click(cx, "save-profile");
-        app.wait_gone(cx, "connection-name");
+        app.wait_gone(cx, "save-profile");
         app.wait_until(
             cx,
             "the column-read choice to save",
@@ -794,6 +796,8 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     app.run_complete(cx, "SELECT 1");
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "Catalog");
     app.scroll_to(cx, "connection-schema-refresh");
     app.select(cx, "connection-schema-refresh", "While connected");
     app.scroll_to(cx, "connection-schema-catalog");
@@ -804,7 +808,7 @@ fn a_connected_member_transfers_its_fresh_cache_before_an_automatic_refresh(
     app.scroll_to(cx, "connection-shared-catalog-name");
     app.fill(cx, "connection-shared-catalog-name", "Seeded");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the transferred cache", QUERY_TIMEOUT, |_, _| {
         let saved = app.saved();
         let Some(shared) = saved.shared_catalogs.first() else {

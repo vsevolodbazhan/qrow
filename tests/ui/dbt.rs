@@ -78,6 +78,7 @@ fn edit(app: &TestApp, cx: &mut TestAppContext, profile: uuid::Uuid) {
     app.context_menu(cx, connection_row(profile));
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-name");
+    app.connection_page(cx, "dbt");
     app.scroll_to(cx, "connection-dbt-manifest");
 }
 
@@ -122,7 +123,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
     wait_label(&app, cx, "connection-dbt-status", "Read after you save.");
     rules(&app, cx, "analytics_* = *");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved project", TIMEOUT, |_, _| {
         app.saved().profiles[0].dbt
             == Some(DbtProject {
@@ -178,7 +179,7 @@ fn a_connection_reads_its_manifest_and_matches_its_tables(cx: &mut TestAppContex
         "0 of 16 dbt resources matched the catalog",
     );
     app.click(cx, "cancel-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
 
     // Each refresh is in Activity, also one from the sidebar.
     app.context_menu(cx, connection_row(id));
@@ -237,7 +238,7 @@ fn the_form_rejects_invalid_projects_and_shows_manifest_errors(cx: &mut TestAppC
     rules(&app, cx, "");
     app.select(cx, "connection-dbt-refresh", "Manual");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved project", TIMEOUT, |_, _| {
         app.saved().profiles[0]
             .dbt
@@ -254,7 +255,7 @@ fn the_form_rejects_invalid_projects_and_shows_manifest_errors(cx: &mut TestAppC
     // An empty field removes the project.
     app.fill(cx, "connection-dbt-manifest", "");
     app.click(cx, "save-profile");
-    app.wait_gone(cx, "connection-name");
+    app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the removed project", TIMEOUT, |_, _| {
         app.saved().profiles[0].dbt.is_none()
     });
