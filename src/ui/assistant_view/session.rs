@@ -139,10 +139,10 @@ impl ThreadStatus {
     pub(in crate::ui) fn tooltip_status(self) -> &'static str {
         match self {
             Self::Idle => "Idle",
-            Self::Ready => "Unread Reply",
+            Self::Ready => "Unread reply",
             Self::Working => "Working",
-            Self::Failed => "Unread Error",
-            Self::Approval => "Needs Approval",
+            Self::Failed => "Unread error",
+            Self::Approval => "Needs approval",
         }
     }
 

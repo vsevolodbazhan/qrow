@@ -168,7 +168,7 @@ fn a_tooltip_in_the_form_closes_with_the_form(cx: &mut TestAppContext) {
     app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-title").as_deref(),
-            Some("Save Connection")
+            Some("Save connection")
         );
         assert_tooltip_header_center(window, cx, "status-tooltip-shortcut");
     });

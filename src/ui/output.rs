@@ -82,8 +82,8 @@ impl Qrow {
                                 Button::new(("output-show-activity", entry.id()))
                                     .ghost()
                                     .xsmall()
-                                    .label("Show Activity")
-                                    .accessibility_label("Show Activity")
+                                    .label("Show activity")
+                                    .accessibility_label("Show activity")
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.open_activity(Some(connection), window, cx)
                                     })),
@@ -117,18 +117,18 @@ impl Qrow {
                         Button::new("output-copy-all")
                             .ghost()
                             .small()
-                            .label("Copy All")
+                            .label("Copy all")
                             .disabled(tab.output.is_empty())
-                            .accessibility_label("Copy All Logs")
+                            .accessibility_label("Copy all logs")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output(cx))),
                     )
                     .child(
                         Button::new("output-copy-error")
                             .ghost()
                             .small()
-                            .label("Copy Error")
+                            .label("Copy error")
                             .disabled(!tab.output.has_error())
-                            .accessibility_label("Copy Latest Error")
+                            .accessibility_label("Copy latest error")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_output_error(cx))),
                     )
                     .child(
@@ -136,7 +136,7 @@ impl Qrow {
                             .ghost()
                             .small()
                             .label("Clear")
-                            .accessibility_label("Clear Logs History")
+                            .accessibility_label("Clear logs history")
                             .on_click(cx.listener(|this, _, _, cx| this.clear_output(cx))),
                     ),
             )

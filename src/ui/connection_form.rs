@@ -21,7 +21,7 @@ pub(super) fn parse_patterns(text: &str) -> Vec<String> {
 
 /// Read the schema refresh fields into `settings`. Only an automatic
 /// refresh reads the period.
-/// The choices of the Schema refresh dropdown, in their order.
+/// The choices of the Schema Refresh dropdown, in their order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RefreshMode {
     Disabled,
@@ -607,32 +607,32 @@ pub(super) fn render_lifecycle(form: &ProfileEditor, cx: &mut Context<Qrow>) -> 
     Form::vertical()
         .w_full()
         .child(field(
-            "When idle",
+            "Idle Behavior",
             Some("Releasing keeps SQL and results, but drops temporary views and unfetched rows."),
             Select::new(&form.idle_behavior)
                 .id("connection-idle-behavior")
                 .w_full()
                 .disabled(saving)
-                .accessibility_label("When idle")
+                .accessibility_label("Idle Behavior")
                 .into_any_element(),
         ))
         .when(!keep, |el| {
             el.child(field(
-                "Idle timeout",
+                "Idle Timeout",
                 Some("Seconds of inactivity before the session is released."),
-                input(7, "Idle timeout in seconds"),
+                input(7, "Idle Timeout in Seconds"),
             ))
         })
         .when(keep, |el| {
             el.child(field(
-                "Keep-alive interval",
+                "Keep-Alive Interval",
                 Some("Seconds between keep-alive queries."),
-                input(8, "Keep-alive interval in seconds"),
+                input(8, "Keep-Alive Interval in Seconds"),
             ))
             .child(field(
-                "Keep-alive query",
+                "Keep-Alive Query",
                 Some("A light, read-only query that keeps the engine active while idle."),
-                input(9, "Keep-alive query"),
+                input(9, "Keep-Alive Query"),
             ))
         })
 }
@@ -667,18 +667,18 @@ pub(super) fn render_schemas(
     Form::vertical()
         .w_full()
         .child(field(
-            "Schema refresh",
+            "Schema Refresh",
             Some(mode.help()),
             Select::new(&form.schema_refresh)
                 .id("connection-schema-refresh")
                 .w_full()
                 .disabled(saving)
-                .accessibility_label("Schema refresh")
+                .accessibility_label("Schema Refresh")
                 .into_any_element(),
         ))
         .when(mode != RefreshMode::Disabled, |el| {
             el.child(field(
-                "Schema catalog",
+                "Schema Catalog",
                 Some(if shared {
                     "Connections that share this catalog must read the same metastore with the same permissions."
                 } else {
@@ -690,7 +690,7 @@ pub(super) fn render_schemas(
                     .id("connection-schema-catalog")
                     .test_support()
                     .role(Role::ComboBox)
-                    .aria_label("Schema catalog")
+                    .aria_label("Schema Catalog")
                     .aria_value(catalog_label)
                     .w_full()
                     .child(
@@ -720,60 +720,60 @@ pub(super) fn render_schemas(
         })
         .when(mode != RefreshMode::Disabled && shared, |el| {
             el.child(field(
-                "Shared catalog name",
+                "Shared Catalog Name",
                 Some("Shown in the settings of each connection that uses the catalog."),
                 Input::new(&form.shared_name)
                     .id("connection-shared-catalog-name")
                     .w_full()
                     .disabled(saving)
-                    .aria_label("Shared catalog name")
+                    .aria_label("Shared Catalog Name")
                     .into_any_element(),
             ))
             .child(field(
-                "Preferred connection",
+                "Preferred Connection",
                 Some("Automatic refreshes use this connection first while it is connected."),
                 Select::new(&form.preferred_select)
                     .id("connection-preferred-catalog-connection")
                     .w_full()
                     .disabled(saving)
-                    .accessibility_label("Preferred connection")
+                    .accessibility_label("Preferred Connection")
                     .into_any_element(),
             ))
         })
         .when(mode == RefreshMode::WhileConnected, |el| {
             el.child(field(
-                "Refresh period",
+                "Refresh Period",
                 Some("Minutes between automatic schema refreshes, from 5 to 10080."),
-                input(12, "Refresh period in minutes"),
+                input(12, "Refresh Period in Minutes"),
             ))
         })
         .when(mode != RefreshMode::Disabled, |el| {
             el.child(field(
-                "Column reads",
+                "Column Reads",
                 Some("Per-relation reads use less driver memory; schema reads send fewer requests."),
                 Select::new(&form.column_reads)
                     .id("connection-column-reads")
                     .w_full()
                     .disabled(saving)
-                    .accessibility_label("Column reads")
+                    .accessibility_label("Column Reads")
                     .into_any_element(),
             ))
             .child(field(
-                "Show schemas",
+                "Visible Schemas",
                 Some("Patterns separated by commas, for example sales_*. Empty shows all schemas."),
-                input(10, "Show schemas"),
+                input(10, "Visible Schemas"),
             ))
             .child(field(
-                "Hide schemas",
-                Some("Patterns separated by commas. Hides a schema also when Show schemas matches it."),
-                input(11, "Hide schemas"),
+                "Hidden Schemas",
+                Some("Patterns separated by commas. Hides a schema also when Visible Schemas matches it."),
+                input(11, "Hidden Schemas"),
             ))
             .child(field(
-                "Refresh timeout",
+                "Refresh Timeout",
                 Some(
                     "Minutes before a schema refresh stops, from 1 to 1440.",
                 ),
-                input(13, "Refresh timeout in minutes"),
+                input(13, "Refresh Timeout in Minutes"),
             ))
         })
 }

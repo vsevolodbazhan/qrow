@@ -56,7 +56,7 @@ fn copy_and_move_carry_the_sql_but_not_the_results(cx: &mut TestAppContext) {
     app.wait_cell(cx, 0, 1, "connected-result");
 
     app.context_menu_labelled(cx, "Query 1");
-    app.choose_in_submenu(cx, "Copy to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Copy to connection…", "Beta");
     app.select_connection(cx, beta);
     app.wait_until(cx, "the copy", QUERY_TIMEOUT, |window, _| {
         labelled(window, "Query 1 (Copy)").is_some()
@@ -72,7 +72,7 @@ fn copy_and_move_carry_the_sql_but_not_the_results(cx: &mut TestAppContext) {
     assert!(!app.logs(cx).contains("Selected connection"));
 
     app.context_menu_labelled(cx, "Query 1");
-    app.choose_in_submenu(cx, "Move to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Move to connection…", "Beta");
     app.select_connection(cx, beta);
     app.wait_until(cx, "the moved tab", QUERY_TIMEOUT, |window, _| {
         labelled(window, "Query 1 (Copy 2)").is_some()

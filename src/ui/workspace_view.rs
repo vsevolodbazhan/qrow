@@ -192,7 +192,7 @@ impl Qrow {
                                 .accessibility_label(format!("Close {}", tab.saved.title))
                                 .map(|mut button| {
                                     button.interactivity().tooltip(
-                                        StatusTooltip::new("Close Tab", "")
+                                        StatusTooltip::new("Close tab", "")
                                             .for_action(&CloseTab, None),
                                     );
                                     button
@@ -221,10 +221,10 @@ impl Qrow {
                         .h(self.ui_px(28.))
                         .icon(IconName::Plus)
                         .disabled(self.active_profile().is_none())
-                        .accessibility_label("New Tab")
+                        .accessibility_label("New tab")
                         .map(|mut button| {
                             button.interactivity().tooltip(
-                                StatusTooltip::new("New Tab", "").for_action(&NewTab, None),
+                                StatusTooltip::new("New tab", "").for_action(&NewTab, None),
                             );
                             button
                         })
@@ -253,7 +253,7 @@ impl Qrow {
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Run Query", "")
+                        .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Run query", "")
                             .detail("Run the selected SQL or the editor contents. One statement only.")
                             .for_action(&RunQuery, None)); button })
                         .disabled(active.is_none() && !self.demo)
@@ -311,11 +311,11 @@ impl Qrow {
     fn assistant_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let status = self.assistant_status();
         let accessibility_label = match status {
-            ThreadStatus::Failed => "Toggle Assistant, reply failed",
-            ThreadStatus::Ready => "Toggle Assistant, reply ready",
-            ThreadStatus::Approval => "Toggle Assistant, waiting for approval",
-            ThreadStatus::Working => "Toggle Assistant, working",
-            _ => "Toggle Assistant",
+            ThreadStatus::Failed => "Toggle assistant, reply failed",
+            ThreadStatus::Ready => "Toggle assistant, reply ready",
+            ThreadStatus::Approval => "Toggle assistant, waiting for approval",
+            ThreadStatus::Working => "Toggle assistant, working",
+            _ => "Toggle assistant",
         };
         let toggle = Button::new("toggle-assistant")
             .ghost()
@@ -345,21 +345,21 @@ impl Qrow {
     fn sign_ins_status(&self) -> (Option<DotStatus>, String, StatusTooltip) {
         let attention = self.sign_ins_needing_attention();
         let working = self.sign_ins_working();
-        let mut label = String::from("Sign-ins");
+        let mut label = String::from("Sign-Ins");
         let mut statuses = Vec::new();
         if working {
             label.push_str(", sign-in in progress");
-            statuses.push("Sign-in Running".to_owned());
+            statuses.push("Sign-in running".to_owned());
         }
         match attention {
             0 => {}
             1 => {
                 label.push_str(", 1 sign-in needs attention");
-                statuses.insert(0, "1 Needs Attention".to_owned());
+                statuses.insert(0, "1 needs attention".to_owned());
             }
             count => {
                 label.push_str(&format!(", {count} sign-ins need attention"));
-                statuses.insert(0, format!("{count} Need Attention"));
+                statuses.insert(0, format!("{count} need attention"));
             }
         }
         let status = if attention > 0 {
@@ -372,7 +372,7 @@ impl Qrow {
         (
             status,
             label,
-            StatusTooltip::new("Sign-ins", statuses.join("\n")),
+            StatusTooltip::new("Sign-Ins", statuses.join("\n")),
         )
     }
 
@@ -483,13 +483,13 @@ impl Qrow {
         let mut statuses = Vec::new();
         if unseen > 0 {
             statuses.push(format!(
-                "{unseen} Unread {}",
-                if unseen == 1 { "Error" } else { "Errors" }
+                "{unseen} unread {}",
+                if unseen == 1 { "error" } else { "errors" }
             ));
         }
         if in_use {
             label.push_str(", in use");
-            statuses.push("In Use".into());
+            statuses.push("In use".into());
         }
         match unseen {
             0 => {}

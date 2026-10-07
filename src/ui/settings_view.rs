@@ -853,7 +853,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                         let owner = owner.clone();
                         Switch::new("enable-assistant")
                             .checked(enabled)
-                            .accessibility_label("Enable Assistant")
+                            .accessibility_label("Enable assistant")
                             .on_click(move |next, window, cx| {
                                 let _ = owner.update(cx, |this, cx| {
                                     this.set_assistant_enabled(*next, window, cx)

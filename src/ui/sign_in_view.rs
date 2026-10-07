@@ -62,7 +62,7 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
     (
         "sign-in-name",
         "Name",
-        "Shown in the Sign-ins sidebar and in Connection Settings.",
+        "Shown in the Sign-Ins sidebar and in Connection Settings.",
         "Company",
     ),
     (
@@ -825,7 +825,7 @@ impl Qrow {
             .size_full()
             .bg(cx.theme().sidebar)
             .child(
-                self.sidebar_header("Sign-ins", cx)
+                self.sidebar_header("Sign-Ins", cx)
                     // The header actions are compact and touch, so they read
                     // as one group.
                     .child(
@@ -839,8 +839,8 @@ impl Qrow {
                                     .h(group_action_size)
                                     .icon(AssetIconName::ClipboardPaste)
                                     .disabled(self.demo)
-                                    .accessibility_label("Paste Sign-in")
-                                    .tooltip("Paste Sign-in…")
+                                    .accessibility_label("Paste sign-in")
+                                    .tooltip("Paste sign-in…")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.paste_sign_in(window, cx)
                                     })),
@@ -853,8 +853,8 @@ impl Qrow {
                                     .h(group_action_size)
                                     .icon(IconName::Plus)
                                     .disabled(self.demo)
-                                    .accessibility_label("New Sign-in")
-                                    .tooltip("New Sign-in…")
+                                    .accessibility_label("New sign-in")
+                                    .tooltip("New sign-in…")
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_sign_in_editor(None, false, window, cx)
                                     })),
@@ -881,7 +881,7 @@ impl Qrow {
                                 .flex_wrap()
                                 .child(
                                     Button::new("add-first-sign-in")
-                                        .label("Add Sign-in…")
+                                        .label("Add sign-in…")
                                         .disabled(self.demo)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.open_sign_in_editor(None, false, window, cx)
@@ -889,7 +889,7 @@ impl Qrow {
                                 )
                                 .child(
                                     Button::new("paste-first-sign-in")
-                                        .label("Paste Sign-in…")
+                                        .label("Paste sign-in…")
                                         .disabled(self.demo)
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.paste_sign_in(window, cx)
@@ -1114,7 +1114,7 @@ impl Qrow {
         self.open_context_menu(
             position,
             move |menu, _, _| {
-                let mut menu = menu.item(menu_section("Sign-in"));
+                let mut menu = menu.item(menu_section("Sign-In"));
                 for (label, blocked, listener) in actions {
                     menu = menu.item(
                         PopupMenuItem::new(label)
@@ -1123,7 +1123,7 @@ impl Qrow {
                     );
                 }
                 menu.item(PopupMenuItem::new("Edit").on_click(edit).disabled(working))
-                    .item(PopupMenuItem::new("Copy Settings").on_click(copy))
+                    .item(PopupMenuItem::new("Copy settings").on_click(copy))
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
@@ -1354,7 +1354,7 @@ impl Qrow {
             let viewport = window.viewport_size();
             let height = (rem * 44.).min(viewport.height - rem * 4.);
             dialog
-                .title("Sign-in Settings")
+                .title("Sign-In Settings")
                 .w(profile_view::dialog_width(window))
                 .h(height)
                 .margin_top((viewport.height - height) / 2.)
@@ -1708,9 +1708,9 @@ impl SignInAction {
     /// The label of a button.
     fn button_label(self) -> &'static str {
         match self {
-            Self::SignIn => "Sign In…",
+            Self::SignIn => "Sign in…",
             Self::Cancel => "Cancel",
-            Self::SignOut => "Sign Out",
+            Self::SignOut => "Sign out",
             Self::Retry => "Retry",
         }
     }
@@ -1718,9 +1718,9 @@ impl SignInAction {
     /// The label of a menu item, which names its object.
     fn menu_label(self) -> &'static str {
         match self {
-            Self::SignIn => "Sign In…",
-            Self::Cancel => "Cancel Sign-in",
-            Self::SignOut => "Sign Out",
+            Self::SignIn => "Sign in…",
+            Self::Cancel => "Cancel sign-in",
+            Self::SignOut => "Sign out",
             Self::Retry => "Retry",
         }
     }

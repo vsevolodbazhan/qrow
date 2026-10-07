@@ -75,7 +75,7 @@ thread because AppKit requires that thread. The other headless UI tests
 use GPUI's test text backend. Run `./qtest run ui` to include the native
 check. A test filter runs only the matching GPUI tests.
 
-UI tests also compare the Connections and Sign-ins headers with query tabs.
+UI tests also compare the Connections and Sign-Ins headers with query tabs.
 They check text height, control centers, and separator positions at different
 UI scales and window widths. The native check repeats these comparisons with
 system and Menlo fonts at 1× and 2× display scales. The query E2E test checks
@@ -314,7 +314,7 @@ events. It checks only what needs the real operating system:
 2. A connection that you add through the form keeps its password in the real
    Keychain, and a real query reads it.
 3. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
-   SQL. **Keep Editing** returns to it, and **Retry Save and Quit** saves and
+   SQL. **Keep editing** returns to it, and **Retry save and quit** saves and
    quits.
 
 Then it runs these scenarios, each with a new workspace:
@@ -357,7 +357,7 @@ notifications do not change the result. A check captures its region again
 until two captures in a row match, so it does not measure a frame of an
 animation. The driver also records the
 launch time and the memory and CPU use of Qrow. Its launch time ends when the
-**New Connection** control is accessible.
+**New connection** control is accessible.
 
 The assistant scenarios need no servers. To run one scenario, build an
 isolated package and start the driver:
@@ -545,7 +545,7 @@ fn query_rows_reach_the_results_table(cx: &mut TestAppContext) {
   `app.run_sql` also runs it. `app.wait_status("Complete")` waits for the
   status of the active tab, which its dot tooltip shows, and `app.wait_cell(row, column, text)` waits for a result.
 - `app.select_connection(profile)` selects a connection, and `app.logs()`
-  reads Logs through **Copy All Logs**.
+  reads Logs through **Copy all logs**.
 - `blocking(token, milliseconds)` makes a query that holds an executor
   task. The fixture records the task in a file on the host, and
   `evidence(token, "started")` or `app.wait_evidence(...)` reads that file.

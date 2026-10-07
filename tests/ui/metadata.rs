@@ -65,8 +65,8 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     "pagination keeps its icon width"
                 );
                 for (id, name) in [
-                    ("previous-page", "Previous Page"),
-                    ("next-page", "Next Page"),
+                    ("previous-page", "Previous page"),
+                    ("next-page", "Next page"),
                 ] {
                     assert_eq!(label(window, id).as_deref(), Some(name));
                 }
@@ -92,7 +92,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 } else {
                     assert_eq!(
                         label(window, "result-details").as_deref(),
-                        Some("Result Details")
+                        Some("Show result details")
                     );
                     assert!(window.try_find("result-loaded").is_none());
                     assert!(window.try_find("result-columns").is_none());
@@ -107,7 +107,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                 app.update(cx, |window, _| {
                     assert_eq!(
                         label(window, "result-detail-loaded").as_deref(),
-                        Some("Loaded rows: 2250")
+                        Some("Loaded Rows: 2250")
                     );
                     assert_eq!(
                         label(window, "result-detail-columns").as_deref(),
@@ -116,7 +116,7 @@ fn result_metadata_adapts_to_pane_width_and_ui_scale(cx: &mut TestAppContext) {
                     assert!(
                         label(window, "result-detail-elapsed")
                             .unwrap()
-                            .starts_with("Query duration: ")
+                            .starts_with("Query Duration: ")
                     );
                     let content = bounds_of(window, "result-details-content");
                     assert!(
@@ -155,7 +155,7 @@ fn result_metadata_tooltips_match_detail_labels(cx: &mut TestAppContext) {
             .iter()
             .map(|(_, title)| title.as_str())
             .collect::<Vec<_>>(),
-        ["Visible rows", "Loaded rows", "Columns", "Query duration"]
+        ["Visible Rows", "Loaded Rows", "Columns", "Query Duration"]
     );
     cx.simulate_window_resize(app.window, size(px(700.), px(650.)));
     app.settle(cx);
@@ -193,7 +193,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 1–1000")
+            Some("Visible Rows: 1–1000")
         );
     });
     app.press(cx, "escape");
@@ -218,7 +218,7 @@ fn result_details_support_keyboard_dismissal_and_page_updates(cx: &mut TestAppCo
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "result-detail-range").as_deref(),
-            Some("Visible rows: 1001–2000")
+            Some("Visible Rows: 1001–2000")
         )
     });
     // Outside clicks dismiss without consuming the target command.
@@ -243,7 +243,7 @@ fn shortcuts_and_connection_fields_use_tooltip_parts(cx: &mut TestAppContext) {
             ..Workspace::default()
         },
     );
-    for (target, title, shortcut) in [("new-tab", "New Tab", "⌘T"), ("run", "Run Query", "⌘⏎")]
+    for (target, title, shortcut) in [("new-tab", "New tab", "⌘T"), ("run", "Run query", "⌘⏎")]
     {
         app.update(cx, |window, cx| window.hover(target, cx));
         cx.executor().advance_clock(Duration::from_millis(800));

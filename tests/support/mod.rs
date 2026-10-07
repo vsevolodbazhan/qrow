@@ -1052,7 +1052,7 @@ impl TestApp {
     /// closes again.
     pub fn activity(&self, cx: &mut TestAppContext, profile: Uuid) -> String {
         self.context_menu(cx, connection_row(profile));
-        self.choose(cx, "popup-menu", "Show Activity");
+        self.choose(cx, "popup-menu", "Show activity");
         self.wait_for(cx, "activity");
         let text = self.copy_activity(cx);
         self.press(cx, "escape");

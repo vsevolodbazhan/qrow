@@ -222,15 +222,15 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, &schema).is_none(),
     );
 
-    app.fill_labelled(cx, "Search Tables", &format!("{schema}.bookings"));
+    app.fill_labelled(cx, "Search tables", &format!("{schema}.bookings"));
     app.wait_until(cx, "the qualified match", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "daily").is_none()
     });
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Copy Qualified Name");
+    app.choose(cx, "popup-menu", "Copy qualified name");
     let name = cx.read_from_clipboard().unwrap().text().unwrap();
     assert_eq!(name, format!("`{schema}`.`bookings`"));
-    app.fill_labelled(cx, "Search Tables", &name);
+    app.fill_labelled(cx, "Search tables", &name);
     app.wait_until(
         cx,
         "the copied name to match",
@@ -238,7 +238,7 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         |window, _| labelled(window, "bookings").is_some() && labelled(window, "daily").is_none(),
     );
 
-    app.fill_labelled(cx, "Search Tables", &format!("{schema}.missing"));
+    app.fill_labelled(cx, "Search tables", &format!("{schema}.missing"));
     app.toggle_connection(cx, profile.id);
     app.wait_until(cx, "the empty search notice", QUERY_TIMEOUT, |window, _| {
         labelled(window, "No matches").is_some() && labelled(window, "bookings").is_none()
@@ -257,14 +257,14 @@ fn qualified_search_finds_a_live_table_and_inserts_its_name(cx: &mut TestAppCont
         QUERY_TIMEOUT,
         |window, _| labelled(window, "No matches").is_none(),
     );
-    app.fill_labelled(cx, "Search Tables", &name);
+    app.fill_labelled(cx, "Search tables", &name);
     app.wait_until(cx, "the table to return", QUERY_TIMEOUT, |window, _| {
         labelled(window, "bookings").is_some() && labelled(window, "No matches").is_none()
     });
 
     app.type_sql(cx, "SELECT COUNT(*) FROM ");
     app.context_menu_labelled(cx, "bookings");
-    app.choose(cx, "popup-menu", "Insert into Editor");
+    app.choose(cx, "popup-menu", "Insert into editor");
     let sql = format!("SELECT COUNT(*) FROM `{schema}`.`bookings`");
     app.wait_until(cx, "the inserted name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
@@ -302,7 +302,7 @@ fn an_inserted_reserved_table_name_runs_with_ansi_keywords(cx: &mut TestAppConte
     });
     app.type_sql(cx, "SELECT `from` FROM ");
     app.context_menu_labelled(cx, "select");
-    app.choose(cx, "popup-menu", "Insert into Editor");
+    app.choose(cx, "popup-menu", "Insert into editor");
     let sql = format!("SELECT `from` FROM `{schema}`.`select`");
     app.wait_until(cx, "the quoted table name", QUERY_TIMEOUT, |_, _| {
         app.saved().tabs[0].sql == sql
@@ -506,7 +506,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
                 })
             },
         );
-        app.fill_labelled(cx, "Search Tables", &format!("{schema}.fourth"));
+        app.fill_labelled(cx, "Search tables", &format!("{schema}.fourth"));
         app.wait_until(cx, "the refreshed table", QUERY_TIMEOUT, |window, _| {
             labelled(window, "fourth").is_some()
         });
@@ -526,7 +526,7 @@ fn both_column_read_modes_refresh_tables_and_views(cx: &mut TestAppContext) {
         app.wait_until(cx, "the table to collapse", QUERY_TIMEOUT, |window, _| {
             labelled(window, "c0 INT").is_none()
         });
-        app.fill_labelled(cx, "Search Tables", "");
+        app.fill_labelled(cx, "Search tables", "");
     }
     app.run_complete(cx, &format!("DROP DATABASE {schema} CASCADE"));
 }

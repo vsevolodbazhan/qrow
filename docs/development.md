@@ -60,6 +60,21 @@ Use release builds for performance measurements. `cargo build` does not update
 `dist/Qrow.app`. Follow the [packaging instructions](../README.md#release) when
 you need a new distributable. Do not replace the app while someone is testing it.
 
+### Interface text
+
+Use these rules for UI text:
+
+- Headings, panel names, and field labels are nouns in title case:
+  **Connection Settings**, **Initial Database**, **Sign-In**.
+- Buttons, menu items, and action tooltips are verbs in sentence case:
+  **Move to connection…**, **Copy qualified name**, **Show activity**. This rule
+  also applies to the macOS menu bar.
+- States, choices, placeholders, empty states, and messages use sentence
+  case: **Not connected**, **While connected**, **No sign-ins**.
+- Dialog titles that are questions or conditions use sentence case:
+  **Delete assistant conversation?**
+- Product names and acronyms keep their case: **Qrow**, **Codex**, **SQL**.
+
 ## Hooks and continuous integration
 
 The pre-commit hook checks the staged Git snapshot. The pre-push hook checks

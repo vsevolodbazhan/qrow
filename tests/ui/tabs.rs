@@ -292,7 +292,7 @@ fn copy_and_move_to_another_connection(cx: &mut TestAppContext) {
         },
     );
     app.context_menu_labelled(cx, "Query 1");
-    app.choose_in_submenu(cx, "Copy to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Copy to connection…", "Beta");
     wait_tabs(
         &app,
         cx,
@@ -307,7 +307,7 @@ fn copy_and_move_to_another_connection(cx: &mut TestAppContext) {
         crate::support::labelled(window, "Query 1").is_some()
     });
     app.context_menu_labelled(cx, "Query 1");
-    app.choose_in_submenu(cx, "Move to Connection…", "Beta");
+    app.choose_in_submenu(cx, "Move to connection…", "Beta");
     wait_tabs(
         &app,
         cx,

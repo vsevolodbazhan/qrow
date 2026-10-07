@@ -11,9 +11,9 @@ Do one of these steps:
 - Click **Activity** at the right end of the status bar.
 - Press **⇧⌘U**. Press it again to close Activity.
 - Select **View → Activity**.
-- Right-click a connection, then select **Show Activity**.
+- Right-click a connection, then select **Show activity**.
 - Click the status dot on a connection row.
-- Click **Show Activity** on a failed keep-alive line in the Logs of a tab.
+- Click **Show activity** on a failed keep-alive line in the Logs of a tab.
 
 Activity covers the main area of the window. Press **Esc** or click **Close**
 to go back.
@@ -39,14 +39,14 @@ Latest** goes back to the end.
 | Query | The tab submitted a query, then the query completed, failed, or was cancelled. |
 
 Entries of a tab start with the tab name, for example `Query 3: Submitted a
-query`. Activity does not show SQL text or query errors. Click **Show Tab** to
+query`. Activity does not show SQL text or query errors. Click **Show tab** to
 see the tab of the query and its Logs, which have the details. An entry of a
-closed tab stays, without **Show Tab**.
+closed tab stays, without **Show tab**.
 
 A shared catalog refresh goes to the Activity of the connection that ran it.
 
 Select **Errors only** to show only errors. **All activity** shows all
-entries. **Copy All** copies the entries that show. **Copy** on an error
+entries. **Copy all** copies the entries that show. **Copy** on an error
 copies that error. Both actions include the recorded timestamps and the full
 text of each entry. **Clear** deletes the log of the connection.
 
@@ -62,16 +62,16 @@ accessible name give the count. A refresh with several failed requests counts
 once. Each tab with an unread query or keep-alive error counts once.
 
 When the Activity of a connection shows, its refresh errors become seen.
-An unread tab error stays until the Logs of that tab show. Use **Show Tab**
+An unread tab error stays until the Logs of that tab show. Use **Show tab**
 to open the tab. The Activity entry keeps its error color after the error
 becomes seen.
 
-A blue dot means that at least one connection shows **In Use**. This includes
+A blue dot means that at least one connection shows **In use**. This includes
 query or session work, schema refreshes, and assistant turns. An unread error
 takes priority over work. The tooltip shows
 **Activity** and its keyboard shortcut on the first line.
 The name and shortcut share a vertical center.
-The status below it shows **In Use** while a connection shows that status.
+The status below it shows **In use** while a connection shows that status.
 Otherwise, the status shows **Idle**. Unread errors add their count and replace
 **Idle**. These lines use secondary text, also when the dot is red. Activity has no
 green completion dot.

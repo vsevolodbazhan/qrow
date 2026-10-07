@@ -256,8 +256,8 @@ impl AssistantPane {
                 )
                 // Like the transcript before it, the list has no scrollbar.
                 .scrollbar(false)
-                .with_jump_button_label("Jump to Latest")
-                .with_jump_button_renderer(|button| button.accessibility_label("Jump to Latest"))
+                .with_jump_button_label("Jump to latest")
+                .with_jump_button_renderer(|button| button.accessibility_label("Jump to latest"))
                 // The same insets as the message field: 12 pixels at the
                 // sides, and 12 pixels above, between, and below the rows.
                 .with_list_style(StyleRefinement::default().pt_3().pb_0())
@@ -447,8 +447,8 @@ impl AssistantPane {
                             .h(action_size)
                             .flex_shrink_0()
                             .icon(IconName::Plus)
-                            .accessibility_label("New Conversation")
-                            .tooltip("New Conversation")
+                            .accessibility_label("New conversation")
+                            .tooltip("New conversation")
                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                 this.create_assistant_conversation(window, cx);
                             })),
@@ -476,8 +476,8 @@ impl AssistantPane {
                             .h(action_size)
                             .flex_shrink_0()
                             .icon(IconName::Menu)
-                            .accessibility_label("Toggle Conversation List")
-                            .tooltip("Toggle Conversation List")
+                            .accessibility_label("Toggle conversation list")
+                            .tooltip("Toggle conversation list")
                             .on_click(cx.listener(move |pane, _, window, cx| {
                                 pane.thread_list_override = Some(!show_threads);
                                 pane.read_visible_reply(window, cx);
@@ -658,8 +658,8 @@ impl AssistantPane {
                                         Button::new("assistant-tier")
                                             .ghost().small().compact()
                                             .icon(AssetIconName::BatteryCharging)
-                                            .accessibility_label(control_label("Service tier", &tier_label))
-                                            .tooltip(control_label("Service tier", &tier_label))
+                                            .accessibility_label(control_label("Service Tier", &tier_label))
+                                            .tooltip(control_label("Service Tier", &tier_label))
                                             .disabled(!controls_ready || !model.is_some_and(|model| !model.service_tiers().is_empty()))
                                             .when(model.is_some() && show_tier_label, |button| button.label(tier_label.clone()).dropdown_caret(true))
                                             .dropdown_menu({
@@ -691,8 +691,8 @@ impl AssistantPane {
                                 Button::new("assistant-stop")
                                     .small()
                                     .label("Cancel")
-                                    .accessibility_label("Cancel Assistant Turn")
-                                    .tooltip("Cancel Assistant Turn")
+                                    .accessibility_label("Cancel assistant turn")
+                                    .tooltip("Cancel assistant turn")
                                     .on_click(on_qrow(&self.qrow, |this, _, _, cx| this.stop_assistant(cx))),
                             ))
                             .when(!disconnected && !active_turn, |row| row.child(
@@ -700,9 +700,9 @@ impl AssistantPane {
                                     .child(
                                         Button::new("assistant-send-mode")
                                             .ghost().small()
-                                            .label(if mode_is_run { "Auto Run" } else { "Ask First" })
+                                            .label(if mode_is_run { "Auto run" } else { "Ask first" })
                                             .icon(AssetIconName::ChevronDown)
-                                            .accessibility_label(if mode_is_run { "SQL Mode: Auto Run" } else { "SQL Mode: Ask First" })
+                                            .accessibility_label(if mode_is_run { "SQL Mode: Auto run" } else { "SQL Mode: Ask first" })
                                             .tooltip(if mode_is_run { "Run assistant SQL automatically" } else { "Ask before running assistant SQL" })
                                             .disabled(!controls_ready || first_message.is_some())
                                             .dropdown_menu({
@@ -731,7 +731,7 @@ impl AssistantPane {
                                             .icon(AssetIconName::Send)
                                             .label("Send")
                                             .disabled(!controls_ready || first_message.is_some())
-                                            .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Send Message", "")
+                                            .map(|mut button| { button.interactivity().tooltip(StatusTooltip::new("Send message", "")
                                                 .for_action_in(&SendAssistantMessage, self.composer.focus_handle(cx))); button })
                                             .on_click(on_qrow(&self.qrow, |this, _, window, cx| {
                                                 this.send_assistant(window, cx)

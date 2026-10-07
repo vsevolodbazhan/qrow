@@ -163,8 +163,8 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
             disabled: false,
             name: "File".into(),
             items: vec![
-                MenuItem::action("New Query Tab", NewTab),
-                MenuItem::action("Close Tab", CloseTab),
+                MenuItem::action("New query tab", NewTab),
+                MenuItem::action("Close tab", CloseTab),
             ],
         },
         Menu {
@@ -178,7 +178,7 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
                 MenuItem::os_action("Copy", gpui_kit::component::input::Copy, OsAction::Copy),
                 MenuItem::os_action("Paste", gpui_kit::component::input::Paste, OsAction::Paste),
                 MenuItem::os_action(
-                    "Select All",
+                    "Select all",
                     gpui_kit::component::input::SelectAll,
                     OsAction::SelectAll,
                 ),
@@ -187,17 +187,17 @@ fn set_menus(cx: &mut App, assistant_enabled: bool) {
         Menu {
             disabled: false,
             name: "Query".into(),
-            items: vec![MenuItem::action("Run Query", RunQuery)],
+            items: vec![MenuItem::action("Run query", RunQuery)],
         },
     ];
     let mut view = vec![
         MenuItem::action("Connections", ShowConnections),
-        MenuItem::action("Sign-ins", ShowSignIns),
-        MenuItem::action("Toggle Sidebar", ToggleSidebar),
+        MenuItem::action("Sign-Ins", ShowSignIns),
+        MenuItem::action("Toggle sidebar", ToggleSidebar),
         MenuItem::separator(),
     ];
     if assistant_enabled {
-        view.push(MenuItem::action("Toggle Assistant", ToggleAssistant));
+        view.push(MenuItem::action("Toggle assistant", ToggleAssistant));
     }
     view.push(MenuItem::action("Activity", ToggleActivity));
     menus.push(Menu {
@@ -277,10 +277,10 @@ impl Tab {
                 Some(DotStatus::Connected) => "Idle",
                 Some(DotStatus::Connecting) => "Connecting",
                 Some(DotStatus::Working) => "Running",
-                Some(DotStatus::Ready) => "Unread Result",
-                Some(DotStatus::Error) => "Unread Error",
+                Some(DotStatus::Ready) => "Unread result",
+                Some(DotStatus::Error) => "Unread error",
                 Some(DotStatus::Attention) => unreachable!("SQL never needs approval"),
-                None => "Not Connected",
+                None => "Not connected",
             },
         )
     }
@@ -922,9 +922,9 @@ impl Qrow {
         let query = self.tabs.iter().any(|tab| tab.busy);
         match (assistant, query) {
             (true, true) => {
-                Some("An Assistant turn and a query are still running. Quit now to stop both?")
+                Some("An assistant turn and a query are still running. Quit now to stop both?")
             }
-            (true, false) => Some("The Assistant is still working. Quit now to stop the turn?"),
+            (true, false) => Some("The assistant is still working. Quit now to stop the turn?"),
             (false, true) => Some("A query is still running. Quit now to stop it?"),
             (false, false) => None,
         }
@@ -961,7 +961,7 @@ impl Qrow {
                         .child(
                             Button::new("keep-working")
                                 .primary()
-                                .label("Keep Working")
+                                .label("Keep working")
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let _ = keep_working.update(cx, |this, cx| {
@@ -972,7 +972,7 @@ impl Qrow {
                         )
                         .child(
                             Button::new("quit-anyway")
-                                .label("Quit Anyway")
+                                .label("Quit anyway")
                                 .with_variant(ButtonVariant::Danger)
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
@@ -1051,7 +1051,7 @@ impl Qrow {
                         .justify_end()
                         .child(
                             Button::new("quit-without-saving")
-                                .label("Quit Without Saving")
+                                .label("Quit without saving")
                                 .with_variant(ButtonVariant::Danger)
                                 .on_click(move |_, _, cx| {
                                     let _ = discard.update(cx, |this, cx| {
@@ -1060,7 +1060,7 @@ impl Qrow {
                                     });
                                 }),
                         )
-                        .child(Button::new("keep-editing").label("Keep Editing").on_click(
+                        .child(Button::new("keep-editing").label("Keep editing").on_click(
                             move |_, window, cx| {
                                 window.close_dialog(cx);
                                 // A failed save cancels the earlier quit decision.
@@ -1074,7 +1074,7 @@ impl Qrow {
                         .child(
                             Button::new("retry-save-and-quit")
                                 .primary()
-                                .label("Retry Save and Quit")
+                                .label("Retry save and quit")
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
                                     let _ =
@@ -2168,11 +2168,11 @@ impl Qrow {
                     .item(PopupMenuItem::new("Rename…").on_click(rename))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate));
                 let menu = if destinations.is_empty() {
-                    menu.item(PopupMenuItem::new("Copy to Connection…").disabled(true))
+                    menu.item(PopupMenuItem::new("Copy to connection…").disabled(true))
                 } else {
                     let destinations = destinations.clone();
                     let weak = weak.clone();
-                    menu.submenu("Copy to Connection…", window, cx, move |menu, _, _| {
+                    menu.submenu("Copy to connection…", window, cx, move |menu, _, _| {
                         destinations.iter().cloned().fold(
                             menu.scrollable(true),
                             |menu, (id, name)| {
@@ -2189,10 +2189,10 @@ impl Qrow {
                     })
                 };
                 let menu = if destinations.is_empty() || source_busy {
-                    menu.item(PopupMenuItem::new("Move to Connection…").disabled(true))
+                    menu.item(PopupMenuItem::new("Move to connection…").disabled(true))
                 } else {
                     let weak = weak.clone();
-                    menu.submenu("Move to Connection…", window, cx, move |menu, _, _| {
+                    menu.submenu("Move to connection…", window, cx, move |menu, _, _| {
                         destinations.iter().cloned().fold(
                             menu.scrollable(true),
                             |menu, (id, name)| {
@@ -2210,7 +2210,7 @@ impl Qrow {
                 };
                 match conversation {
                     Some(available) => menu.separator().item(
-                        PopupMenuItem::new("Start Conversation")
+                        PopupMenuItem::new("Start conversation")
                             .on_click(start_conversation)
                             .disabled(!available),
                     ),
@@ -2292,7 +2292,7 @@ impl Qrow {
                     )
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
-                    .item(PopupMenuItem::new("Show Activity").on_click(show_activity))
+                    .item(PopupMenuItem::new("Show activity").on_click(show_activity))
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)
@@ -2303,7 +2303,7 @@ impl Qrow {
                             .item(menu_section("Schemas"))
                             .item(
                                 PopupMenuItem::new(if refreshing {
-                                    "Stop Refresh"
+                                    "Stop refresh"
                                 } else {
                                     "Refresh"
                                 })

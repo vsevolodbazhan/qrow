@@ -40,10 +40,10 @@ Assistant page. If a saved font or theme is unavailable, Qrow uses a default and
 reports the substitution.
 
 The sidebar at the left of the window shows
-[Connections](connections.md) or [Sign-ins](connections.md#sign-in-with-openid-connect).
+[Connections](connections.md) or [Sign-Ins](connections.md#sign-in-with-openid-connect).
 The two buttons at the left end of the status bar choose the sidebar. Click the
 button of the visible sidebar to hide it. Press **⌘B** to show or hide the
-Connections sidebar. **View → Toggle Sidebar** hides or shows the sidebar that
+Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
 was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
@@ -111,8 +111,8 @@ You can continue to edit while a save is in progress. Qrow saves those new edits
 before it exits.
 
 If an Assistant turn or query is active when you quit or close the window, Qrow
-shows **Work is still running**. Select **Keep Working** to leave Qrow open.
-Select **Quit Anyway** to stop the active work. Qrow still saves the workspace
+shows **Work is still running**. Select **Keep working** to leave Qrow open.
+Select **Quit anyway** to stop the active work. Qrow still saves the workspace
 before it exits.
 
 ## Load and save failures
@@ -129,8 +129,8 @@ that process exits or crashes. Do not delete `workspace.lock` to remove a lock.
 
 A save failure is reported in the application. Do not assume changes reached
 disk after a save error. If a save fails during Quit or window close, Qrow keeps
-the window open. Select **Keep Editing** to retain access to your SQL. Correct
-the file access problem, then select **Retry Save and Quit**. **Quit Without
+the window open. Select **Keep editing** to retain access to your SQL. Correct
+the file access problem, then select **Retry save and quit**. **Quit Without
 Saving** exits without confirmation that the latest edits reached disk.
 
 The current framework cannot cancel termination requested through the macOS

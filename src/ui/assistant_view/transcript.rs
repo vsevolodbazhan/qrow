@@ -257,13 +257,13 @@ impl TranscriptEntry {
     fn shown_changed(&mut self) {
         self.revision += 1;
         let speaker = if self.tool.is_some() {
-            "Tool call"
+            "Tool Call"
         } else {
             match self.speaker {
                 Speaker::User => "You",
                 Speaker::Assistant => "Assistant",
-                Speaker::Activity => "Assistant activity",
-                Speaker::Error => "Assistant error",
+                Speaker::Activity => "Assistant Activity",
+                Speaker::Error => "Assistant Error",
             }
         };
         self.label = format!("{speaker}: {}", self.shown).into();

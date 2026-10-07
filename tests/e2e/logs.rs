@@ -26,13 +26,13 @@ fn copy_actions_include_timestamps_on_server_errors(cx: &mut TestAppContext) {
     let error = cx
         .read_from_clipboard()
         .and_then(|item| item.text())
-        .expect("Copy Error writes to the clipboard");
+        .expect("Copy error writes to the clipboard");
     assert_timestamped(&error);
     assert!(error.contains("qrow_timestamp_missing_column"), "{error}");
     assert!(logs.contains(&error), "{logs}");
 
     app.context_menu(cx, connection_row(connection));
-    app.choose(cx, "popup-menu", "Show Activity");
+    app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
     app.click(cx, "activity-errors");
     let activity_error = app.copy_activity(cx);
@@ -65,7 +65,7 @@ fn copy_actions_include_timestamps_on_server_errors(cx: &mut TestAppContext) {
     assert_eq!(
         cx.read_from_clipboard().and_then(|item| item.text()),
         Some(error.clone()),
-        "Copy Error keeps the recorded error after a successful query"
+        "Copy error keeps the recorded error after a successful query"
     );
     assert!(app.logs(cx).contains(&error));
 }

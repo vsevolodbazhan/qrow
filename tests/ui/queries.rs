@@ -87,7 +87,7 @@ fn connecting_dots_and_tooltips_follow_a_failed_session_open(cx: &mut TestAppCon
         cx,
         "the failed session",
         Duration::from_secs(10),
-        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread Error"),
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("Unread error"),
     );
     app.update(cx, |window, cx| {
         assert_tab_dot(window, query, Some(cx.theme().danger));
@@ -173,7 +173,7 @@ fn activity_tooltip_summarizes_connections_in_use_and_updates_live(cx: &mut Test
     app.update(cx, |window, cx| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("In Use")
+            Some("In use")
         );
         assert_connection_dot(window, connection, cx.theme().info);
         assert_tab_dot(window, query, None);
@@ -195,14 +195,14 @@ fn activity_tooltip_summarizes_connections_in_use_and_updates_live(cx: &mut Test
         "the unread error and work",
         REPLY_TIMEOUT,
         |window, _| {
-            label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error\nIn Use")
+            label(window, "status-tooltip-status").as_deref() == Some("1 unread error\nIn use")
         },
     );
 
     // Keep the pointer over Activity as the working connection becomes idle.
     codex.mark("first-reply-release");
     app.wait_until(cx, "the finished work", REPLY_TIMEOUT, |window, _| {
-        label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error")
+        label(window, "status-tooltip-status").as_deref() == Some("1 unread error")
     });
 }
 
@@ -259,12 +259,12 @@ fn activity_tooltips_keep_the_shortcut_above_unread_status(cx: &mut TestAppConte
         cx,
         "the unread error in the open tooltip",
         Duration::from_secs(10),
-        |window, _| label(window, "status-tooltip-status").as_deref() == Some("1 Unread Error"),
+        |window, _| label(window, "status-tooltip-status").as_deref() == Some("1 unread error"),
     );
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("1 Unread Error")
+            Some("1 unread error")
         );
         assert_eq!(
             label(window, "status-tooltip-shortcut").as_deref(),
@@ -307,7 +307,7 @@ fn activity_copy_preserves_timestamps_and_error_details(cx: &mut TestAppContext)
         .expect("The window is open");
     app.settle(cx);
     app.context_menu(cx, connection_row(id));
-    app.choose(cx, "popup-menu", "Show Activity");
+    app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
     app.click(cx, "activity-errors");
 
@@ -456,9 +456,9 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     // Show Tab closes Activity and shows the tab of the query.
     app.click_labelled(cx, "Query 2");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Show Activity");
+    app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
-    app.click_labelled(cx, "Show Tab");
+    app.click_labelled(cx, "Show tab");
     app.wait_gone(cx, "activity");
     app.wait_until(cx, "the first tab", Duration::from_secs(10), |_, _| {
         app.saved().active_tab == 0
@@ -467,11 +467,11 @@ fn activity_links_the_queries_of_a_connection_to_their_tabs(cx: &mut TestAppCont
     // A closed tab keeps its entries without a link.
     app.press(cx, "cmd-w");
     app.context_menu(cx, connection_row(profile.id));
-    app.choose(cx, "popup-menu", "Show Activity");
+    app.choose(cx, "popup-menu", "Show activity");
     app.wait_for(cx, "activity");
     assert!(app.copy_activity(cx).contains("Query 1: Submitted a query"));
     app.update(cx, |window, _| {
-        assert!(labelled(window, "Show Tab").is_none());
+        assert!(labelled(window, "Show tab").is_none());
     });
 }
 
@@ -536,7 +536,7 @@ fn a_tab_without_a_dot_shows_only_its_connection_state_in_its_tooltip(cx: &mut T
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "status-tooltip-status").as_deref(),
-            Some("Not Connected")
+            Some("Not connected")
         );
         assert!(window.try_find("status-tooltip-detail").is_none());
     });

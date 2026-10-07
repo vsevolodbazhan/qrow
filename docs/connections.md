@@ -22,7 +22,7 @@ then connected and idle.
 The tooltip shows the connection name and a short status beside it. The status
 uses secondary text. The name and status share a vertical center. The status
 stays beside the first line when the name wraps.
-Host and User show on compact labeled rows below the name. **Unread Error**
+Host and User show on compact labeled rows below the name. **Unread error**
 identifies an unread error. No dot means that no session, work, or
 unread outcome needs an indicator. A schema refresh uses its own temporary
 session. That session does not give the connection a dim blue dot.
@@ -45,7 +45,7 @@ last selected tab. The other tabs keep their unread outcomes.
 6. Enter the initial database.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, set
-   **Schema refresh** to **Manual** or **While connected**. Then you can enter
+   **Schema Refresh** to **Manual** or **While connected**. Then you can enter
    [schema patterns](#show-or-hide-schemas).
 9. Optional: When the [assistant](assistant.md) is on, enter **Assistant
    notes**. See [Give the assistant facts about a
@@ -71,9 +71,9 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
-The **Sign-ins** sidebar shows each sign-in with its account. To open it,
+The **Sign-Ins** sidebar shows each sign-in with its account. To open it,
 click the key button at the left end of the status bar, or select
-**View → Sign-ins**. Click the button again to hide the sidebar. The button
+**View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
 that is not signed in, a sign-in has expired, Qrow cannot reach the provider,
 or the last sign-in action failed. Point to the button to read how many
@@ -81,8 +81,8 @@ sign-ins need attention.
 
 ### Add a sign-in
 
-1. Open the **Sign-ins** sidebar and click **+**. In Connection Settings, you
-   can also click **New Sign-in…** at the bottom of the **Sign-in** list. The
+1. Open the **Sign-Ins** sidebar and click **+**. In Connection Settings, you
+   can also click **New sign-in…** at the bottom of the **Sign-In** list. The
    connection then uses the new sign-in.
 2. Enter a name, the issuer URL, and the client ID.
 3. Enter other scopes if the server requires them. Qrow always requests
@@ -103,7 +103,7 @@ provider requires an RFC 8707 resource indicator.
 
 To give a sign-in to a colleague, for example in a Slack message:
 
-1. Right-click the sign-in and select **Copy Settings**.
+1. Right-click the sign-in and select **Copy settings**.
 2. Paste the text into the message.
 
 The text contains the name, the issuer, the client ID, the scopes, the
@@ -113,8 +113,8 @@ your account or your tokens.
 To add a sign-in that a colleague sent to you:
 
 1. Copy the text of the message.
-2. Open the **Sign-ins** sidebar and click the paste button beside **+**.
-   When the sidebar is empty, click **Paste Sign-in…**.
+2. Open the **Sign-Ins** sidebar and click the paste button beside **+**.
+   When the sidebar is empty, click **Paste sign-in…**.
 3. Sign-in Settings opens with the values. Make sure that you trust the
    issuer and the database hosts. Qrow sends your access tokens to these
    hosts.
@@ -128,22 +128,22 @@ database username, so a colleague must add their own connections.
 
 ### Sign in and use a sign-in
 
-Click **Sign In…** on the row of the sign-in. Qrow opens the default browser.
+Click **Sign in…** on the row of the sign-in. Qrow opens the default browser.
 Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
 stop. The row then shows the email or name of the account.
 
-Click a row to open **Sign-in Settings**. The **Account** field shows the
+Click a row to open **Sign-In Settings**. The **Account** field shows the
 status and the actions for the account on the same row. The actions are on
-the right. Right-click a row for **Sign In…**,
-**Cancel Sign-in**, **Sign Out**, or **Retry**, and for **Edit**,
-**Copy Settings**, and **Delete**.
+the right. Right-click a row for **Sign in…**,
+**Cancel sign-in**, **Sign out**, or **Retry**, and for **Edit**,
+**Copy settings**, and **Delete**.
 
 The **Connections** field shows the number of connections that use the
 sign-in. Neutral tags show the names below the heading. The tags wrap when
 they do not fit on one line.
 
 To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
-**Authentication**, and select the sign-in in the **Sign-in** list. The host of the connection must be
+**Authentication**, and select the sign-in in the **Sign-In** list. The host of the connection must be
 one of the database hosts of the sign-in. Qrow does not send a token to
 another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
@@ -151,10 +151,10 @@ use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
 | State | Recovery |
 | --- | --- |
-| **Not signed in** | Click **Sign In…**. |
+| **Not signed in** | Click **Sign in…**. |
 | **Waiting for the browser…** | Finish the sign-in in the browser, or click **Cancel**. |
 | The account email or name | No action. |
-| **Expired · Sign in again** | Click **Sign In…**. |
+| **Expired · Sign in again** | Click **Sign in…**. |
 | **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
 | **The last action failed** | Open Sign-in Settings to read the error, then try again. |
 
@@ -166,10 +166,10 @@ the query runs. The query did not reach the server before, so this is not a
 second run. If the sign-in fails, the query ends with
 **Error: Sign-in required**. If you cancel it in the browser, the query ends
 with **Cancelled: Sign-in not finished**. Click **Cancel** to stop the query
-while it waits. The browser sign-in then continues in the Sign-ins sidebar.
+while it waits. The browser sign-in then continues in the Sign-Ins sidebar.
 If you run the cancelled query again, Qrow opens the page of that sign-in
 again. Other queries that wait for the same sign-in continue to wait.
-To start a new sign-in attempt, cancel the sign-in in the Sign-ins sidebar.
+To start a new sign-in attempt, cancel the sign-in in the Sign-Ins sidebar.
 Then run the query again.
 Qrow opens the browser only once for each query. An open session continues
 without a new token, so a query in it does not open the browser. While a
@@ -288,7 +288,7 @@ row shows a minus icon, the column name, and its type. A schema row shows
 the number of its tables and views.
 
 Schema browsing is off for a new connection. To turn it on, open the
-connection settings and set **Schema refresh**, the first field of the
+connection settings and set **Schema Refresh**, the first field of the
 Schemas section:
 
 - **Disabled**: Qrow does not read or show the schemas of the connection. The
@@ -348,17 +348,17 @@ not change the idle timer, the keep-alive, or the results of a tab.
   Refresh**. The tree keeps the schemas that it had before the refresh.
 
 A connection refresh reads one schema at a time: first its tables, then their
-columns. By default, **Column reads** is **One relation at a time**. Qrow reads
+columns. By default, **Column Reads** is **One relation at a time**. Qrow reads
 the columns of each table or view in a separate request. Each request ends
 before the next starts. This reduces the column result that the Spark driver
 holds in memory.
 
-For fewer requests, set **Column reads** to **Whole schema** in the
+For fewer requests, set **Column Reads** to **Whole schema** in the
 connection's **Schemas** section. This reads all columns of a schema in one
 request. Large schemas can exhaust the memory of a small driver. If a request
 fails and the session stays available, Qrow reads each table separately.
 Per-relation reads can take longer because they send more requests. The same
-**Refresh timeout** applies to both choices. Connections saved before this
+**Refresh Timeout** applies to both choices. Connections saved before this
 setting was added also use **One relation at a time**.
 
 A connection refresh starts with the schemas that Qrow read longest ago.
@@ -366,19 +366,19 @@ The progress row shows the number of schemas that are done. A connection
 with many schemas or tables can need many minutes. To make it faster, hide
 the schemas that you do not use.
 
-Each refresh stops when it takes longer than **Refresh timeout** in the
+Each refresh stops when it takes longer than **Refresh Timeout** in the
 connection settings. The default is 30 minutes. The tree keeps what the
 refresh read before it stopped. The error **Refresh stopped after 30
 minutes** shows like other [refresh errors](#refresh-errors).
 
 When a connection refresh stops before its end, for example at its timeout,
 when you stop it, or when the session fails, the next connection refresh in
-the **Refresh period** continues it. It does not read again the schemas that
+the **Refresh Period** continues it. It does not read again the schemas that
 the stopped refresh read without an error, and its progress starts at their
 number. A schema with a failed read is read again. A schema that you hide
 and show again is read again because its cached data was removed. After the
 refresh period, the next connection refresh reads all schemas again. With
-**Manual** refresh, the period is the last saved **Refresh period**, 60
+**Manual** refresh, the period is the last saved **Refresh Period**, 60
 minutes by default.
 
 Qrow does not start a session to read schemas when no tab of the connection
@@ -398,7 +398,7 @@ If a refresh fails or stops at its timeout, the tree keeps the data that it
 had before the refresh. The error shows on the row of the refreshed part:
 
 - A connection: the connection row shows a red dot, also when the
-  connection is collapsed. Point to the row to see **Unread Error** beside
+  connection is collapsed. Point to the row to see **Unread error** beside
   the connection name. The first row under the expanded
   connection shows the error with **Refresh**. The dot goes away when you view
   the Activity of the connection. The error text stays until the next refresh
@@ -408,13 +408,13 @@ had before the refresh. The error shows on the row of the refreshed part:
   shows the error with **Refresh**.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
-**Show Activity** from the connection menu to open it. The connection row uses
+**Show activity** from the connection menu to open it. The connection row uses
 the same red dot for an unread query error. If Qrow cannot connect, it stops the
 refreshes that wait for that connection.
 
 ### Refresh schemas automatically
 
-When **Schema refresh** is **While connected**, Qrow refreshes the schemas of
+When **Schema Refresh** is **While connected**, Qrow refreshes the schemas of
 the connection after each refresh period, but only while a tab of the
 connection has a live session. The refresh then uses
 the engine that the tab already started. Qrow never opens a session for an
@@ -444,10 +444,10 @@ connects while the catalog stays connected does not start a new attempt.
 
 Set these fields in the Schemas section of the connection settings:
 
-- **Refresh period**: the minutes between automatic refreshes, from 5 to
+- **Refresh Period**: the minutes between automatic refreshes, from 5 to
   10,080 (7 days). The default is 60. This field shows only for **While
   connected**.
-- **Refresh timeout**: the longest time of one refresh, manual or automatic,
+- **Refresh Timeout**: the longest time of one refresh, manual or automatic,
   from 1 to 1,440 minutes (1 day). The default is 30.
 
 ### Share schemas
@@ -460,29 +460,29 @@ tree of each connection.
 To share a catalog:
 
 1. Open the settings of a connection that browses schemas.
-2. Open the **Schema catalog** list, then select **New shared catalog…** below
+2. Open the **Schema Catalog** list, then select **New shared catalog…** below
    the list. The connection brings its copy of the schemas to the new
    catalog before an automatic refresh can start.
-3. Enter a **Shared catalog name**, then select **Save**.
+3. Enter a **Shared Catalog Name**, then select **Save**.
 4. Open the settings of each other connection, select the shared catalog in
-   **Schema catalog**, then select **Save**.
+   **Schema Catalog**, then select **Save**.
 
 The connections of a shared catalog must read the same metastore with the
 same permissions and the same Spark catalog. Qrow cannot check this.
 
 For a connection that uses a shared catalog:
 
-- **Schema refresh**, **Refresh period**, **Show schemas**, **Hide schemas**,
-  and **Refresh timeout** belong to the shared catalog. A change in the
+- **Schema Refresh**, **Refresh Period**, **Visible Schemas**, **Hidden Schemas**,
+  and **Refresh Timeout** belong to the shared catalog. A change in the
   settings of one connection applies to all connections of the catalog. When
-  you select a catalog in **Schema catalog**, the fields show its settings.
-- **Schema refresh** set to **Disabled** turns schema browsing off only for
+  you select a catalog in **Schema Catalog**, the fields show its settings.
+- **Schema Refresh** set to **Disabled** turns schema browsing off only for
   this connection. The connection stays in the shared catalog.
-- **Preferred connection** selects the connection that automatic refreshes
+- **Preferred Connection** selects the connection that automatic refreshes
   use while one of its tabs has a live session. Otherwise, Qrow uses the
   first connection in the sidebar that has a live session. The default is
   **Any connected connection**.
-- **Column reads** belongs to each connection. A refresh uses the choice of
+- **Column Reads** belongs to each connection. A refresh uses the choice of
   the connection that runs it. Different clusters can use different choices.
 
 Each refresh uses the session, the user, and the cluster of the connection
@@ -490,10 +490,10 @@ that asked for it. Qrow runs one refresh of a shared catalog at a time. A
 refresh that a running or waiting refresh includes does not wait again.
 Only the connection that runs a refresh shows its progress and its errors.
 This includes the errors of schemas, tables, and views. A connection whose
-refresh waits shows **Waiting…**. **Stop Refresh** stops only the refreshes of its
+refresh waits shows **Waiting…**. **Stop refresh** stops only the refreshes of its
 connection.
 
-To stop sharing, select **This connection** in **Schema catalog**. The
+To stop sharing, select **This connection** in **Schema Catalog**. The
 connection then starts with an empty copy of the schemas. When the last
 connection leaves a shared catalog, or you delete it, Qrow deletes the shared
 catalog and its copy of the schemas.
@@ -503,7 +503,7 @@ catalog and its copy of the schemas.
 Type in **Search tables…** to find schemas and tables in all connections. The
 search also finds views. Use a name or part of a name. For a table or view,
 you can include the schema, for example `integrations.bookings`. The search
-also accepts names from **Copy Qualified Name**, for example
+also accepts names from **Copy qualified name**, for example
 `` `integrations`.`bookings` ``. The search ignores letter case and spaces
 at the start and end of the search text.
 
@@ -519,9 +519,9 @@ to show the full tree again.
 
 Right-click a schema, a table, a view, or a column, then select:
 
-- **Copy Name** or **Copy Qualified Name** to copy the name. A table name
+- **Copy name** or **Copy qualified name** to copy the name. A table name
   includes its schema, for example `` `sales`.`orders` ``.
-- **Insert into Editor** to put the name at the cursor of the SQL editor. The
+- **Insert into editor** to put the name at the cursor of the SQL editor. The
   name replaces the selected text.
 
 A double-click does not insert a name.
@@ -550,21 +550,21 @@ connection a red dot and counts as an unseen error in the status bar.
 
 ### Show or hide schemas
 
-Use **Show schemas** and **Hide schemas** in the connection settings to select
+Use **Visible Schemas** and **Hidden Schemas** in the connection settings to select
 which schemas the tree shows. For a [shared catalog](#share-schemas), the
 patterns apply to all its connections. Each field takes glob patterns separated by
 commas. `*` matches any text, and `?` matches one character. Letter case does
 not matter.
 
-- If **Show schemas** is empty, the tree shows all schemas.
-- **Hide schemas** hides a schema also when **Show schemas** matches it.
+- If **Visible Schemas** is empty, the tree shows all schemas.
+- **Hidden Schemas** hides a schema also when **Visible Schemas** matches it.
 
-For example, `sales_*, ops` in **Show schemas** and `*_tmp` in **Hide
+For example, `sales_*, ops` in **Visible Schemas** and `*_tmp` in **Hide
 schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
 
 When you save new patterns, the tree hides schemas at once. A connection
 refresh skips hidden schemas that it has not started to read. A schema that you
-add to **Show schemas** shows after the next connection refresh. A connection
+add to **Visible Schemas** shows after the next connection refresh. A connection
 with many schemas refreshes faster when you hide the schemas that you do not
 use.
 
@@ -580,7 +580,7 @@ use.
 - Qrow does not save which rows are expanded.
 - Qrow cannot stop a refresh while it opens its session or sends a request to
   the server. A wait for a server answer uses the connection's **Response
-  timeout**. Thus, a refresh can take longer than its **Refresh timeout**.
+  timeout**. Thus, a refresh can take longer than its **Refresh Timeout**.
 - One catalog request can return at most 200,000 rows or 64 MB. If a schema
   exceeds this limit with **Whole schema**, use **One relation at a time**.
   The limit still applies to each table request. These limits apply after
@@ -602,7 +602,7 @@ Tabs can execute SQL concurrently, including when they use the same profile.
 Separate sessions do not necessarily use separate Spark engines. Engine sharing
 depends on the Kyuubi configuration.
 
-Use the **When idle** picker to control each session:
+Use the **Idle Behavior** picker to control each session:
 
 | Choice | Behavior |
 | --- | --- |
@@ -652,8 +652,8 @@ blank tab. Closing or moving the last tab creates a blank replacement for the
 source connection.
 
 Right-click a tab to choose **Rename…**, **Duplicate**, **Copy to
-Connection…**, or **Move to Connection…**. When the assistant is on, the menu
-also has [**Start Conversation**](assistant.md#conversations-and-query-tabs). Duplicate copies the tab within its
+Connection…**, or **Move to connection…**. When the assistant is on, the menu
+also has [**Start conversation**](assistant.md#conversations-and-query-tabs). Duplicate copies the tab within its
 connection. Copy and move show a submenu of destination connections. Choosing
 a destination selects the resulting tab. Move is disabled while the tab is
 busy or while its assistant conversation works or waits for approval. A move
@@ -690,10 +690,10 @@ Each attempt to connect to one address of the host has a 10-second timeout.
 If the host has more than one address, Qrow tries the next address after a
 failure. Each network write has a 15-second timeout.
 
-**Response timeout** sets how long Qrow waits for one answer from Kyuubi. The
+**Response Timeout** sets how long Qrow waits for one answer from Kyuubi. The
 default is 300 seconds, and the range is 10 to 3600 seconds. The first query
 of a session can wait while Kyuubi starts an engine. Kyuubi limits that wait
-with `kyuubi.session.engine.initialize.timeout`. Set **Response timeout**
+with `kyuubi.session.engine.initialize.timeout`. Set **Response Timeout**
 higher than that limit, or a slow engine start fails with `Kyuubi did not
 answer within 300 seconds`. A change applies to the sessions that open after
 you save. The timeout does not limit the duration of a query, because Qrow

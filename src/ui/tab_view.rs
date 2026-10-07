@@ -30,7 +30,7 @@ pub(super) struct RenameDialog {
 pub(super) const TAB_RENAME: RenameDialog = RenameDialog {
     key: "tab",
     label: "Tab Name",
-    tooltip: "Rename Tab",
+    tooltip: "Rename tab",
     form: |this| {
         this.tab_form
             .as_ref()

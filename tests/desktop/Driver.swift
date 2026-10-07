@@ -136,7 +136,7 @@ func clickTarget(_ element: AXUIElement, _ point: CGPoint, _ extent: CGSize) -> 
     }
     for control in descendants(unsafeBitCast(window, to: AXUIElement.self)) {
         guard attribute(control, kAXRoleAttribute) as? String == kAXButtonRole,
-              strings(control).first == "New Tab",
+              strings(control).first == "New tab",
               let (controlPoint, controlExtent) = try? elementBounds(control),
               abs(controlPoint.y + controlExtent.height / 2 - target.y) < extent.height / 2 else { continue }
         right = min(right, controlPoint.x)
@@ -472,7 +472,7 @@ final class Driver {
         inputPID = process.processIdentifier
         app = AXUIElementCreateApplication(process.processIdentifier)
         NSRunningApplication(processIdentifier: process.processIdentifier)?.activate(options: [])
-        _ = try wait(demo ? "SQL Editor" : "New Connection", timeout: 20)
+        _ = try wait(demo ? "SQL Editor" : "New connection", timeout: 20)
         samples.append("launch_to_accessible_new_connection_seconds=\(monotonicSeconds() - started)")
         try setTestWindowFrame(app)
         sampleTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -622,21 +622,21 @@ final class Driver {
             }
         }
         try requestQuit()
-        _ = try wait("Keep Editing", timeout: 10)
+        _ = try wait("Keep editing", timeout: 10)
         try require(process.isRunning, "Failed final save closed the application")
         try require(savedSQL(baseline, at: backup), "Failed save changed the previous workspace")
         try snapshot(closeWindow ? "failed-save-window-close" : "failed-save-quit")
-        try press("Keep Editing")
-        try waitGone("Keep Editing")
+        try press("Keep editing")
+        try waitGone("Keep editing")
         guard let editor = find("SQL Editor", role: kAXTextAreaRole) ?? find("SQL Editor", role: kAXTextFieldRole) else {
             throw Failure("SQL editor is unavailable after failed save")
         }
         try require(attribute(editor, kAXValueAttribute) as? String == finalSQL, "Failed save lost the current SQL edit")
         try requestQuit()
-        _ = try wait("Retry Save and Quit", timeout: 10)
+        _ = try wait("Retry save and quit", timeout: 10)
         try FileManager.default.removeItem(at: workspace)
         try FileManager.default.moveItem(at: backup, to: workspace)
-        try press("Retry Save and Quit")
+        try press("Retry save and quit")
         deadline = (monotonicSeconds() + 10)
         while process.isRunning {
             try require(monotonicSeconds() < deadline, "Save retry did not finish quitting")
@@ -987,9 +987,9 @@ final class Driver {
     func testAssistantDeleteMenu() throws {
         key(38, flags: .maskCommand)
         _ = try wait("Model: Synthetic Model", timeout: 20)
-        if find("Search Conversations") != nil {
-            try press("Toggle Conversation List")
-            try waitGone("Search Conversations", timeout: 5)
+        if find("Search conversations") != nil {
+            try press("Toggle conversation list")
+            try waitGone("Search conversations", timeout: 5)
         }
         try fill("Assistant Message", "Explain SELECT 1")
         try press("Send")
@@ -1016,9 +1016,9 @@ final class Driver {
     func testAssistantLayout() throws {
         key(38, flags: .maskCommand) // Cmd+J opens the docked assistant.
         _ = try wait("Model: Synthetic Model", timeout: 20)
-        if find("Search Conversations") != nil {
-            try press("Toggle Conversation List")
-            try waitGone("Search Conversations", timeout: 5)
+        if find("Search conversations") != nil {
+            try press("Toggle conversation list")
+            try waitGone("Search conversations", timeout: 5)
         }
         try checkInlineCodeMessages()
         try checkBoldReply()
@@ -1032,10 +1032,10 @@ final class Driver {
         try start()
         try testAbout()
         try testSettingsMenu()
-        try press("New Connection")
+        try press("New connection")
         for (label, value) in [("Name", "Qrow E2E"), ("Host", "127.0.0.1"),
                                ("Port", env["QROW_E2E_PORT"]!), ("Username", "qrow"),
-                               ("Password", "qrow-test-password"), ("Initial database", "default")] {
+                               ("Password", "qrow-test-password"), ("Initial Database", "default")] {
             try fill(label, value)
         }
         try press("Save")

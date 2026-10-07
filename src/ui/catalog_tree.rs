@@ -1173,9 +1173,9 @@ impl Qrow {
         });
         let has_commands = scope.is_some();
         let copy_label = if matches!(node, Node::Relation { .. }) {
-            "Copy Qualified Name"
+            "Copy qualified name"
         } else {
-            "Copy Name"
+            "Copy name"
         };
         let refresh = scope.map(|scope| {
             cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1222,7 +1222,7 @@ impl Qrow {
                 };
                 let menu = if has_commands { menu.separator() } else { menu };
                 menu.item(PopupMenuItem::new(copy_label).on_click(copy))
-                    .item(PopupMenuItem::new("Insert into Editor").on_click(insert))
+                    .item(PopupMenuItem::new("Insert into editor").on_click(insert))
             },
             window,
             cx,
@@ -1293,11 +1293,11 @@ impl Qrow {
                             match status {
                                 Some(DotStatus::Connected) => "Idle",
                                 Some(DotStatus::Connecting) => "Connecting",
-                                Some(DotStatus::Working) => "In Use",
-                                Some(DotStatus::Ready) if unread_success => "Unread Result",
-                                Some(DotStatus::Ready) => "Unread Reply",
-                                Some(DotStatus::Error) => "Unread Error",
-                                Some(DotStatus::Attention) => "Needs Approval",
+                                Some(DotStatus::Working) => "In use",
+                                Some(DotStatus::Ready) if unread_success => "Unread result",
+                                Some(DotStatus::Ready) => "Unread reply",
+                                Some(DotStatus::Error) => "Unread error",
+                                Some(DotStatus::Attention) => "Needs approval",
                                 None => "Disconnected",
                             },
                         )
@@ -1354,8 +1354,8 @@ impl Qrow {
                         .h(action_size)
                         .flex_shrink_0()
                         .icon(IconName::Plus)
-                        .accessibility_label("New Connection")
-                        .tooltip("New Connection…")
+                        .accessibility_label("New connection")
+                        .tooltip("New connection…")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.edit_profile(Profile::default(), true, window, cx)
                         })),
@@ -1367,7 +1367,7 @@ impl Qrow {
                         Input::new(&self.catalog.search)
                             .small()
                             .w_full()
-                            .aria_label("Search Tables"),
+                            .aria_label("Search tables"),
                     ),
                 )
             })
