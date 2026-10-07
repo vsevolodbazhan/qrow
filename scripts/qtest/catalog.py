@@ -172,8 +172,9 @@ SUITES = {
                Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
                      "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
                      "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov")),)),
-        Suite("perf", "SQL validation benchmark with enforced budgets.", ("cargo",),
-              (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),)),
+        Suite("perf", "SQL validation and dbt manifest benchmarks with enforced budgets.", ("cargo",),
+              (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),
+               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")))),
         Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
               ("uv", "shellcheck", "actionlint"),
               (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
