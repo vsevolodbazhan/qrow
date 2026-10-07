@@ -12,7 +12,7 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
-use gpui_kit::base::{SelectableText, StyledExt as _};
+use gpui_kit::base::{SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -26,8 +26,8 @@ use gpui_kit::component::{
 };
 use gpui_kit::{
     AnyElement, App, Context, Entity, Hsla, IntoElement, ListAlignment, ListState, Render, Role,
-    SharedString, StyleRefinement, TestSupportExt as _, Window, div, list, percentage, prelude::*,
-    px, relative, rems,
+    SharedString, StyleRefinement, Subscription, TestSupportExt as _, Window, div, list,
+    percentage, prelude::*, px, relative, rems,
 };
 use std::{ops::Range, sync::Arc};
 use uuid::Uuid;
@@ -208,18 +208,43 @@ enum Sql {
 struct SqlText {
     full: SharedString,
     chunks: Vec<SharedString>,
+    /// The selection of each row. A change of a selection draws the sheet
+    /// again, so that a drag shows the selection while it grows.
+    selections: Vec<TextSelectionHandle>,
+    _selection_changes: Vec<Subscription>,
 }
 
 impl SqlText {
-    fn new(sql: String) -> Self {
+    fn new(sql: String, cx: &mut Context<DbtDetailsView>) -> Self {
         let lines: Vec<&str> = sql.lines().collect();
-        let chunks = lines
+        let chunks: Vec<SharedString> = lines
             .chunks(SQL_CHUNK_LINES)
             .map(|chunk| SharedString::from(chunk.join("\n")))
+            .collect();
+        let selections: Vec<TextSelectionHandle> = chunks
+            .iter()
+            .map(|chunk| TextSelectionHandle::new(chunk.clone(), cx))
+            .collect();
+        let view = cx.weak_entity();
+        let selection_changes = selections
+            .iter()
+            .map(|selection| {
+                let view = view.clone();
+                selection.subscribe(
+                    move |event, cx| {
+                        if matches!(event, TextSelectionEvent::SelectionChanged(_)) {
+                            let _ = view.update(cx, |_, cx| cx.notify());
+                        }
+                    },
+                    cx,
+                )
+            })
             .collect();
         Self {
             full: sql.into(),
             chunks,
+            selections,
+            _selection_changes: selection_changes,
         }
     }
 }
@@ -513,7 +538,7 @@ impl DbtDetailsView {
                 }
                 match result {
                     SqlRead::Changed => this.read_sql(cx),
-                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql)),
+                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql, cx)),
                     SqlRead::Failed(error) => this.sql = Sql::Failed(error),
                 }
                 this.sql_changed();
@@ -749,7 +774,9 @@ impl DbtDetailsView {
         let Sql::Read(sql) = &self.sql else {
             return div().into_any_element();
         };
-        let Some(text) = sql.chunks.get(position) else {
+        let (Some(text), Some(selection)) =
+            (sql.chunks.get(position), sql.selections.get(position))
+        else {
             return div().into_any_element();
         };
         let last = position + 1 == sql.chunks.len();
@@ -766,8 +793,9 @@ impl DbtDetailsView {
             .font_family(self.code_font.clone())
             .text_xs()
             .child(
-                SelectableText::new(
+                SelectableText::with_handle(
                     SharedString::from(format!("dbt-sql-{position}")),
+                    selection.clone(),
                     text.clone(),
                 )
                 .document_order(position as u64),
