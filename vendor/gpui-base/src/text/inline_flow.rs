@@ -1090,8 +1090,9 @@ fn wrap_units(
 
 /// Breaks a hard line of `units` into lines that are not wider than
 /// `wrap_width`, at the last place before the overflow where
-/// [`can_break`] allows a break. A line without such a place breaks before
-/// the unit that overflows it. White space stays at the end of its line.
+/// [`can_break`] allows a break. A line without such a place, or that is
+/// still too wide after it, breaks before the unit that overflows it. White
+/// space stays at the end of its line.
 ///
 /// Returns the start of each line after the first, as an offset in the hard
 /// line, and the width of each line: the sum of the widths of its units.
@@ -1123,6 +1124,15 @@ fn wrap_line(units: &[WrapUnit], wrap_width: Pixels) -> (Vec<usize>, Vec<Pixels>
             width -= width_before;
             starts.push(start);
             line_start = start;
+            // The units from the break to this one can still overflow, for
+            // example an opening quote and a styled word after it. No break
+            // is allowed between them, so the line breaks before this unit.
+            if width > wrap_width && offset > line_start {
+                widths.push(width - unit.width);
+                width = unit.width;
+                starts.push(offset);
+                line_start = offset;
+            }
         }
         if unit.space {
             after_space = true;
@@ -1938,6 +1948,10 @@ mod tests {
         let units = wrap_units(fragments, |_| px(1.));
         let (starts, widths) = wrap_line(&units, px(wrap_width));
         assert_eq!(widths.len(), starts.len() + 1);
+        // Each unit of the tests fits a line, so no line overflows.
+        for width in &widths {
+            assert!(*width <= px(wrap_width), "{widths:?}");
+        }
         let mut lines = Vec::new();
         let mut start = 0;
         for end in starts.into_iter().chain(std::iter::once(text.len())) {
@@ -1982,6 +1996,15 @@ mod tests {
             WrapFragment::Text(" сегодня"),
         ];
         assert_eq!(wrapped(&fragments, 12.), ["гейт", "«Aviasales»", "сегодня"]);
+        // A run without a break that does not fit breaks where it overflows,
+        // so no line is wider than the wrap width.
+        let fragments = [
+            WrapFragment::Text("x "),
+            element("«"),
+            element("abc"),
+            element("»"),
+        ];
+        assert_eq!(wrapped(&fragments, 3.), ["x", "«", "abc", "»"]);
         // The spaces of a long code span are elements too.
         let fragments = [element("select"), element(" "), element("pdate")];
         assert_eq!(wrapped(&fragments, 8.), ["select", "pdate"]);
