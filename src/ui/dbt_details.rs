@@ -68,6 +68,16 @@ impl Qrow {
             )
         });
         self.dbt_details = Some(view.clone());
+        self.open_dbt_details_sheet(view, window, cx);
+    }
+
+    /// Open the sheet of the details `view`.
+    fn open_dbt_details_sheet(
+        &mut self,
+        view: Entity<DbtDetailsView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let weak = cx.weak_entity();
         window.open_sheet(cx, move |sheet, window, cx| {
             let close = weak.clone();
@@ -79,13 +89,25 @@ impl Qrow {
                 )
                 .title(title)
                 .child(view.clone())
-                .on_close(move |_, _, cx| {
-                    let _ = close.update(cx, |this, cx| {
-                        this.dbt_details = None;
-                        cx.notify();
-                    });
+                .on_close(move |_, window, cx| {
+                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
                 })
         });
+    }
+
+    /// The user closed the details sheet. Details that the user opened
+    /// from the lineage go back to the resource that the user came from,
+    /// in the same sheet: the sheet opens again with it.
+    fn dbt_details_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(view) = self.dbt_details.clone() else {
+            return;
+        };
+        if view.update(cx, |view, cx| view.back(window, cx)) {
+            self.open_dbt_details_sheet(view, window, cx);
+        } else {
+            self.dbt_details = None;
+        }
+        cx.notify();
     }
 
     /// The manifest state and the dbt project of `profile`.
@@ -136,9 +158,12 @@ pub(super) struct DbtDetailsView {
     rem_size: Option<gpui_kit::Pixels>,
     /// The compiled SQL part, then the raw SQL part.
     sql: [SqlPart; 2],
-    /// The unique IDs and the titles of the resources that the user came
-    /// from through the lineage, the last one on top.
-    history: Vec<(String, SharedString)>,
+    /// The resources that the user came from through the lineage, the last
+    /// one on top.
+    history: Vec<Visit>,
+    /// The place of a resource that the user went back to, in rows of SQL
+    /// that its read has not brought yet.
+    pending_anchor: Option<(Row, gpui_kit::Pixels)>,
     /// The Markdown of the description and of the column descriptions, by
     /// element ID. A text view without a state of its own parses its text
     /// again after a frame off the screen, and parses a large text in the
@@ -146,6 +171,17 @@ pub(super) struct DbtDetailsView {
     /// moment, and the list moves the rows below it.
     markdown: RefCell<HashMap<String, Markdown>>,
     _subscription: gpui_kit::Subscription,
+}
+
+/// A resource that the user left through the lineage, and how the sheet
+/// showed it: the column filter, the open SQL parts, and the place in the
+/// list where the user clicked.
+struct Visit {
+    unique_id: String,
+    title: SharedString,
+    filter: String,
+    sql_open: [bool; 2],
+    anchor: Option<(Row, gpui_kit::Pixels)>,
 }
 
 /// The Markdown of a row, and its parse.
@@ -501,6 +537,7 @@ impl DbtDetailsView {
             rem_size: None,
             sql: Default::default(),
             history: Vec::new(),
+            pending_anchor: None,
             markdown: RefCell::default(),
             _subscription: subscription,
         };
@@ -715,24 +752,60 @@ impl DbtDetailsView {
         self.state.as_ref().is_some_and(|state| !state.is_current())
     }
 
-    /// Show the details of `unique_id` from the top, as the sheet shows a
-    /// resource when it opens. `back` tells that the user goes back to it.
-    fn show(&mut self, unique_id: String, back: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if !back {
-            let current = (self.unique_id.clone(), self.title.clone());
-            self.history.push(current);
+    /// Show the details of `unique_id`, a parent or a child of the shown
+    /// resource, from the top.
+    fn show(&mut self, unique_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.history.push(Visit {
+            unique_id: self.unique_id.clone(),
+            title: self.title.clone(),
+            filter: self.filter.read(cx).value().to_string(),
+            sql_open: self.sql.each_ref().map(|part| part.open),
+            anchor: self.scroll_anchor(),
+        });
+        self.open(unique_id, "", [false; 2], window, cx);
+    }
+
+    /// Show the resource that the user came from again, at the place where
+    /// the user left it. Tells whether there was one.
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(visit) = self.history.pop() else {
+            return false;
+        };
+        self.open(visit.unique_id, &visit.filter, visit.sql_open, window, cx);
+        // The rows of an open SQL part come after the read.
+        if !self.restore_scroll(visit.anchor) {
+            self.pending_anchor = visit.anchor;
         }
+        true
+    }
+
+    /// Show the details of `unique_id` from the top, with the column filter
+    /// `filter` and the SQL parts in `sql_open` open.
+    fn open(
+        &mut self,
+        unique_id: String,
+        filter: &str,
+        sql_open: [bool; 2],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.unique_id = unique_id;
-        // The SQL, the Markdown, and the column filter belong to the old
-        // resource.
+        self.pending_anchor = None;
+        // The SQL and the Markdown belong to the old resource.
         self.markdown.borrow_mut().clear();
-        for part in &mut self.sql {
+        for (part, open) in self.sql.iter_mut().zip(sql_open) {
             part.reset();
-            part.open = false;
+            part.open = open;
         }
-        self.filter
-            .update(cx, |filter, cx| filter.set_value("", window, cx));
+        self.filter.update(cx, |state, cx| {
+            state.set_value(filter.to_owned(), window, cx)
+        });
         self.rebuild(cx);
+        for kind in SqlKind::ALL {
+            if self.sql[kind.position()].open {
+                self.read_sql(kind, cx);
+            }
+        }
         cx.notify();
     }
 
@@ -783,7 +856,7 @@ impl DbtDetailsView {
 
     /// The button back to the resource that the user came from.
     fn back_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some((_, title)) = self.history.last() else {
+        let Some(Visit { title, .. }) = self.history.last() else {
             return div().into_any_element();
         };
         h_flex()
@@ -795,9 +868,7 @@ impl DbtDetailsView {
                     .icon(IconName::ChevronLeft)
                     .label(format!("Back to {title}"))
                     .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some((unique_id, _)) = this.history.pop() {
-                            this.show(unique_id, true, window, cx);
-                        }
+                        this.back(window, cx);
                     })),
             )
             .into_any_element()
@@ -806,6 +877,8 @@ impl DbtDetailsView {
     /// Open or close the SQL part `kind`.
     fn toggle_sql(&mut self, kind: SqlKind, cx: &mut Context<Self>) {
         let current = self.state.as_ref().is_some_and(|state| state.is_current());
+        // The user moves the list now.
+        self.pending_anchor = None;
         let part = &mut self.sql[kind.position()];
         part.open = !part.open;
         // A manifest that changed since the read has other SQL, and a failed
@@ -842,7 +915,20 @@ impl DbtDetailsView {
         let new = chunks(&self.rows);
         self.list.splice(sql + 1..sql + 1 + old, new);
         self.list.remeasure_items(sql..sql + 1 + new);
-        if !self.restore_scroll(anchor)
+        // The place of a resource that the user went back to waits only for
+        // the reads that started with it.
+        let reading = self
+            .sql
+            .iter()
+            .any(|part| matches!(part.sql, Sql::Reading | Sql::Refreshing));
+        let pending = if reading {
+            self.pending_anchor
+        } else {
+            self.pending_anchor.take()
+        };
+        if pending.is_some() && self.restore_scroll(pending) {
+            self.pending_anchor = None;
+        } else if !self.restore_scroll(anchor)
             && matches!(anchor, Some((Row::SqlChunk(chunk_kind, _), _)) if chunk_kind == kind)
         {
             // The SQL that the user read is gone: show its header.
@@ -1387,9 +1473,7 @@ fn linked_row(
                 .child(div().min_w_0().truncate().child(linked.name.clone()))
                 .child(div().text_color(muted).child(linked.label.clone())),
         )
-        .on_click(
-            cx.listener(move |this, _, window, cx| this.show(unique_id.clone(), false, window, cx)),
-        )
+        .on_click(cx.listener(move |this, _, window, cx| this.show(unique_id.clone(), window, cx)))
         .into_any_element()
 }
 

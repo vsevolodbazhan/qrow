@@ -348,7 +348,10 @@ details**. A panel opens at the right side of the window. It shows:
   **Filter columns** to find columns by name or description.
 - The parents and children, with the materialization of each model or the
   kind of each other resource. Click a parent or a child to show its details
-  in the panel. Click **Back to** and the name to go back.
+  in the panel. To go back, click **Back to** and the name, or close the
+  panel: the panel then shows the resource that you came from, with its
+  column filter, its open SQL parts, and the row that you clicked. Close the
+  panel of the first resource to close it.
 
 The panel takes almost half of the window width, so make the window wider to
 read long text more easily.
