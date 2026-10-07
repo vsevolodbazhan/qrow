@@ -157,6 +157,35 @@ pub fn last_statement_range(sql: &str) -> Option<Range<usize>> {
     statement_ranges(sql).pop()
 }
 
+/// Finds the statement at a UTF-8 byte offset. Same-line whitespace beside
+/// a statement belongs to it; blank lines and comments between statements do not.
+pub fn statement_range_at(sql: &str, offset: usize) -> Option<Range<usize>> {
+    if !sql.is_char_boundary(offset) {
+        return None;
+    }
+    let ranges = statement_ranges(sql);
+    // Prefer the next statement's start over the previous statement's end.
+    if let Some(range) = ranges.iter().find(|range| range.contains(&offset)) {
+        return Some(range.clone());
+    }
+    if tokens(sql)
+        .iter()
+        .any(|(range, kind)| *kind == Kind::Comment && range.contains(&offset))
+    {
+        return None;
+    }
+    ranges.into_iter().find(|range| {
+        let gap = if offset < range.start {
+            offset..range.start
+        } else {
+            range.end..offset
+        };
+        sql[gap]
+            .chars()
+            .all(|c| c.is_whitespace() && !matches!(c, '\n' | '\r'))
+    })
+}
+
 pub fn validate_single(sql: &str) -> anyhow::Result<()> {
     let mut statements = 0;
     let mut content = false;
@@ -855,5 +884,64 @@ where pdate >= date '2026-09-26' and pdate < date '2026-09-28';"
             .collect();
         assert_eq!(statements, ["SELECT '日;本';", "SELECT 2;", "SELECT 3"]);
         assert!(statement_ranges(" -- only a comment\n").is_empty());
+    }
+
+    #[test]
+    fn cursor_statement_covers_multiline_sql_and_unicode() {
+        let sql = "SELECT 1;\n\n  SELECT '日本😀;' AS `a;b`\n  /* inner ; */\n  FROM t\n  LIMIT 10;  \n\nSELECT 3";
+        let expected = "SELECT '日本😀;' AS `a;b`\n  /* inner ; */\n  FROM t\n  LIMIT 10;";
+        for marker in [
+            "  SELECT", "日本", "😀", "a;b", "/* inner", "  FROM", "LIMIT 10",
+        ] {
+            let offset = sql.find(marker).unwrap();
+            assert_eq!(&sql[statement_range_at(sql, offset).unwrap()], expected);
+        }
+        let end = sql.find("10;").unwrap() + 3;
+        for offset in end..=end + 2 {
+            assert_eq!(&sql[statement_range_at(sql, offset).unwrap()], expected);
+        }
+        assert_eq!(&sql[statement_range_at(sql, 0).unwrap()], "SELECT 1;");
+        assert_eq!(
+            &sql[statement_range_at(sql, sql.len()).unwrap()],
+            "SELECT 3"
+        );
+        assert_eq!(statement_range_at(sql, sql.find('😀').unwrap() + 1), None);
+        assert_eq!(statement_range_at(sql, usize::MAX), None);
+    }
+
+    #[test]
+    fn cursor_statement_rejects_gaps_and_standalone_comments() {
+        let sql = "\n-- leading;\nSELECT 1;\n\n-- between;\n/* nested /* ; */ comment */\n\nSELECT 2;\n\n-- trailing;\n";
+        for marker in [
+            "-- leading",
+            "-- between",
+            "/* nested",
+            "comment */",
+            "-- trailing",
+        ] {
+            let offset = sql.find(marker).unwrap();
+            assert_eq!(statement_range_at(sql, offset), None, "{marker}");
+        }
+        for offset in [0, sql.find("\n\n").unwrap() + 1, sql.len()] {
+            assert_eq!(statement_range_at(sql, offset), None);
+        }
+        for sql in ["", " \n ", "-- comment", "/* comment */", "; ;"] {
+            assert_eq!(statement_range_at(sql, sql.len()), None);
+        }
+    }
+
+    #[test]
+    fn cursor_statement_distinguishes_adjacent_statements_and_comments() {
+        let sql = "SELECT 1;SELECT 2;-- between\nSELECT 3;/* between */SELECT 4";
+        for marker in ["SELECT 2", "SELECT 3", "SELECT 4"] {
+            let offset = sql.find(marker).unwrap();
+            let range = statement_range_at(sql, offset).unwrap();
+            assert!(sql[range].starts_with(marker));
+        }
+        for marker in ["-- between", "/* between */"] {
+            assert_eq!(statement_range_at(sql, sql.find(marker).unwrap()), None);
+        }
+        let sql = "SELECT 1;";
+        assert_eq!(statement_range_at(sql, sql.len()), Some(0..sql.len()));
     }
 }

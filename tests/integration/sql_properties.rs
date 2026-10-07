@@ -18,6 +18,12 @@ proptest! {
         // Validation must also be total for malformed and incomplete editor text.
         let _ = sql::validate_single(&source);
         let _ = sql::format_statement(&format!("SELECT {}", source.replace('\n', " ")), sql::SqlStyle::default());
+        for caret in [0, source.len() / 2, source.len(), usize::MAX] {
+            if let Some(range) = sql::statement_range_at(&source, caret) {
+                let statement = source.get(range).expect("caret statement is on UTF-8 boundaries");
+                prop_assert!(sql::validate_single(statement).is_ok());
+            }
+        }
         let mut previous_end = 0;
         for range in sql::statement_ranges(&source) {
             prop_assert!(range.start >= previous_end);
