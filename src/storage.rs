@@ -91,7 +91,7 @@ impl WorkspaceFile {
 
 /// Replace `path` with `data` so that a crash leaves the old or the new file,
 /// never a partial one. Only the owner can read the file.
-fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
     let parent = path.parent().context("Invalid file path")?;
     let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
     let mut options = fs::OpenOptions::new();
@@ -124,6 +124,12 @@ pub fn catalog_path(workspace: &Path, profile: Uuid) -> PathBuf {
         .unwrap_or(Path::new("."))
         .join("catalog")
         .join(format!("{profile}.json"))
+}
+
+/// The folder of the saved dbt indexes, next to the workspace file. The
+/// workspace lock also protects this folder.
+pub fn dbt_directory(workspace: &Path) -> PathBuf {
+    workspace.parent().unwrap_or(Path::new(".")).join("dbt")
 }
 
 /// Read a schema cache. A missing, unreadable, or outdated file gives `None`,

@@ -5265,6 +5265,7 @@ dependencies = [
  "form_urlencoded",
  "gpui-kit",
  "httparse",
+ "notify",
  "postcard",
  "proptest",
  "ring",

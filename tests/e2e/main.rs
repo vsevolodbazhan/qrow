@@ -7,6 +7,7 @@ mod assistant;
 mod blocking;
 mod catalog;
 mod connections;
+mod dbt;
 mod logs;
 mod perf;
 mod queries;

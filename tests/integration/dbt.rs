@@ -123,7 +123,9 @@ fn a_saved_index_of_a_generated_manifest_loads_back() {
     let bytes = dbt_manifest::generate(&small());
     std::fs::write(&path, &bytes).unwrap();
     let saved = saved::Saved {
+        manifest: path.clone(),
         stamp: saved::Stamp::of(&path).unwrap(),
+        refreshed: std::time::SystemTime::now(),
         index: dbt::parse(&bytes).unwrap(),
     };
     assert_eq!(saved.stamp.len, bytes.len() as u64);

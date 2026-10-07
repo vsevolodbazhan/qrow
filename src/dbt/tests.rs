@@ -480,6 +480,8 @@ fn search_matches_names_before_descriptions() {
 
 fn stamped(index: Index) -> Saved {
     Saved {
+        manifest: "/projects/tiny_lake/target/manifest.json".into(),
+        refreshed: std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_791_000_100),
         stamp: Stamp {
             len: 42,
             modified: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_791_000_000)),
@@ -560,9 +562,129 @@ fn the_saved_form_changes_only_with_its_format_version() {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    assert_eq!(FORMAT_VERSION, 1);
+    assert_eq!(FORMAT_VERSION, 2);
     assert_eq!(
         hex,
-        "977c34b1668831e5a9f3ef1cf73f5fc5b6e97bc084f687ccde589da5b89c782b"
+        "9b622bbd33d2628a19688c3efb2ac9e96a609f59f42151253bc3580605448c86"
     );
+}
+
+mod matching {
+    use super::{entry, manifest, parse_value};
+    use crate::{
+        catalog::{Catalog, RelationEntry, RelationKind},
+        dbt::matching::{self, CatalogNames, Match},
+        model::{CatalogSettings, DbtProject, DbtRefresh, SchemaRule, SchemaRuleKind},
+    };
+
+    fn catalog(schemas: &[(&str, Option<&[&str]>)]) -> Catalog {
+        let mut catalog = Catalog::empty(uuid::Uuid::new_v4(), None);
+        let names = schemas.iter().map(|(name, _)| (*name).to_owned()).collect();
+        catalog.apply_schemas(names, &CatalogSettings::default(), 1);
+        for (schema, relations) in schemas {
+            if let Some(relations) = relations {
+                let entries = relations
+                    .iter()
+                    .map(|name| RelationEntry {
+                        name: (*name).to_owned(),
+                        kind: RelationKind::Table,
+                        comment: None,
+                    })
+                    .collect();
+                catalog.apply_relations(schema, None, entries, 1);
+            }
+        }
+        catalog
+    }
+
+    fn project(rules: Vec<SchemaRule>) -> DbtProject {
+        DbtProject {
+            manifest: "/manifest.json".into(),
+            refresh: DbtRefresh::Manual,
+            schema_mapping: rules,
+        }
+    }
+
+    #[test]
+    fn resources_match_relations_after_the_schema_mapping() {
+        let index = parse_value(&manifest());
+        // The catalog of production: dbt writes to dev_core in development.
+        let catalog = catalog(&[("core", Some(&["FCT_ORDERS", "countries"])), ("raw", None)]);
+        let names = CatalogNames::of(&catalog);
+        let unmapped = project(vec![]);
+        let (_, orders) = entry(&index, "model.tiny_lake.orders");
+        assert_eq!(
+            matching::find(&index, orders, &unmapped, &names),
+            Match::Relation {
+                schema: "core".into(),
+                relation: "FCT_ORDERS".into()
+            }
+        );
+        let (_, customers) = entry(&index, "model.tiny_lake.customers");
+        assert_eq!(
+            matching::find(&index, customers, &unmapped, &names),
+            Match::NotARelation
+        );
+        let (source_at, source) = entry(&index, "source.tiny_lake.raw.orders");
+        assert_eq!(
+            matching::find(&index, source, &unmapped, &names),
+            Match::NotLoaded
+        );
+        let summary = matching::summary(&index, &unmapped, &names);
+        assert_eq!(
+            (summary.total, summary.matched, summary.not_loaded),
+            (3, 2, 1)
+        );
+        assert!(summary.unmatched.is_empty());
+
+        // A mapping to a schema that the catalog does not have.
+        let mapped = project(vec![SchemaRule {
+            kind: SchemaRuleKind::Exact,
+            from: "raw".into(),
+            to: "landing".into(),
+        }]);
+        let summary = matching::summary(&index, &mapped, &names);
+        assert_eq!(
+            summary.unmatched,
+            [(source_at, "landing".into(), Match::NoSchema)]
+        );
+
+        // A relation that is missing from a loaded schema.
+        let catalog =
+            super::matching::catalog(&[("core", Some(&["countries"])), ("raw", Some(&[]))]);
+        let names = CatalogNames::of(&catalog);
+        let summary = matching::summary(&index, &unmapped, &names);
+        assert_eq!(summary.matched, 1);
+        let reasons: Vec<&Match> = summary.unmatched.iter().map(|(_, _, m)| m).collect();
+        assert_eq!(reasons, [&Match::NoRelation, &Match::NoRelation]);
+    }
+
+    #[test]
+    fn a_relation_finds_its_resource() {
+        let index = parse_value(&manifest());
+        let mapped = project(vec![SchemaRule {
+            kind: SchemaRuleKind::Prefix,
+            from: "".into(),
+            to: "prod_".into(),
+        }]);
+        let (orders_at, _) = entry(&index, "model.tiny_lake.orders");
+        let (source_at, _) = entry(&index, "source.tiny_lake.raw.orders");
+        assert_eq!(
+            matching::entry_for(&index, &mapped, "PROD_core", "fct_orders"),
+            Some(orders_at)
+        );
+        assert_eq!(
+            matching::entry_for(&index, &mapped, "prod_raw", "orders_v2"),
+            Some(source_at)
+        );
+        assert_eq!(
+            matching::entry_for(&index, &mapped, "core", "fct_orders"),
+            None
+        );
+        // An ephemeral model is not a relation.
+        assert_eq!(
+            matching::entry_for(&index, &mapped, "prod_core", "customers"),
+            None
+        );
+    }
 }

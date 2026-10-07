@@ -5,6 +5,7 @@ mod catalog;
 mod dbt;
 #[path = "../support/dbt_manifest.rs"]
 mod dbt_manifest;
+mod dbt_worker;
 mod hive_protocol;
 mod keychain;
 mod oidc;

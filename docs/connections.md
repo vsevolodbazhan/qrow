@@ -47,10 +47,11 @@ last selected tab. The other tabs keep their unread outcomes.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, set
    **Schema Refresh** to **Manual** or **While connected**. Then you can enter
    [schema patterns](#show-or-hide-schemas).
-9. Optional: When the [assistant](assistant.md) is on, enter **Assistant
-   notes**. See [Give the assistant facts about a
-   connection](#give-the-assistant-facts-about-a-connection).
-10. Click **Save**.
+9. Optional: Attach a [dbt project](#attach-a-dbt-project).
+10. Optional: When the [assistant](assistant.md) is on, enter **Assistant
+    notes**. See [Give the assistant facts about a
+    connection](#give-the-assistant-facts-about-a-connection).
+11. Click **Save**.
 
 Connection names must be unique. If the form contains an error, Qrow keeps the
 form open and shows the error above the form actions.
@@ -253,6 +254,80 @@ sends the notes.
 
 A duplicate keeps the notes of the source.
 
+## Attach a dbt project
+
+A connection can have one dbt project. Qrow reads the `manifest.json` file
+that dbt writes, with the descriptions, tests, lineage, and SQL of the models.
+Qrow does not run dbt, and it does not read the other files of the project.
+
+1. In Connection Settings, go to **dbt Project**.
+2. In **Manifest**, enter the path of `manifest.json`, or click **Choose…**.
+   The file is usually in the `target` folder of the project. Any manifest
+   works, for example one from CI.
+3. Select **Manifest Refresh**:
+   - **Automatic**: Qrow reads the manifest again when dbt writes it.
+   - **Manual**: Qrow reads the manifest again only when you select
+     **Refresh**, and at launch when its saved copy does not agree with the
+     file.
+4. Optional: Enter the [schema mapping](#map-dbt-schemas-to-catalog-schemas).
+5. Click **Save**.
+
+Qrow reads manifests of schema v12. dbt-core 1.8 and later, and dbt Fusion,
+write this schema. Run a dbt command, for example `dbt parse`, to make the
+file.
+
+Below the path, the form shows the state of the manifest: the time that dbt
+wrote it, the dbt version, and the number of models. It shows an error when
+the file is missing, has another schema version, or is not a valid manifest.
+When a refresh fails, Qrow keeps the data of the last manifest that it read.
+To read the manifest again now, click **Refresh** in the form, or right-click
+the connection and select **Refresh manifest** in the **dbt** section. Each
+refresh is in the [Activity](activity.md) of the connection, with its
+duration and result.
+
+To remove the project, clear **Manifest** and save.
+
+Qrow saves a compact copy of each manifest next to the workspace, and loads it
+at launch. Connections with the same manifest path share one copy. Qrow
+removes a copy when no connection uses its manifest.
+
+### Map dbt schemas to catalog schemas
+
+dbt can write to other schemas than the catalog shows, for example
+`dbt_dev_core` during development and `core` in production. A schema mapping
+changes the dbt schema of each model into a catalog schema. Enter one rule on
+each line:
+
+- `dbt_dev_* = *` replaces the start `dbt_dev_` with nothing.
+- `staging_* = stg_*` replaces the start `staging_` with `stg_`.
+- `analytics = prod_analytics` replaces one schema.
+
+The first rule that matches applies. Without a match, the schema stays. Letter
+case does not matter.
+
+### Match models with tables
+
+When the connection [shows schemas](#browse-schemas), **Tables** in the form
+shows how many models, seeds, snapshots, and sources match tables in the
+catalog. A match has the mapped schema and the alias or identifier of the
+model. Qrow does not use the database of a model, because Spark has no level
+above schemas. Ephemeral models do not count. Click **Show unmatched** to see
+the models without a match, with their mapped schema. The summary follows the
+rules as you type them.
+
+Qrow can match only the schemas and tables that it has read. Refresh the
+schemas of the connection first. A model in a schema without loaded tables
+does not count as a match or as a failure.
+
+### dbt limitations
+
+- A connection can have only one dbt project.
+- Qrow reads only the manifest. It does not resolve Jinja, run dbt, or read
+  the YAML or SQL files of the project.
+- Two paths to the same manifest, for example through a symbolic link to its
+  folder, do not share one copy.
+- Automatic refresh waits until the file has not changed for 2 seconds.
+
 ## Edit, duplicate, or delete a profile
 
 Right-click a profile and use the **Connection** section of the menu: **Edit**,
@@ -261,11 +336,12 @@ An empty password field during an edit keeps the stored password. When you
 change a connection from a sign-in to a password, enter the password. A
 duplicate has a new profile identifier and a unique name based on the source
 name. A duplicate with password authentication requires a password. A
-duplicate keeps the sign-in and the assistant notes of the source.
+duplicate keeps the sign-in, the dbt project, and the assistant notes of the
+source.
 
 Saving an edit keeps live sessions that use the profile when you change only the
-name, the Connection Lifecycle fields, the Schemas fields, or the
-assistant notes. The worker applies the new lifecycle
+name, the Connection Lifecycle fields, the Schemas fields, the dbt project, or
+the assistant notes. The worker applies the new lifecycle
 policy after active query, fetch, or keep-alive work finishes. The idle timer
 and the keep-alive interval of these sessions then start again from the policy
 update.
@@ -732,6 +808,14 @@ session, and saves the copy after each refresh. Qrow sends names to the server
 as given. HiveServer2 reads `_` in a name as a pattern, so the worker removes
 the rows of other names. Refresh requests that wait are merged: a schema
 refresh includes the refreshes of its tables.
+
+The [dbt worker](../src/dbt/worker.rs) keeps one index for each manifest. It
+parses one manifest at a time in the background, with typed structures that
+skip the parts that Qrow does not use, like macros. The index keeps the
+position of each SQL text in the manifest, not the SQL. For automatic refresh,
+the worker watches the folder of the manifest with FSEvents, because dbt can
+replace the file, and it does not poll. See the
+[parser](../src/dbt/manifest.rs) and the [saved form](../src/dbt/saved.rs).
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable

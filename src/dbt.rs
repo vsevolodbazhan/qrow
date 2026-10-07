@@ -7,7 +7,9 @@
 //! [`read_sql`] reads a span on demand.
 
 mod manifest;
+pub mod matching;
 pub mod saved;
+pub mod worker;
 
 pub use manifest::{ParseError, parse};
 
