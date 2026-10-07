@@ -336,7 +336,7 @@ fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAp
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "connection-database-type").as_deref(),
-            Some("Connection type")
+            Some("Connection Type")
         );
     });
     app.select(cx, "connection-database-type", "Postgres");
@@ -355,6 +355,10 @@ fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAp
         );
         assert!(window.try_find("connection-authentication").is_none());
         assert!(window.try_find("connection-tls").is_none());
+        assert_eq!(
+            label(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("TLS Mode")
+        );
         assert_eq!(
             crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
             Some("Require TLS")
@@ -479,8 +483,8 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
         "Port",
         "Username",
         "Password",
-        "Initial database",
-        "Session parameters",
+        "Initial Database",
+        "Session Parameters",
     ];
     let shared = app.update(cx, |window, _| {
         fields.map(|field| label(window, format!("connection-help-{field}")).unwrap())

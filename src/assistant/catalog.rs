@@ -78,7 +78,7 @@ impl Missing {
             ),
             Missing::SchemaHidden => (
                 "schema_hidden",
-                "The Show schemas or Hide schemas settings of this connection hide this schema. Ask the user to change them, or query the relation catalog with SQL for this connector with query-run.",
+                "The Visible Schemas or Hidden Schemas settings of this connection hide this schema. Ask the user to change them, or query the relation catalog with SQL for this connector with query-run.",
             ),
             Missing::Relations(_) => (
                 "not_cached",

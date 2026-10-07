@@ -1392,7 +1392,7 @@ impl Qrow {
         if !profile.catalog.browses() {
             return CatalogStep::Done(failure(
                 "schema_browsing_off",
-                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or query the system catalog with SQL for this connector with query-run.",
+                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema Refresh in the connection settings, or query the system catalog with SQL for this connector with query-run.",
             ));
         }
         let settings = crate::model::effective_catalog(profile, &self.shared_catalogs);

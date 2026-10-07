@@ -43,10 +43,10 @@ and **Assistant**. The **Assistant** page shows only while the
 search field above the pages to find a field.
 
 1. Click **+** beside Connections.
-2. On the **General** page, select **Connection type**.
+2. On the **General** page, select **Connection Type**.
 3. Enter a name, the server hostname or IP address, and the port.
 4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
-   For Postgres, select a [TLS mode](#use-postgres).
+   For Postgres, select a [TLS Mode](#use-postgres).
 5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
    - **Sign-in (OpenID Connect)**: select a
@@ -78,7 +78,7 @@ macOS can request Keychain access when you save the password.
 
 ## Use Postgres
 
-Select **Postgres** in **Connection type**. The default port is 5432. The initial
+Select **Postgres** in **Connection Type**. The default port is 5432. The initial
 database is the database that Postgres opens for the session. Existing profiles
 without a connection type continue to use Kyuubi.
 
@@ -92,7 +92,7 @@ Postgres checks each setting when the session opens. If a setting is invalid,
 the connection fails and names the setting. Passwords use macOS Keychain.
 Postgres connections do not use OpenID Connect sign-ins.
 
-Select a **TLS mode**:
+Select a **TLS Mode**:
 
 - **Require TLS** encrypts the connection without a certificate or hostname
   check. New Postgres connections use this mode. It does not check the server
@@ -102,7 +102,7 @@ Select a **TLS mode**:
 - **Disabled** connects without encryption. A server that requires TLS rejects
   this mode.
 
-Both TLS modes fail if the server does not accept encryption. They do not
+Both TLS Modes fail if the server does not accept encryption. They do not
 retry without TLS. Existing Postgres profiles keep their earlier choice.
 Profiles with the old TLS checkbox enabled use **Verify certificate**.
 
@@ -128,7 +128,7 @@ names. Use qualified names when a different `search_path` applies.
   first page even when only a preview is needed.
 - The Postgres client library can buffer a server row before Qrow checks its
   size. Result limits do not cap the memory used to receive one oversized row.
-- Response timeout bounds connection setup, session settings, and cancellation.
+- **Response Timeout** bounds connection setup, session settings, and cancellation.
   It does not set a query execution timeout. Use the `statement_timeout` session
   setting when you need one.
 - A late cancellation request can cancel the next query in the same session.
@@ -760,8 +760,8 @@ not matter.
 - If **Visible Schemas** is empty, the tree shows all schemas.
 - **Hidden Schemas** hides a schema also when **Visible Schemas** matches it.
 
-For example, `sales_*, ops` in **Visible Schemas** and `*_tmp` in **Hide
-schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
+For example, `sales_*, ops` in **Visible Schemas** and `*_tmp` in **Hidden
+Schemas** show `sales_eu` and `ops`, but not `sales_tmp`.
 
 When you save new patterns, the tree hides schemas at once. A connection
 refresh skips hidden schemas that it has not started to read. A schema that you

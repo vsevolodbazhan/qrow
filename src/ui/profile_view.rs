@@ -174,7 +174,7 @@ impl Qrow {
         let fields = SettingGroup::new()
             .item(connection_row(
                 qrow,
-                "Connection type",
+                "Connection Type",
                 "",
                 &["connector", "type"],
                 false,
@@ -183,7 +183,7 @@ impl Qrow {
                         .id("connection-database-type")
                         .w_full()
                         .disabled(form.saving.is_some())
-                        .accessibility_label("Connection type")
+                        .accessibility_label("Connection Type")
                         .into_any_element()
                 },
             ))
@@ -214,7 +214,7 @@ impl Qrow {
             .items(postgres.then(|| {
                 connection_row(
                     qrow,
-                    "TLS mode",
+                    "TLS Mode",
                     match connection_form::chosen(
                         &form.postgres_ssl_mode,
                         &connection_form::postgres_ssl_mode_choices(),
@@ -235,7 +235,7 @@ impl Qrow {
                             .id("connection-postgres-ssl-mode")
                             .w_full()
                             .disabled(form.saving.is_some())
-                            .accessibility_label("TLS mode")
+                            .accessibility_label("TLS Mode")
                             .into_any_element()
                     },
                 )

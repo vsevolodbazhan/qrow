@@ -45,7 +45,8 @@ fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     app.wait_label(cx, "Postgres database");
     app.context_menu(cx, connection_row(app.saved().profiles[0].id));
     app.choose(cx, "popup-menu", "Edit");
-    app.wait_label(cx, "Connection type");
+    app.wait_label(cx, "Connection Type");
+    app.wait_label(cx, "TLS Mode");
     app.wait_label(cx, "The database account used to connect.");
     app.click(cx, "cancel-profile");
     app.wait_gone(cx, "connection-name");
