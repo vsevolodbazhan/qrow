@@ -1,8 +1,9 @@
 use std::ops::Range;
 
 use gpui::{
-    App, BorderStyle, Bounds, Corners, Edges, Element, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
+    App, BorderStyle, Bounds, Corners, CursorStyle, Edges, Element, ElementId, GlobalElementId,
+    HighlightStyle,
+    Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, PaintQuad, Pixels, Point,
     SharedString, StyledText, TextStyleRefinement, Window, transparent_black,
 };
 
@@ -62,6 +63,17 @@ impl SelectableText {
     /// Sets the text style the run is laid out and painted with.
     pub fn text_style(mut self, style: TextStyleRefinement) -> Self {
         self.text_style = Some(style);
+        self
+    }
+
+    /// Styles ranges of the text, for example for syntax highlighting. The
+    /// ranges are byte ranges on character boundaries, in order, and do not
+    /// overlap.
+    pub fn highlights(
+        mut self,
+        highlights: impl IntoIterator<Item = (Range<usize>, HighlightStyle)>,
+    ) -> Self {
+        self.styled_text = StyledText::new(self.text.clone()).with_highlights(highlights);
         self
     }
 
@@ -204,10 +216,13 @@ impl Element for SelectableText {
         inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         handle: &mut Self::RequestLayoutState,
-        _: &mut Self::PrepaintState,
+        hitbox: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
     ) {
+        // The text cursor tells that the text can be selected, as over
+        // Markdown text.
+        window.set_cursor_style(CursorStyle::IBeam, hitbox);
         let layout = self.styled_text.layout().clone();
         let selected_text_before = TextSelection::selected_text(window, cx);
         let projection = handle.update_runs(
@@ -241,24 +256,54 @@ impl Element for SelectableText {
 #[cfg(test)]
 mod tests {
     use gpui::{
-        Bounds, Context, IntoElement, Modifiers, MouseButton, ParentElement as _, Render,
-        Styled as _, TestAppContext, Window, div, point, px, size,
+        Bounds, Context, HighlightStyle, IntoElement, Modifiers, MouseButton, ParentElement as _,
+        Render, Styled as _, TestAppContext, Window, div, point, px, size,
     };
 
     use super::SelectableText;
     use crate::{TextSelection, TextSelectionHandle, TextSelectionLayer};
 
-    struct SelectableTextTestView;
+    #[derive(Default)]
+    struct SelectableTextTestView {
+        highlighted: bool,
+    }
 
     impl Render for SelectableTextTestView {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div().size_full().child(TextSelectionLayer).child(
-                div()
-                    .w(px(240.))
-                    .h(px(32.))
-                    .child(SelectableText::new("local", "alpha beta")),
-            )
+            let text = SelectableText::new("local", "alpha beta");
+            let text = if self.highlighted {
+                text.highlights([(
+                    0..5,
+                    HighlightStyle {
+                        color: Some(gpui::red()),
+                        ..Default::default()
+                    },
+                )])
+            } else {
+                text
+            };
+            div()
+                .size_full()
+                .child(TextSelectionLayer)
+                .child(div().w(px(240.)).h(px(32.)).child(text))
         }
+    }
+
+    fn select_all_by_drag(cx: &mut gpui::VisualTestContext) -> String {
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        cx.simulate_mouse_down(point(px(1.), px(12.)), MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(px(220.), px(12.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_up(point(px(220.), px(12.)), MouseButton::Left, Modifiers::default());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            TextSelection::selected_text(window, cx).to_string()
+        })
     }
 
     #[gpui::test]
@@ -271,30 +316,14 @@ mod tests {
 
     #[gpui::test]
     fn local_handle_participates_in_window_selection(cx: &mut TestAppContext) {
-        let (_, cx) = cx.add_window_view(|_, _| SelectableTextTestView);
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-        });
+        let (_, cx) = cx.add_window_view(|_, _| SelectableTextTestView::default());
+        assert_eq!(select_all_by_drag(cx), "alpha beta");
+    }
 
-        cx.simulate_mouse_down(
-            gpui::point(px(1.), px(12.)),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        cx.simulate_mouse_move(
-            gpui::point(px(220.), px(12.)),
-            Some(MouseButton::Left),
-            Modifiers::default(),
-        );
-        cx.simulate_mouse_up(
-            gpui::point(px(220.), px(12.)),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-            assert_eq!(TextSelection::selected_text(window, cx), "alpha beta");
-        });
+    #[gpui::test]
+    fn highlighted_text_selects_as_plain_text(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| SelectableTextTestView { highlighted: true });
+        assert_eq!(select_all_by_drag(cx), "alpha beta");
     }
 
     #[test]

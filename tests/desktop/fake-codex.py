@@ -695,15 +695,25 @@ for line in sys.stdin:
             def failed(result):
                 return result.get("error", {}).get("code", "failed")
 
-            def traced(success, result):
-                lineage = result["resource_count"] if success else failed(result)
+            def read_sql(success, result):
+                sql = (
+                    f"{result['code']} sql, compiled missing {result['compiled_missing']}"
+                    if success else failed(result)
+                )
                 finish_turn(
                     thread_id,
                     turn_id,
                     f"dbt {dbt.get('dbt_version')}, models {dbt.get('models')}; "
                     f"model {referenced[0]['unique_id']}, table points to {found['pointer']}; "
-                    f"{found['described']}; parents {lineage}",
+                    f"{found['described']}; parents {found['lineage']}; {sql}",
                 )
+
+            def traced(success, result):
+                found["lineage"] = result["resource_count"] if success else failed(result)
+                call_tool(thread_id, turn_id, "dbt-read-sql", {
+                    "version": 1, "connection_id": dbt["connection_id"],
+                    "model": referenced[0]["unique_id"],
+                }, read_sql)
 
             def described(success, result):
                 if not success:

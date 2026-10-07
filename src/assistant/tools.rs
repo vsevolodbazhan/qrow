@@ -134,6 +134,15 @@ pub fn definitions() -> Vec<ToolDefinition> {
                 "column_offset": {"type": "integer", "minimum": 0}},
             "required": ["version", "connection_id", "model"], "additionalProperties": false
         })),
+        ("dbt-read-sql", "Read the SQL of a dbt model, seed, or snapshot from the manifest. model is a unique ID, a table like core.orders, or a name. code is compiled (the default), with refs resolved to tables, or raw, the Jinja SQL of the project. When the manifest has no compiled SQL, the result has the raw SQL and compiled_missing is true; the manifest then comes from dbt parse. It returns at most 32768 bytes from offset, with sql_offset, the total sql_bytes, and next_offset for the next part, or null at the end.", json!({
+            "type": "object", "properties": {
+                "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
+                "model": {"type": "string"},
+                "code": {"enum": ["compiled", "raw"]},
+                "offset": {"type": "integer", "minimum": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 32768}},
+            "required": ["version", "connection_id", "model"], "additionalProperties": false
+        })),
         ("dbt-read-lineage", "Read the resources upstream (parents) or downstream (children) of a dbt resource, to depth steps, from the dbt manifest. model is a unique ID, a table like core.orders, or a name. Each resource gives its unique ID, table, direction, and depth, and with descriptions the first line of its description. resource_count is the total; use next_offset for the next page.", json!({
             "type": "object", "properties": {
                 "version": {"const": 1}, "connection_id": {"type": "string", "format": "uuid"},
@@ -196,7 +205,7 @@ mod tests {
     fn tool_surface_has_unique_names_and_closed_input_schemas() {
         let tools = definitions();
         let names: BTreeSet<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
-        assert_eq!(tools.len(), 16);
+        assert_eq!(tools.len(), 17);
         assert_eq!(names.len(), tools.len());
         assert!(
             tools

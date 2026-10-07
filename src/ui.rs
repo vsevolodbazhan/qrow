@@ -6,6 +6,7 @@ mod button_pair;
 mod catalog_tree;
 mod connection_form;
 mod dbt;
+mod dbt_details;
 mod environment;
 mod output;
 mod profile_view;
@@ -545,6 +546,8 @@ pub struct Qrow {
     _activity_events: Subscription,
     /// The indexes of the dbt manifests of the connections.
     dbt: dbt::DbtProjects,
+    /// The dbt resource of the open dbt details sheet.
+    dbt_details: Option<Entity<dbt_details::DbtDetailsView>>,
 }
 impl Qrow {
     fn ui_px(&self, value: f32) -> Pixels {
@@ -746,6 +749,7 @@ impl Qrow {
             activity,
             _activity_events: activity_events,
             dbt,
+            dbt_details: None,
         };
         for tab in workspace.tabs {
             let tab = this.make_tab(tab, window, cx);

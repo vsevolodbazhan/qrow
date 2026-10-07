@@ -5,24 +5,25 @@ use super::{ProfileEditor, Qrow, connection_form};
 use crate::{
     activity::ActivityEntry,
     dbt::{
-        Index, Kind,
-        matching::{self, CatalogNames, Match},
+        Entry, Index, Kind,
+        matching::{self, CatalogNames},
         worker::{self, DbtWorker, Event, ManifestState, Use, manifest_key},
     },
     model::{DbtProject, DbtRefresh, parse_schema_rules},
 };
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IndexPath, Sizable as _,
-    button::{Button, ButtonVariants as _},
+    button::Button,
     form::{Field, Form},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
+    progress::Progress,
     select::{SearchableVec, Select, SelectState},
     v_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Context, Entity, IntoElement, PathPromptOptions, Role, SharedString,
-    TestSupportExt as _, Window, div, prelude::*,
+    AnyElement, App, Context, Entity, IntoElement, PathPromptOptions, Role, TestSupportExt as _,
+    Window, div, prelude::*,
 };
 use std::{
     collections::HashMap,
@@ -30,9 +31,6 @@ use std::{
     sync::Arc,
 };
 use uuid::Uuid;
-
-/// The most resources without a match that the form lists.
-const MAX_UNMATCHED_ROWS: usize = 200;
 
 const AUTOMATIC: &str = "Automatic";
 const MANUAL: &str = "Manual";
@@ -46,6 +44,8 @@ pub(super) struct DbtProjects {
     keys: HashMap<Uuid, PathBuf>,
     /// The projects that the worker has: connection, manifest, automatic.
     configured: Vec<(Uuid, String, bool)>,
+    /// The schema tree shows dbt data of projects that changed.
+    tree_stale: bool,
 }
 
 impl DbtProjects {
@@ -69,7 +69,18 @@ impl DbtProjects {
             states: HashMap::new(),
             keys: HashMap::new(),
             configured: Vec::new(),
+            tree_stale: false,
         }
+    }
+
+    /// Read the manifest with the key `path` again.
+    pub(super) fn refresh_path(&self, path: &Path) {
+        self.worker.refresh(path);
+    }
+
+    /// A handle that asks the worker to read manifests again.
+    pub(super) fn refresher(&self) -> worker::Refresher {
+        self.worker.refresher()
     }
 
     /// The state of the manifest of `profile`.
@@ -105,6 +116,7 @@ impl Qrow {
         self.dbt
             .states
             .retain(|key, _| keys.values().any(|k| k == key));
+        self.dbt.tree_stale = true;
         self.dbt.worker.configure(
             configured
                 .iter()
@@ -121,11 +133,19 @@ impl Qrow {
     /// each connection that uses the manifest.
     pub(super) fn drain_dbt(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
+        let mut rebuild = false;
         let mut activity = Vec::new();
         for event in self.dbt.worker.events.try_iter() {
             changed = true;
             match event {
                 Event::State(state) => {
+                    let previous = self.dbt.states.get(&state.path);
+                    let same = match (previous.and_then(|p| p.index.as_ref()), &state.index) {
+                        (Some(old), Some(new)) => Arc::ptr_eq(old, new),
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    rebuild |= !same;
                     if self.dbt.keys.values().any(|key| *key == state.path) {
                         self.dbt.states.insert(state.path.clone(), state);
                     }
@@ -145,6 +165,14 @@ impl Qrow {
         }
         for (profile, entry) in activity {
             self.record_activity(profile, entry, cx);
+        }
+        // The schema tree marks the tables of the new index, and of a new
+        // schema mapping.
+        if rebuild || std::mem::take(&mut self.dbt.tree_stale) {
+            self.rebuild_catalog_tree(cx);
+        }
+        if changed {
+            self.dbt_details_changed(cx);
         }
         changed
     }
@@ -177,6 +205,19 @@ impl Qrow {
             state.refreshed,
             !state.is_current(),
         ))
+    }
+
+    /// The dbt resources of the tables of each connection with a dbt index.
+    pub(super) fn dbt_lookups(&self) -> HashMap<Uuid, DbtLookup> {
+        self.profiles
+            .iter()
+            .filter_map(|profile| {
+                let project = profile.dbt.as_ref()?;
+                let index = self.dbt.state(profile.id)?.index.clone()?;
+                let relations = matching::relations(&index, project);
+                Some((profile.id, DbtLookup { index, relations }))
+            })
+            .collect()
     }
 
     /// Whether Qrow parses the manifest of `profile` now.
@@ -232,18 +273,14 @@ impl Qrow {
         let automatic = refresh_choice(&form.dbt.refresh, cx) == DbtRefresh::Automatic;
         let rules = parse_schema_rules(form.dbt.rules.read(cx).value().as_ref());
         let matches = match (&state, rules) {
-            (_, Err(error)) => Some(Matches {
-                text: error.to_string(),
-                unmatched: 0,
-                rows: vec![],
-            }),
+            (_, Err(error)) => Some(MatchResult::Error(error.to_string())),
             (Some(state), Ok(rules)) => state.index.as_ref().map(|index| {
                 let project = DbtProject {
                     manifest: typed.clone(),
                     refresh: DbtRefresh::Manual,
                     schema_mapping: rules,
                 };
-                self.matches(profile, index, &project, form.dbt.unmatched_open)
+                self.matches(profile, index, &project)
             }),
             _ => None,
         };
@@ -336,90 +373,86 @@ impl Qrow {
                         "Rules like dbt_dev_* = * or analytics = prod. The first match applies.",
                     ),
             )
-            .when_some(matches, |form_element, matches| {
-                let Matches {
-                    text,
-                    unmatched,
-                    rows,
-                } = matches;
-                form_element.child(
-                    Field::new().label("Tables").child(
+            .when_some(matches, |form_element, result| {
+                let line = |id: &'static str, text: String, color| {
+                    div()
+                        .id(id)
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label(text.clone())
+                        .text_sm()
+                        .text_color(color)
+                        .child(text)
+                };
+                let result = match result {
+                    MatchResult::Note(text) => {
+                        line("connection-dbt-matches", text, muted).into_any_element()
+                    }
+                    MatchResult::Error(text) => {
+                        line("connection-dbt-matches", text, cx.theme().danger).into_any_element()
+                    }
+                    MatchResult::Summary { matched, total } => {
+                        let percent = percent(matched, total);
                         v_flex()
                             .w_full()
                             .gap_1()
                             .child(
+                                // Progress has no element ID setter for
+                                // tests, so this element gives tests one.
+                                div()
+                                    .id("connection-dbt-match-ratio")
+                                    .test_support()
+                                    .w_full()
+                                    .child(
+                                        Progress::new("connection-dbt-match-ratio-bar")
+                                            .xsmall()
+                                            .value(percent as f32)
+                                            .accessibility_label(
+                                                "dbt resources that matched the catalog",
+                                            ),
+                                    ),
+                            )
+                            // The percentage ends with the bar.
+                            .child(
                                 h_flex()
                                     .w_full()
+                                    .items_start()
+                                    .justify_between()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .id("connection-dbt-matches")
-                                            .test_support()
-                                            .role(Role::Status)
-                                            .aria_label(text.clone())
-                                            .flex_1()
-                                            .min_w_0()
-                                            .text_sm()
-                                            .child(text),
-                                    )
-                                    .when(unmatched > 0, |row| {
-                                        row.child(
-                                            Button::new("connection-dbt-unmatched")
-                                                .small()
-                                                .ghost()
-                                                .label(if form.dbt.unmatched_open {
-                                                    "Hide unmatched"
-                                                } else {
-                                                    "Show unmatched"
-                                                })
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    if let Some(form) = &mut this.form {
-                                                        form.dbt.unmatched_open =
-                                                            !form.dbt.unmatched_open;
-                                                    }
-                                                    cx.notify();
-                                                })),
+                                        line(
+                                            "connection-dbt-matches",
+                                            format!(
+                                                "{} of {} dbt resources matched the catalog",
+                                                group(matched),
+                                                group(total)
+                                            ),
+                                            muted,
                                         )
-                                    }),
+                                        .min_w_0(),
+                                    )
+                                    .child(
+                                        line(
+                                            "connection-dbt-match-percent",
+                                            format!("{percent}%"),
+                                            muted,
+                                        )
+                                        .flex_shrink_0(),
+                                    ),
                             )
-                            .when(!rows.is_empty(), |list| {
-                                list.child(
-                                    v_flex()
-                                        .id("connection-dbt-unmatched-list")
-                                        .test_support()
-                                        .w_full()
-                                        .gap_0p5()
-                                        .text_sm()
-                                        .font_family("Menlo")
-                                        .text_color(muted)
-                                        .children(rows.into_iter().enumerate().map(
-                                            |(number, row)| {
-                                                div()
-                                                    .id(("connection-dbt-unmatched-row", number))
-                                                    .test_support()
-                                                    .role(Role::ListItem)
-                                                    .aria_label(SharedString::from(row.clone()))
-                                                    .w_full()
-                                                    .truncate()
-                                                    .child(row)
-                                            },
-                                        )),
-                                )
-                            }),
-                    ),
-                )
+                            .into_any_element()
+                    }
+                };
+                // The summary follows the schema mapping, so it needs no
+                // label of its own.
+                form_element.child(Field::new().child(result))
             })
             .into_any_element()
     }
 
-    /// The match summary of a connection, with the rows of the resources
-    /// without a match when `rows` is true.
-    fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject, rows: bool) -> Matches {
-        let note = |text: &str| Matches {
-            text: text.into(),
-            unmatched: 0,
-            rows: vec![],
-        };
+    /// The match summary of a connection.
+    fn matches(&self, profile: Uuid, index: &Index, project: &DbtProject) -> MatchResult {
+        let note = |text: &str| MatchResult::Note(text.into());
         if !self.profile_browses(profile) {
             return note("Turn on Schema Refresh to match models with tables.");
         }
@@ -431,50 +464,9 @@ impl Qrow {
             return note("Refresh the schemas of the connection to match models with tables.");
         };
         let summary = matching::summary(index, project, &CatalogNames::of(catalog));
-        let mut text = format!(
-            "{} of {} models and sources match tables in the catalog.",
-            group(summary.matched),
-            group(summary.total)
-        );
-        match summary.not_loaded {
-            0 => {}
-            1 => text.push_str(" 1 is in a schema without loaded tables."),
-            count => text.push_str(&format!(
-                " {} are in schemas without loaded tables.",
-                group(count)
-            )),
-        }
-        let mut list = Vec::new();
-        if rows {
-            list = summary
-                .unmatched
-                .iter()
-                .take(MAX_UNMATCHED_ROWS)
-                .map(|(position, schema, found)| {
-                    let entry = index.entry(*position);
-                    let reason = match found {
-                        Match::NoSchema => "no schema",
-                        _ => "no table",
-                    };
-                    format!(
-                        "{} {}: {schema}.{} ({reason})",
-                        entry.kind.name(),
-                        entry.name,
-                        entry.identifier
-                    )
-                })
-                .collect();
-            if summary.unmatched.len() > MAX_UNMATCHED_ROWS {
-                list.push(format!(
-                    "And {} more.",
-                    group(summary.unmatched.len() - MAX_UNMATCHED_ROWS)
-                ));
-            }
-        }
-        Matches {
-            text,
-            unmatched: summary.unmatched.len(),
-            rows: list,
+        MatchResult::Summary {
+            matched: summary.matched,
+            total: summary.total,
         }
     }
 
@@ -485,13 +477,178 @@ impl Qrow {
     }
 }
 
-/// The match summary that the form shows.
-struct Matches {
-    text: String,
-    /// The number of resources without a match.
-    unmatched: usize,
-    /// The resources without a match, when the list is open.
-    rows: Vec<String>,
+/// What the form can tell about the matches.
+enum MatchResult {
+    /// The counts of the resources with a match and of all resources.
+    Summary { matched: usize, total: usize },
+    /// What the user must do before the form can match the resources.
+    Note(String),
+    /// The schema mapping rules are not valid.
+    Error(String),
+}
+
+/// The share of the resources with a match, in whole percent. A share that
+/// is not zero does not show as 0%, and a share that is not all does not
+/// show as 100%.
+fn percent(matched: usize, total: usize) -> usize {
+    if total == 0 {
+        return 0;
+    }
+    let percent = (matched * 100 + total / 2) / total;
+    match percent {
+        0 if matched > 0 => 1,
+        100 if matched < total => 99,
+        percent => percent,
+    }
+}
+
+/// What the schema tree shows for a table that a dbt resource builds.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct DbtBadge {
+    pub(super) unique_id: String,
+    /// The text after the name, like `dbt incremental` or `dbt source`.
+    pub(super) detail: String,
+    /// The start of the dbt description, for the tooltip, unless the
+    /// catalog comment has the same text.
+    pub(super) description: Option<String>,
+    /// Whether the tooltip has only a part of the description.
+    pub(super) description_cut: bool,
+}
+
+/// The longest dbt description in a tooltip, in characters. The details
+/// sheet has the full text.
+const TOOLTIP_DESCRIPTION_CHARS: usize = 240;
+
+/// The dbt resources of the tables of one connection.
+pub(super) struct DbtLookup {
+    index: Arc<Index>,
+    relations: HashMap<(String, String), u32>,
+}
+
+impl DbtLookup {
+    /// The badge of the table `relation` in `schema`, which has the catalog
+    /// comment `comment`.
+    pub(super) fn badge(
+        &self,
+        schema: &str,
+        relation: &str,
+        comment: Option<&str>,
+    ) -> Option<DbtBadge> {
+        let key = (schema.to_lowercase(), relation.to_lowercase());
+        let entry = self.index.entry(*self.relations.get(&key)?);
+        let detail = format!("dbt {}", resource_label(&self.index, entry));
+        let description = entry.description.trim();
+        let (description, description_cut) =
+            if description.is_empty() || comment.map(str::trim) == Some(description) {
+                (None, false)
+            } else {
+                let (summary, cut) = summary(description, TOOLTIP_DESCRIPTION_CHARS);
+                (Some(summary), cut)
+            };
+        Some(DbtBadge {
+            unique_id: entry.unique_id.to_string(),
+            detail,
+            description,
+            description_cut,
+        })
+    }
+}
+
+/// The materialization of a model, like `incremental`, or the kind of
+/// another resource, like `seed` or `source`.
+pub(super) fn resource_label<'a>(index: &'a Index, entry: &'a Entry) -> &'a str {
+    match (entry.kind, entry.materialized) {
+        (Kind::Model, Some(materialized)) => index.symbol(materialized),
+        (kind, _) => kind.name(),
+    }
+}
+
+/// The first paragraph of `text` on one line, cut at a word to `limit`
+/// characters, and whether it drops a part of `text`. The tooltip shows it
+/// as Markdown, so the cut is outside a code span, a link, and strong text
+/// when the text has such a place.
+fn summary(text: &str, limit: usize) -> (String, bool) {
+    let text = text.trim();
+    let paragraph = text.split("\n\n").next().unwrap_or_default();
+    let words: Vec<&str> = paragraph.split_whitespace().collect();
+    let mut summary = String::new();
+    let mut taken = 0;
+    // The length and the word count of the longest part that is complete
+    // Markdown.
+    let mut complete = (0, 0);
+    for word in &words {
+        let length = summary.chars().count() + usize::from(taken > 0) + word.chars().count();
+        if length > limit {
+            break;
+        }
+        if taken > 0 {
+            summary.push(' ');
+        }
+        summary.push_str(word);
+        taken += 1;
+        if !markdown_open(&summary) {
+            complete = (summary.len(), taken);
+        }
+    }
+    if taken < words.len() && complete.1 > 0 {
+        summary.truncate(complete.0);
+        taken = complete.1;
+    }
+    let mut cut = taken < words.len() || paragraph.len() < text.len();
+    // A first word longer than the limit is cut inside the word.
+    if taken == 0 && !words.is_empty() {
+        summary = words[0].chars().take(limit).collect();
+        cut = true;
+    }
+    if cut {
+        summary.push('…');
+    }
+    (summary, cut)
+}
+
+/// Whether `text` ends inside a code span, a link, or strong text.
+fn markdown_open(text: &str) -> bool {
+    // The length of the backtick run that opened the code span.
+    let mut code: Option<usize> = None;
+    let mut strong = false;
+    // In the text of a link, then in its target.
+    let (mut link_text, mut link_target) = (false, false);
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '`' => {
+                let mut run = 1;
+                while chars.peek() == Some(&'`') {
+                    chars.next();
+                    run += 1;
+                }
+                // Only a run of the same length closes a code span.
+                code = match code {
+                    None => Some(run),
+                    Some(open) if open == run => None,
+                    open => open,
+                };
+            }
+            _ if code.is_some() => {}
+            '\\' => {
+                chars.next();
+            }
+            // Double underscores are common in identifiers, such as
+            // silver__orders, where they are not emphasis.
+            '*' if chars.peek() == Some(&'*') => {
+                chars.next();
+                strong = !strong;
+            }
+            '[' if !link_target => link_text = true,
+            ']' if link_text => {
+                link_text = false;
+                link_target = chars.peek() == Some(&'(');
+            }
+            ')' if link_target => link_target = false,
+            _ => {}
+        }
+    }
+    code.is_some() || strong || link_text || link_target
 }
 
 /// The dbt fields of Connection Settings.
@@ -499,7 +656,6 @@ pub(super) struct DbtForm {
     pub(super) manifest: Entity<InputState>,
     pub(super) refresh: connection_form::ChoiceSelect,
     pub(super) rules: Entity<TextareaState>,
-    pub(super) unmatched_open: bool,
     _subscriptions: Vec<gpui_kit::Subscription>,
 }
 
@@ -553,7 +709,6 @@ impl DbtForm {
             manifest,
             refresh,
             rules,
-            unmatched_open: false,
             _subscriptions: subscriptions,
         }
     }
@@ -650,6 +805,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_match_share_shows_some_and_not_all() {
+        assert_eq!(percent(0, 0), 0);
+        assert_eq!(percent(0, 10), 0);
+        assert_eq!(percent(10, 10), 100);
+        assert_eq!(percent(26, 2_244), 1);
+        assert_eq!(percent(1, 2_244), 1);
+        assert_eq!(percent(2_243, 2_244), 99);
+        assert_eq!(percent(10, 16), 63);
+    }
+
+    #[test]
     fn the_status_follows_the_field_and_the_manifest() {
         assert!(manifest_status("", false, None).starts_with("The manifest.json file"));
         assert_eq!(
@@ -667,6 +833,111 @@ mod tests {
         assert_eq!(
             manifest_status("/m.json", true, Some(&state)),
             "Manifest not found: run dbt parse in the project"
+        );
+    }
+
+    #[test]
+    fn a_table_badge_names_the_materialization_and_the_description() {
+        let value = serde_json::json!({
+            "metadata": {"dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json"},
+            "nodes": {
+                "model.lake.orders": {
+                    "unique_id": "model.lake.orders", "resource_type": "model", "name": "orders",
+                    "schema": "dev_core", "alias": "orders", "relation_name": "x",
+                    "config": {"materialized": "incremental"},
+                    "description": format!("  {}  ", "Long text. ".repeat(40)),
+                    "raw_code": "select 1",
+                },
+            },
+            "sources": {
+                "source.lake.raw.orders": {
+                    "unique_id": "source.lake.raw.orders", "resource_type": "source",
+                    "name": "orders", "schema": "raw", "source_name": "raw",
+                },
+            },
+        });
+        let index = Arc::new(crate::dbt::parse(&serde_json::to_vec(&value).unwrap()).unwrap());
+        let project = DbtProject {
+            manifest: "/m".into(),
+            refresh: DbtRefresh::Manual,
+            schema_mapping: parse_schema_rules("dev_* = *").unwrap(),
+        };
+        let relations = matching::relations(&index, &project);
+        let lookup = DbtLookup { index, relations };
+        let badge = lookup.badge("CORE", "Orders", None).unwrap();
+        assert_eq!(badge.unique_id, "model.lake.orders");
+        assert_eq!(badge.detail, "dbt incremental");
+        assert!(badge.description_cut);
+        let description = badge.description.unwrap();
+        // The cut is after a whole word.
+        let start = description.strip_suffix('…').unwrap();
+        assert!("Long text. ".repeat(40).starts_with(&format!("{start} ")));
+        assert!(description.chars().count() <= TOOLTIP_DESCRIPTION_CHARS + 1);
+        // A catalog comment with the same text needs no second line.
+        let comment = "Long text. ".repeat(40);
+        let same = lookup.badge("core", "orders", Some(&comment)).unwrap();
+        assert_eq!(same.description, None);
+        let source = lookup.badge("raw", "orders", None).unwrap();
+        assert_eq!(source.detail, "dbt source");
+        assert_eq!(source.description, None);
+        assert!(lookup.badge("dev_core", "orders", None).is_none());
+    }
+
+    #[test]
+    fn a_summary_has_the_first_paragraph_on_one_line() {
+        assert_eq!(summary("Short.", 20), ("Short.".to_owned(), false));
+        assert_eq!(
+            summary("One\ntwo  three.", 20),
+            ("One two three.".to_owned(), false)
+        );
+        assert_eq!(
+            summary("First part.\n\nSecond part.", 20),
+            ("First part.…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Words that do not fit", 12),
+            ("Words that…".to_owned(), true)
+        );
+        assert_eq!(summary("Ünïcödé_wörd", 4), ("Ünïc…".to_owned(), true));
+    }
+
+    #[test]
+    fn a_summary_does_not_cut_markdown() {
+        // A code span, a link, and strong text stay whole or go.
+        assert_eq!(
+            summary("Uses `a long code span` here", 14),
+            ("Uses…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("See [the guide](https://example.com/guide) now", 20),
+            ("See…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Very **important text** here", 18),
+            ("Very…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Has `code` and more words", 14),
+            ("Has `code` and…".to_owned(), true)
+        );
+        // Identifiers with underscores are not emphasis.
+        assert_eq!(
+            summary("silver__orders has prices", 20),
+            ("silver__orders has…".to_owned(), true)
+        );
+        // A code span closes only with as many backticks as it opened with.
+        assert_eq!(
+            summary("Uses ``a ` b c`` and more", 13),
+            ("Uses…".to_owned(), true)
+        );
+        assert_eq!(
+            summary("Uses ``a ` b`` and more", 18),
+            ("Uses ``a ` b`` and…".to_owned(), true)
+        );
+        // Text that is all one open span keeps the first words.
+        assert_eq!(
+            summary("`one two three four`", 9),
+            ("`one two…".to_owned(), true)
         );
     }
 

@@ -215,6 +215,21 @@ struct DbtDescribeInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DbtSqlInput {
+    version: u32,
+    #[allow(dead_code)]
+    connection_id: Uuid,
+    model: String,
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DbtLineageInput {
     version: u32,
     #[allow(dead_code)]
@@ -557,6 +572,7 @@ impl Qrow {
                 return self.tool_catalog(call, cx);
             }
             "dbt-search-models" | "dbt-describe-model" | "dbt-read-lineage" => self.tool_dbt(call),
+            "dbt-read-sql" => return self.tool_dbt_sql(call, cx),
             _ => Err(failure(
                 "capability_missing",
                 "This assistant tool is not available.",
@@ -1441,12 +1457,20 @@ impl Qrow {
         }
     }
 
-    /// Answer a dbt tool call from the index of the manifest of the
-    /// connection.
-    fn tool_dbt(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
-        use crate::assistant::dbt;
-        let arguments = call.arguments.clone();
-        let connection = arguments
+    /// The connection of a dbt tool call and the state of its manifest,
+    /// which has an index.
+    fn dbt_target(
+        &self,
+        call: &ToolCall,
+    ) -> Result<
+        (
+            &crate::model::Profile,
+            &Arc<crate::dbt::worker::ManifestState>,
+        ),
+        ToolResult,
+    > {
+        let connection = call
+            .arguments
             .get("connection_id")
             .and_then(Value::as_str)
             .and_then(|id| Uuid::parse_str(id).ok());
@@ -1465,15 +1489,106 @@ impl Qrow {
             ));
         }
         let state = self.dbt.state(profile.id);
-        let Some(project) = self.dbt_project(profile, state) else {
-            return Err(match state.and_then(|state| state.error.as_ref()) {
+        match state {
+            Some(state) if state.index.is_some() => Ok((profile, state)),
+            _ => Err(match state.and_then(|state| state.error.as_ref()) {
                 Some(error) => failure("manifest_unavailable", error.to_string()),
                 None => failure(
                     "manifest_loading",
                     "Qrow is reading the dbt manifest. Try again in a few seconds.",
                 ),
-            });
+            }),
+        }
+    }
+
+    /// Read the SQL of a model in the background, and answer the call when
+    /// the read ends.
+    fn tool_dbt_sql(&self, call: &ToolCall, cx: &mut Context<Self>) -> Option<ToolResult> {
+        use crate::assistant::dbt;
+        let prepared = (|| {
+            let input: DbtSqlInput = parse(call.arguments.clone())?;
+            version(input.version)?;
+            let (profile, state) = self.dbt_target(call)?;
+            // The positions of the SQL in the file are wrong after a change,
+            // and the model can be new. A refresh makes them right.
+            if !state.is_current() {
+                self.dbt.refresh_path(&state.path);
+                return Err(failure(
+                    "manifest_changed",
+                    "The dbt manifest changed after Qrow read it. Qrow reads it again now; try again in a few seconds.",
+                ));
+            }
+            Ok((
+                input,
+                profile.id,
+                profile.dbt.clone().unwrap(),
+                state.clone(),
+            ))
+        })();
+        let (input, connection, project, state) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return Some(error),
         };
+        let task = cx.background_executor().spawn(async move {
+            let index = state.index.as_ref().expect("a target has an index");
+            let project = dbt::Project::new(index, &project, state.refreshed, false);
+            let fail = |error: dbt::Failure| failure(error.code, error.message);
+            let changed = || {
+                failure(
+                    "manifest_changed",
+                    "The dbt manifest changed while Qrow read it. Try again in a few seconds.",
+                )
+            };
+            let result = (|| {
+                let position = project.resolve(&input.model).map_err(fail)?;
+                let mut value = project
+                    .read_sql(
+                        position,
+                        &state.path,
+                        input.code.as_deref() != Some("raw"),
+                        input.offset,
+                        input.limit.unwrap_or(dbt::MAX_SQL_BYTES),
+                    )
+                    .map_err(fail)?;
+                // dbt can write the file during the read.
+                if !state.is_current() {
+                    return Err(changed());
+                }
+                value["version"] = json!(TOOL_SCHEMA_VERSION);
+                value["connection_id"] = json!(connection);
+                Ok(success(value))
+            })();
+            result.unwrap_or_else(|error| error)
+        });
+        let call = call.clone();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                // The conversation or its turn can end during the read.
+                let current = this.assistant.conversation(&call.thread_id).is_some()
+                    && this
+                        .thread_run(&call.thread_id)
+                        .and_then(|run| run.active_turn.as_deref())
+                        == Some(call.turn_id.as_str());
+                if current {
+                    this.finish_assistant_tool(call, result, cx);
+                }
+            });
+        })
+        .detach();
+        None
+    }
+
+    /// Answer a dbt tool call from the index of the manifest of the
+    /// connection.
+    fn tool_dbt(&self, call: &ToolCall) -> Result<ToolResult, ToolResult> {
+        use crate::assistant::dbt;
+        let arguments = call.arguments.clone();
+        let (profile, state) = self.dbt_target(call)?;
+        let state = Some(state);
+        let project = self
+            .dbt_project(profile, state)
+            .expect("a target has an index");
         let fail = |error: dbt::Failure| failure(error.code, error.message);
         let mut value = match call.name.as_str() {
             "dbt-search-models" => {

@@ -307,17 +307,57 @@ case does not matter.
 
 ### Match models with tables
 
-When the connection [shows schemas](#browse-schemas), **Tables** in the form
-shows how many models, seeds, snapshots, and sources match tables in the
-catalog. A match has the mapped schema and the alias or identifier of the
-model. Qrow does not use the database of a model, because Spark has no level
-above schemas. Ephemeral models do not count. Click **Show unmatched** to see
-the models without a match, with their mapped schema. The summary follows the
-rules as you type them.
+When the connection [shows schemas](#browse-schemas), the form shows below
+the schema mapping how many dbt models, seeds, snapshots, and sources match
+tables in the catalog. A bar shows the percentage, so that rules that find
+almost no tables are easy to see. A match has the mapped schema and the alias
+or identifier of the model. Qrow does not use the database of a model,
+because Spark has no level above schemas. Ephemeral models do not count. The
+summary follows the rules as you type them. An incorrect rule shows its error
+in the place of the summary.
 
 Qrow can match only the schemas and tables that it has read. Refresh the
-schemas of the connection first. A model in a schema without loaded tables
-does not count as a match or as a failure.
+schemas of the connection first.
+
+### See dbt models in the schema tree
+
+In the schema tree, a table or view that a dbt model, seed, snapshot, or
+source builds shows its kind after its name, for example `dbt incremental` or
+`dbt source`. Its tooltip shows the name in bold, then the first paragraph
+of the dbt description, cut to a few lines. The tooltip shows the Markdown of
+the description, for example code and bold text. A cut description has a
+small note below it that tells you to open the dbt details.
+
+To read the full description, right-click the table and select **Show dbt
+details**. A panel opens at the right side of the window. It shows:
+
+- The kind, the materialization, the relation, the unique ID, and the tags of
+  the resource.
+- The full description.
+- The SQL of the model, in two closed parts: **Compiled SQL** has the SQL
+  that dbt compiled, without Jinja, and **Raw SQL** has the SQL of the model
+  file, with Jinja. Click a part to open it, and click its copy button to copy
+  the SQL. Both parts show the SQL with syntax highlighting, without the empty
+  lines at the start and at the end. A manifest from `dbt parse` has no
+  compiled SQL, so the **Compiled SQL** part tells why it is empty. When the
+  manifest changed after Qrow read it, Qrow reads the manifest again first,
+  then shows the SQL. When dbt writes the manifest again while the panel is
+  open, the panel keeps its place, and an open part shows its old SQL until
+  Qrow has read the new SQL.
+- The tests of the table. A test with arguments shows each argument under its
+  name.
+- The documented columns, with their types, descriptions, and tests. Type in
+  **Filter columns** to find columns by name or description.
+- The parents and children, with the materialization of each model or the
+  kind of each other resource. Click a parent or a child to show its details
+  in the panel. To go back, click the back button next to the close button
+  of the panel, or close the panel. The tooltip of the back button shows the
+  name of the resource that you came from. The panel then shows that
+  resource, with its column filter, its open SQL parts, and the row that you
+  clicked. Close the panel of the first resource to close it.
+
+The panel takes almost half of the window width, so make the window wider to
+read long text more easily.
 
 ### dbt limitations
 

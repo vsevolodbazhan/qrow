@@ -31,6 +31,7 @@ pub(in crate::ui) enum ToolKind {
     SearchModels,
     DescribeModel,
     ReadLineage,
+    ReadModelSql,
     Other,
 }
 
@@ -54,6 +55,7 @@ impl ToolKind {
             "dbt-search-models" => Self::SearchModels,
             "dbt-describe-model" => Self::DescribeModel,
             "dbt-read-lineage" => Self::ReadLineage,
+            "dbt-read-sql" => Self::ReadModelSql,
             _ => Self::Other,
         }
     }
@@ -76,6 +78,7 @@ impl ToolKind {
             Self::SearchModels => "Search dbt models",
             Self::DescribeModel => "Describe dbt model",
             Self::ReadLineage => "Read dbt lineage",
+            Self::ReadModelSql => "Read dbt model SQL",
             Self::Other => "Use tool",
         }
     }
@@ -98,6 +101,7 @@ impl ToolKind {
             Self::SearchModels => AssetIconName::Search,
             Self::DescribeModel => AssetIconName::BookOpen,
             Self::ReadLineage => AssetIconName::Network,
+            Self::ReadModelSql => AssetIconName::FileCode,
             Self::Other => AssetIconName::SquareTerminal,
         }
     }
@@ -473,6 +477,7 @@ mod tests {
             ToolKind::SearchModels,
             ToolKind::DescribeModel,
             ToolKind::ReadLineage,
+            ToolKind::ReadModelSql,
             ToolKind::Other,
         ];
         for kind in kinds {
@@ -494,6 +499,7 @@ mod tests {
                 | ToolKind::SearchModels
                 | ToolKind::DescribeModel
                 | ToolKind::ReadLineage
+                | ToolKind::ReadModelSql
                 | ToolKind::Other => {}
             }
             let path = kind.icon().path();
