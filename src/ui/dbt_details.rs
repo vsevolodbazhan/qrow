@@ -131,12 +131,8 @@ pub(super) struct DbtDetailsView {
     shown_changed: bool,
     /// The rem size of the last frame. Row heights follow it.
     rem_size: Option<gpui_kit::Pixels>,
-    /// Whether the SQL part is open.
-    sql_open: bool,
-    sql: Sql,
-    /// Counts the reads of the SQL, so that the result of an old read is
-    /// dropped.
-    sql_read: u64,
+    /// The compiled SQL part, then the raw SQL part.
+    sql: [SqlPart; 2],
     /// The unique IDs and the titles of the resources that the user came
     /// from through the lineage, the last one on top.
     history: Vec<(String, SharedString)>,
@@ -147,9 +143,9 @@ pub(super) struct DbtDetailsView {
 struct Data {
     facts: Vec<(&'static str, SharedString)>,
     description: Option<SharedString>,
-    /// The title of the SQL part, and whether the manifest has only the raw
-    /// SQL. `None` for a resource without SQL.
-    sql: Option<(&'static str, bool)>,
+    /// Whether the manifest has the compiled SQL and the raw SQL of the
+    /// resource. `None` for a resource without SQL, like a source.
+    sql: Option<SqlKinds>,
     tests: Vec<TestView>,
     columns: Vec<ColumnView>,
     parents: Vec<Linked>,
@@ -185,7 +181,6 @@ enum Row {
     Missing,
     Facts,
     Description,
-    Sql,
     Tests,
     ColumnsTitle,
     Column(usize),
@@ -194,12 +189,93 @@ enum Row {
     Parent(usize),
     ChildrenTitle,
     Child(usize),
-    SqlChunk(usize),
+    Sql(SqlKind),
+    SqlChunk(SqlKind, usize),
+}
+
+/// The two SQL parts of a resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SqlKind {
+    Compiled,
+    Raw,
+}
+
+impl SqlKind {
+    const ALL: [SqlKind; 2] = [SqlKind::Compiled, SqlKind::Raw];
+
+    fn title(self) -> &'static str {
+        match self {
+            SqlKind::Compiled => "Compiled SQL",
+            SqlKind::Raw => "Raw SQL",
+        }
+    }
+
+    /// The part of the element IDs of the part.
+    fn id(self) -> &'static str {
+        match self {
+            SqlKind::Compiled => "compiled",
+            SqlKind::Raw => "raw",
+        }
+    }
+
+    fn position(self) -> usize {
+        self as usize
+    }
+
+    /// What the part shows, or why the manifest does not have it.
+    fn note(self, available: bool) -> &'static str {
+        match (self, available) {
+            (SqlKind::Compiled, true) => "The SQL that dbt compiled, without Jinja.",
+            (SqlKind::Compiled, false) => {
+                "The manifest has no compiled SQL. dbt adds it when it compiles the project, \
+                 for example with dbt compile or dbt build, but not with dbt parse."
+            }
+            (SqlKind::Raw, true) => "The SQL of the model file, with Jinja.",
+            (SqlKind::Raw, false) => "The manifest has no raw SQL of this resource.",
+        }
+    }
+}
+
+/// Which SQL the manifest has for a resource.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SqlKinds {
+    compiled: bool,
+    raw: bool,
+}
+
+impl SqlKinds {
+    fn has(self, kind: SqlKind) -> bool {
+        match kind {
+            SqlKind::Compiled => self.compiled,
+            SqlKind::Raw => self.raw,
+        }
+    }
+}
+
+/// One SQL part: whether it is open, and its SQL.
+#[derive(Default)]
+struct SqlPart {
+    open: bool,
+    sql: Sql,
+    /// Counts the reads of the SQL, so that the result of an old read is
+    /// dropped.
+    read: u64,
+}
+
+impl SqlPart {
+    /// Forget the SQL, because it belongs to an old index or another
+    /// resource. A read in progress ends without a result.
+    fn reset(&mut self) {
+        self.read += 1;
+        self.sql = Sql::Unread;
+    }
 }
 
 /// The SQL of the resource. The sheet reads it from the manifest when the
 /// user opens the SQL part.
+#[derive(Default)]
 enum Sql {
+    #[default]
     Unread,
     Reading,
     /// The manifest changed after Qrow read it, so the positions of the SQL
@@ -293,9 +369,7 @@ impl DbtDetailsView {
             list: ListState::new(0, ListAlignment::Top, px(OVERDRAW)).measure_all(),
             shown_changed: false,
             rem_size: None,
-            sql_open: false,
-            sql: Sql::Unread,
-            sql_read: 0,
+            sql: Default::default(),
             history: Vec::new(),
             _subscription: subscription,
         };
@@ -354,9 +428,12 @@ impl DbtDetailsView {
         };
         rows.extend([Row::Facts, Row::Description]);
         if data.sql.is_some() {
-            rows.push(Row::Sql);
-            if let (true, Sql::Read(sql)) = (self.sql_open, &self.sql) {
-                rows.extend((0..sql.chunks.len()).map(Row::SqlChunk));
+            for kind in SqlKind::ALL {
+                rows.push(Row::Sql(kind));
+                let part = &self.sql[kind.position()];
+                if let (true, Sql::Read(sql)) = (part.open, &part.sql) {
+                    rows.extend((0..sql.chunks.len()).map(|chunk| Row::SqlChunk(kind, chunk)));
+                }
             }
         }
         rows.extend([Row::Tests, Row::ColumnsTitle]);
@@ -423,24 +500,29 @@ impl DbtDetailsView {
         self.project = project;
         if new_index {
             // The SQL of the old index is old.
-            self.sql_read += 1;
-            self.sql = Sql::Unread;
+            for part in &mut self.sql {
+                part.reset();
+            }
             self.rebuild(cx);
-            if self.sql_open {
-                self.read_sql(cx);
+            for kind in SqlKind::ALL {
+                if self.sql[kind.position()].open {
+                    self.read_sql(kind, cx);
+                }
             }
             cx.notify();
             return;
         }
-        if matches!(self.sql, Sql::Refreshing)
-            && let Some(state) = self.state.clone()
-            && !state.parsing
-        {
-            if state.is_current() {
-                self.read_sql(cx);
-            } else if let Some(error) = &state.error {
-                self.sql = Sql::Failed(error.to_string());
-                self.sql_changed();
+        for kind in SqlKind::ALL {
+            if matches!(self.sql[kind.position()].sql, Sql::Refreshing)
+                && let Some(state) = self.state.clone()
+                && !state.parsing
+            {
+                if state.is_current() {
+                    self.read_sql(kind, cx);
+                } else if let Some(error) = &state.error {
+                    self.sql[kind.position()].sql = Sql::Failed(error.to_string());
+                    self.sql_changed(kind);
+                }
             }
         }
         // The facts tell whether the manifest changed since the read. A
@@ -479,9 +561,10 @@ impl DbtDetailsView {
         }
         self.unique_id = unique_id;
         // The SQL and the column filter belong to the old resource.
-        self.sql_open = false;
-        self.sql_read += 1;
-        self.sql = Sql::Unread;
+        for part in &mut self.sql {
+            part.reset();
+            part.open = false;
+        }
         self.filter
             .update(cx, |filter, cx| filter.set_value("", window, cx));
         self.rebuild(cx);
@@ -510,33 +593,35 @@ impl DbtDetailsView {
             .into_any_element()
     }
 
-    /// Open or close the SQL part.
-    fn toggle_sql(&mut self, cx: &mut Context<Self>) {
-        self.sql_open = !self.sql_open;
+    /// Open or close the SQL part `kind`.
+    fn toggle_sql(&mut self, kind: SqlKind, cx: &mut Context<Self>) {
+        let current = self.state.as_ref().is_some_and(|state| state.is_current());
+        let part = &mut self.sql[kind.position()];
+        part.open = !part.open;
         // A manifest that changed since the read has other SQL, and a failed
         // read can work now.
-        let stale = match &self.sql {
+        let stale = match &part.sql {
             Sql::Unread | Sql::Failed(_) => true,
-            Sql::Read(_) => !self.state.as_ref().is_some_and(|state| state.is_current()),
+            Sql::Read(_) => !current,
             Sql::Reading | Sql::Refreshing => false,
         };
-        if self.sql_open && stale {
-            self.read_sql(cx);
+        if part.open && stale {
+            self.read_sql(kind, cx);
         }
-        self.sql_changed();
+        self.sql_changed(kind);
         cx.notify();
     }
 
-    /// The SQL part changed: its header has a new height, and the rows of
-    /// SQL came or went.
-    fn sql_changed(&mut self) {
-        let Some(sql) = self.rows.iter().position(|row| *row == Row::Sql) else {
+    /// The SQL part `kind` changed: its header has a new height, and the
+    /// rows of SQL came or went.
+    fn sql_changed(&mut self, kind: SqlKind) {
+        let Some(sql) = self.rows.iter().position(|row| *row == Row::Sql(kind)) else {
             return;
         };
         let chunks = |rows: &[Row]| {
             rows[sql + 1..]
                 .iter()
-                .take_while(|row| matches!(row, Row::SqlChunk(_)))
+                .take_while(|row| matches!(row, Row::SqlChunk(..)))
                 .count()
         };
         let old = chunks(&self.rows);
@@ -546,29 +631,33 @@ impl DbtDetailsView {
         self.list.remeasure_items(sql..sql + 1 + new);
     }
 
-    /// Read the SQL in the background: the compiled SQL, or the raw SQL when
-    /// the manifest has none.
-    fn read_sql(&mut self, cx: &mut Context<Self>) {
+    /// Read the SQL of the part `kind` in the background.
+    fn read_sql(&mut self, kind: SqlKind, cx: &mut Context<Self>) {
         let Some(state) = self.state.clone() else {
             return;
         };
         let span = state.index.as_ref().and_then(|index| {
             let entry = index.entry(index.find(&self.unique_id)?);
-            entry.compiled_code.or(entry.raw_code)
+            match kind {
+                SqlKind::Compiled => entry.compiled_code,
+                SqlKind::Raw => entry.raw_code,
+            }
         });
+        // The part tells that the manifest has no such SQL.
         let Some(span) = span else {
             return;
         };
-        self.sql_read += 1;
+        let part = &mut self.sql[kind.position()];
+        part.read += 1;
         if !state.is_current() {
             self.refresher.refresh(&state.path);
-            self.sql = Sql::Refreshing;
-            self.sql_changed();
+            part.sql = Sql::Refreshing;
+            self.sql_changed(kind);
             return;
         }
-        self.sql = Sql::Reading;
-        self.sql_changed();
-        let read = self.sql_read;
+        part.sql = Sql::Reading;
+        let read = part.read;
+        self.sql_changed(kind);
         // Compiled SQL can be large, and the file can be on a slow disk.
         let task = cx.background_executor().spawn(async move {
             let result = crate::dbt::read_sql(&state.path, span);
@@ -585,15 +674,18 @@ impl DbtDetailsView {
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |this, cx| {
-                if this.sql_read != read {
+                if this.sql[kind.position()].read != read {
                     return;
                 }
                 match result {
-                    SqlRead::Changed => this.read_sql(cx),
-                    SqlRead::Read(sql) => this.sql = Sql::Read(SqlText::new(sql, cx)),
-                    SqlRead::Failed(error) => this.sql = Sql::Failed(error),
+                    SqlRead::Changed => this.read_sql(kind, cx),
+                    SqlRead::Read(sql) => {
+                        let text = SqlText::new(sql, cx);
+                        this.sql[kind.position()].sql = Sql::Read(text);
+                    }
+                    SqlRead::Failed(error) => this.sql[kind.position()].sql = Sql::Failed(error),
                 }
-                this.sql_changed();
+                this.sql_changed(kind);
                 cx.notify();
             });
         })
@@ -674,11 +766,11 @@ impl DbtDetailsView {
                 };
                 section("Description", content).into_any_element()
             }
-            Row::Sql => match data.sql {
-                Some((title, raw_only)) => self.sql_part(title, raw_only, cx),
+            Row::Sql(kind) => match data.sql {
+                Some(kinds) => self.sql_part(kind, kinds.has(kind), cx),
                 None => div().into_any_element(),
             },
-            Row::SqlChunk(position) => self.sql_chunk(position, cx),
+            Row::SqlChunk(kind, position) => self.sql_chunk(kind, position, cx),
             Row::Tests => {
                 let content = if data.tests.is_empty() {
                     muted_text("No tests of the table.", muted)
@@ -772,33 +864,51 @@ impl DbtDetailsView {
         }
     }
 
-    /// The SQL part: a header that opens it, then the SQL with a copy
-    /// button. `raw_only` tells that the manifest has no compiled SQL.
-    fn sql_part(&self, title: &'static str, raw_only: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// A SQL part: a header that opens it, then the SQL with a copy button.
+    /// `available` tells whether the manifest has this SQL; when it does
+    /// not, the part tells why.
+    fn sql_part(&self, kind: SqlKind, available: bool, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
-        let open = self.sql_open;
-        let header = Button::new("dbt-details-sql-toggle")
-            .ghost()
-            .small()
-            .w_full()
-            .justify_start()
-            // The chevron lines up with the titles of the other parts.
-            .px_0()
-            .accessibility_label(title)
-            .child(
-                h_flex()
-                    .w_full()
-                    .gap_1p5()
-                    .child(
-                        Icon::new(IconName::ChevronRight)
-                            .xsmall()
-                            .text_color(muted)
-                            .rotate(percentage(if open { 0.25 } else { 0. })),
-                    )
-                    .child(div().text_sm().font_semibold().child(title)),
-            )
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_sql(cx)));
-        let body = open.then(|| match &self.sql {
+        let part = &self.sql[kind.position()];
+        let open = part.open;
+        let title = kind.title();
+        let header = Button::new(SharedString::from(format!(
+            "dbt-details-{}-sql-toggle",
+            kind.id()
+        )))
+        .ghost()
+        .small()
+        .w_full()
+        .justify_start()
+        // The chevron lines up with the titles of the other parts.
+        .px_0()
+        .accessibility_label(title)
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1p5()
+                .child(
+                    Icon::new(IconName::ChevronRight)
+                        .xsmall()
+                        .text_color(muted)
+                        .rotate(percentage(if open { 0.25 } else { 0. })),
+                )
+                .child(div().text_sm().font_semibold().child(title)),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_sql(kind, cx)));
+        let body = open.then(|| match &part.sql {
+            _ if !available => div()
+                .id(SharedString::from(format!(
+                    "dbt-details-{}-sql-note",
+                    kind.id()
+                )))
+                .test_support()
+                .role(Role::Label)
+                .aria_label(kind.note(false))
+                .text_xs()
+                .text_color(muted)
+                .child(kind.note(false))
+                .into_any_element(),
             Sql::Unread | Sql::Reading => muted_text("Reading the SQL…", muted),
             Sql::Refreshing => muted_text(
                 "The dbt manifest changed. Qrow reads it again, then shows the SQL.",
@@ -806,22 +916,21 @@ impl DbtDetailsView {
             ),
             Sql::Failed(error) => muted_text(&format!("Could not read the SQL: {error}"), muted),
             Sql::Read(sql) => h_flex()
-                .id("dbt-details-sql")
+                .id(SharedString::from(format!("dbt-details-{}-sql", kind.id())))
                 .test_support()
                 .role(Role::Label)
                 .aria_label(sql.full.clone())
                 .gap_2()
                 .text_xs()
                 .text_color(muted)
-                .child(div().flex_1().child(if raw_only {
-                    "The manifest has no compiled SQL. This is the SQL with Jinja."
-                } else {
-                    "The SQL that dbt compiled, without Jinja."
-                }))
+                .child(div().flex_1().child(kind.note(true)))
                 .child(
-                    Clipboard::new("dbt-details-copy-sql")
-                        .value(sql.full.clone())
-                        .tooltip("Copy SQL"),
+                    Clipboard::new(SharedString::from(format!(
+                        "dbt-details-copy-{}-sql",
+                        kind.id()
+                    )))
+                    .value(sql.full.clone())
+                    .tooltip("Copy SQL"),
                 )
                 .into_any_element(),
         });
@@ -835,8 +944,8 @@ impl DbtDetailsView {
 
     /// The rows of SQL form one box. They scroll with the sheet instead of
     /// in a box of their own.
-    fn sql_chunk(&self, position: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Sql::Read(sql) = &self.sql else {
+    fn sql_chunk(&self, kind: SqlKind, position: usize, cx: &mut Context<Self>) -> AnyElement {
+        let Sql::Read(sql) = &self.sql[kind.position()].sql else {
             return div().into_any_element();
         };
         let (Some(text), Some(selection)) =
@@ -859,11 +968,12 @@ impl DbtDetailsView {
             .text_xs()
             .child(
                 SelectableText::with_handle(
-                    SharedString::from(format!("dbt-sql-{position}")),
+                    SharedString::from(format!("dbt-sql-{}-{position}", kind.id())),
                     selection.clone(),
                     text.clone(),
                 )
-                .document_order(position as u64),
+                // The compiled SQL comes before the raw SQL.
+                .document_order(((kind.position() as u64) << 32) + position as u64),
             )
             .into_any_element()
     }
@@ -934,8 +1044,10 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
     let description = entry.description.trim();
     let sql = match (entry.kind, entry.compiled_code, entry.raw_code) {
         (Kind::Source, _, _) | (_, None, None) => None,
-        (_, Some(_), _) => Some(("Compiled SQL", false)),
-        (_, None, Some(_)) => Some(("Raw SQL", true)),
+        (_, compiled, raw) => Some(SqlKinds {
+            compiled: compiled.is_some(),
+            raw: raw.is_some(),
+        }),
     };
     let view = |test: &Test| test_view(index, &project, test);
     let columns = entry

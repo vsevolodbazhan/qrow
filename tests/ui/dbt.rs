@@ -432,19 +432,26 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
             assert!(crate::support::present(window, &column_id(name)), "{name}");
         }
     });
-    // The SQL opens in the sheet and can be copied. The manifest has no
-    // compiled SQL, so the sheet shows the raw SQL.
-    let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
-    app.click(cx, "dbt-details-sql-toggle");
-    app.wait_until(cx, "the model SQL", TIMEOUT, |window, _| {
-        label(window, "dbt-details-sql").as_deref() == Some(raw.as_str())
+    // The manifest has no compiled SQL, so the Compiled SQL part tells why.
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_until(cx, "the compiled SQL note", TIMEOUT, |window, _| {
+        label(window, "dbt-details-compiled-sql-note")
+            .is_some_and(|text| text.starts_with("The manifest has no compiled SQL."))
     });
-    app.click(cx, "dbt-details-copy-sql");
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_gone(cx, "dbt-details-compiled-sql-note");
+    // The raw SQL opens in the sheet and can be copied.
+    let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
+    app.click(cx, "dbt-details-raw-sql-toggle");
+    app.wait_until(cx, "the model SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-raw-sql").as_deref() == Some(raw.as_str())
+    });
+    app.click(cx, "dbt-details-copy-raw-sql");
     let copied = cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(copied.as_deref(), Some(raw.as_str()));
-    app.click(cx, "dbt-details-sql-toggle");
+    app.click(cx, "dbt-details-raw-sql-toggle");
     app.wait_until(cx, "the closed SQL", TIMEOUT, |window, _| {
-        !crate::support::present(window, &"dbt-details-sql".into())
+        !crate::support::present(window, &"dbt-details-raw-sql".into())
     });
 
     // dbt writes new SQL while the part is closed. The connection refreshes
@@ -452,15 +459,25 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let changed = format!("{raw}\n-- changed");
     value["nodes"][dbt_manifest::model_id(1)]["raw_code"] = changed.clone().into();
+    // dbt also compiles the model this time.
+    let compiled = "select 1 as id";
+    value["nodes"][dbt_manifest::model_id(1)]["compiled_code"] = compiled.into();
     std::fs::write(&manifest, serde_json::to_vec(&value).unwrap()).unwrap();
-    app.click(cx, "dbt-details-sql-toggle");
+    app.click(cx, "dbt-details-raw-sql-toggle");
     app.wait_until(cx, "the new model SQL", TIMEOUT, |window, _| {
-        label(window, "dbt-details-sql").as_deref() == Some(changed.as_str())
+        label(window, "dbt-details-raw-sql").as_deref() == Some(changed.as_str())
     });
-    app.click(cx, "dbt-details-sql-toggle");
+    app.click(cx, "dbt-details-raw-sql-toggle");
     app.wait_until(cx, "the closed SQL", TIMEOUT, |window, _| {
-        !crate::support::present(window, &"dbt-details-sql".into())
+        !crate::support::present(window, &"dbt-details-raw-sql".into())
     });
+    // Now the Compiled SQL part has the compiled SQL.
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_until(cx, "the compiled SQL", TIMEOUT, |window, _| {
+        label(window, "dbt-details-compiled-sql").as_deref() == Some(compiled)
+    });
+    app.click(cx, "dbt-details-compiled-sql-toggle");
+    app.wait_gone(cx, "dbt-details-compiled-sql");
 
     // The space above a column description and the space below it look the
     // same: the name and the description share a line height, and the tests

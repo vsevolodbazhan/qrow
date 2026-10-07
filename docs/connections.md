@@ -332,11 +332,13 @@ details**. A panel opens at the right side of the window. It shows:
 - The kind, the materialization, the relation, the unique ID, and the tags of
   the resource.
 - The full description.
-- The SQL of the model, in a closed part. Click **Compiled SQL** to open it,
-  and click the copy button to copy it. When the manifest has no compiled SQL,
-  for example a manifest from `dbt parse`, the part is **Raw SQL** and has the
-  SQL with Jinja. When the manifest changed after Qrow read it, Qrow reads the
-  manifest again first, then shows the SQL.
+- The SQL of the model, in two closed parts: **Compiled SQL** has the SQL
+  that dbt compiled, without Jinja, and **Raw SQL** has the SQL of the model
+  file, with Jinja. Click a part to open it, and click its copy button to copy
+  the SQL. A manifest from `dbt parse` has no compiled SQL, so the
+  **Compiled SQL** part tells why it is empty. When the manifest changed
+  after Qrow read it, Qrow reads the manifest again first, then shows the
+  SQL.
 - The tests of the table. A test with arguments shows each argument under its
   name.
 - The documented columns, with their types, descriptions, and tests. Type in
