@@ -791,6 +791,57 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
             && crate::support::present(window, &"dbt-details-description".into())
     });
     app.settle(cx);
-    assert!(top(cx, "dbt-details-description").is_some());
+    let description = top(cx, "dbt-details-description");
+    assert!(description.is_some());
     assert_eq!(parent_top(cx), None);
+
+    // A click on the scrollbar track before the read moves the list too.
+    for _ in 0..40 {
+        if parent_top(cx).is_some() {
+            break;
+        }
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    let before = parent_top(cx).expect("the parent row");
+    app.click(cx, ("dbt-details-parent", 0usize));
+    app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
+    });
+    app.update(cx, |window, cx| {
+        window.press("escape", cx);
+        window.render_frame(cx);
+        let list = window.find("dbt-details-list").bounds();
+        let position = gpui_kit::point(
+            list.right() - gpui_kit::px(4.),
+            list.bottom() - list.size.height / 4.,
+        );
+        window.dispatch_event(
+            gpui_kit::MouseDownEvent {
+                button: gpui_kit::MouseButton::Left,
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            gpui_kit::MouseUpEvent {
+                button: gpui_kit::MouseButton::Left,
+                position,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.render_frame(cx);
+    });
+    app.wait_until(cx, "the model SQL read", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").is_none()
+    });
+    app.settle(cx);
+    assert_ne!(parent_top(cx), Some(before));
 }

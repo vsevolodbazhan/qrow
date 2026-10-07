@@ -1328,11 +1328,6 @@ impl Render for DbtDetailsView {
         {
             self.list.remeasure();
         }
-        // The scrollbar does not tell the list handler that the user moves
-        // the list.
-        if self.list.is_scrollbar_dragging() {
-            self.pending_anchor = None;
-        }
         let rows = list(
             self.list.clone(),
             // GPUI's list lays a row out at the width of its content, so
@@ -1355,6 +1350,9 @@ impl Render for DbtDetailsView {
             .id("dbt-details-list")
             .test_support()
             .size_full()
+            // The scrollbar does not tell the list handler that the user
+            // moves the list. The capture comes before the scrollbar.
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.pending_anchor = None))
             .child(rows)
             .vertical_scrollbar(&self.list)
     }
