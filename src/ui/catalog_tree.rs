@@ -44,6 +44,8 @@ const ROW_HEIGHT: f32 = 30.;
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
 const STATUS_SLOT_WIDTH: f32 = 28.;
+/// The opacity of the accent fill of the current connection row.
+const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -2209,9 +2211,9 @@ fn connection_row(
         }
     );
     let foreground = cx.theme().sidebar_foreground;
-    // Only the current query connection paints an accent bar at its start.
-    // An inset focus outline shows the keyboard position, also without schema
-    // browsing. The button itself paints no background.
+    // Only the current query connection paints an accent fill. An inset focus
+    // outline shows the keyboard position, also without schema browsing.
+    // The button itself paints no background.
     let button = Button::new(SharedString::from(format!("profile-{id}")))
         .custom(
             ButtonCustomVariant::new(cx)
@@ -2281,7 +2283,13 @@ fn connection_row(
         .rounded(cx.theme().radius)
         .relative()
         .text_color(foreground)
-        .hover(|el| el.bg(cx.theme().tokens.list_hover))
+        .map(|el| {
+            if row.active {
+                el.bg(cx.theme().primary.opacity(CURRENT_CONNECTION_FILL))
+            } else {
+                el.hover(|el| el.bg(cx.theme().tokens.list_hover))
+            }
+        })
         .child(disclosure)
         .child(
             h_flex()
@@ -2324,20 +2332,6 @@ fn connection_row(
                 // The tree must not also expand the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )
-        .when(row.active, |el| {
-            el.child(
-                div()
-                    .id(SharedString::from(format!("current-connection-bar-{id}")))
-                    .test_support()
-                    .absolute()
-                    .left(px(context.scale * 2.))
-                    .top(px(context.scale * 6.))
-                    .bottom(px(context.scale * 6.))
-                    .w(px(context.scale * 3.))
-                    .rounded_full()
-                    .bg(cx.theme().primary),
-            )
-        })
         // The outline paints after the status slot, so the hover fill of the
         // slot does not cover it.
         .when(keyboard_position, |el| el.child(focus_outline(cx)))

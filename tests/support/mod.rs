@@ -365,29 +365,34 @@ pub fn selected_tree_rows(window: &Window) -> Vec<String> {
         .collect()
 }
 
-/// Only the current query connection shows the accent bar, and no connection
-/// row paints a fill.
+/// Only the current query connection paints a fill: a tint of the accent
+/// color.
 pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, active: bool) {
     use gpui_kit::component::ActiveTheme as _;
-    let bar = window.try_find(ElementId::Name(
-        format!("current-connection-bar-{profile}").into(),
-    ));
-    assert_eq!(bar.is_some(), active, "Unexpected current-connection bar");
     let center = window
         .find(connection_row(profile))
         .bounds()
         .scale(window.scale_factor())
         .center();
-    let backgrounds: Vec<_> = window
+    let primary = cx.theme().primary;
+    let fills: Vec<_> = window
         .painted_quads()
         .into_iter()
         .filter(|quad| quad.bounds.contains(&center) && quad.content_mask.bounds.contains(&center))
-        .map(|quad| quad.background)
+        .filter_map(|quad| quad.background.as_solid())
+        .filter(|fill| fill.a > 0.)
         .collect();
+    let tinted = fills.iter().any(|fill| {
+        (fill.h, fill.s, fill.l) == (primary.h, primary.s, primary.l) && fill.a < primary.a
+    });
+    assert_eq!(
+        tinted, active,
+        "Unexpected current-connection fill: {fills:?}"
+    );
     for fill in [cx.theme().sidebar_accent, cx.theme().list_active] {
         assert!(
-            !backgrounds.contains(&gpui_kit::Background::from(fill)),
-            "A connection row has a fill: {backgrounds:?}"
+            !fills.contains(&fill),
+            "A connection row has a gray fill: {fills:?}"
         );
     }
 }

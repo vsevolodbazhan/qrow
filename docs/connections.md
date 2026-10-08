@@ -507,8 +507,8 @@ connection settings and set **Schema Refresh**, the first field of the
 To use the tree:
 
 - Click a connection to show its query tabs. The tree selects the row
-  and keeps the focus. This does not expand the connection. A bar at the
-  start of the row shows the connection of the current query.
+  and keeps the focus. This does not expand the connection. An accent fill
+  shows the connection of the current query.
 - Click the arrow before a connection to expand or collapse it.
   This does not change the connection of the query.
 - Click a schema, a table, or a view to expand or collapse it.
