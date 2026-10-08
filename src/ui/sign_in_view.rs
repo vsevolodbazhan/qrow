@@ -117,8 +117,6 @@ pub(super) struct SignInState {
     retrying: HashSet<Uuid>,
     /// The last failure of an action, shown with the sign-in.
     errors: HashMap<Uuid, String>,
-    /// The connection whose attempt produced the displayed failure.
-    error_connections: HashMap<Uuid, Uuid>,
     /// Connections waiting for the shared OIDC browser attempt.
     attempt_connections: HashMap<Uuid, HashSet<Uuid>>,
     /// The statuses that the window shows. A refresh on a worker thread can
@@ -142,7 +140,6 @@ impl SignInState {
             signing_out: HashSet::new(),
             retrying: HashSet::new(),
             errors: HashMap::new(),
-            error_connections: HashMap::new(),
             attempt_connections: HashMap::new(),
             statuses: Vec::new(),
             external_statuses: Vec::new(),
@@ -153,14 +150,8 @@ impl SignInState {
         }
     }
 
-    pub(super) fn set_connection_error(&mut self, id: Uuid, connection: Uuid, message: String) {
-        self.errors.insert(id, message);
-        self.error_connections.insert(id, connection);
-    }
-
     pub(super) fn clear_error(&mut self, id: Uuid) {
         self.errors.remove(&id);
-        self.error_connections.remove(&id);
     }
 
     /// Stops browser sign-ins, for example when the window closes.
@@ -402,8 +393,7 @@ impl Qrow {
         message: String,
         cx: &mut Context<Self>,
     ) {
-        self.sign_in_ui
-            .set_connection_error(id, connection, message.clone());
+        self.sign_in_ui.errors.insert(id, message.clone());
         self.record_activity(
             connection,
             crate::activity::ActivityEntry::new(Severity::Error, message),
@@ -1108,6 +1098,34 @@ impl Qrow {
             .iter()
             .copied()
             .find(|action| *action == SignInAction::Cancel);
+        let slot = div()
+            .flex_shrink_0()
+            .min_w(slot_width)
+            .flex()
+            .items_center()
+            .justify_center()
+            .pr_1();
+        let indicator = if account.working {
+            slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+        } else if account.attention {
+            slot.child(
+                div()
+                    .id(SharedString::from(format!("sign-in-status-{id}")))
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(status.to_owned())
+                    .child(
+                        if error.is_some() {
+                            DotStatus::Error
+                        } else {
+                            DotStatus::Attention
+                        }
+                        .dot(cx),
+                    ),
+            )
+        } else {
+            slot
+        };
         let button = Button::new(SharedString::from(format!("sign-in-{id}")))
             .custom(
                 ButtonCustomVariant::new(cx)
@@ -1159,66 +1177,33 @@ impl Qrow {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(summary),
                             ),
-                    ),
+                    )
+                    .when(primary.is_none(), |el| el.child(indicator)),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_sign_in_editor(Some(id), false, window, cx)
             }));
-        let slot = div()
-            .flex_shrink_0()
-            .min_w(slot_width)
-            .flex()
-            .items_center()
-            .justify_center()
-            .pr_1();
-        let trailing = match primary {
-            Some(action) => slot.child(
-                Button::new(SharedString::from(format!(
-                    "sign-in-{id}-{}",
-                    action.slug()
-                )))
-                .xsmall()
-                .label(action.button_label())
-                .disabled(self.sign_in_action_blocked(id, action))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)),
-                ),
-            ),
-            None if account.working => {
-                slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-            }
-            None if account.attention => slot.child(
-                Button::new(SharedString::from(format!("sign-in-status-{id}")))
-                    .ghost()
-                    .small()
-                    .w(slot_width)
-                    .h_full()
-                    .accessibility_label(status.to_owned())
-                    .tooltip(if error.is_some() {
-                        "Show sign-in error"
-                    } else {
-                        "Show sign-in status"
-                    })
-                    .child(
-                        if error.is_some() {
-                            DotStatus::Error
-                        } else {
-                            DotStatus::Attention
-                        }
-                        .dot(cx),
-                    )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(connection) =
-                            this.sign_in_ui.error_connections.get(&id).copied()
-                        {
-                            this.open_activity(Some(connection), window, cx);
-                        } else {
-                            this.open_sign_in_editor(Some(id), false, window, cx);
-                        }
-                    })),
-            ),
-            None => slot,
-        };
+        let trailing = primary.map(|action| {
+            div()
+                .flex_shrink_0()
+                .min_w(slot_width)
+                .flex()
+                .items_center()
+                .justify_center()
+                .pr_1()
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "sign-in-{id}-{}",
+                        action.slug()
+                    )))
+                    .xsmall()
+                    .label(action.button_label())
+                    .disabled(self.sign_in_action_blocked(id, action))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)),
+                    ),
+                )
+        });
         h_flex()
             .id(SharedString::from(format!("sign-in-row-{id}")))
             .when(!menu_open, |el| {
@@ -1231,7 +1216,7 @@ impl Qrow {
             .rounded(cx.theme().radius)
             .hover(|el| el.bg(cx.theme().tokens.list_hover))
             .child(button)
-            .child(trailing)
+            .when_some(trailing, |el, trailing| el.child(trailing))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |_, event: &MouseDownEvent, window, cx| {

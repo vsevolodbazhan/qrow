@@ -247,8 +247,9 @@ signed-in identity can use the database username of the connection.
 The **Sign-Ins** sidebar shows each saved sign-in with its type, **OIDC**.
 Select a connection to start its sign-in when necessary. A query also starts
 sign-in when it needs authentication. The sidebar has no **Sign in…** button.
-Click a red error dot to open **Activity** for the connection whose sign-in
-failed. Click the sign-in name to see its account and settings. To open the sidebar,
+Click a sign-in row to see its account and settings. Its status dot is part
+of the row. In **Connections**, click a red error dot to open **Activity**
+for the connection whose sign-in failed. To open the sidebar,
 click the key button at the left end of the status bar, or select
 **View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
@@ -309,7 +310,8 @@ Select a connection that uses the sign-in. Qrow opens the default browser
 when authentication is necessary. Finish the sign-in there. Qrow waits up
 to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
-Click a row to open **Sign-In Settings**. The disabled **Account** field shows
+Click a row, including its status dot, to open **Sign-In Settings**.
+The dot has no separate action. The disabled **Account** field shows
 the account value or the sign-in status, such as **Not signed in**.
 You cannot edit or focus the field. Waiting and error details appear below it.
 Click **Sign out** beside the field to unlock the authentication settings.

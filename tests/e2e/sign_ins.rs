@@ -333,6 +333,20 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     });
     app.click(cx, "cancel-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
+    app.update(cx, |window, _| {
+        let indicator = window.find(format!("sign-in-status-{}", sign_in.id));
+        assert_eq!(indicator.role(), Some(gpui_kit::Role::Status));
+        assert!(
+            window
+                .find(format!("sign-in-{}", sign_in.id))
+                .bounds()
+                .contains(&indicator.bounds().center())
+        );
+    });
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-account-sign-in");
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
     app.hover_labelled(cx, "Delete");
     cx.executor()

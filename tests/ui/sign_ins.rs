@@ -630,7 +630,9 @@ fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut 
     assert_eq!(app.saved().sign_ins.len(), 1);
     assert_eq!(tokens.load_tokens(sign_in.id).unwrap().unwrap(), record);
     // The error remains visible in Settings, and the account remains signed in.
-    open_settings(&app, cx, &sign_in);
+    // Clicking the indicator uses the same action as the rest of the row.
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-name");
     app.wait_until(cx, "the Keychain error", WAIT, |window, _| {
         label(window, "sign-in-account-error")
             .is_some_and(|error| error.contains("Invalid attempt to change the owner"))
@@ -820,6 +822,12 @@ fn an_unreachable_provider_shows_a_yellow_sign_in_dot(cx: &mut TestAppContext) {
     wait_row(&app, cx, &sign_in, "Cannot reach the provider");
     app.update(cx, |window, cx| {
         assert_sign_in_dot(window, sign_in.id, cx.theme().warning);
+    });
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-name");
+    app.wait_until(cx, "the provider status", WAIT, |window, _| {
+        label(window, "sign-in-account-status")
+            .is_some_and(|status| status.contains("could not reach the provider"))
     });
 }
 

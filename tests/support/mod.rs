@@ -503,6 +503,13 @@ pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit:
 pub fn assert_sign_in_dot(window: &Window, sign_in: Uuid, expected: gpui_kit::Hsla) {
     let dot = window.find(format!("sign-in-status-{sign_in}"));
     assert!(dot.visible(), "The sign-in dot is hidden");
+    assert_eq!(dot.role(), Some(gpui_kit::Role::Status));
+    assert!(
+        window
+            .find(format!("sign-in-{sign_in}"))
+            .bounds()
+            .contains(&dot.bounds().center())
+    );
     assert_dot_in(window, dot.bounds(), Some(expected));
 }
 
