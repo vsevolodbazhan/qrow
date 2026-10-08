@@ -531,6 +531,55 @@ final class Driver {
         try require(distance(reference, edge) < 0.015, "Active line highlight stops before the editor's right edge")
         print("PASS: The active line highlight reaches the right edge of the editor")
     }
+    /// The focus outline of a selected connection row stays on top when the
+    /// pointer is on the status dot of the row.
+    func checkConnectionOutline(_ name: String) throws {
+        let status = try waitExact("\(name), connected, idle", role: kAXButtonRole)
+        let row = try waitExact(name, role: kAXButtonRole)
+        let (rowOrigin, rowExtent) = try elementBounds(row)
+        // A click on the disclosure focuses the tree and selects the row.
+        clickPoint(CGPoint(x: rowOrigin.x - 12, y: rowOrigin.y + rowExtent.height / 2))
+        let (origin, extent) = try elementBounds(status)
+        let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                           mouseCursorPosition: CGPoint(x: origin.x + extent.width / 2, y: origin.y + extent.height / 2),
+                           mouseButton: .left)!
+        move.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.3))
+
+        // The capture starts 24 points before the status slot and ends at
+        // the row end. The reference column is outside the slot.
+        let lead = 24.0
+        let path = "\(artifacts)/connection-outline.png"
+        let rect = "\(Int(origin.x - lead)),\(Int(origin.y)),\(Int(lead + extent.width)),\(Int(extent.height))"
+        try captureRegion(rect, to: path)
+        guard let data = FileManager.default.contents(atPath: path),
+              let bitmap = NSBitmapImageRep(data: data) else {
+            throw Failure("Could not read connection outline capture")
+        }
+        let scale = Double(bitmap.pixelsWide) / Double(Int(lead + extent.width))
+        let referenceX = Int(8 * scale)
+        let slotX = Int((lead + 4) * scale)
+        func color(_ x: Int, _ y: Int) -> NSColor? {
+            bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB)
+        }
+        func distance(_ a: NSColor, _ b: NSColor) -> CGFloat {
+            max(abs(a.redComponent - b.redComponent),
+                abs(a.greenComponent - b.greenComponent),
+                abs(a.blueComponent - b.blueComponent))
+        }
+        guard let fill = color(referenceX, bitmap.pixelsHigh * 3 / 4) else {
+            throw Failure("Could not sample connection row fill")
+        }
+        // The outline is the pixel row at the top that differs most from the row fill.
+        guard let outlineY = (0..<Int(3 * scale)).max(by: { a, b in
+            (color(referenceX, a).map { distance($0, fill) } ?? 0) < (color(referenceX, b).map { distance($0, fill) } ?? 0)
+        }), let outline = color(referenceX, outlineY), distance(outline, fill) > 0.1 else {
+            throw Failure("The selected connection row shows no focus outline")
+        }
+        guard let covered = color(slotX, outlineY) else { throw Failure("Could not sample the outline over the status slot") }
+        try require(distance(outline, covered) < 0.03, "The status hover fill covers the focus outline")
+        print("PASS: The focus outline of a connection row stays above the hover fill of its status dot")
+    }
     func testResultsText() throws {
         let descender = try wait("Singapore Airlines", timeout: 20, role: kAXCellRole)
         let (descenderOrigin, descenderSize) = try elementBounds(descender)
@@ -1046,6 +1095,7 @@ final class Driver {
         try query("SELECT 'qrow-ui-connected' AS result")
         _ = try wait("qrow-ui-connected", role: kAXCellRole)
         try snapshot("connected")
+        try checkConnectionOutline("Qrow E2E")
         try testFailedSaveExit(closeWindow: false)
         print("PASS: Menu bar dialogs, a Keychain password for a real query, and a failed save before Quit")
     }

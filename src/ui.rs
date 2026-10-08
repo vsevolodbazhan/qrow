@@ -1601,6 +1601,16 @@ impl Qrow {
         true
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tab(index, true, window, cx);
+    }
+    /// Shows the tab at `index`. With `focus_editor`, its editor takes the focus.
+    fn show_tab(
+        &mut self,
+        index: usize,
+        focus_editor: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if index >= self.tabs.len() {
             return;
         }
@@ -1619,9 +1629,11 @@ impl Qrow {
         }
         if !self.activity.read(cx).is_open() {
             self.tabs[index].panel.content_visible();
-            self.tabs[index]
-                .input
-                .update(cx, |s, cx| s.focus(window, cx));
+            if focus_editor {
+                self.tabs[index]
+                    .input
+                    .update(cx, |s, cx| s.focus(window, cx));
+            }
         } else {
             let focus = self.tabs[index].input.read(cx).focus_handle(cx);
             self.activity
@@ -1764,9 +1776,10 @@ impl Qrow {
         if let Some(index) = self.active_tab_for_profile(id) {
             // A connection selection changes the visible tab group. It does
             // not change the owning connection of either tab, so it is not a
-            // query Logs event.
-            self.activate(index, window, cx);
+            // query Logs event. The tree keeps the focus.
+            self.show_tab(index, false, window, cx);
         }
+        self.select_catalog_connection(id, window, cx);
     }
     fn run(&mut self, _: &RunQuery, window: &mut Window, cx: &mut Context<Self>) {
         self.run_selected_query(window, cx);

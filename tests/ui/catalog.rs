@@ -3,8 +3,8 @@
 use crate::support::{
     MemoryCredentials, TestApp, assert_catalog_icon, assert_connection_dot,
     assert_connection_highlight, assert_connection_keyboard_position, assert_tooltip_header_center,
-    bounds_of, connection_row, elements, label, labelled, menu_item, offline_profile, press_at,
-    selected_tree_rows, shows, value,
+    assert_tree_row_outline, bounds_of, connection_row, elements, label, labelled, menu_item,
+    offline_profile, press_at, selected_tree_rows, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -937,8 +937,11 @@ fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut 
     app.click_labelled(cx, "bookings");
     wait_shows(&app, cx, "gate string");
     app.click_labelled(cx, "booking_id bigint");
-    app.update(cx, |window, _| {
+    app.update(cx, |window, cx| {
         assert_eq!(selected_tree_rows(window), ["booking_id bigint"]);
+        // A selected row shows the focus outline, like a selected connection.
+        assert_tree_row_outline(window, cx, "booking_id bigint", true);
+        assert_tree_row_outline(window, cx, "gate string", false);
     });
 
     app.toggle_connection(cx, profile.id);
@@ -977,6 +980,52 @@ fn reopening_an_inactive_connection_does_not_paint_a_second_active_row(cx: &mut 
     app.update(cx, |window, cx| {
         assert_connection_highlight(window, cx, current.id, true);
         assert_connection_highlight(window, cx, profile.id, false);
+    });
+}
+
+#[gpui_kit::test]
+fn connection_click_selects_its_row_and_keeps_the_tree_focus(cx: &mut TestAppContext) {
+    let profiles: Vec<_> = ["Current", "Other"]
+        .into_iter()
+        .map(|name| {
+            let mut profile = offline_profile(name);
+            profile.catalog.refresh = CatalogRefresh::Disabled;
+            profile
+        })
+        .collect();
+    let mut workspace = workspace(profiles.clone());
+    workspace.tabs.push(SavedTab::new(2, Some(profiles[1].id)));
+    let app = TestApp::launch_with(cx, workspace, MemoryCredentials::default());
+
+    app.select_connection(cx, &profiles[1]);
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        let selected = selected_tree_rows(window);
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].contains("Other"));
+        assert_connection_highlight(window, cx, profiles[0].id, false);
+        assert_connection_highlight(window, cx, profiles[1].id, true);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, true);
+    });
+    // The tree has the focus: the arrow keys continue from the clicked
+    // connection. They do not change the current connection.
+    app.press(cx, "up");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        let selected = selected_tree_rows(window);
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].contains("Current"));
+        assert_connection_highlight(window, cx, profiles[1].id, true);
+        assert_connection_keyboard_position(window, cx, profiles[0].id, true);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, false);
+    });
+    // The current connection keeps its bar when the tree loses the focus.
+    app.click(cx, "sql-editor");
+    app.settle(cx);
+    app.update(cx, |window, cx| {
+        assert_connection_highlight(window, cx, profiles[1].id, true);
+        assert_connection_keyboard_position(window, cx, profiles[0].id, false);
+        assert_connection_keyboard_position(window, cx, profiles[1].id, false);
     });
 }
 

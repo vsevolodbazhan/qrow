@@ -44,6 +44,8 @@ const ROW_HEIGHT: f32 = 30.;
 const ROW_GAP: f32 = 4.;
 /// The trailing lane shared by catalog status icons and the header action.
 const STATUS_SLOT_WIDTH: f32 = 28.;
+/// The opacity of the accent fill of the current connection row.
+const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
@@ -1065,6 +1067,20 @@ impl Qrow {
         }
     }
 
+    /// Selects the row of the connection `profile` and focuses the tree.
+    pub(super) fn select_catalog_connection(
+        &mut self,
+        profile: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.catalog.state.update(cx, |state, cx| {
+            let ix = state.index_of(&connection_id(profile));
+            state.set_selected_index(ix, cx);
+            state.focus(window, cx);
+        });
+    }
+
     /// Inserts `text` at the cursor of the active query tab.
     fn insert_into_editor(&mut self, text: String, window: &mut Window, cx: &mut Context<Self>) {
         let input = self.tabs[self.active].input.clone();
@@ -1828,9 +1844,9 @@ fn render_entry(
         .gap(ui_px(ROW_GAP))
         .text_sm()
         .rounded(cx.theme().radius)
-        .when(selected, |el| el.bg(cx.theme().list_active))
-        .when(right_clicked && !selected, |el| el.bg(cx.theme().accent))
-        .when(!selected && !right_clicked, |el| {
+        .relative()
+        .when(right_clicked, |el| el.bg(cx.theme().accent))
+        .when(!right_clicked, |el| {
             el.hover(|el| el.bg(cx.theme().tokens.list_hover))
         })
         .text_color(cx.theme().sidebar_foreground)
@@ -1898,6 +1914,7 @@ fn render_entry(
                     ),
             )
         })
+        .when(selected, |el| el.child(focus_outline(cx)))
         .when(tooltip.is_some() && !*menu_open, |el| {
             el.tooltip(context.live_tooltip(&id))
         })
@@ -2137,6 +2154,19 @@ fn show_activity(
     }
 }
 
+/// The outline of the selected tree row while the tree has the focus. The
+/// row must be `relative`, and the outline must be its last child, so that
+/// hover fills of the row's controls do not cover it.
+fn focus_outline(cx: &App) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .size_full()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().ring)
+}
+
 /// The row of a connection: the disclosure and the connection button.
 fn connection_row(
     entry: &SharedString,
@@ -2180,12 +2210,8 @@ fn connection_row(
             ""
         }
     );
-    let foreground = if row.active {
-        cx.theme().sidebar_accent_foreground
-    } else {
-        cx.theme().sidebar_foreground
-    };
-    // Only the current query connection paints an active fill. An inset focus
+    let foreground = cx.theme().sidebar_foreground;
+    // Only the current query connection paints an accent fill. An inset focus
     // outline shows the keyboard position, also without schema browsing.
     // The button itself paints no background.
     let button = Button::new(SharedString::from(format!("profile-{id}")))
@@ -2256,21 +2282,10 @@ fn connection_row(
         .gap(px(context.scale * ROW_GAP))
         .rounded(cx.theme().radius)
         .relative()
-        .when(keyboard_position, |el| {
-            el.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .size_full()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().ring),
-            )
-        })
         .text_color(foreground)
         .map(|el| {
             if row.active {
-                el.bg(cx.theme().sidebar_accent)
+                el.bg(cx.theme().primary.opacity(CURRENT_CONNECTION_FILL))
             } else {
                 el.hover(|el| el.bg(cx.theme().tokens.list_hover))
             }
@@ -2317,6 +2332,9 @@ fn connection_row(
                 // The tree must not also expand the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )
+        // The outline paints after the status slot, so the hover fill of the
+        // slot does not cover it.
+        .when(keyboard_position, |el| el.child(focus_outline(cx)))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
             move |event, window, cx| {
