@@ -340,6 +340,10 @@ fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAp
             label(window, "connection-database-type").as_deref(),
             Some("Connection Type")
         );
+        assert_eq!(
+            label(window, "setting-help-Connection Type").as_deref(),
+            Some("The database engine of the server.")
+        );
     });
     app.select(cx, "connection-database-type", "Postgres");
     app.update(cx, |window, _| {

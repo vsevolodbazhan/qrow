@@ -175,7 +175,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Connection Type",
-                "",
+                "The database engine of the server.",
                 &["connector", "type"],
                 false,
                 |_, form, _, _| {
@@ -404,6 +404,8 @@ impl Qrow {
             } else {
                 "Spark (HiveServer2)"
             })
+            // Space the engine name like the help text under a field.
+            .header_style(&StyleRefinement::default().gap_0())
             .default_open(true)
             .resettable(false)
             .group(fields)
