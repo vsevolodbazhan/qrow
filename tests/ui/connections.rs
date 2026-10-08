@@ -20,6 +20,7 @@ fn fill_connection(app: &TestApp, cx: &mut TestAppContext, name: &str) {
     app.fill(cx, "connection-host", "127.0.0.1");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "synthetic-user");
+    app.scroll_to(cx, "connection-password");
     app.fill(cx, "connection-password", "synthetic-password");
 }
 
@@ -247,6 +248,7 @@ fn the_connection_menu_edits_duplicates_and_deletes(cx: &mut TestAppContext) {
         app.context_menu(cx, connection_row(original));
         app.choose(cx, "popup-menu", "Duplicate");
         app.wait_for(cx, "connection-password");
+        app.scroll_to(cx, "connection-password");
         app.fill(cx, "connection-password", "copy-password");
         app.click(cx, "save-profile");
         app.wait_gone(cx, "save-profile");
@@ -327,4 +329,205 @@ fn connection_settings_open_on_the_general_page(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(window.try_find("connection-dbt-manifest").is_none());
     });
+}
+
+#[gpui_kit::test]
+fn postgres_connection_uses_password_and_saves_its_database_type(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, "connection-database-type").as_deref(),
+            Some("Connection Type")
+        );
+    });
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-name").as_deref(),
+            Some("Postgres")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-port").as_deref(),
+            Some("5432")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-database").as_deref(),
+            Some("postgres")
+        );
+        assert!(window.try_find("connection-authentication").is_none());
+        assert!(window.try_find("connection-tls").is_none());
+        assert_eq!(
+            label(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("TLS Mode")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("Require TLS")
+        );
+    });
+    fill_connection(&app, cx, "Postgres test");
+    app.fill(cx, "connection-port", "5432");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(
+        cx,
+        "the saved Postgres profile",
+        Duration::from_secs(10),
+        |_, _| !app.saved().profiles.is_empty(),
+    );
+    assert_eq!(
+        app.saved().profiles[0].database_type,
+        qrow::model::DatabaseType::Postgres
+    );
+    assert_eq!(
+        app.saved().profiles[0].postgres_ssl_mode,
+        Some(qrow::model::PostgresSslMode::Require)
+    );
+    assert_eq!(
+        app.saved().profiles[0].authentication,
+        qrow::model::Authentication::Password
+    );
+}
+
+#[gpui_kit::test]
+fn postgres_tls_choices_save_and_keep_legacy_verification(cx: &mut TestAppContext) {
+    use qrow::model::{DatabaseType, PostgresSslMode};
+    let (mut workspace, credentials) = connections(&["Postgres legacy"]);
+    let id = workspace.profiles[0].id;
+    workspace.profiles[0].database_type = DatabaseType::Postgres;
+    workspace.profiles[0].tls = true;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    for (label, mode) in [
+        ("Require TLS", PostgresSslMode::Require),
+        ("Disabled", PostgresSslMode::Disable),
+        ("Verify certificate", PostgresSslMode::VerifyFull),
+    ] {
+        app.context_menu(cx, connection_row(id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.wait_for(cx, "connection-name");
+        if app.saved().profiles[0].postgres_ssl_mode.is_none() {
+            app.update(cx, |window, _| {
+                assert_eq!(
+                    crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+                    Some("Verify certificate")
+                )
+            });
+        }
+        app.select(cx, "connection-postgres-ssl-mode", label);
+        app.click(cx, "save-profile");
+        app.wait_gone(cx, "connection-name");
+        app.wait_until(
+            cx,
+            "the saved TLS choice",
+            Duration::from_secs(10),
+            |_, _| app.saved().profiles[0].postgres_ssl_mode == Some(mode),
+        );
+        assert_eq!(
+            app.saved().profiles[0].tls,
+            mode != PostgresSslMode::Disable
+        );
+    }
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-name");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-postgres-ssl-mode").as_deref(),
+            Some("Verify certificate")
+        )
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn changing_database_type_keeps_custom_connection_fields(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.fill(cx, "connection-name", "Custom");
+    app.fill(cx, "connection-port", "6543");
+    app.scroll_to(cx, "connection-database");
+    app.fill(cx, "connection-database", "custom_database");
+    app.scroll_to(cx, "connection-database-type");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-name").as_deref(),
+            Some("Custom")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-port").as_deref(),
+            Some("6543")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-database").as_deref(),
+            Some("custom_database")
+        );
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn connection_icons_identify_postgres_and_spark(cx: &mut TestAppContext) {
+    let (mut workspace, credentials) = connections(&["Spark test", "Postgres test"]);
+    workspace.profiles[1].database_type = qrow::model::DatabaseType::Postgres;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.wait_label(cx, "Spark (HiveServer2) database");
+    app.wait_label(cx, "Postgres database");
+}
+
+#[gpui_kit::test]
+fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    let fields = [
+        "Host",
+        "Port",
+        "Username",
+        "Password",
+        "Initial Database",
+        "Session Parameters",
+    ];
+    let shared = app.update(cx, |window, _| {
+        fields.map(|field| label(window, format!("setting-help-{field}")).unwrap())
+    });
+    app.select(cx, "connection-database-type", "Postgres");
+    app.update(cx, |window, _| {
+        for (field, expected) in fields.into_iter().zip(shared) {
+            assert_eq!(
+                label(window, format!("setting-help-{field}")).as_deref(),
+                Some(expected.as_str())
+            );
+        }
+        for help in gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|element| {
+                element
+                    .path()
+                    .iter()
+                    .any(|id| format!("{id:?}").contains("setting-help-"))
+            })
+        {
+            let text = help.label().unwrap_or_default();
+            assert!(
+                !["Postgres", "Kyuubi", "HiveServer2", "LDAP"]
+                    .iter()
+                    .any(|kind| text.contains(kind)),
+                "database type leaked into help: {text}"
+            );
+        }
+    });
+    app.scroll_to(cx, "connection-response-timeout");
+    app.wait_label(
+        cx,
+        "Seconds to wait for setup and cancellation, from 10 to 3600.",
+    );
+    app.scroll_to(cx, "connection-database-type");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.scroll_to(cx, "connection-response-timeout");
+    app.wait_label(
+        cx,
+        "Seconds to wait for a server response, from 10 to 3600.",
+    );
+    cancel_form(&app, cx);
 }

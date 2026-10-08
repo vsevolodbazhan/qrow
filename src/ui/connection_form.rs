@@ -3,6 +3,7 @@ use crate::model::{
     SharedCatalog,
 };
 use gpui_kit::base::FocusableExt as _;
+use gpui_kit::component::ActiveTheme;
 use uuid::Uuid;
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
@@ -116,7 +117,7 @@ use super::profile_view::{connection_row, form_input};
 use super::{ProfileEditor, Qrow};
 use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn};
 use gpui_kit::component::{
-    ActiveTheme as _, IconName, IndexPath, Sizable as _,
+    IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
     input::{Input, Textarea},
@@ -764,6 +765,23 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
                 }),
         )
         .into_any_element()
+}
+
+pub(super) fn database_type_choices() -> Vec<(crate::model::DatabaseType, String)> {
+    use crate::model::DatabaseType;
+    [DatabaseType::Kyuubi, DatabaseType::Postgres]
+        .into_iter()
+        .map(|kind| (kind, kind.label().into()))
+        .collect()
+}
+
+pub(super) fn postgres_ssl_mode_choices() -> Vec<(crate::model::PostgresSslMode, String)> {
+    use crate::model::PostgresSslMode;
+    vec![
+        (PostgresSslMode::Disable, "Disabled".into()),
+        (PostgresSslMode::Require, "Require TLS".into()),
+        (PostgresSslMode::VerifyFull, "Verify certificate".into()),
+    ]
 }
 
 #[cfg(test)]

@@ -362,20 +362,12 @@ impl Service {
                 if let Ok(mut ids) = thread_cleanup_ids.lock()
                     && !ids.is_empty()
                 {
-                    let results: Vec<_> = ids
-                        .drain(..)
-                        .map(|id| harness.delete_conversation(&id))
-                        .collect();
+                    let result = harness.delete_conversations_on_shutdown(ids.drain(..));
                     if let Ok(mut outcome) = thread_cleanup_result.lock() {
-                        *outcome = Some(
-                            results
-                                .into_iter()
-                                .collect::<anyhow::Result<Vec<_>>>()
-                                .map(|_| ())
-                                .map_err(|error| error.to_string()),
-                        );
+                        *outcome = Some(result.map_err(|error| error.to_string()));
                     }
                 }
+
                 if let Err(error) = harness.shutdown() {
                     let _ = emit(Event::Disconnected(format!(
                         "Could not stop Codex: {error}"

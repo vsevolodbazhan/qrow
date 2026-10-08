@@ -9,7 +9,7 @@ use crate::assistant::{
     broker::{
         AppendRequest, CallIdentity, EditRequest, EditorDocument, MAX_SQL_BYTES,
         MAX_SQL_PAGE_BYTES, MAX_TOOL_OUTPUT_BYTES, RunRequest, TOOL_SCHEMA_VERSION, ToolBroker,
-        bound_rows_after, bound_text, context_statement_ranges, preview_rows, sql_page,
+        bound_rows_after, bound_text, context_statement_ranges_for, preview_rows, sql_page,
     },
     catalog,
     service::Command as AssistantCommand,
@@ -646,8 +646,11 @@ impl Qrow {
                     "The offset is past the end of the SQL or inside a character. Use 0 or next_offset.",
                 )
             })?;
-            let (statement_ranges, statement_ranges_truncated) =
-                context_statement_ranges(&sql, &page);
+            let (statement_ranges, statement_ranges_truncated) = context_statement_ranges_for(
+                &sql,
+                &page,
+                self.tab_database_type(tab.saved.profile),
+            );
             let next_offset = (page.end < sql.len()).then_some(page.end);
             let value = json!({"version": 1, "tab_id": args.tab_id,
                 "connection_id": tab.saved.profile, "editor_revision": tab.revision,
@@ -678,6 +681,7 @@ impl Qrow {
         let sql = tab.input.read(cx).value().to_string();
         let selected = tab.input.read(cx).selected_range();
         let document = EditorDocument {
+            database_type: self.tab_database_type(tab.saved.profile),
             tab_id: tab.saved.id,
             connection_id: tab.saved.profile,
             revision: tab.revision,
@@ -709,7 +713,7 @@ impl Qrow {
                     && edit.end == sql.len()
                     && !edit.replacement.trim().is_empty()
             })
-            .then(|| crate::sql::last_statement_range(&plan.sql))
+            .then(|| crate::sql::statement_ranges_for(&plan.sql, document.database_type).pop())
             .flatten()
             .filter(|range| range.start >= sql.len());
         let mapped = appended_range
@@ -757,6 +761,7 @@ impl Qrow {
         args.connection_id = tab.saved.profile;
         let sql = tab.input.read(cx).value().to_string();
         let document = EditorDocument {
+            database_type: self.tab_database_type(tab.saved.profile),
             tab_id: tab.saved.id,
             connection_id: tab.saved.profile,
             revision: tab.revision,
@@ -817,6 +822,7 @@ impl Qrow {
             let sql = tab.input.read(cx).value().to_string();
             let selected = tab.input.read(cx).selected_range();
             let document = EditorDocument {
+                database_type: self.tab_database_type(tab.saved.profile),
                 tab_id: tab.saved.id,
                 connection_id: tab.saved.profile,
                 revision: tab.revision,
@@ -1397,7 +1403,7 @@ impl Qrow {
         if !profile.catalog.browses() {
             return CatalogStep::Done(failure(
                 "schema_browsing_off",
-                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema refresh in the connection settings, or run SHOW and DESCRIBE with query-run.",
+                "Schema browsing is off for this connection, so Qrow has no schema catalog for it. Ask the user to set Schema Refresh in the connection settings, or query the system catalog with SQL for this connector with query-run.",
             ));
         }
         let settings = crate::model::effective_catalog(profile, &self.shared_catalogs);
@@ -1690,7 +1696,7 @@ impl Qrow {
                     }
                     CatalogStep::Wait { .. } => failure(
                         "not_cached",
-                        "Qrow is still reading the schema catalog. Try again later, or run SHOW or DESCRIBE with query-run.",
+                        "Qrow is still reading the schema catalog. Try again later, or query the system catalog with SQL for this connector with query-run.",
                     ),
                 };
                 self.finish_assistant_tool(pending.call, result, cx);
@@ -1947,6 +1953,7 @@ mod tests {
         let connection_id = Uuid::new_v4();
         let sql = "SELECT 0;\n\nSELECT 1";
         let document = EditorDocument {
+            database_type: crate::model::DatabaseType::Kyuubi,
             tab_id,
             connection_id: Some(connection_id),
             revision: 8,
@@ -1981,6 +1988,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     revision: 9,
                     ..document.clone()
                 }
@@ -1993,6 +2001,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     selected_range: Some(0..9),
                     ..document.clone()
                 }
@@ -2005,6 +2014,7 @@ mod tests {
                 Some(&appended),
                 "turn",
                 &EditorDocument {
+                    database_type: crate::model::DatabaseType::Kyuubi,
                     tab_id: Uuid::new_v4(),
                     ..document.clone()
                 }

@@ -1218,3 +1218,41 @@ done
             .contains("cursor")
     );
 }
+
+#[test]
+fn shutdown_deletion_reads_replies_after_a_queued_stop() {
+    let directory = tempfile::tempdir().unwrap();
+    let executable = directory.path().join("fake-codex");
+    write_executable(
+        &executable,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$0.log"
+  id=$(printf '%s' "$line" | sed -nE 's/.*"id":([0-9]+).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*) printf '{"id":%s,"result":{}}\n' "$id" ;;
+    *'"method":"thread/delete"'*) printf '{"id":%s,"error":{"code":-1,"message":"synthetic refusal"}}\n' "$id" ;;
+  esac
+done
+"#,
+    );
+    let (commands, inbox) = Inbox::channel(1);
+    let mut harness =
+        CodexHarness::launch_with_inbox(&executable, directory.path(), inbox, |_| {}).unwrap();
+    commands.stop();
+    let error = harness
+        .delete_conversations_on_shutdown(["thread-1".into(), "thread-2".into()])
+        .unwrap_err();
+    assert!(error.to_string().contains("synthetic refusal"), "{error:#}");
+    let requests = fs::read_to_string(executable.with_extension("log")).unwrap();
+    assert!(requests.contains("thread-1"));
+    assert!(requests.contains("thread-2"));
+    // Cleanup restores the stop behavior of ordinary requests.
+    commands.stop();
+    let error = harness.delete_conversation("thread-3").unwrap_err();
+    assert!(
+        error.to_string().contains("Assistant is stopping"),
+        "{error:#}"
+    );
+    harness.shutdown().unwrap();
+}

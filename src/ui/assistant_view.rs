@@ -7,7 +7,7 @@ use crate::{
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, MAX_CONTEXT_SQL_BYTES, QueryState,
             ResultSummary, SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
-            context_statement_ranges, sql_window,
+            sql_window,
         },
         history_item_text,
         service::{

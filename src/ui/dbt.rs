@@ -217,8 +217,31 @@ impl Qrow {
             .filter_map(|profile| {
                 let project = profile.dbt.as_ref()?;
                 let index = self.dbt.state(profile.id)?.index.clone()?;
-                let relations = matching::relations(&index, project);
-                Some((profile.id, DbtLookup { index, relations }))
+                let mut relations = matching::relations(&index, project);
+                let exact = profile.database_type == crate::model::DatabaseType::Postgres;
+                if exact {
+                    relations = relations
+                        .into_values()
+                        .map(|position| {
+                            let entry = index.entry(position);
+                            (
+                                (
+                                    matching::mapped_schema(&index, entry, project),
+                                    entry.identifier.to_string(),
+                                ),
+                                position,
+                            )
+                        })
+                        .collect();
+                }
+                Some((
+                    profile.id,
+                    DbtLookup {
+                        index,
+                        relations,
+                        exact,
+                    },
+                ))
             })
             .collect()
     }
@@ -583,6 +606,7 @@ const TOOLTIP_DESCRIPTION_CHARS: usize = 240;
 pub(super) struct DbtLookup {
     index: Arc<Index>,
     relations: HashMap<(String, String), u32>,
+    exact: bool,
 }
 
 impl DbtLookup {
@@ -594,7 +618,11 @@ impl DbtLookup {
         relation: &str,
         comment: Option<&str>,
     ) -> Option<DbtBadge> {
-        let key = (schema.to_lowercase(), relation.to_lowercase());
+        let key = if self.exact {
+            (schema.to_owned(), relation.to_owned())
+        } else {
+            (schema.to_lowercase(), relation.to_lowercase())
+        };
         let entry = self.index.entry(*self.relations.get(&key)?);
         let detail = format!("dbt {}", resource_label(&self.index, entry));
         let description = entry.description.trim();
@@ -923,7 +951,11 @@ mod tests {
             schema_mapping: parse_schema_rules("dev_* = *").unwrap(),
         };
         let relations = matching::relations(&index, &project);
-        let lookup = DbtLookup { index, relations };
+        let mut lookup = DbtLookup {
+            index,
+            relations,
+            exact: false,
+        };
         let badge = lookup.badge("CORE", "Orders", None).unwrap();
         assert_eq!(badge.unique_id, "model.lake.orders");
         assert_eq!(badge.detail, "dbt incremental");
@@ -939,6 +971,11 @@ mod tests {
         assert_eq!(same.description, None);
         let source = lookup.badge("raw", "orders", None).unwrap();
         assert_eq!(source.detail, "dbt source");
+        // A Postgres catalog may contain both orders and "Orders".
+        lookup.exact = true;
+        assert!(lookup.badge("core", "orders", None).is_some());
+        assert!(lookup.badge("core", "Orders", None).is_none());
+        assert!(lookup.badge("CORE", "orders", None).is_none());
         assert_eq!(source.description, None);
         assert!(lookup.badge("dev_core", "orders", None).is_none());
     }

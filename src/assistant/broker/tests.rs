@@ -23,6 +23,7 @@ fn call() -> CallIdentity<'static> {
 
 fn document<'a>(tab: Uuid, connection: Uuid, sql: &'a str) -> EditorDocument<'a> {
     EditorDocument {
+        database_type: crate::model::DatabaseType::Kyuubi,
         tab_id: tab,
         connection_id: Some(connection),
         revision: 7,
@@ -188,6 +189,7 @@ fn appended_selection_can_run_without_running_older_queries() {
     let mut target = target(tab, connection);
     target.selected_range = Some(append.appended_range.clone());
     let document = EditorDocument {
+        database_type: crate::model::DatabaseType::Kyuubi,
         tab_id: tab,
         connection_id: Some(connection),
         revision: 8,
@@ -286,6 +288,7 @@ fn selected_tab_can_be_edited_without_a_connection_but_not_run() {
         selected_range: None,
     }));
     let document = EditorDocument {
+        database_type: crate::model::DatabaseType::Kyuubi,
         tab_id: tab,
         connection_id: None,
         revision: 7,
@@ -659,6 +662,7 @@ fn broker_rejects_missing_target_wrong_version_and_oversized_ids() {
         ToolErrorCode::StaleTarget
     );
     let reassigned = EditorDocument {
+        database_type: crate::model::DatabaseType::Kyuubi,
         connection_id: Some(Uuid::new_v4()),
         ..document
     };

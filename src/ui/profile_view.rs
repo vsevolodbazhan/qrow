@@ -150,7 +150,12 @@ impl Qrow {
         qrow: &WeakEntity<Qrow>,
         cx: &mut Context<Self>,
     ) -> SettingPage {
-        let uses_sign_in = connection_form::uses_sign_in(&form.authentication, cx);
+        let postgres = connection_form::chosen(
+            &form.database_type,
+            &connection_form::database_type_choices(),
+            cx,
+        ) == crate::model::DatabaseType::Postgres;
+        let uses_sign_in = !postgres && connection_form::uses_sign_in(&form.authentication, cx);
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
         let sign_in_description = chosen_sign_in
@@ -169,6 +174,22 @@ impl Qrow {
         let fields = SettingGroup::new()
             .item(connection_row(
                 qrow,
+                "Connection Type",
+                "",
+                &["connector", "type"],
+                false,
+                |_, form, _, _| {
+                    Select::new(&form.database_type)
+                        .focus_ring(false)
+                        .id("connection-database-type")
+                        .w_full()
+                        .disabled(form.saving.is_some())
+                        .accessibility_label("Connection Type")
+                        .into_any_element()
+                },
+            ))
+            .item(connection_row(
+                qrow,
                 "Name",
                 "Shown in the connections sidebar.",
                 &["connection"],
@@ -178,7 +199,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Host",
-                "Hostname of the Kyuubi or HiveServer2 endpoint.",
+                "Hostname or IP address of the server.",
                 &["server", "address", "kyuubi"],
                 false,
                 |_, form, _, _| form_input(form, 1, "Host"),
@@ -186,51 +207,85 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Port",
-                "Thrift port on that host.",
+                "Port on that host.",
                 &["server"],
                 false,
                 |_, form, _, _| form_input(form, 2, "Port"),
             ))
-            .item(connection_row(
-                qrow,
-                "TLS",
-                if uses_sign_in && !form.tls {
-                    "Without TLS, others on the network can read and use the access token."
-                } else {
-                    "Encrypts the connection. The server must accept TLS on this port."
-                },
-                &["ssl", "encryption", "security"],
-                false,
-                |_, form, _, cx| {
-                    Switch::new("connection-tls")
-                        .checked(form.tls)
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("TLS")
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            if let Some(form) = &mut this.form {
-                                form.tls = *checked;
-                            }
-                            cx.notify();
-                        }))
-                        .into_any_element()
-                },
-            ))
-            .item(connection_row(
-                qrow,
-                "Authentication",
-                "Several connections can share one sign-in, each with its own username.",
-                &["sign-in", "ldap", "password", "oidc"],
-                false,
-                |_, form, _, _| {
-                    Select::new(&form.authentication)
-                        .focus_ring(false)
-                        .id("connection-authentication")
-                        .w_full()
-                        .disabled(form.saving.is_some())
-                        .accessibility_label("Authentication")
-                        .into_any_element()
-                },
-            ))
+            .items(postgres.then(|| {
+                connection_row(
+                    qrow,
+                    "TLS Mode",
+                    match connection_form::chosen(
+                        &form.postgres_ssl_mode,
+                        &connection_form::postgres_ssl_mode_choices(),
+                        cx,
+                    ) {
+                        crate::model::PostgresSslMode::Disable => "Connects without encryption.",
+                        crate::model::PostgresSslMode::Require => {
+                            "Encrypts without checking the server certificate."
+                        }
+                        crate::model::PostgresSslMode::VerifyFull => {
+                            "Checks the server certificate and hostname."
+                        }
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.postgres_ssl_mode)
+                            .focus_ring(false)
+                            .id("connection-postgres-ssl-mode")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS Mode")
+                            .into_any_element()
+                    },
+                )
+            }))
+            .items((!postgres).then(|| {
+                connection_row(
+                    qrow,
+                    "TLS",
+                    if uses_sign_in && !form.tls {
+                        "Without TLS, others on the network can read and use the access token."
+                    } else {
+                        "Encrypts the connection. The server must accept TLS on this port."
+                    },
+                    &["ssl", "encryption", "security"],
+                    false,
+                    |_, form, _, cx| {
+                        Switch::new("connection-tls")
+                            .checked(form.tls)
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("TLS")
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                if let Some(form) = &mut this.form {
+                                    form.tls = *checked;
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    },
+                )
+            }))
+            .items((!postgres).then(|| {
+                connection_row(
+                    qrow,
+                    "Authentication",
+                    "Several connections can share one sign-in, each with its own username.",
+                    &["sign-in", "ldap", "password", "oidc"],
+                    false,
+                    |_, form, _, _| {
+                        Select::new(&form.authentication)
+                            .focus_ring(false)
+                            .id("connection-authentication")
+                            .w_full()
+                            .disabled(form.saving.is_some())
+                            .accessibility_label("Authentication")
+                            .into_any_element()
+                    },
+                )
+            }))
             .items(uses_sign_in.then(|| {
                 connection_row(
                     qrow,
@@ -244,11 +299,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Username",
-                if uses_sign_in {
-                    "The database account. Kyuubi checks that the signed-in identity can use it."
-                } else {
-                    "The database account for LDAP authentication."
-                },
+                "The database account used to connect.",
                 &["user", "account", "login"],
                 false,
                 |_, form, _, _| form_input(form, 3, "Username"),
@@ -257,7 +308,7 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "Password",
-                    "Used for LDAP authentication.",
+                    "The password for this account.",
                     &["ldap", "secret"],
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
@@ -274,7 +325,7 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Session Parameters",
-                "JSON object with string values.",
+                "JSON object with setting names and string values.",
                 &["spark", "conf", "configuration", "json"],
                 true,
                 |_, form, _, _| {
@@ -290,7 +341,11 @@ impl Qrow {
             .item(connection_row(
                 qrow,
                 "Response Timeout",
-                "Seconds to wait for a server response, from 10 to 3600.",
+                if postgres {
+                    "Seconds to wait for setup and cancellation, from 10 to 3600."
+                } else {
+                    "Seconds to wait for a server response, from 10 to 3600."
+                },
                 &["timeout", "seconds"],
                 false,
                 |_, form, _, _| form_input(form, 14, "Response Timeout in Seconds"),
@@ -344,7 +399,11 @@ impl Qrow {
                 vec![]
             });
         SettingPage::new("General")
-            .description("Spark (HiveServer2)")
+            .description(if postgres {
+                "Postgres"
+            } else {
+                "Spark (HiveServer2)"
+            })
             .default_open(true)
             .resettable(false)
             .group(fields)

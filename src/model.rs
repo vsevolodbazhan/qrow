@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 6;
+pub const WORKSPACE_VERSION: u32 = 7;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
@@ -346,6 +346,8 @@ fn sanitize_optional_string(value: &mut Option<String>) {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
+    #[serde(default)]
+    pub database_type: DatabaseType,
     pub id: Uuid,
     pub name: String,
     pub host: String,
@@ -367,6 +369,9 @@ pub struct Profile {
     /// Encrypts the transport with TLS. Profiles before version 6 use plain TCP.
     #[serde(default)]
     pub tls: bool,
+    /// The Postgres TLS policy. None preserves the earlier TLS checkbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_ssl_mode: Option<PostgresSslMode>,
     #[serde(default)]
     pub authentication: Authentication,
     /// Facts about the connection that the user writes for the assistant.
@@ -525,6 +530,58 @@ pub fn format_schema_rules(rules: &[SchemaRule]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The encryption and server identity checks of a Postgres connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresSslMode {
+    Disable,
+    Require,
+    VerifyFull,
+}
+
+/// The SQL server and dialect of a connection.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseType {
+    #[default]
+    Kyuubi,
+    Postgres,
+}
+
+impl DatabaseType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Kyuubi => "Spark (HiveServer2)",
+            Self::Postgres => "Postgres",
+        }
+    }
+
+    pub fn connector_name(self) -> &'static str {
+        match self {
+            Self::Kyuubi => "spark_kyuubi",
+            Self::Postgres => "postgres",
+        }
+    }
+
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Kyuubi => 10009,
+            Self::Postgres => 5432,
+        }
+    }
+
+    pub fn quote_identifier(self, name: &str) -> String {
+        let quote = match self {
+            Self::Kyuubi => '`',
+            Self::Postgres => '"',
+        };
+        format!(
+            "{quote}{}{quote}",
+            name.replace(quote, &format!("{quote}{quote}"))
+        )
+    }
 }
 
 /// How a refresh reads columns. Table reads reduce the result held by the driver.
@@ -811,6 +868,7 @@ impl ConnectionLifecycle {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            database_type: DatabaseType::default(),
             id: Uuid::new_v4(),
             name: "Spark".into(),
             host: String::new(),
@@ -823,6 +881,7 @@ impl Default for Profile {
             catalog_column_reads: CatalogColumnReads::default(),
             shared_catalog: None,
             tls: false,
+            postgres_ssl_mode: None,
             authentication: Authentication::Password,
             assistant_notes: String::new(),
             dbt: None,
@@ -831,6 +890,15 @@ impl Default for Profile {
 }
 
 impl Profile {
+    /// Resolve saved profiles that predate explicit Postgres TLS modes.
+    pub fn postgres_ssl_mode(&self) -> PostgresSslMode {
+        self.postgres_ssl_mode.unwrap_or(if self.tls {
+            PostgresSslMode::VerifyFull
+        } else {
+            PostgresSslMode::Disable
+        })
+    }
+
     /// Return whether two profiles open the same authenticated session.
     ///
     /// The display name and idle policy can change while a session remains
@@ -838,12 +906,17 @@ impl Profile {
     /// the stored password.
     pub fn connection_identity_eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && self.database_type == other.database_type
             && self.host == other.host
             && self.port == other.port
             && self.username == other.username
             && self.database == other.database
             && self.parameters == other.parameters
-            && self.tls == other.tls
+            && if self.database_type == DatabaseType::Postgres {
+                self.postgres_ssl_mode() == other.postgres_ssl_mode()
+            } else {
+                self.tls == other.tls
+            }
             && self.authentication == other.authentication
     }
 
@@ -868,6 +941,11 @@ impl Profile {
             self.assistant_notes.len() <= MAX_ASSISTANT_NOTES_BYTES,
             "Assistant notes must be {} KB or less.",
             MAX_ASSISTANT_NOTES_BYTES / 1024
+        );
+        anyhow::ensure!(
+            self.database_type != DatabaseType::Postgres
+                || self.authentication == Authentication::Password,
+            "Postgres connections use password authentication."
         );
         self.lifecycle.validate()?;
         if let Some(dbt) = &self.dbt {
@@ -2144,6 +2222,47 @@ mod tests {
     }
 
     #[test]
+    fn postgres_tls_modes_preserve_legacy_profiles_and_session_identity() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Postgres,
+            ..Profile::default()
+        };
+        for (tls, expected) in [
+            (false, PostgresSslMode::Disable),
+            (true, PostgresSslMode::VerifyFull),
+        ] {
+            profile.tls = tls;
+            let json = serde_json::to_string(&profile).unwrap();
+            assert!(!json.contains("postgres_ssl_mode"));
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), expected);
+        }
+        let legacy = profile.clone();
+        profile.postgres_ssl_mode = Some(PostgresSslMode::VerifyFull);
+        assert!(legacy.connection_identity_eq(&profile));
+        for mode in [
+            PostgresSslMode::Disable,
+            PostgresSslMode::Require,
+            PostgresSslMode::VerifyFull,
+        ] {
+            profile.postgres_ssl_mode = Some(mode);
+            let json = serde_json::to_string(&profile).unwrap();
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), mode);
+            assert_eq!(
+                legacy.connection_identity_eq(&restored),
+                mode == PostgresSslMode::VerifyFull
+            );
+        }
+        profile.database_type = DatabaseType::Kyuubi;
+        let mut changed = profile.clone();
+        changed.postgres_ssl_mode = Some(PostgresSslMode::Require);
+        assert!(profile.connection_identity_eq(&changed));
+        changed.tls = false;
+        assert!(!profile.connection_identity_eq(&changed));
+    }
+
+    #[test]
     fn connection_identity_excludes_name_and_lifecycle() {
         let original = Profile::default();
         let mut updated = original.clone();
@@ -2679,5 +2798,58 @@ mod tests {
         assert!(catalog.validate().is_err());
         catalog.name = "x".repeat(MAX_SHARED_CATALOG_NAME + 1);
         assert!(catalog.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod database_type_tests {
+    use super::*;
+
+    #[test]
+    fn old_profiles_use_kyuubi_and_postgres_profiles_round_trip() {
+        let mut json = serde_json::to_value(Profile::default()).unwrap();
+        json.as_object_mut().unwrap().remove("database_type");
+        assert_eq!(
+            serde_json::from_value::<Profile>(json)
+                .unwrap()
+                .database_type,
+            DatabaseType::Kyuubi
+        );
+        let mut profile = Profile {
+            database_type: DatabaseType::Postgres,
+            host: "localhost".into(),
+            username: "qrow".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Profile>(&serde_json::to_string(&profile).unwrap()).unwrap(),
+            profile
+        );
+        let old = profile.clone();
+        profile.database_type = DatabaseType::Kyuubi;
+        assert!(!profile.connection_identity_eq(&old));
+        profile.database_type = DatabaseType::Postgres;
+        profile.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(
+            profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("password authentication")
+        );
+    }
+
+    #[test]
+    fn each_database_quotes_identifiers_in_its_dialect() {
+        assert_eq!(
+            DatabaseType::Postgres.quote_identifier("odd\"name"),
+            "\"odd\"\"name\""
+        );
+        assert_eq!(
+            DatabaseType::Kyuubi.quote_identifier("odd`name"),
+            "`odd``name`"
+        );
     }
 }

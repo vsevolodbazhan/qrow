@@ -522,14 +522,19 @@ impl<'a> Project<'a> {
     /// whether some did not fit. A name without a schema uses
     /// `default_schema`. The match is best-effort, like the catalog
     /// context.
-    fn referenced(&self, sql: &str, default_schema: &str) -> (Vec<ReferencedModel>, bool) {
+    fn referenced(
+        &self,
+        sql: &str,
+        default_schema: &str,
+        database_type: crate::model::DatabaseType,
+    ) -> (Vec<ReferencedModel>, bool) {
         let mut found: Vec<ReferencedModel> = Vec::new();
         let mut bytes = 0;
         let mut truncated = false;
         // One pass over the manifest, and one lookup for each distinct name.
         let relations = matching::relations(self.index, self.project);
         let mut seen = BTreeSet::new();
-        for name in super::catalog::names(sql) {
+        for name in super::catalog::names(sql, database_type) {
             let (schema, relation) = match name.as_slice() {
                 [.., schema, relation] => (schema.as_str(), relation.as_str()),
                 [relation] => (default_schema, relation.as_str()),
@@ -543,6 +548,12 @@ impl<'a> Project<'a> {
                 continue;
             };
             let entry = self.index.entry(position);
+            if database_type == crate::model::DatabaseType::Postgres
+                && (matching::mapped_schema(self.index, entry, self.project) != schema
+                    || entry.identifier.as_ref() != relation)
+            {
+                continue;
+            }
             if found
                 .iter()
                 .any(|model| *model.unique_id == *entry.unique_id)
@@ -624,6 +635,7 @@ pub fn context(
     project: Option<&Project>,
     sql: &str,
     default_schema: &str,
+    database_type: crate::model::DatabaseType,
 ) -> DbtContext {
     let context = DbtContext {
         connection_id,
@@ -642,7 +654,8 @@ pub fn context(
             .filter(|entry| entry.kind == kind)
             .count()
     };
-    let (referenced_models, referenced_models_truncated) = project.referenced(sql, default_schema);
+    let (referenced_models, referenced_models_truncated) =
+        project.referenced(sql, default_schema, database_type);
     DbtContext {
         project: Some(project.index.project.to_string()),
         dbt_version: Some(project.index.dbt_version.to_string()),

@@ -147,11 +147,14 @@ the user's SQL after setup returns. It does not immediately interrupt every
 setup step. During result fetching, cancellation releases the cursor and keeps
 rows that Qrow has already downloaded.
 
-Each network read waits up to the
+For Kyuubi, each network read waits up to the
 [response timeout](connections.md#authentication-and-connection-failures) of
 the connection, 300 seconds by default. This is not a limit on the total query
 duration. A read that times out fails with `Kyuubi did not answer within 300
 seconds`, with the timeout of the connection. A failed cancellation request is reported as an error.
+
+For Postgres, see [Postgres limits](connections.md#postgres-limits) for timeout
+and transaction behavior.
 
 On application exit, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) if a query is active, then requests

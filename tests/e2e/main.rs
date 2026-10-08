@@ -13,3 +13,6 @@ mod perf;
 mod queries;
 mod sessions;
 mod sign_ins;
+
+// These tests use their own server: `./qtest run postgres` selects them.
+mod postgres;

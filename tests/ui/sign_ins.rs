@@ -61,6 +61,7 @@ fn open_settings(app: &TestApp, cx: &mut TestAppContext, sign_in: &SignIn) {
 
 /// Chooses `option` in the Sign-in list of Connection Settings.
 fn choose_sign_in(app: &TestApp, cx: &mut TestAppContext, option: &str) {
+    app.scroll_to(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
     app.settle(cx);
     app.update(cx, |window, cx| window.input(option, cx));
@@ -575,6 +576,7 @@ fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     app.fill(cx, "connection-username", "kyuubi-analytics-xl");
     app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
     app.wait_for(cx, "connection-sign-in");
+    app.scroll_to(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
     app.click(cx, "connection-new-sign-in");
     // Sign-in Settings opens above Connection Settings.

@@ -173,6 +173,7 @@ fn the_notes_field_rejects_notes_above_the_limit(cx: &mut TestAppContext) {
     app.context_menu(cx, connection_row(alpha));
     app.choose(cx, "popup-menu", "Duplicate");
     app.wait_for(cx, "connection-name");
+    app.scroll_to(cx, "connection-password");
     app.fill(cx, "connection-password", "synthetic-password");
     app.click(cx, "save-profile");
     app.wait_until(cx, "the duplicate", Duration::from_secs(10), |_, _| {

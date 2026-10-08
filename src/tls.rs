@@ -1,4 +1,4 @@
-//! TLS for Kyuubi connections and sign-in providers.
+//! TLS for database connections and sign-in providers.
 //!
 //! The application trusts the certificate authorities of the macOS trust
 //! store. Tests trust a synthetic authority only.
@@ -64,7 +64,7 @@ impl Trust {
         })
     }
 
-    fn client_config(&self) -> Result<Arc<ClientConfig>> {
+    pub(crate) fn client_config(&self) -> Result<Arc<ClientConfig>> {
         self.config
             .get_or_init(|| self.build().map_err(|error| format!("{error:#}")))
             .clone()

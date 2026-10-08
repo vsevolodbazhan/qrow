@@ -352,6 +352,81 @@ fn search_filters_by_pattern_text_tag_and_type() {
 }
 
 #[test]
+fn case_distinct_manifest_names_do_not_receive_a_folded_match() {
+    let index = index(json!({"metadata": {"dbt_schema_version": V12}, "nodes": {
+        "model.lake.orders": {"unique_id": "model.lake.orders", "resource_type": "model", "name": "orders", "schema": "public", "alias": "orders", "relation_name": "x"},
+        "model.lake.upper": {"unique_id": "model.lake.upper", "resource_type": "model", "name": "upper", "schema": "public", "alias": "Orders", "relation_name": "x"},
+        "model.lake.third": {"unique_id": "model.lake.third", "resource_type": "model", "name": "third", "schema": "public", "alias": "orders", "relation_name": "x"}
+    }}));
+    let project = project();
+    assert!(matching::relations(&index, &project).is_empty());
+    let mut catalog = crate::catalog::Catalog::empty(uuid::Uuid::nil(), None);
+    catalog.apply_schemas(
+        vec!["public".into()],
+        &crate::model::CatalogSettings::default(),
+        1,
+    );
+    catalog.apply_relations(
+        "public",
+        None,
+        vec![crate::catalog::RelationEntry {
+            name: "orders".into(),
+            kind: crate::catalog::RelationKind::Table,
+            comment: None,
+        }],
+        1,
+    );
+    let summary = matching::summary(&index, &project, &matching::CatalogNames::of(&catalog));
+    assert_eq!(summary.matched, 0);
+    assert_eq!(summary.unmatched.len(), 3);
+    assert_eq!(
+        matching::entry_for(&index, &project, "public", "orders"),
+        None
+    );
+}
+
+#[test]
+fn postgres_dbt_context_does_not_match_a_different_identifier_case() {
+    let index = index(json!({"metadata": {"dbt_schema_version": V12}, "nodes": {
+        "model.lake.orders": {"unique_id": "model.lake.orders", "resource_type": "model", "name": "orders", "schema": "public", "alias": "Orders", "relation_name": "x"}
+    }}));
+    let project = project();
+    let dbt = Project::new(&index, &project, None, false);
+    let state = ManifestState::default();
+    let context = |sql| {
+        context(
+            uuid::Uuid::nil(),
+            &state,
+            Some(&dbt),
+            sql,
+            "public",
+            crate::model::DatabaseType::Postgres,
+        )
+    };
+    assert!(context("SELECT * FROM ORDERS").referenced_models.is_empty());
+    assert_eq!(
+        context("SELECT * FROM \"Orders\"").referenced_models[0].unique_id,
+        "model.lake.orders"
+    );
+}
+
+#[test]
+fn postgres_dbt_context_distinguishes_quoted_names_from_string_literals() {
+    let (index, project) = (lake("Orders."), project());
+    let dbt = Project::new(&index, &project, None, false);
+    let found = context(
+        uuid::Uuid::nil(),
+        &ManifestState::default(),
+        Some(&dbt),
+        "SELECT 'core.customers' FROM \"core\".\"orders\"",
+        "core",
+        crate::model::DatabaseType::Postgres,
+    );
+    assert_eq!(found.referenced_models.len(), 1);
+    assert_eq!(found.referenced_models[0].unique_id, "model.lake.orders");
+}
+
+#[test]
 fn the_context_names_the_models_of_the_tab_sql() {
     let (index, project) = (lake("Orders.\nMore."), project());
     let dbt = Project::new(&index, &project, None, true);
@@ -362,6 +437,7 @@ fn the_context_names_the_models_of_the_tab_sql() {
         Some(&dbt),
         "SELECT * FROM core.orders o JOIN customers c ON 1 = 1 JOIN raw.unknown u",
         "core",
+        crate::model::DatabaseType::Kyuubi,
     );
     assert_eq!(found.models, Some(3));
     assert_eq!(found.sources, Some(1));
@@ -388,14 +464,28 @@ fn the_context_names_the_models_of_the_tab_sql() {
         parsing: true,
         ..ManifestState::default()
     };
-    let value = context(uuid::Uuid::nil(), &reading, None, "", "core");
+    let value = context(
+        uuid::Uuid::nil(),
+        &reading,
+        None,
+        "",
+        "core",
+        crate::model::DatabaseType::Kyuubi,
+    );
     assert!(value.reading && value.models.is_none());
     let failed = ManifestState {
         error: Some(ManifestError::NotFound),
         ..ManifestState::default()
     };
-    let value =
-        serde_json::to_value(context(uuid::Uuid::nil(), &failed, Some(&dbt), "", "core")).unwrap();
+    let value = serde_json::to_value(context(
+        uuid::Uuid::nil(),
+        &failed,
+        Some(&dbt),
+        "",
+        "core",
+        crate::model::DatabaseType::Kyuubi,
+    ))
+    .unwrap();
     assert_eq!(
         value["error"],
         "Manifest not found: run dbt parse in the project"

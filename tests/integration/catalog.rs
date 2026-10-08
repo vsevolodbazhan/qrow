@@ -32,6 +32,7 @@ struct PollGate {
 
 #[derive(Default)]
 struct Server {
+    limited: AtomicBool,
     tables: Mutex<Tables>,
     connects: AtomicUsize,
     closes: AtomicUsize,
@@ -136,6 +137,9 @@ fn names(names: &[&str]) -> Vec<Column> {
 }
 
 impl Session for FakeSession {
+    fn result_limited(&self) -> bool {
+        self.server.limited.load(Ordering::SeqCst)
+    }
     fn execute(&mut self, _: &str) -> Result<Arc<dyn Cancellation>> {
         unreachable!("the catalog worker runs no SQL")
     }
@@ -1796,4 +1800,23 @@ fn a_seeded_shared_catalog_keeps_its_columns_when_an_automatic_read_fails() {
     assert!(h.catalog().schema("sales").unwrap().error.is_some());
     assert_eq!(h.columns("sales", "orders").unwrap(), ["id", "total"]);
     assert!(!private.exists());
+}
+
+#[test]
+fn a_truncated_metadata_result_is_a_failed_refresh() {
+    let server = warehouse();
+    let mut h = Harness::new(server.clone(), profile(), None);
+    h.refresh(Scope::Connection);
+    let before = h.catalog().schemas.clone();
+    server.limited.store(true, Ordering::SeqCst);
+    h.worker.refresh(h.id, Scope::Connection);
+    h.wait(|h| h.catalog().error.is_some() && h.status.is_idle());
+    assert!(
+        h.catalog()
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("connector result limit")
+    );
+    assert_eq!(h.catalog().schemas, before);
 }

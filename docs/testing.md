@@ -45,6 +45,7 @@ accept a test filter.
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
 | `deps` | Dependency policy, unused dependencies, advisories, licenses, and sources. | cargo-machete, cargo-deny |
+| `postgres` | Postgres connector and, on macOS, real-window tests with a disposable server. | Docker, cargo-nextest |
 | `backend` * | Connector and worker against the real servers, without the UI. | Docker |
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
@@ -304,6 +305,25 @@ because the Apache archive service is slow. When a source fails, or stays
 below 256 KiB/s for 60 seconds, the download continues from the next source.
 The last source has no speed limit. To change an archive version, add the new
 archive to the mirror first, as its README tells.
+
+## Test Postgres
+
+Run `./qtest run postgres`. This suite starts a separate disposable Postgres 17
+container with a synthetic password and a temporary TLS certificate. It tests
+connector results, SQL errors, cancellation, session settings, schema metadata,
+TLS encryption without a trusted certificate, and certificate verification.
+On macOS, it also tests encrypted queries, result pages, and cancellation
+through the real Qrow window. The unit suite includes a protocol test that
+checks that required TLS cannot fall back to plaintext.
+
+The suite requires Docker. It does not use the Spark fixture or a native server
+runtime. It removes the container, its volumes, and certificates after the run.
+The backend CI job includes the connector tests. The Postgres UI tests require
+a local macOS run with Docker.
+
+The `e2e` suite selects tests for the Kyuubi fixture. The `postgres` suite
+selects the Postgres tests from the same test binary and supplies their server.
+Postgres tests fail if their fixture settings are missing.
 
 ## Run the desktop suite
 
@@ -635,7 +655,7 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend` with Docker | `core` |
+| `backend` | Linux | `backend`, `postgres` with Docker | `core` |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
 | `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |

@@ -10,7 +10,7 @@
 use super::*;
 use crate::catalog::{
     Catalog, CatalogConfig, CatalogIdentity, CatalogWorker, Event as CatalogEvent, RelationKind,
-    Scope, Seed, Status, catalog_key, qualified_name, quote_identifier,
+    Scope, Seed, Status, catalog_key, qualified_name,
 };
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::FocusableExt as _;
@@ -88,14 +88,18 @@ pub(super) enum Node {
 
 impl Node {
     /// The name that Copy gives and the name for SQL, for a node with a name.
-    fn names(&self) -> Option<(String, String)> {
+    fn names(&self, kind: crate::model::DatabaseType) -> Option<(String, String)> {
         match self {
-            Node::Schema { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Schema { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Relation { schema, name, .. } => {
-                let qualified = qualified_name(schema, name);
+                let qualified = format!(
+                    "{}.{}",
+                    kind.quote_identifier(schema),
+                    kind.quote_identifier(name)
+                );
                 Some((qualified.clone(), qualified))
             }
-            Node::Column { name, .. } => Some((name.clone(), quote_identifier(name))),
+            Node::Column { name, .. } => Some((name.clone(), kind.quote_identifier(name))),
             Node::Connection(_) | Node::Notice { .. } => None,
         }
     }
@@ -619,6 +623,7 @@ impl Builder<'_> {
 
 /// What a connection row shows in the current frame.
 struct ConnectionRow {
+    database_type: crate::model::DatabaseType,
     name: String,
     tooltip: StatusTooltip,
     running: bool,
@@ -1136,10 +1141,25 @@ impl Qrow {
         cx.notify();
     }
 
+    fn catalog_node_names(&self, node: &Node) -> Option<(String, String)> {
+        let id = match node {
+            Node::Schema { profile, .. }
+            | Node::Relation { profile, .. }
+            | Node::Column { profile, .. } => *profile,
+            _ => return None,
+        };
+        node.names(
+            self.profiles
+                .iter()
+                .find(|profile| profile.id == id)?
+                .database_type,
+        )
+    }
+
     /// The names of the row that the tree selects.
     fn selected_catalog_names(&self, cx: &App) -> Option<(String, String)> {
         let state = self.catalog.state.read(cx);
-        self.catalog.node(&state.selected_item()?.id)?.names()
+        self.catalog_node_names(self.catalog.node(&state.selected_item()?.id)?)
     }
 
     /// Copies the name of the selected row, like Copy Name in its menu.
@@ -1166,7 +1186,7 @@ impl Qrow {
         let Some(node) = self.catalog.node(&id).cloned() else {
             return;
         };
-        let Some((name, insert)) = node.names() else {
+        let Some((name, insert)) = self.catalog_node_names(&node) else {
             return;
         };
         let (profile, scope) = match &node {
@@ -1343,6 +1363,7 @@ impl Qrow {
                         (
                             id,
                             ConnectionRow {
+                                database_type: profile.database_type,
                                 name: profile.name.clone(),
                                 tooltip,
                                 connected,
@@ -2198,13 +2219,17 @@ fn connection_row(
                 .when(!has_status, |el| el.pr_3())
                 .child(
                     div()
+                        .id(child_id(entry, "icon"))
+                        .test_support()
+                        .role(Role::Image)
+                        .aria_label(format!("{} database", row.database_type.label()))
                         .w(px(context.scale * 16.))
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
                         .child(
                             gpui_kit::component::Icon::default()
-                                .path(crate::assets::SPARK_ICON)
+                                .path(crate::assets::connection_icon(row.database_type))
                                 .size_4(),
                         ),
                 )
