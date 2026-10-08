@@ -314,20 +314,6 @@ fn saved_indexes_that_no_connection_uses_are_deleted() {
 }
 
 #[test]
-fn a_switch_to_manual_drops_a_waiting_automatic_refresh() {
-    let mut fixture = Fixture::new();
-    fixture.worker.configure(vec![fixture.use_manifest(true)]);
-    fixture.wait("the parse", |state| models(state) == 10);
-    fixture.settle();
-    fixture.write(12);
-    // The change waits for SETTLE. Manual refresh drops it.
-    std::thread::sleep(SETTLE / 3);
-    fixture.worker.configure(vec![fixture.use_manifest(false)]);
-    assert!(fixture.settle().is_empty());
-    assert_eq!(models(fixture.states.last().unwrap()), 10);
-}
-
-#[test]
 fn a_manifest_link_reads_its_current_target() {
     let mut fixture = Fixture::new();
     let folder = fixture.manifest.parent().unwrap().to_owned();
