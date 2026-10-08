@@ -365,9 +365,14 @@ pub fn selected_tree_rows(window: &Window) -> Vec<String> {
         .collect()
 }
 
-/// Only the current query connection paints an active row background.
+/// Only the current query connection shows the accent bar, and no connection
+/// row paints a fill.
 pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, active: bool) {
     use gpui_kit::component::ActiveTheme as _;
+    let bar = window.try_find(ElementId::Name(
+        format!("current-connection-bar-{profile}").into(),
+    ));
+    assert_eq!(bar.is_some(), active, "Unexpected current-connection bar");
     let center = window
         .find(connection_row(profile))
         .bounds()
@@ -379,15 +384,10 @@ pub fn assert_connection_highlight(window: &Window, cx: &App, profile: Uuid, act
         .filter(|quad| quad.bounds.contains(&center) && quad.content_mask.bounds.contains(&center))
         .map(|quad| quad.background)
         .collect();
-    assert_eq!(
-        backgrounds.contains(&gpui_kit::Background::from(cx.theme().sidebar_accent)),
-        active,
-        "Unexpected current-connection highlight: {backgrounds:?}"
-    );
-    if !active {
+    for fill in [cx.theme().sidebar_accent, cx.theme().list_active] {
         assert!(
-            !backgrounds.contains(&gpui_kit::Background::from(cx.theme().list_active)),
-            "An inactive connection has a tree-selection fill: {backgrounds:?}"
+            !backgrounds.contains(&gpui_kit::Background::from(fill)),
+            "A connection row has a fill: {backgrounds:?}"
         );
     }
 }
@@ -399,13 +399,41 @@ pub fn assert_connection_keyboard_position(
     profile: Uuid,
     expected: bool,
 ) {
+    let bounds = window.find(connection_row(profile)).bounds();
+    assert_eq!(
+        has_focus_outline(window, cx, bounds),
+        expected,
+        "Unexpected connection keyboard outline at {bounds:?}"
+    );
+}
+
+/// The selected schema, table, or column row labelled `row` has the focus
+/// outline and no selection fill.
+pub fn assert_tree_row_outline(window: &Window, cx: &App, row: &str, expected: bool) {
     use gpui_kit::component::ActiveTheme as _;
-    let center = window
-        .find(connection_row(profile))
-        .bounds()
-        .scale(window.scale_factor())
-        .center();
-    let outlined = window.painted_quads().into_iter().any(|quad| {
+    let bounds = labelled(window, row)
+        .unwrap_or_else(|| panic!("No tree row {row}"))
+        .bounds();
+    assert_eq!(
+        has_focus_outline(window, cx, bounds),
+        expected,
+        "Unexpected tree row outline of {row}"
+    );
+    let center = bounds.scale(window.scale_factor()).center();
+    assert!(
+        !window.painted_quads().into_iter().any(|quad| {
+            quad.bounds.contains(&center)
+                && quad.background == gpui_kit::Background::from(cx.theme().list_active)
+        }),
+        "The tree row {row} has a selection fill"
+    );
+}
+
+/// A ring-colored outline around the center of `bounds`.
+fn has_focus_outline(window: &Window, cx: &App, bounds: Bounds<Pixels>) -> bool {
+    use gpui_kit::component::ActiveTheme as _;
+    let center = bounds.scale(window.scale_factor()).center();
+    window.painted_quads().into_iter().any(|quad| {
         quad.bounds.contains(&center)
             && quad.border_color == cx.theme().ring
             && quad.border_widths.top > px(0.).scale(window.scale_factor())
@@ -414,11 +442,7 @@ pub fn assert_connection_keyboard_position(
                 center.x,
                 quad.bounds.top() + quad.border_widths.top / 2.,
             ))
-    });
-    assert_eq!(
-        outlined, expected,
-        "Unexpected connection keyboard outline at {center:?}"
-    );
+    })
 }
 
 /// One painted dot in a region, in the expected theme color.
