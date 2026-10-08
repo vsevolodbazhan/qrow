@@ -692,8 +692,9 @@ setting was added also use **One relation at a time**.
 
 A connection refresh starts with the schemas that Qrow read longest ago.
 The progress row shows the number of schemas that are done. The row is removed
-when the refresh ends, before the session closes. An expanded schema shows
-**Loading relations…** while Qrow reads its tables and views. A connection
+when the refresh ends, before the session closes. An expanded schema without
+a table list shows **Loading relations…** while Qrow reads its tables and
+views. A connection
 with many schemas or tables can need many minutes. To make it faster, hide
 the schemas that you do not use.
 
