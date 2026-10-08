@@ -2256,17 +2256,6 @@ fn connection_row(
         .gap(px(context.scale * ROW_GAP))
         .rounded(cx.theme().radius)
         .relative()
-        .when(keyboard_position, |el| {
-            el.child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .size_full()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().ring),
-            )
-        })
         .text_color(foreground)
         .map(|el| {
             if row.active {
@@ -2317,6 +2306,19 @@ fn connection_row(
                 // The tree must not also expand the row.
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
         )
+        // The outline paints after the status slot, so the hover fill of the
+        // slot does not cover it.
+        .when(keyboard_position, |el| {
+            el.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .size_full()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().ring),
+            )
+        })
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
             move |event, window, cx| {

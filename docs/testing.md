@@ -333,7 +333,9 @@ events. It checks only what needs the real operating system:
 1. **About Qrow** and **Settings…** open from the menu bar.
 2. A connection that you add through the form keeps its password in the real
    Keychain, and a real query reads it.
-3. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
+3. Pixels of the selected connection row: when the pointer is on the status
+   dot, the focus outline stays above the hover fill of the dot.
+4. When the workspace cannot be saved, **⌘Q** keeps the editor open with its
    SQL. **Keep editing** returns to it, and **Retry save and quit** saves and
    quits.
 
