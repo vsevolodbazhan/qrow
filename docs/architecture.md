@@ -96,8 +96,12 @@ one window timer, and it does not poll.
 
 A window gets display refresh ticks only while GPUI requests frames. It stops
 its display link 1 second after the last frame request, so an idle window does
-not wake the main thread at the refresh rate of the display. See the
-[macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
+not wake the main thread at the refresh rate of the display. When no window
+has drawn for 5 seconds, a background thread tells the macOS allocator to
+return its free pages one time. Thus memory that work freed, for example
+the memory of long results, does not stay in the footprint that Activity
+Monitor shows.
+See the [macOS platform patch](../vendor/gpui-pre-macos/QROW-PATCH.md).
 
 The assistant pane is a separate view. Typing in its message field or a
 streamed reply renders the pane again, but not the workspace. The transcript

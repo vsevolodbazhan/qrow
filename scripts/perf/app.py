@@ -3,12 +3,12 @@
 
 Starts target/release/qrow with a temporary workspace that has one synthetic
 connection and an indented query, waits until it reports that its UI is ready,
-lets it idle until the caret of the focused editor stops blinking, and samples
-it with ps and footprint. The physical footprint is the memory that Activity
-Monitor shows. The first launch after a build is slower while macOS checks the
-new executable, so one launch warms up and the median of the next launches
-counts. Prints one QROW_PERF line for each measurement and exits with 1 above a
-budget.
+lets it idle until the caret of the focused editor stops blinking and Qrow
+returns its free memory, and samples it with ps and footprint. The physical
+footprint is the memory that Activity Monitor shows. The first launch after a
+build is slower while macOS checks the new executable, so one launch warms up
+and the median of the next launches counts. Prints one QROW_PERF line for each
+measurement and exits with 1 above a budget.
 """
 import json
 import os
@@ -25,8 +25,9 @@ from environment import target_dir  # noqa: E402
 
 READY = "Qrow GPUI initialized"
 # The caret blinks for 10 seconds after the editor gets focus, and each blink
-# repaints the window.
-IDLE_SECONDS = 12
+# repaints the window. 5 seconds after the window stops drawing, Qrow returns
+# free malloc pages to macOS one time.
+IDLE_SECONDS = 18
 SAMPLE_SECONDS = 5
 # Large regressions only; `./qtest compare` measures small ones.
 BUDGETS = {"app.launch_to_ui": 1500, "app.idle_rss": 400, "app.idle_footprint": 400, "app.idle_cpu": 5}
