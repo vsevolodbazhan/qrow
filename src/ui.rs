@@ -699,10 +699,18 @@ impl Qrow {
         // no content, so a focused field can leave the window. The keys then
         // go to no element, and Escape and the close button of a sheet or a
         // dialog do nothing. The focus goes to the nearest element around
-        // the field that is still in the window, for example the sheet.
-        let focus_lost = cx.on_focus_lost(window, |_, window, cx| {
-            if let Some(target) = window.focus_lost_restore_target(cx) {
+        // the field that is still in the window, for example the sheet. In
+        // the workspace, like after a failed query hides the focused result
+        // table, the focus goes to the SQL editor, so that typing and
+        // shortcuts like ⌘B continue to operate.
+        let focus_lost = cx.on_focus_lost(window, |this: &mut Self, window, cx| {
+            if let Some(target) = window.focus_lost_restore_target(cx)
+                && !target.contains(&this.focus, window)
+            {
                 window.focus(&target, cx);
+            } else {
+                let editor = this.tabs[this.active].input.clone();
+                editor.update(cx, |editor, cx| editor.focus(window, cx));
             }
         });
         let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);

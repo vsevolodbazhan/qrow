@@ -46,7 +46,9 @@ The sidebar at the left of the window shows
 The two buttons at the left end of the status bar choose the sidebar. Click the
 button of the visible sidebar to hide it. Press **⌘B** to show or hide the
 Connections sidebar. **View → Toggle sidebar** hides or shows the sidebar that
-was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. Drag the sidebar divider
+was visible last. The **View** menu has the commands of both buttons. Qrow opens with the Connections sidebar. When the focused part of
+the workspace closes, for example the result table after a failed query, the
+SQL editor gets the focus. Thus shortcuts like **⌘B** continue to operate. Drag the sidebar divider
 to change its width. Drag the divider above Results or Logs to change the
 editor height.
 These two divider positions are not saved in the workspace. Qrow saves the
