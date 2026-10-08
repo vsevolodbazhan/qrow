@@ -646,3 +646,67 @@ fn connection_help_is_shared_and_does_not_repeat_the_database_type(cx: &mut Test
     );
     cancel_form(&app, cx);
 }
+
+#[gpui_kit::test]
+fn trino_connection_saves_catalog_schema_and_optional_password(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_new_connection(&app, cx);
+    app.select(cx, "connection-database-type", "Trino");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-name").as_deref(),
+            Some("Trino")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-port").as_deref(),
+            Some("8080")
+        );
+        assert_eq!(
+            crate::support::value(window, "connection-database").as_deref(),
+            Some("tpch")
+        );
+        assert_eq!(
+            label(window, "connection-database").as_deref(),
+            Some("Initial Catalog")
+        );
+        assert_eq!(
+            label(window, "connection-trino-schema").as_deref(),
+            Some("Initial Schema")
+        );
+        assert!(window.try_find("connection-authentication").is_some());
+        assert!(window.try_find("connection-postgres-ssl-mode").is_none());
+    });
+    app.fill(cx, "connection-host", "localhost");
+    app.fill(cx, "connection-username", "synthetic-user");
+    app.scroll_to(cx, "connection-trino-schema");
+    app.fill(cx, "connection-trino-schema", "tiny");
+    app.press(cx, "cmd-enter");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(
+        cx,
+        "the saved Trino profile",
+        Duration::from_secs(10),
+        |_, _| !app.saved().profiles.is_empty(),
+    );
+    let profile = &app.saved().profiles[0];
+    assert_eq!(profile.database_type, qrow::model::DatabaseType::Trino);
+    assert_eq!(profile.database, "tpch");
+    assert_eq!(profile.trino_schema, "tiny");
+    assert_eq!(app.credentials.get(profile.id).as_deref(), Some(""));
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-trino-schema");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::value(window, "connection-trino-schema").as_deref(),
+            Some("tiny")
+        );
+    });
+    app.scroll_to(cx, "connection-database-type");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.wait_gone(cx, "connection-trino-schema");
+    app.select(cx, "connection-database-type", "Trino");
+    app.wait_for(cx, "connection-trino-schema");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "connection-name");
+}

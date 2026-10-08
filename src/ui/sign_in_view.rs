@@ -1,10 +1,13 @@
-//! Sign-ins: reusable OpenID Connect sign-ins in the Sign-ins sidebar and the
+//! Sign-ins: reusable authentication providers in the Sign-ins sidebar and the
 //! Sign-in Settings dialog, their browser sign-in and sign-out, and the
 //! sessions that use them.
 use super::environment::Browser;
 use super::*;
 use crate::{
-    model::{Authentication, BASE_SCOPES, Identity, SignIn, extra_scopes, unique_sign_in_name},
+    model::{
+        Authentication, BASE_SCOPES, Identity, SignIn, SignInProvider, extra_scopes,
+        unique_sign_in_name,
+    },
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
@@ -31,6 +34,7 @@ use std::{
 /// The result of background sign-in work.
 enum Outcome {
     SignedIn(Uuid, Result<Identity, (Failure, String)>),
+    External(Uuid, Result<(), String>),
     SignedOut(Uuid, Result<(), String>),
     Removed(Uuid, Result<(), String>),
     Retried(Uuid, Result<(), String>),
@@ -50,8 +54,11 @@ pub(super) struct SignInEditor {
     /// Connection Settings opened the dialog. A new sign-in becomes the
     /// choice of its Sign-in list.
     for_connection: bool,
-    /// Name, issuer, client ID, scopes, resource, database hosts, callback port.
+    /// Name, issuer, client ID, scopes, resource, callback ports.
     fields: Vec<Entity<InputState>>,
+    account: Entity<InputState>,
+    provider: connection_form::RowSelect,
+    _provider_subscription: Subscription,
     /// The fields came from settings that another user shared.
     pasted: bool,
     error: Option<String>,
@@ -59,7 +66,7 @@ pub(super) struct SignInEditor {
 
 /// The fields of the Sign-in Settings dialog: element ID, label in title
 /// case, description, and placeholder.
-const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
+const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-name",
         "Name",
@@ -91,16 +98,10 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
         "https://db.example.com",
     ),
     (
-        "sign-in-database-hosts",
-        "Database Hosts",
-        "The servers that can receive the access tokens, separated by spaces.",
-        "db.example.com",
-    ),
-    (
         "sign-in-callback-ports",
         "Callback Ports",
-        "Optional. Local ports to try in order. Empty uses any free port.",
-        "8765 8766",
+        "Optional. Comma-separated ports. Empty uses any free port.",
+        "8765, 8766",
     ),
 ];
 
@@ -111,13 +112,17 @@ const TOKEN_FIELDS: std::ops::RangeInclusive<usize> = 1..=4;
 pub(super) struct SignInState {
     /// Browser sign-ins that run, with their cancellation flags.
     pending: HashMap<Uuid, PendingSignIn>,
+    external_pending: HashMap<Uuid, Arc<AtomicBool>>,
     signing_out: HashSet<Uuid>,
     retrying: HashSet<Uuid>,
     /// The last failure of an action, shown with the sign-in.
     errors: HashMap<Uuid, String>,
+    /// Connections waiting for the shared OIDC browser attempt.
+    attempt_connections: HashMap<Uuid, HashSet<Uuid>>,
     /// The statuses that the window shows. A refresh on a worker thread can
     /// change a status.
     statuses: Vec<(Uuid, Status)>,
+    external_statuses: Vec<(Uuid, crate::external_auth::Status)>,
     outcomes: (mpsc::Sender<Outcome>, mpsc::Receiver<Outcome>),
     /// Authorization URLs to open on the main thread.
     urls: (mpsc::Sender<BrowserPage>, mpsc::Receiver<BrowserPage>),
@@ -131,10 +136,13 @@ impl SignInState {
     pub(super) fn new(browser: Option<Browser>) -> Self {
         Self {
             pending: HashMap::new(),
+            external_pending: HashMap::new(),
             signing_out: HashSet::new(),
             retrying: HashSet::new(),
             errors: HashMap::new(),
+            attempt_connections: HashMap::new(),
             statuses: Vec::new(),
+            external_statuses: Vec::new(),
             outcomes: mpsc::channel(),
             urls: mpsc::channel(),
             browser,
@@ -142,8 +150,15 @@ impl SignInState {
         }
     }
 
+    pub(super) fn clear_error(&mut self, id: Uuid) {
+        self.errors.remove(&id);
+    }
+
     /// Stops browser sign-ins, for example when the window closes.
     pub(super) fn cancel_all(&self) {
+        for cancel in self.external_pending.values() {
+            cancel.store(true, Ordering::SeqCst);
+        }
         for pending in self.pending.values() {
             pending.cancel.store(true, Ordering::SeqCst);
         }
@@ -164,18 +179,20 @@ pub(super) fn automatic_sign_in(tab: &Tab, profiles: &[Profile]) -> Option<(Uuid
     if tab.signed_in_for_run || tab.cancelling {
         return None;
     }
-    let sign_in = profiles
+    let authentication = profiles
         .iter()
         .find(|profile| Some(profile.id) == tab.worker_profile)?
-        .authentication
-        .sign_in()?;
+        .authentication;
+    let Authentication::Oidc { sign_in } = authentication else {
+        return None;
+    };
     Some((sign_in, tab.submitted_sql.clone()?))
 }
 
 /// What the Sign-ins sidebar and the Sign-in Settings dialog show about the
 /// account of a sign-in.
 struct Account {
-    /// The second line of the sidebar row.
+    /// The short account status for accessibility and status indicators.
     summary: String,
     /// The full status, for the dialog.
     detail: String,
@@ -184,6 +201,10 @@ struct Account {
     working: bool,
     /// The sign-in needs the user before its connections can work.
     attention: bool,
+}
+
+fn provider_choices() -> [(SignInProvider, String); 1] {
+    [(SignInProvider::Oidc, "OpenID Connect".into())]
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -211,16 +232,27 @@ fn parse_editor(values: &[String], base: &SignIn) -> anyhow::Result<SignIn> {
         .collect();
     let resource = values[4].trim();
     sign_in.resource = (!resource.is_empty()).then(|| resource.to_owned());
-    sign_in.allowed_hosts = split_list(&values[5]);
-    sign_in.callback_ports = split_list(&values[6])
-        .iter()
-        .map(|port| match port.parse::<u16>() {
-            Ok(port) if port > 0 => Ok(port),
-            _ => Err(anyhow::anyhow!(
-                "Callback ports must be numbers from 1 to 65535."
-            )),
-        })
-        .collect::<anyhow::Result<_>>()?;
+    sign_in.callback_ports = split_list(if sign_in.provider == SignInProvider::Oidc {
+        &values[5]
+    } else {
+        ""
+    })
+    .iter()
+    .map(|port| match port.parse::<u16>() {
+        Ok(port) if port > 0 => Ok(port),
+        _ => Err(anyhow::anyhow!(
+            "Callback ports must be numbers from 1 to 65535."
+        )),
+    })
+    .collect::<anyhow::Result<_>>()?;
+    if sign_in.provider == SignInProvider::TrinoExternal {
+        sign_in.issuer.clear();
+        sign_in.client_id.clear();
+        sign_in.scopes.clear();
+        sign_in.resource = None;
+        sign_in.callback_ports.clear();
+        sign_in.identity = None;
+    }
     sign_in.validate()?;
     Ok(sign_in)
 }
@@ -231,11 +263,13 @@ impl Qrow {
     pub(super) fn credential_provider(&self) -> crate::worker::CredentialProvider {
         let credentials = self.credentials.clone();
         let service = self.oidc.clone();
+        let external = self.external_auth.clone();
         Arc::new(move |profile: &Profile| match profile.authentication {
             Authentication::Password => credentials
                 .password(profile.id)
                 .map(|password| password.into()),
             Authentication::Oidc { .. } => service.secret(profile),
+            Authentication::TrinoExternal => external.secret(profile),
         })
     }
 
@@ -274,8 +308,97 @@ impl Qrow {
     }
 
     fn sync_sign_ins(&mut self, cx: &mut Context<Self>) {
-        self.oidc.configure(&self.sign_ins);
+        self.oidc.configure(&self.sign_ins, &self.profiles);
         self.changed(cx);
+    }
+
+    fn start_external_sign_in(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        use crate::connector::Connector;
+        if self.demo
+            || self.sign_in_ui.external_pending.contains_key(&profile.id)
+            || self.external_auth.is_authenticated(&profile)
+        {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.sign_in_ui
+            .external_pending
+            .insert(profile.id, cancel.clone());
+        let connection = profile.id;
+        let service = self.external_auth.clone();
+        let connector = self.connector.clone();
+        let outcomes = self.sign_in_ui.outcomes.0.clone();
+        let wake = self.wake.clone();
+        std::thread::spawn(move || {
+            let result = (|| {
+                let secret =
+                    service
+                        .secret(&profile)?
+                        .with_control(crate::external_auth::Control::new(
+                            Arc::new(move || cancel.load(Ordering::SeqCst)),
+                            Arc::new(|_| {}),
+                        ));
+                let mut session = connector.connect(&profile, secret)?;
+                session.close()
+            })()
+            .map_err(|error: anyhow::Error| {
+                if error.is::<crate::external_auth::Cancelled>() {
+                    String::new()
+                } else {
+                    crate::connector::error_message(&error)
+                }
+            });
+            let _ = outcomes.send(Outcome::External(connection, result));
+            let _ = wake.try_send(());
+        });
+        cx.notify();
+    }
+    /// Explicit connection selection authenticates without submitting editor SQL.
+    pub(super) fn authenticate_connection(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        match profile.authentication {
+            Authentication::TrinoExternal => self.start_external_sign_in(profile, cx),
+            Authentication::Oidc { sign_in: id } if self.sign_in_needs_browser(id) => {
+                self.sign_in_ui
+                    .attempt_connections
+                    .entry(id)
+                    .or_default()
+                    .insert(profile.id);
+                self.start_sign_in(id, cx);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn external_authentication_pending(&self, connection: Uuid) -> bool {
+        self.sign_in_ui.external_pending.contains_key(&connection)
+            || self.external_auth.status(connection) == crate::external_auth::Status::Waiting
+    }
+
+    pub(super) fn cancel_external_authentication(
+        &mut self,
+        connection: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(cancel) = self.sign_in_ui.external_pending.get(&connection) {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        cx.notify();
+    }
+
+    /// Failures retain their originating connection even when another tab is selected.
+    pub(super) fn record_sign_in_error(
+        &mut self,
+        id: Uuid,
+        connection: Uuid,
+        message: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.sign_in_ui.errors.insert(id, message.clone());
+        self.record_activity(
+            connection,
+            crate::activity::ActivityEntry::new(Severity::Error, message),
+            cx,
+        );
     }
 
     pub(super) fn start_sign_in(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -295,7 +418,7 @@ impl Qrow {
                 url: authorization_url.clone(),
             },
         );
-        self.sign_in_ui.errors.remove(&id);
+        self.sign_in_ui.clear_error(id);
         let service = self.oidc.clone();
         let outcomes = self.sign_in_ui.outcomes.0.clone();
         let urls = self.sign_in_ui.urls.0.clone();
@@ -371,7 +494,7 @@ impl Qrow {
         {
             return;
         }
-        self.sign_in_ui.errors.remove(&id);
+        self.sign_in_ui.clear_error(id);
         let service = self.oidc.clone();
         let outcomes = self.sign_in_ui.outcomes.0.clone();
         let wake = self.wake.clone();
@@ -422,7 +545,7 @@ impl Qrow {
 
     /// Applies the results of background sign-in work, and notes a change of
     /// status from a refresh. Returns whether something changed.
-    pub(super) fn tick_sign_ins(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn tick_sign_ins(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let urls: Vec<BrowserPage> = self.sign_in_ui.urls.1.try_iter().collect();
         for (id, cancel, url) in urls {
@@ -472,10 +595,32 @@ impl Qrow {
                         }
                         Err((Failure::Cancelled, _)) => {}
                         Err((_, message)) => {
+                            let connections = self
+                                .sign_in_ui
+                                .attempt_connections
+                                .get(&id)
+                                .cloned()
+                                .unwrap_or_default();
+                            for connection in connections {
+                                self.record_sign_in_error(id, connection, message.clone(), cx);
+                            }
                             self.sign_in_ui.errors.insert(id, message);
                         }
                     }
+                    self.sign_in_ui.attempt_connections.remove(&id);
                     self.end_sign_in_waits(id, ended, cx);
+                }
+                Outcome::External(connection, result) => {
+                    self.sign_in_ui.external_pending.remove(&connection);
+                    if let Err(message) = result
+                        && !message.is_empty()
+                    {
+                        self.record_activity(
+                            connection,
+                            crate::activity::ActivityEntry::new(Severity::Error, message),
+                            cx,
+                        );
+                    }
                 }
                 Outcome::SignedOut(id, result) => {
                     self.sign_in_ui.signing_out.remove(&id);
@@ -499,7 +644,7 @@ impl Qrow {
                     match result {
                         Ok(()) => {
                             self.sign_ins.retain(|sign_in| sign_in.id != id);
-                            self.sign_in_ui.errors.remove(&id);
+                            self.sign_in_ui.clear_error(id);
                             self.sync_sign_ins(cx);
                         }
                         Err(message) => {
@@ -512,7 +657,7 @@ impl Qrow {
                     if let Err(message) = result {
                         self.sign_in_ui.errors.insert(id, message);
                     } else {
-                        self.sign_in_ui.errors.remove(&id);
+                        self.sign_in_ui.clear_error(id);
                     }
                 }
                 Outcome::BrowserFailed(id, cancel) => {
@@ -543,6 +688,16 @@ impl Qrow {
                 }
             }
         }
+        let external_statuses = self
+            .profiles
+            .iter()
+            .filter(|profile| profile.authentication == Authentication::TrinoExternal)
+            .map(|profile| (profile.id, self.external_auth.status(profile.id)))
+            .collect::<Vec<_>>();
+        if external_statuses != self.sign_in_ui.external_statuses {
+            self.sign_in_ui.external_statuses = external_statuses;
+            changed = true;
+        }
         // A query of another tab that blocked a browser sign-in can end.
         self.start_waiting_sign_ins(cx);
         let statuses: Vec<(Uuid, Status)> = self
@@ -554,7 +709,33 @@ impl Qrow {
             self.sign_in_ui.statuses = statuses;
             changed = true;
         }
+        changed |= self.sync_account_field(window, cx);
         changed
+    }
+
+    fn sync_account_field(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if let Some(editor) = &self.sign_in_ui.editor {
+            let value = editor
+                .id
+                .map(|id| self.account_value(id))
+                .unwrap_or_default();
+            if editor.account.read(cx).value().as_ref() != value {
+                editor
+                    .account
+                    .update(cx, |field, cx| field.set_value(value, window, cx));
+                return true;
+            }
+        }
+        false
+    }
+
+    fn account_value(&self, id: Uuid) -> String {
+        self.sign_ins
+            .iter()
+            .find(|sign_in| sign_in.id == id)
+            .and_then(|sign_in| sign_in.identity.as_ref())
+            .map(|identity| identity.display().to_owned())
+            .unwrap_or_else(|| self.account(id).summary)
     }
 
     /// The account of a sign-in, with the actions that apply to it.
@@ -629,7 +810,7 @@ impl Qrow {
     /// Whether a browser sign-in or a sign-out of the sign-in `id` runs,
     /// which can change or remove its account.
     pub(super) fn sign_in_changing(&self, id: Uuid) -> bool {
-        self.sign_in_ui.pending.contains_key(&id) || self.sign_in_ui.signing_out.contains(&id)
+        self.account(id).working
     }
 
     /// Whether the sign-in `id` needs the browser before a new session can
@@ -658,6 +839,13 @@ impl Qrow {
             .find(|candidate| candidate.id == sign_in)
             .map(|candidate| candidate.name.clone())
             .unwrap_or_default();
+        if let Some(connection) = self.tabs[index].saved.profile {
+            self.sign_in_ui
+                .attempt_connections
+                .entry(sign_in)
+                .or_default()
+                .insert(connection);
+        }
         let tab = &mut self.tabs[index];
         let reopen = tab.cancelled_sign_in.take() == Some(sign_in);
         tab.sign_in_wait = Some(SignInWait { sign_in, sql });
@@ -689,6 +877,7 @@ impl Qrow {
             .iter()
             .filter_map(|tab| tab.sign_in_wait.as_ref().map(|wait| wait.sign_in))
             .collect();
+        needed.extend(self.sign_in_ui.attempt_connections.keys().copied());
         needed.sort();
         needed.dedup();
         for id in needed {
@@ -881,36 +1070,62 @@ impl Qrow {
             })
     }
 
-    /// The row of a sign-in: its name and account. Click opens Sign-in
+    /// The row of a sign-in: its name and provider. Click opens Sign-in
     /// Settings; right-click opens the menu of the sign-in.
     fn sign_in_row(&self, sign_in: &SignIn, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let id = sign_in.id;
         let account = self.account(id);
         let error = self.sign_in_ui.errors.get(&id).cloned();
         let slot_width = self.ui_px(28.);
-        let mut tooltip = format!(
-            "{}\nDatabase hosts: {}",
-            sign_in.issuer,
-            sign_in.allowed_hosts.join(", ")
-        );
+        let mut tooltip = sign_in.issuer.clone();
         if let Some(error) = &error {
             tooltip.push('\n');
             tooltip.push_str(error);
         }
-        let summary = if error.is_some() {
-            "The last action failed".to_owned()
-        } else {
-            account.summary.clone()
+        let summary = match sign_in.provider {
+            SignInProvider::Oidc => "OIDC",
+            SignInProvider::TrinoExternal => "Trino",
         };
-        let accessibility_label = format!("{}, {summary}", sign_in.name);
+        let status = if error.is_some() {
+            "The last action failed"
+        } else {
+            &account.summary
+        };
+        let accessibility_label = format!("{}, {summary}, {status}", sign_in.name);
         let menu_open = self.menu.is_some();
-        // The first action of the account is the next step, like Sign In
-        // for an expired sign-in.
         let primary = account
             .actions
-            .first()
+            .iter()
             .copied()
-            .filter(|action| matches!(action, SignInAction::SignIn | SignInAction::Cancel));
+            .find(|action| *action == SignInAction::Cancel);
+        let slot = div()
+            .flex_shrink_0()
+            .min_w(slot_width)
+            .flex()
+            .items_center()
+            .justify_center()
+            .pr_1();
+        let indicator = if account.working {
+            slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
+        } else if account.attention {
+            slot.child(
+                div()
+                    .id(SharedString::from(format!("sign-in-status-{id}")))
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(status.to_owned())
+                    .child(
+                        if error.is_some() {
+                            DotStatus::Error
+                        } else {
+                            DotStatus::Attention
+                        }
+                        .dot(cx),
+                    ),
+            )
+        } else {
+            slot
+        };
         let button = Button::new(SharedString::from(format!("sign-in-{id}")))
             .custom(
                 ButtonCustomVariant::new(cx)
@@ -955,66 +1170,40 @@ impl Qrow {
                                     .id(SharedString::from(format!("sign-in-{id}-account")))
                                     .test_support()
                                     .role(Role::Label)
-                                    .aria_label(summary.clone())
+                                    .aria_label(summary)
                                     .w_full()
                                     .truncate()
                                     .text_xs()
-                                    .text_color(if error.is_some() {
-                                        cx.theme().danger
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    })
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(summary),
                             ),
-                    ),
+                    )
+                    .when(primary.is_none(), |el| el.child(indicator)),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_sign_in_editor(Some(id), false, window, cx)
             }));
-        let slot = div()
-            .flex_shrink_0()
-            .min_w(slot_width)
-            .flex()
-            .items_center()
-            .justify_center()
-            .pr_1();
-        let trailing = match primary {
-            Some(action) => slot.child(
-                Button::new(SharedString::from(format!(
-                    "sign-in-{id}-{}",
-                    action.slug()
-                )))
-                .xsmall()
-                .label(action.button_label())
-                .disabled(self.sign_in_action_blocked(id, action))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)),
-                ),
-            ),
-            None if account.working => {
-                slot.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-            }
-            None if account.attention => slot.child(
-                div()
-                    .id(SharedString::from(format!("sign-in-status-{id}")))
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(if error.is_some() {
-                        "The last action failed"
-                    } else {
-                        &account.summary
-                    })
-                    .child(
-                        if error.is_some() {
-                            DotStatus::Error
-                        } else {
-                            DotStatus::Attention
-                        }
-                        .dot(cx),
+        let trailing = primary.map(|action| {
+            div()
+                .flex_shrink_0()
+                .min_w(slot_width)
+                .flex()
+                .items_center()
+                .justify_center()
+                .pr_1()
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "sign-in-{id}-{}",
+                        action.slug()
+                    )))
+                    .xsmall()
+                    .label(action.button_label())
+                    .disabled(self.sign_in_action_blocked(id, action))
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)),
                     ),
-            ),
-            None => slot,
-        };
+                )
+        });
         h_flex()
             .id(SharedString::from(format!("sign-in-row-{id}")))
             .when(!menu_open, |el| {
@@ -1027,7 +1216,7 @@ impl Qrow {
             .rounded(cx.theme().radius)
             .hover(|el| el.bg(cx.theme().tokens.list_hover))
             .child(button)
-            .child(trailing)
+            .when_some(trailing, |el, trailing| el.child(trailing))
             .on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |_, event: &MouseDownEvent, window, cx| {
@@ -1120,7 +1309,14 @@ impl Qrow {
             .read_from_clipboard()
             .and_then(|item| item.text())
             .unwrap_or_default();
-        match SignIn::from_shared_text(&text) {
+        let pasted = SignIn::from_shared_text(&text).and_then(|sign_in| {
+            anyhow::ensure!(
+                sign_in.provider == SignInProvider::Oidc,
+                "Choose External in the Trino connection's Authentication field."
+            );
+            Ok(sign_in)
+        });
+        match pasted {
             Ok(mut sign_in) => {
                 sign_in.name = unique_sign_in_name(&sign_in.name, |name| {
                     self.sign_ins.iter().any(|other| other.name == name)
@@ -1164,15 +1360,18 @@ impl Qrow {
             return;
         };
         let display_name = truncate_display_name(&sign_in.name);
+        let description = if sign_in.provider == SignInProvider::TrinoExternal {
+            "This signs out, deletes the sign-in, and clears its tokens from memory. This cannot be undone."
+        } else {
+            "This signs out, deletes the sign-in, and removes its tokens from Keychain. This cannot be undone."
+        };
         let weak = cx.weak_entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert
                 .width(px(360.))
                 .title(format!("Delete sign-in \"{display_name}\"?"))
-                .description(
-                    "This signs out, deletes the sign-in, and removes its tokens from Keychain. This cannot be undone.",
-                )
+                .description(description)
                 .footer(
                     DialogFooter::new()
                         .justify_end()
@@ -1213,14 +1412,26 @@ impl Qrow {
 
     /// Gives Connection Settings a new, closed Sign-in list with the current
     /// sign-ins and `selected` chosen.
-    fn replace_sign_in_list(
+    pub(super) fn replace_sign_in_list(
         &mut self,
         selected: Option<Uuid>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let choices = connection_form::sign_in_choices(&self.sign_ins);
-        let list = connection_form::sign_in_combobox(&choices, selected, window, cx);
+        let database_type = self
+            .form
+            .as_ref()
+            .map(|form| {
+                connection_form::chosen(
+                    &form.database_type,
+                    &connection_form::database_type_choices(),
+                    cx,
+                )
+            })
+            .unwrap_or_default();
+        let choices = connection_form::sign_in_choices(&self.sign_ins, database_type);
+        let list =
+            connection_form::sign_in_combobox(&choices, &self.sign_ins, selected, window, cx);
         let subscription = Self::subscribe_sign_in_list(&list, window, cx);
         if let Some(form) = &mut self.form {
             form.sign_in_choices = choices;
@@ -1270,12 +1481,11 @@ impl Qrow {
             base.client_id.clone(),
             extra_scopes(&base.scopes).join(" "),
             base.resource.clone().unwrap_or_default(),
-            base.allowed_hosts.join(" "),
             base.callback_ports
                 .iter()
                 .map(u16::to_string)
                 .collect::<Vec<_>>()
-                .join(" "),
+                .join(", "),
         ];
         let fields: Vec<_> = values
             .into_iter()
@@ -1289,16 +1499,43 @@ impl Qrow {
             })
             .collect();
         let first = fields[0].clone();
+        let account =
+            cx.new(|cx| InputState::new(window, cx).default_value(self.account_value(base.id)));
         // The New Sign-in… button is in the open Sign-in list. A new list is
         // closed, so it does not take the keys of the dialog.
         if let Some(form) = self.form.as_ref().filter(|_| for_connection) {
             let chosen = connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
             self.replace_sign_in_list(chosen, window, cx);
         }
+        let choices: Vec<_> = provider_choices()
+            .into_iter()
+            .filter(|(provider, _)| {
+                *provider == SignInProvider::Oidc
+                    || !for_connection
+                    || self.form.as_ref().is_some_and(|form| {
+                        form.profile.database_type == crate::model::DatabaseType::Trino
+                    })
+            })
+            .collect();
+        let provider = connection_form::choice_select(&choices, &base.provider, window, cx);
+        let provider_subscription = cx.subscribe_in(
+            &provider,
+            window,
+            |_,
+             _,
+             _: &gpui_kit::component::select::SelectEvent<
+                gpui_kit::component::select::SearchableVec<connection_form::Row>,
+            >,
+             _,
+             cx| cx.notify(),
+        );
         self.sign_in_ui.editor = Some(SignInEditor {
             id: id.filter(|id| self.sign_ins.iter().any(|sign_in| sign_in.id == *id)),
             for_connection,
             fields,
+            account,
+            provider,
+            _provider_subscription: provider_subscription,
             pasted,
             error: None,
         });
@@ -1355,11 +1592,22 @@ impl Qrow {
             .map(|field| field.read(cx).value().to_string())
             .collect();
         let for_connection = editor.for_connection;
-        let base = editor
+        let mut base = editor
             .id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
             .cloned()
             .unwrap_or_default();
+        let provider = connection_form::chosen(&editor.provider, &provider_choices(), cx);
+        if base.provider != provider && !self.connections_using(base.id).is_empty() {
+            if let Some(editor) = &mut self.sign_in_ui.editor {
+                editor.error = Some(
+                    "Change authentication in its connections before changing the provider.".into(),
+                );
+            }
+            cx.notify();
+            return;
+        }
+        base.provider = provider;
         let result = parse_editor(&values, &base).and_then(|sign_in| {
             anyhow::ensure!(
                 !self
@@ -1403,7 +1651,13 @@ impl Qrow {
 
     /// The Account field of Sign-in Settings: the status, the last error, and
     /// the account actions.
-    fn account_field(&self, id: Uuid, signed_in: bool, cx: &mut Context<Self>) -> Field {
+    fn account_field(
+        &self,
+        id: Uuid,
+        signed_in: bool,
+        input: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> Field {
         let account = self.account(id);
         let error = self.sign_in_ui.errors.get(&id).cloned();
         let buttons = account.actions.iter().map(|&action| {
@@ -1412,14 +1666,16 @@ impl Qrow {
                 "sign-in-account-{}",
                 action.slug()
             )))
-            .small()
             .label(action.button_label())
             .disabled(blocked)
             .when(
                 blocked && matches!(action, SignInAction::SignIn | SignInAction::SignOut),
                 |button| button.tooltip("Wait for queries that use this sign-in to finish."),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_sign_in_action(id, action, cx);
+                this.sync_account_field(window, cx);
+            }))
         });
         let field = Field::new().label("Account").child(
             v_flex()
@@ -1430,18 +1686,38 @@ impl Qrow {
                         .w_full()
                         .gap_2()
                         .child(
-                            div()
-                                .id("sign-in-account-status")
-                                .test_support()
+                            Input::new(input)
+                                .id("sign-in-account")
+                                .aria_label("Account")
+                                .focus_ring(false)
+                                .readonly(true)
+                                .disabled(true)
                                 .flex_1()
-                                .min_w_0()
-                                .role(Role::Status)
-                                .aria_label(account.detail.clone())
-                                .child(account.detail),
+                                .min_w_0(),
                         )
                         .when(!account.actions.is_empty(), |el| {
                             el.child(h_flex().gap_2().flex_shrink_0().children(buttons))
                         }),
+                )
+                .when(
+                    account.working
+                        || (signed_in
+                            && matches!(
+                                self.oidc.status(id),
+                                Status::SignInRequired(..) | Status::NetworkFailure(..)
+                            )),
+                    |el| {
+                        el.child(
+                            div()
+                                .id("sign-in-account-status")
+                                .test_support()
+                                .role(Role::Status)
+                                .aria_label(account.detail.clone())
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(account.detail),
+                        )
+                    },
                 )
                 .when_some(error, |el, error| {
                     el.child(
@@ -1457,7 +1733,7 @@ impl Qrow {
                 }),
         );
         if signed_in {
-            field.description("Sign out to change the issuer, client ID, scopes, or resource.")
+            field.description("Sign out to change authentication settings.")
         } else {
             field
         }
@@ -1472,7 +1748,8 @@ impl Qrow {
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id));
         let signed_in = existing.is_some_and(|sign_in| sign_in.identity.is_some());
         let pasted = editor.pasted;
-        let account = existing.map(|sign_in| self.account_field(sign_in.id, signed_in, cx));
+        let account =
+            existing.map(|sign_in| self.account_field(sign_in.id, signed_in, &editor.account, cx));
         let users = existing
             .map(|sign_in| self.connections_using(sign_in.id))
             .unwrap_or_default();
@@ -1488,6 +1765,7 @@ impl Qrow {
             )
         });
         let count = users.len();
+        let provider_locked = signed_in || count > 0;
         let connections = Field::new()
             .label_fn(move |_, cx| {
                 h_flex().gap_1().child("Connections").child(
@@ -1562,10 +1840,10 @@ impl Qrow {
                     .text_base()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(cx.theme().muted_foreground)
-                    .child("OpenID Connect"),
+                    .child("Authentication"),
             )
             .when(pasted, |el| {
-                let note = "Pasted from the clipboard. Make sure that you trust the issuer and the database hosts before you save.";
+                let note = "Pasted from the clipboard. Make sure that you trust the issuer before you save.";
                 el.child(
                     div()
                         .id("sign-in-pasted-note")
@@ -1582,6 +1860,9 @@ impl Qrow {
                 v_flex().pt_3().w_full().gap_2().child(
                     Form::vertical()
                         .w_full()
+                        .child(Field::new().label("Provider").description("Choose the authentication protocol of the database.").child(
+                            gpui_kit::component::select::Select::new(&editor.provider).id("sign-in-provider").w_full().disabled(provider_locked)
+                        ))
                         .when_some(account, |form, account| form.child(account))
                         .children(fields)
                         .when(existing.is_some(), |form| form.child(connections)),
@@ -1712,7 +1993,6 @@ mod tests {
             "qrow-desktop",
             "openid profile, kyuubi kyuubi",
             "",
-            "kyuubi-a.example.test, kyuubi-b.example.test",
             "",
         ]
         .map(str::to_owned)
@@ -1724,14 +2004,10 @@ mod tests {
         let sign_in = parse_editor(&values(), &SignIn::default()).unwrap();
         assert_eq!(sign_in.issuer, "https://id.example.test/realms/data");
         assert_eq!(sign_in.scopes, vec!["kyuubi"]);
-        assert_eq!(
-            sign_in.allowed_hosts,
-            vec!["kyuubi-a.example.test", "kyuubi-b.example.test"]
-        );
         assert_eq!(sign_in.resource, None);
         assert!(sign_in.callback_ports.is_empty());
         let mut values = values();
-        values[6] = "8765, 8766 8765".into();
+        values[5] = "8765, 8766 8765".into();
         values[4] = "https://kyuubi.example.test".into();
         let sign_in = parse_editor(&values, &SignIn::default()).unwrap();
         assert_eq!(sign_in.callback_ports, vec![8765, 8766]);
@@ -1740,7 +2016,7 @@ mod tests {
             Some("https://kyuubi.example.test")
         );
         for ports in ["port", "8765 0", "70000"] {
-            values[6] = ports.into();
+            values[5] = ports.into();
             assert!(
                 parse_editor(&values, &SignIn::default()).is_err(),
                 "{ports}"

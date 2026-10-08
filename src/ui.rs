@@ -527,6 +527,7 @@ pub struct Qrow {
     /// Reusable sign-ins. The service owns their tokens and identities.
     sign_ins: Vec<crate::model::SignIn>,
     oidc: Arc<oidc::Service>,
+    external_auth: Arc<crate::external_auth::Service>,
     sign_in_ui: sign_in_view::SignInState,
     connector: Arc<DatabaseConnector>,
     sidebar: bool,
@@ -686,8 +687,14 @@ impl Qrow {
                 }
             },
         );
+        let external_auth = Arc::new(crate::external_auth::Service::new(environment.browser()));
+        external_auth.configure(&workspace.profiles);
+        let external_wake = wake.clone();
+        external_auth.set_on_change(Arc::new(move || {
+            let _ = external_wake.try_send(());
+        }));
         let oidc = oidc::Service::new(environment.tokens(), environment.trust());
-        oidc.configure(&workspace.sign_ins);
+        oidc.configure(&workspace.sign_ins, &workspace.profiles);
         let status_wake = wake.clone();
         oidc.set_on_change(Arc::new(move || {
             let _ = status_wake.try_send(());
@@ -767,6 +774,7 @@ impl Qrow {
             credentials: environment.credentials(),
             sign_ins: workspace.sign_ins,
             oidc,
+            external_auth,
             sign_in_ui: sign_in_view::SignInState::new(environment.browser()),
             connector: Arc::new(DatabaseConnector::new(environment.trust())),
             sidebar: true,
@@ -1149,6 +1157,8 @@ impl Qrow {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
+        self.oidc.configure(&self.sign_ins, &self.profiles);
+        self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
@@ -1209,7 +1219,7 @@ impl Qrow {
         changed |= self.drain_dbt(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
-        changed |= self.tick_sign_ins(cx);
+        changed |= self.tick_sign_ins(window, cx);
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.
@@ -1337,6 +1347,17 @@ impl Qrow {
                 tab.connected = false;
                 tab.busy = true;
                 tab.set_status("Connecting…");
+            }
+            Event::Authenticating(waiting) => {
+                if waiting {
+                    tab.set_status("Waiting for browser sign-in…");
+                } else if !tab.cancelling {
+                    tab.set_status(if tab.connected {
+                        "Executing…"
+                    } else {
+                        "Connecting…"
+                    });
+                }
             }
             Event::Connected => tab.connected = true,
             Event::Running => {
@@ -1559,6 +1580,8 @@ impl Qrow {
                         }
                     }
                 }
+                self.oidc.configure(&self.sign_ins, &self.profiles);
+                self.external_auth.configure(&self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
@@ -1782,6 +1805,14 @@ impl Qrow {
             // not change the owning connection of either tab, so it is not a
             // query Logs event. The tree keeps the focus.
             self.show_tab(index, false, window, cx);
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .cloned()
+            {
+                self.authenticate_connection(profile, cx);
+            }
         }
         self.select_catalog_connection(id, window, cx);
     }
@@ -1906,6 +1937,7 @@ impl Qrow {
         // account of the sign-in.
         let live = tab.connected && tab.worker_profile == Some(profile.id) && !tab.release_pending;
         if !after_sign_in
+            && matches!(profile.authentication, Authentication::Oidc { .. })
             && let Some(sign_in) = profile.authentication.sign_in()
             && (self.sign_in_changing(sign_in) || !live && self.sign_in_needs_browser(sign_in))
         {
@@ -2009,6 +2041,9 @@ impl Qrow {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
+        if let Some(connection) = self.active_profile() {
+            self.cancel_external_authentication(connection, cx);
+        }
         self.cancel_tab(self.active, cx);
     }
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2678,6 +2713,7 @@ impl Qrow {
             settings.refresh_minutes.to_string(),
             settings.timeout_minutes.to_string(),
             profile.lifecycle.response_timeout_seconds.to_string(),
+            profile.trino_schema.clone(),
         ];
         let fields = values
             .into_iter()
@@ -2769,18 +2805,28 @@ impl Qrow {
                     cx.notify();
                 }
             });
-        let sign_in_choices = connection_form::sign_in_choices(&self.sign_ins);
+        let sign_in_choices =
+            connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
-            profile.authentication.sign_in().is_some(),
+            profile.authentication,
+            profile.database_type,
             window,
             cx,
         );
         let sign_in = connection_form::sign_in_combobox(
             &sign_in_choices,
+            &self.sign_ins,
             profile.authentication.sign_in(),
             window,
             cx,
         );
+        if profile.database_type == crate::model::DatabaseType::Trino
+            && matches!(profile.authentication, Authentication::Oidc { .. })
+        {
+            authentication.update(cx, |select, cx| {
+                select.set_selected_value(&"Sign-in".to_owned(), window, cx)
+            });
+        }
         let authentication_subscription =
             cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
                 if connection_form::uses_sign_in_from_event(event).is_some() {
@@ -2813,6 +2859,7 @@ impl Qrow {
                             let default_name = |kind| match kind {
                                 crate::model::DatabaseType::Kyuubi => "Spark",
                                 crate::model::DatabaseType::Postgres => "Postgres",
+                                crate::model::DatabaseType::Trino => "Trino",
                             };
                             if form.is_new
                                 && form.fields[0].read(cx).value().as_ref()
@@ -2833,6 +2880,7 @@ impl Qrow {
                                 == match previous {
                                     crate::model::DatabaseType::Kyuubi => "avia",
                                     crate::model::DatabaseType::Postgres => "postgres",
+                                    crate::model::DatabaseType::Trino => "tpch",
                                 }
                             {
                                 form.fields[5].update(cx, |field, cx| {
@@ -2840,15 +2888,26 @@ impl Qrow {
                                         match selected {
                                             crate::model::DatabaseType::Kyuubi => "avia",
                                             crate::model::DatabaseType::Postgres => "postgres",
+                                            crate::model::DatabaseType::Trino => "tpch",
                                         },
                                         window,
                                         cx,
                                     )
                                 });
                             }
+                            connection_form::reset_authentication(
+                                &form.authentication,
+                                selected,
+                                window,
+                                cx,
+                            );
                             form.profile.database_type = selected;
                         }
                     }
+                    let selected = this.form.as_ref().and_then(|form| {
+                        connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
+                    });
+                    this.replace_sign_in_list(selected, window, cx);
                     cx.notify();
                 }
             });
@@ -3022,6 +3081,7 @@ impl Qrow {
         profile.host = values[1].trim().into();
         profile.username = values[3].trim().into();
         profile.database = values[5].trim().into();
+        profile.trino_schema = values[15].trim().into();
         let parse = (|| -> anyhow::Result<()> {
             profile.port = values[2]
                 .trim()
@@ -3130,21 +3190,22 @@ impl Qrow {
             }
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
-            profile.authentication = if profile.database_type == crate::model::DatabaseType::Kyuubi
+            profile.authentication = if profile.database_type == crate::model::DatabaseType::Trino
+                && connection_form::uses_external(&form.authentication, cx)
+            {
+                Authentication::TrinoExternal
+            } else if profile.database_type != crate::model::DatabaseType::Postgres
                 && connection_form::uses_sign_in(&form.authentication, cx)
             {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
                         .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
                         .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
-                anyhow::ensure!(
-                    sign_in.allows_host(&profile.host),
-                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
-                    sign_in.name,
-                    profile.host
-                );
-                Authentication::Oidc {
-                    sign_in: sign_in.id,
+                match sign_in.provider {
+                    crate::model::SignInProvider::Oidc => Authentication::Oidc {
+                        sign_in: sign_in.id,
+                    },
+                    crate::model::SignInProvider::TrinoExternal => Authentication::TrinoExternal,
                 }
             } else {
                 Authentication::Password
@@ -3171,6 +3232,7 @@ impl Qrow {
         if profile.authentication == Authentication::Password
             && needs_password
             && password.is_empty()
+            && profile.database_type != crate::model::DatabaseType::Trino
             && !self.demo
         {
             form.error = Some("Enter the password for this connection.".into());
@@ -3185,7 +3247,12 @@ impl Qrow {
         let credentials = self.credentials.clone();
         let password_changed = !password.is_empty();
         std::thread::spawn(move || {
-            let result = if !demo && !password.is_empty() {
+            let result = if !demo
+                && (!password.is_empty()
+                    || (needs_password
+                        && profile.database_type == crate::model::DatabaseType::Trino
+                        && profile.authentication == Authentication::Password))
+            {
                 credentials
                     .set_password(profile.id, &password)
                     .map_err(|e| e.to_string())

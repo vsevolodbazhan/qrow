@@ -17,3 +17,5 @@ mod tls;
 mod workers;
 
 mod postgres;
+
+mod trino;

@@ -150,18 +150,21 @@ impl Qrow {
         qrow: &WeakEntity<Qrow>,
         cx: &mut Context<Self>,
     ) -> SettingPage {
-        let postgres = connection_form::chosen(
+        let database_type = connection_form::chosen(
             &form.database_type,
             &connection_form::database_type_choices(),
             cx,
-        ) == crate::model::DatabaseType::Postgres;
+        );
+        let postgres = database_type == crate::model::DatabaseType::Postgres;
+        let trino = database_type == crate::model::DatabaseType::Trino;
+        let uses_external = trino && connection_form::uses_external(&form.authentication, cx);
         let uses_sign_in = !postgres && connection_form::uses_sign_in(&form.authentication, cx);
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
         let sign_in_description = chosen_sign_in
             .map(|id| match self.oidc.identity(id) {
                 Some(identity) => format!("Signed in as {}.", identity.display()),
-                None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
+                None => "The browser opens when a connection needs sign-in.".to_owned(),
             })
             .unwrap_or_else(|| {
                 if form.sign_in_choices.is_empty() {
@@ -246,7 +249,7 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "TLS",
-                    if uses_sign_in && !form.tls {
+                    if (uses_sign_in || uses_external) && !form.tls {
                         "Without TLS, others on the network can read and use the access token."
                     } else {
                         "Encrypts the connection. The server must accept TLS on this port."
@@ -272,7 +275,11 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "Authentication",
-                    "Several connections can share one sign-in, each with its own username.",
+                    if trino {
+                        "Use a password or browser sign-in."
+                    } else {
+                        "Use a password or a saved sign-in."
+                    },
                     &["sign-in", "ldap", "password", "oidc"],
                     false,
                     |_, form, _, _| {
@@ -304,11 +311,15 @@ impl Qrow {
                 false,
                 |_, form, _, _| form_input(form, 3, "Username"),
             ))
-            .items((!uses_sign_in).then(|| {
+            .items((!uses_sign_in && !uses_external).then(|| {
                 connection_row(
                     qrow,
                     "Password",
-                    "The password for this account.",
+                    if trino {
+                        "Leave blank if the server needs only a username."
+                    } else {
+                        "The password for this account."
+                    },
                     &["ldap", "secret"],
                     false,
                     |_, form, _, _| form_input(form, 4, "Password"),
@@ -316,12 +327,36 @@ impl Qrow {
             }))
             .item(connection_row(
                 qrow,
-                "Initial Database",
+                if trino {
+                    "Initial Catalog"
+                } else {
+                    "Initial Database"
+                },
                 "Selected when the session opens.",
                 &["schema", "database", "use"],
                 false,
-                |_, form, _, _| form_input(form, 5, "Initial Database"),
+                move |_, form, _, _| {
+                    form_input(
+                        form,
+                        5,
+                        if trino {
+                            "Initial Catalog"
+                        } else {
+                            "Initial Database"
+                        },
+                    )
+                },
             ))
+            .items(trino.then(|| {
+                connection_row(
+                    qrow,
+                    "Initial Schema",
+                    "Optional schema in the initial catalog.",
+                    &["schema", "trino"],
+                    false,
+                    |_, form, _, _| form_input(form, 15, "Initial Schema"),
+                )
+            }))
             .item(connection_row(
                 qrow,
                 "Session Parameters",
@@ -399,11 +434,7 @@ impl Qrow {
                 vec![]
             });
         SettingPage::new("General")
-            .description(if postgres {
-                "Postgres"
-            } else {
-                "Spark (HiveServer2)"
-            })
+            .description(database_type.label())
             // Space the engine name like the help text under a field.
             .header_style(&StyleRefinement::default().gap_0())
             .default_open(true)

@@ -52,9 +52,11 @@ Measured on MacBook Air M3 (macOS 15.7.7).
 
 Qrow is a personal tool, tailored to my setup and my needs, so:
 
-- **Kyuubi/Spark and Postgres.** Kyuubi uses HiveServer2 over SASL PLAIN.
+- **Kyuubi/Spark, Postgres, and Trino.** Kyuubi uses HiveServer2 over SASL PLAIN.
   Postgres uses password authentication, with TLS encryption and optional
-  certificate verification. Trino and DuckDB are planned. See [connections](docs/connections.md) for Postgres limits.
+  certificate verification. Trino uses HTTP or HTTPS with a username, a password,
+  or an OpenID Connect access token. DuckDB is planned. See
+  [connections](docs/connections.md) for connector limits.
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
   Other operating systems are not supported. The assistant also needs a compatible

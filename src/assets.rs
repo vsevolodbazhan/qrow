@@ -5,10 +5,12 @@ use gpui_kit::{AssetSource, SharedString};
 pub(crate) const SPARK_ICON: &str = "connection-type-icons/apache-spark.svg";
 pub(crate) const POSTGRES_ICON: &str = "connection-type-icons/postgres.svg";
 pub(crate) const APP_ICON: &str = "app-icons/qrow-256.png";
+const TRINO_ICON: &str = "connection-type-icons/trino.svg";
 pub(crate) fn connection_icon(database_type: crate::model::DatabaseType) -> &'static str {
     match database_type {
         crate::model::DatabaseType::Kyuubi => SPARK_ICON,
         crate::model::DatabaseType::Postgres => POSTGRES_ICON,
+        crate::model::DatabaseType::Trino => TRINO_ICON,
     }
 }
 
@@ -64,6 +66,11 @@ impl AssetSource for Assets {
                 "../assets/connection-type-icons/postgres.svg"
             ))));
         }
+        if path == TRINO_ICON {
+            return Ok(Some(Cow::Borrowed(include_bytes!(
+                "../assets/connection-type-icons/trino.svg"
+            ))));
+        }
         if path == APP_ICON {
             return Ok(Some(Cow::Borrowed(include_bytes!(
                 "../assets/app-icons/qrow-256.png"
@@ -78,7 +85,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> anyhow::Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(QrowIconAssets.list(path)?);
-        for asset in [SPARK_ICON, POSTGRES_ICON, APP_ICON] {
+        for asset in [SPARK_ICON, POSTGRES_ICON, TRINO_ICON, APP_ICON] {
             if asset.starts_with(path) {
                 paths.push(asset.into());
             }
@@ -98,6 +105,7 @@ mod tests {
         for kind in [
             crate::model::DatabaseType::Kyuubi,
             crate::model::DatabaseType::Postgres,
+            crate::model::DatabaseType::Trino,
         ] {
             let path = connection_icon(kind);
             let bytes = Assets

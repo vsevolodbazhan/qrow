@@ -154,7 +154,7 @@ duration. A read that times out fails with `Kyuubi did not answer within 300
 seconds`, with the timeout of the connection. A failed cancellation request is reported as an error.
 
 For Postgres, see [Postgres limits](connections.md#postgres-limits) for timeout
-and transaction behavior.
+and transaction behavior. For Trino, see [Trino limits](connections.md#trino-limits).
 
 On application exit, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) if a query is active, then requests

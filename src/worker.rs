@@ -27,6 +27,7 @@ pub enum Command {
 }
 pub enum Event {
     Connecting,
+    Authenticating(bool),
     Connected,
     Running,
     Columns(Vec<Column>),
@@ -158,6 +159,14 @@ impl Worker {
                     Command::Shutdown => break,
                 };
                 if let Err(error) = result {
+                    if error.is::<crate::external_auth::Cancelled>() {
+                        runner.disconnect();
+                        *runner.target.lock().unwrap() = None;
+                        runner.emit(Event::Disconnected);
+                        runner.emit(Event::Cancelled);
+                        idle_started = Instant::now();
+                        continue;
+                    }
                     let message = crate::connector::error_message(&error);
                     let execution_completed = runner
                         .execution
@@ -411,7 +420,17 @@ impl Runner {
             self.disconnect();
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
-            let secret = (self.credentials)(&profile)?;
+            let cancelled = self.cancelled.clone();
+            let events = self.tx.clone();
+            let wake = self.wake.clone();
+            let secret =
+                (self.credentials)(&profile)?.with_control(crate::external_auth::Control::new(
+                    Arc::new(move || cancelled.load(Ordering::SeqCst)),
+                    Arc::new(move |waiting| {
+                        let _ = events.send(Event::Authenticating(waiting));
+                        wake();
+                    }),
+                ));
             self.session = Some(self.connector.connect(&profile, secret)?);
             self.profile = Some(profile);
             self.log(

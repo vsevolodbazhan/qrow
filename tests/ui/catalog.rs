@@ -1677,7 +1677,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         |window, _| {
             label(window, "status-tooltip-status").as_deref() == Some("Unread error")
                 && label(window, connection_row(profile.id)).as_deref()
-                    == Some("Closing, schema refresh error")
+                    == Some("Closing, unread error, schema refresh error")
         },
     );
     app.update(cx, |window, _| {
@@ -1687,7 +1687,7 @@ fn an_open_connection_tooltip_shows_only_the_unread_error_status(cx: &mut TestAp
         );
         assert_eq!(
             label(window, connection_row(profile.id)).as_deref(),
-            Some("Closing, schema refresh error")
+            Some("Closing, unread error, schema refresh error")
         );
         assert!(window.try_find("status-tooltip-error").is_none());
         assert_eq!(

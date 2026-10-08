@@ -2,6 +2,7 @@ pub mod hive;
 pub mod postgres;
 pub mod protocol;
 pub mod sasl;
+pub mod trino;
 #[allow(clippy::all)]
 #[rustfmt::skip]
 pub mod t_c_l_i_service;
@@ -124,6 +125,7 @@ pub trait TokenSource: Send + Sync {
 pub enum Secret {
     Password(Arc<Zeroizing<String>>),
     Token(Arc<dyn TokenSource>),
+    External(crate::external_auth::Source),
 }
 
 impl Secret {
@@ -131,11 +133,22 @@ impl Secret {
         Self::Password(Arc::new(Zeroizing::new(password.into())))
     }
 
+    /// Bind a worker's cancellation and progress before opening its session.
+    pub fn with_control(self, control: crate::external_auth::Control) -> Self {
+        match self {
+            Self::External(source) => Self::External(source.with_control(control)),
+            secret => secret,
+        }
+    }
+
     /// The password, or an access token that is valid now.
     pub fn value(&self) -> Result<Zeroizing<String>> {
         match self {
             Self::Password(password) => Ok(Zeroizing::new(password.as_str().to_owned())),
             Self::Token(source) => source.access_token(),
+            Self::External(_) => {
+                anyhow::bail!("This connector does not support external authentication")
+            }
         }
     }
 }
@@ -151,6 +164,7 @@ impl std::fmt::Debug for Secret {
         f.write_str(match self {
             Self::Password(_) => "Secret::Password(..)",
             Self::Token(_) => "Secret::Token(..)",
+            Self::External(_) => "Secret::External(..)",
         })
     }
 }
@@ -179,13 +193,15 @@ pub fn error_message(error: &anyhow::Error) -> String {
 pub struct DatabaseConnector {
     hive: hive::HiveConnector,
     postgres: postgres::PostgresConnector,
+    trino: trino::TrinoConnector,
 }
 
 impl DatabaseConnector {
     pub fn new(trust: crate::tls::Trust) -> Self {
         Self {
             hive: hive::HiveConnector::new(trust.clone()),
-            postgres: postgres::PostgresConnector::new(trust),
+            postgres: postgres::PostgresConnector::new(trust.clone()),
+            trino: trino::TrinoConnector::new(trust),
         }
     }
 }
@@ -195,6 +211,7 @@ impl Connector for DatabaseConnector {
         match profile.database_type {
             crate::model::DatabaseType::Kyuubi => self.hive.connect(profile, secret),
             crate::model::DatabaseType::Postgres => self.postgres.connect(profile, secret),
+            crate::model::DatabaseType::Trino => self.trino.connect(profile, secret),
         }
     }
 }

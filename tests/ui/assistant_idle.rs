@@ -126,15 +126,14 @@ fn codex_stops_after_the_pane_stays_closed(cx: &mut TestAppContext) {
     });
     // The new Codex process continues the conversation.
     app.send(cx, "Hello again");
-    app.wait_reply(cx, "You: Hello again");
-    app.wait_idle(cx);
-    app.update(cx, |window, _| {
-        let replies = transcript(window)
+    app.wait_until(cx, "the second reply", REPLY_TIMEOUT, |window, _| {
+        transcript(window)
             .into_iter()
             .filter(|entry| entry.contains("I can help with this query"))
-            .count();
-        assert_eq!(replies, 2);
+            .count()
+            == 2
     });
+    app.wait_idle(cx);
     assert_eq!(app.saved().assistant.conversations.len(), 1);
 }
 

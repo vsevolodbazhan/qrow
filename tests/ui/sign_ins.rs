@@ -49,9 +49,26 @@ fn row_account(sign_in: &SignIn) -> String {
 
 /// Waits until the sidebar row of `sign_in` shows `account`.
 fn wait_row(app: &TestApp, cx: &mut TestAppContext, sign_in: &SignIn, account: &str) {
-    let id = row_account(sign_in);
     app.wait_until(cx, account, WAIT, |window, _| {
-        label(window, id.clone()).as_deref() == Some(account)
+        label(window, format!("sign-in-{}", sign_in.id))
+            .is_some_and(|label| label.ends_with(account))
+    });
+    app.update(cx, |window, _| {
+        assert_eq!(
+            label(window, row_account(sign_in)).as_deref(),
+            Some(
+                if sign_in.provider == qrow::model::SignInProvider::TrinoExternal {
+                    "Trino"
+                } else {
+                    "OIDC"
+                }
+            )
+        );
+        assert!(
+            window
+                .try_find(format!("sign-in-{}-sign-in", sign_in.id))
+                .is_none()
+        );
     });
 }
 
@@ -227,7 +244,24 @@ fn the_sign_ins_button_counts_the_sign_ins_that_need_attention(cx: &mut TestAppC
     });
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Not signed in");
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    open_settings(&app, cx, &sign_in);
+    app.wait_until(cx, "the signed-out account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
+    });
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, cx| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        window.input("another-account", cx);
+        assert_eq!(
+            value(window, "sign-in-account").as_deref(),
+            Some("Not signed in")
+        );
+        let field = window.find("sign-in-account").bounds();
+        let action = window.find("sign-in-account-sign-in").bounds();
+        assert!(field.right() < action.left());
+        assert!(f32::from(field.center().y - action.center().y).abs() < 1.);
+    });
+    app.click(cx, "sign-in-account-sign-in");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     app.wait_until(cx, "no attention count", WAIT, |window, _| {
         label(window, "show-sign-ins").as_deref() == Some("Sign-Ins")
@@ -243,7 +277,7 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.click(cx, "add-sign-in");
     app.wait_for(cx, "sign-in-name");
 
-    // Name, issuer, client ID, scopes, resource, and database hosts.
+    // Name, issuer, client ID, scopes, resource, and callback ports.
     type_fields(
         &app,
         cx,
@@ -253,7 +287,6 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
             "qrow-desktop",
             "kyuubi",
             "",
-            "127.0.0.1",
         ],
     );
     // Enter in a field saves the form. The form keeps the input and reports
@@ -262,7 +295,7 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.wait_until(cx, "the issuer error", WAIT, |window, _| {
         label(window, "sign-in-form-error").is_some_and(|error| error.contains("HTTPS URL"))
     });
-    for _ in 0..4 {
+    for _ in 0..3 {
         app.press(cx, "shift-tab");
     }
     type_fields(&app, cx, &[&provider.issuer]);
@@ -273,10 +306,10 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     });
     let sign_in = app.saved().sign_ins[0].clone();
     wait_row(&app, cx, &sign_in, "Not signed in");
-    assert_eq!(sign_in.allowed_hosts, vec!["127.0.0.1"]);
     assert_eq!(sign_in.scopes, vec!["kyuubi"]);
 
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     app.wait_until(cx, "the saved identity", WAIT, |_, _| {
         app.saved().sign_ins[0]
@@ -295,7 +328,20 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     // Sign-in Settings shows the account, and signs out.
     open_settings(&app, cx, &sign_in);
     app.wait_until(cx, "the account", WAIT, |window, _| {
-        label(window, "sign-in-account-status").as_deref() == Some("Signed in as alice@qrow.test.")
+        value(window, "sign-in-account").as_deref() == Some("alice@qrow.test")
+    });
+    app.click(cx, "sign-in-name");
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+    });
+    app.update(cx, |window, cx| window.input("another-account", cx));
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "sign-in-account").as_deref(),
+            Some("alice@qrow.test")
+        );
+        assert!(!present(window, &"sign-in-account-status".into()));
     });
     for width in [850., 1280.] {
         cx.simulate_window_resize(
@@ -304,15 +350,15 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
         );
         app.settle(cx);
         app.update(cx, |window, _| {
-            let status = window.find("sign-in-account-status").bounds();
+            let status = window.find("sign-in-account").bounds();
             let sign_out = window.find("sign-in-account-sign-out").bounds();
             assert!(
                 status.right() < sign_out.left(),
-                "Sign out follows the status"
+                "Sign out follows the account field"
             );
             assert!(
                 f32::from(status.center().y - sign_out.center().y).abs() < 1.,
-                "the account status and Sign Out share a vertical center"
+                "the account field and Sign Out share a vertical center"
             );
             assert!(window.find("sign-in-account-sign-out").visible());
         });
@@ -327,7 +373,17 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.scroll_to(cx, "sign-in-account-sign-out");
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(cx, "the signed-out account", WAIT, |window, _| {
-        label(window, "sign-in-account-status").as_deref() == Some("Not signed in.")
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
+    });
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+    });
+    app.fill_labelled(cx, "Issuer", &format!("{}/new-realm", provider.issuer));
+    app.update(cx, |window, _| {
+        assert!(
+            value(window, "sign-in-issuer").is_some_and(|issuer| issuer.ends_with("/new-realm"))
+        );
     });
     assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
     app.click(cx, "cancel-sign-in-editor");
@@ -349,7 +405,8 @@ fn a_failed_sign_in_shows_the_reason_and_can_be_retried(cx: &mut TestAppContext)
         SignIns::new(trust(), Some(Arc::new(provider.denying_browser()))),
     );
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "The last action failed");
     // The failure needs the user, so the status bar counts it.
     app.wait_until(cx, "the attention count", WAIT, |window, _| {
@@ -559,7 +616,8 @@ fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut 
     sign_ins.tokens = tokens.clone();
     let app = TestApp::launch_with_sign_ins(cx, workspace, MemoryCredentials::default(), sign_ins);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     let record = tokens.load_tokens(sign_in.id).unwrap().unwrap();
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
@@ -572,7 +630,9 @@ fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut 
     assert_eq!(app.saved().sign_ins.len(), 1);
     assert_eq!(tokens.load_tokens(sign_in.id).unwrap().unwrap(), record);
     // The error remains visible in Settings, and the account remains signed in.
-    open_settings(&app, cx, &sign_in);
+    // Clicking the indicator uses the same action as the rest of the row.
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-name");
     app.wait_until(cx, "the Keychain error", WAIT, |window, _| {
         label(window, "sign-in-account-error")
             .is_some_and(|error| error.contains("Invalid attempt to change the owner"))
@@ -601,7 +661,7 @@ fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     app.fill(cx, "connection-host", "127.0.0.1");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "kyuubi-analytics-xl");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.scroll_to(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
@@ -611,14 +671,7 @@ fn connection_settings_adds_a_sign_in_and_chooses_it(cx: &mut TestAppContext) {
     type_fields(
         &app,
         cx,
-        &[
-            "Company",
-            &provider.issuer,
-            "qrow-desktop",
-            "",
-            "",
-            "127.0.0.1",
-        ],
+        &["Company", &provider.issuer, "qrow-desktop", "", ""],
     );
     app.click(cx, "save-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
@@ -658,7 +711,7 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
     app.fill(cx, "connection-host", "kyuubi.example.test");
     app.fill(cx, "connection-port", "10009");
     app.fill(cx, "connection-username", "kyuubi-analytics-xl");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.update(cx, |window, _| {
         assert!(!crate::support::present(
@@ -674,13 +727,6 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
             .is_some_and(|error| error.contains("Choose a sign-in"))
     });
     choose_sign_in(&app, cx, "Company");
-    app.click(cx, "save-profile");
-    // The sign-in does not send tokens to this host.
-    app.wait_until(cx, "the host error", WAIT, |window, _| {
-        label(window, "connection-form-error-accessibility")
-            .is_some_and(|error| error.contains("does not send tokens to kyuubi.example.test"))
-    });
-    app.fill(cx, "connection-host", "127.0.0.1");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
     let saved = || {
@@ -698,6 +744,7 @@ fn a_connection_can_use_a_sign_in_with_its_own_username(cx: &mut TestAppContext)
         }
     );
     assert!(!profile.tls);
+    assert_eq!(profile.host, "kyuubi.example.test");
     assert_eq!(profile.username, "kyuubi-analytics-xl");
     assert_eq!(app.credentials.count(), 0, "no password was saved");
 }
@@ -747,7 +794,8 @@ fn an_expired_sign_in_opens_the_browser_and_runs_the_query_after_it(cx: &mut Tes
     let (workspace, sign_in) = unreachable_workspace(&provider);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     // The provider no longer accepts the refresh token, as after a long
     // break. The sign-in looks valid until a query needs a token.
@@ -766,13 +814,20 @@ fn an_unreachable_provider_shows_a_yellow_sign_in_dot(cx: &mut TestAppContext) {
     let (workspace, sign_in) = unreachable_workspace(&provider);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     provider.set_down(true);
     app.click(cx, "run");
     wait_row(&app, cx, &sign_in, "Cannot reach the provider");
     app.update(cx, |window, cx| {
         assert_sign_in_dot(window, sign_in.id, cx.theme().warning);
+    });
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-name");
+    app.wait_until(cx, "the provider status", WAIT, |window, _| {
+        label(window, "sign-in-account-status")
+            .is_some_and(|status| status.contains("could not reach the provider"))
     });
 }
 
@@ -783,7 +838,8 @@ fn a_query_cancelled_during_the_refresh_does_not_open_the_browser(cx: &mut TestA
     let (workspace, sign_in) = unreachable_workspace(&provider);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     provider.revoke("alice");
     // The refresh takes long enough to cancel the query during it.
@@ -810,7 +866,8 @@ fn two_tabs_that_need_the_same_sign_in_share_one_browser_sign_in(cx: &mut TestAp
     workspace.tabs.push(second);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     provider.revoke("alice");
     // Both refreshes fail at about the same time.
@@ -869,6 +926,36 @@ fn cancel_ends_a_query_that_waits_for_the_browser(cx: &mut TestAppContext) {
     // The browser sign-in continues, and the sidebar can cancel it.
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Waiting for the browser…");
+}
+
+#[gpui_kit::test]
+fn the_account_field_remains_locked_while_waiting_for_the_browser(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, false);
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(|_: &str| Ok(())))),
+    );
+    open_sign_ins(&app, cx);
+    open_settings(&app, cx, &sign_in);
+    app.click(cx, "sign-in-account-sign-in");
+    app.wait_until(cx, "the waiting account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Waiting for the browser…")
+    });
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        assert_eq!(
+            label(window, "sign-in-account-status").as_deref(),
+            Some("Waiting for the browser. Finish the sign-in there.")
+        );
+    });
+    app.click(cx, "sign-in-account-cancel");
+    app.wait_until(cx, "the cancelled account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
+    });
 }
 
 #[gpui_kit::test]
@@ -1056,7 +1143,8 @@ fn copy_settings_puts_the_sign_in_without_its_account_on_the_clipboard(cx: &mut 
     let (workspace, sign_in) = workspace(&provider, false);
     let app = launch(cx, &provider, workspace);
     open_sign_ins(&app, cx);
-    app.click(cx, format!("sign-in-{}-sign-in", sign_in.id));
+    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(String::new()));
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
@@ -1069,7 +1157,7 @@ fn copy_settings_puts_the_sign_in_without_its_account_on_the_clipboard(cx: &mut 
     let json: serde_json::Value = serde_json::from_str(&copied).unwrap();
     assert_eq!(json["name"], "Company");
     assert_eq!(json["issuer"], provider.issuer.as_str());
-    assert_eq!(json["database_hosts"], serde_json::json!(["127.0.0.1"]));
+    assert!(json.get("database_hosts").is_none());
     // The account and the identifier stay with this user.
     for private in ["alice", &sign_in.id.to_string(), "identity", "token"] {
         assert!(!copied.contains(private), "{private} in {copied}");
@@ -1082,11 +1170,7 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
     let (workspace, existing) = workspace(&provider, false);
     let app = launch(cx, &provider, workspace);
     let mut shared = provider.sign_in("Company");
-    shared.allowed_hosts = vec![
-        "kyuubi-a.example.test".into(),
-        "kyuubi-b.example.test".into(),
-    ];
-    shared.callback_ports = vec![8765];
+    shared.callback_ports = vec![8765, 8766];
     let message = format!("Here is our sign-in:\n{}", shared.to_shared_text());
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(message));
     open_sign_ins(&app, cx);
@@ -1102,13 +1186,10 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
             value(window, "sign-in-issuer").as_deref(),
             Some(provider.issuer.as_str())
         );
-        assert_eq!(
-            value(window, "sign-in-database-hosts").as_deref(),
-            Some("kyuubi-a.example.test kyuubi-b.example.test")
-        );
+        assert!(!present(window, &"sign-in-database-hosts".into()));
         assert_eq!(
             value(window, "sign-in-callback-ports").as_deref(),
-            Some("8765")
+            Some("8765, 8766")
         );
         // A new sign-in has no account yet.
         assert!(!present(window, &"sign-in-account-status".into()));
@@ -1131,13 +1212,16 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
     assert_ne!(pasted.id, existing.id);
     assert_ne!(pasted.id, shared.id);
     assert_eq!(pasted.identity, None);
-    assert_eq!(pasted.allowed_hosts, shared.allowed_hosts);
-    assert_eq!(pasted.callback_ports, vec![8765]);
+    assert_eq!(pasted.callback_ports, vec![8765, 8766]);
     wait_row(&app, cx, pasted, "Not signed in");
     // Sign-in Settings of a saved sign-in shows no note.
     open_settings(&app, cx, pasted);
     app.update(cx, |window, _| {
         assert!(!present(window, &"sign-in-pasted-note".into()));
+        assert_eq!(
+            value(window, "sign-in-callback-ports").as_deref(),
+            Some("8765, 8766")
+        );
     });
 }
 
@@ -1179,4 +1263,263 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
     }
     assert!(!app.update(cx, |window, _| present(window, &"sign-ins-list".into())));
     assert!(app.saved().sign_ins.is_empty());
+}
+
+#[gpui_kit::test]
+fn shared_sign_ins_offer_only_oidc(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    open_sign_ins(&app, cx);
+    app.click(cx, "add-sign-in");
+    app.wait_for(cx, "sign-in-name");
+    app.click(cx, "sign-in-provider");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(crate::support::labelled(window, "Trino External Authentication").is_none());
+    });
+    app.press(cx, "escape");
+    app.wait_for(cx, "sign-in-issuer");
+    app.wait_for(cx, "sign-in-client-id");
+    app.click(cx, "cancel-sign-in-editor");
+}
+
+#[gpui_kit::test]
+fn trino_external_authentication_progress_can_be_cancelled_before_connect(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server};
+    use qrow::model::DatabaseType;
+    let mut replies = vec![Reply { status: 401, body: String::new(), headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into() }];
+    replies.extend((0..300).map(|_| Reply::page(serde_json::json!({"nextUri":"{origin}/token"}))));
+    let mut server = Server::new(true, replies);
+    server.profile.authentication = Authentication::TrinoExternal;
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = "SELECT 42".into();
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let browser_opens = opens.clone();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            trust(),
+            Some(Arc::new(move |_| {
+                browser_opens.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Waiting for browser sign-in");
+    app.click(cx, "cancel");
+    app.wait_status(cx, "Cancelled");
+    assert_eq!(opens.load(Ordering::SeqCst), 1);
+    assert_eq!(app.saved().profiles[0].database_type, DatabaseType::Trino);
+}
+
+#[gpui_kit::test]
+fn trino_connection_selects_and_restores_external_authentication(cx: &mut TestAppContext) {
+    use qrow::model::DatabaseType;
+    let app = TestApp::launch(cx, Workspace::default());
+    app.click(cx, "add-connection");
+    app.select(cx, "connection-database-type", "Trino");
+    app.fill(cx, "connection-host", "localhost");
+    app.fill(cx, "connection-username", "alice");
+    app.select(cx, "connection-authentication", "External");
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"connection-sign-in".into()));
+        assert!(!present(window, &"connection-password".into()));
+    });
+    app.click(cx, "save-profile");
+    app.wait_until(cx, "HTTPS is required", WAIT, |window, _| {
+        label(window, "connection-form-error-accessibility")
+            .is_some_and(|error| error.contains("TLS"))
+    });
+    app.click(cx, "connection-tls");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "connection-name");
+    app.wait_until(cx, "saved external connection", WAIT, |_, _| {
+        !app.saved().profiles.is_empty()
+    });
+    let profile = app.saved().profiles[0].clone();
+    assert_eq!(profile.database_type, DatabaseType::Trino);
+    assert_eq!(profile.authentication, Authentication::TrinoExternal);
+    assert!(app.saved().sign_ins.is_empty());
+    app.context_menu(cx, crate::support::connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.wait_for(cx, "connection-authentication");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-authentication").as_deref(),
+            Some("External")
+        )
+    });
+    app.select(cx, "connection-authentication", "Password");
+    app.wait_for(cx, "connection-password");
+    app.click(cx, "cancel-profile");
+}
+
+#[gpui_kit::test]
+fn selecting_trino_authenticates_without_running_editor_sql_and_routes_errors(
+    cx: &mut TestAppContext,
+) {
+    use crate::support::trino_protocol::{Reply, Server};
+    let mut server = Server::new(true, vec![Reply {
+        status: 401,
+        body: String::new(),
+        headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into(),
+    }]);
+    server.profile.authentication = Authentication::TrinoExternal;
+    let connection = server.profile.id;
+    let unrelated = offline_profile("Other connection");
+    let mut tab = SavedTab::new(1, Some(connection));
+    tab.sql = "SELECT 42".into();
+    let entered = Arc::new(AtomicBool::new(false));
+    let release = Arc::new(AtomicBool::new(false));
+    let browser_entered = entered.clone();
+    let browser_release = release.clone();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone(), unrelated.clone()],
+            tabs: vec![tab, SavedTab::new(1, Some(unrelated.id))],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            trust(),
+            Some(Arc::new(move |_| {
+                browser_entered.store(true, Ordering::SeqCst);
+                while !browser_release.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                anyhow::bail!("Synthetic browser failure")
+            })),
+        ),
+    );
+    app.click(cx, format!("profile-{connection}"));
+    app.wait_until(cx, "automatic browser launch", WAIT, |_, _| {
+        entered.load(Ordering::SeqCst)
+    });
+    app.wait_for(cx, "connection-authentication-progress");
+    // A different visible connection must not receive the failure.
+    app.click(cx, format!("profile-{}", unrelated.id));
+    release.store(true, Ordering::SeqCst);
+    app.wait_until(cx, "connection authentication error", WAIT, |window, _| {
+        label(window, crate::support::connection_row(connection))
+            .is_some_and(|label| label.contains("unread error"))
+    });
+    app.click(cx, format!("connection-status-{connection}"));
+    app.wait_for(cx, "activity");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "activity-connection").as_deref(),
+            Some(server.profile.name.as_str())
+        )
+    });
+    assert!(
+        app.copy_activity(cx)
+            .contains("Cannot open the sign-in browser")
+    );
+    assert_eq!(server.requests().len(), 1);
+    assert!(server.requests()[0].ends_with("SELECT 1"));
+    assert!(!server.requests()[0].contains("SELECT 42"));
+}
+
+#[gpui_kit::test]
+fn changing_connection_type_removes_external_authentication(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.click(cx, "add-connection");
+    app.select(cx, "connection-database-type", "Trino");
+    app.select(cx, "connection-authentication", "External");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.wait_for(cx, "connection-password");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "connection-authentication").as_deref(),
+            Some("Password")
+        )
+    });
+    app.click(cx, "connection-authentication");
+    app.settle(cx);
+    app.update(cx, |window, _| {
+        assert!(crate::support::labelled(window, "External").is_none())
+    });
+    app.press(cx, "escape");
+    app.click(cx, "cancel-profile");
+}
+
+#[gpui_kit::test]
+fn selecting_oidc_connection_starts_browser_sign_in(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, true);
+    let connection = workspace.profiles[0].id;
+    let app = launch(cx, &provider, workspace);
+    app.click(cx, format!("profile-{connection}"));
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    assert_eq!(provider.authorization_grants(), 1);
+    assert!(!app.logs(cx).contains("Submitted query"));
+}
+
+#[gpui_kit::test]
+fn successful_trino_query_retry_clears_the_previous_authentication_error(cx: &mut TestAppContext) {
+    use crate::support::trino_protocol::{Reply, Server};
+    let challenge = || {
+        Reply {
+        status: 401,
+        body: String::new(),
+        headers: "WWW-Authenticate: Bearer x_redirect_server=\"{origin}/browser\", x_token_server=\"{origin}/token\"\r\n".into(),
+    }
+    };
+    let done = || {
+        Reply::page(
+            serde_json::json!({"columns":[{"name":"value","type":"integer"}],"data":[[42]]}),
+        )
+    };
+    let mut server = Server::new(
+        true,
+        vec![
+            challenge(),
+            challenge(),
+            Reply::page(serde_json::json!({"token":"synthetic-opaque"})),
+            Reply {
+                status: 204,
+                body: String::new(),
+                headers: String::new(),
+            },
+            done(),
+            done(),
+        ],
+    );
+    server.profile.authentication = Authentication::TrinoExternal;
+    let mut tab = SavedTab::new(1, Some(server.profile.id));
+    tab.sql = "SELECT 42".into();
+    let opens = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let browser_opens = opens.clone();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![server.profile.clone()],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            trust(),
+            Some(Arc::new(move |_| {
+                if browser_opens.fetch_add(1, Ordering::SeqCst) == 0 {
+                    anyhow::bail!("Synthetic browser failure");
+                }
+                Ok(())
+            })),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Error: Connection failed");
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    assert!(app.saved().sign_ins.is_empty());
+    assert_eq!(opens.load(Ordering::SeqCst), 2);
 }

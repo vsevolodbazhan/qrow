@@ -1,8 +1,9 @@
 # Results
 
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
-The preview does not change the SQL sent to the server. Postgres reads the
-result stream before the first page. See [Postgres limits](connections.md#postgres-limits).
+The preview does not change the SQL sent to the server. Postgres and Trino read the
+result stream before the first page. See [Postgres limits](connections.md#postgres-limits)
+and [Trino limits](connections.md#trino-limits).
 
 Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)

@@ -1,13 +1,13 @@
 # Connections
 
-A connection profile stores the settings for a Kyuubi or Postgres server. Each connection
+A connection profile stores the settings for a Kyuubi, Postgres, or Trino server. Each connection
 owns one or more query tabs. Select a profile in the Connections sidebar to show
 its tabs. Qrow restores the last tab selected for that connection. To show the
 Connections sidebar, click the plug button at the left end of the status
 bar, press **⌘B**, or select **View → Connections**.
 
 The connection icon identifies the connection type. Kyuubi connections use the
-Spark icon. Postgres connections use the elephant icon.
+Spark icon. Postgres connections use the elephant icon. Trino connections use the rabbit icon.
 
 Drag a connection name to change the order of the connections. Drop above or
 below the center of another connection row. A line shows the new position.
@@ -54,15 +54,15 @@ search field above the pages to find a field.
 1. Click **+** beside Connections.
 2. On the **General** page, select **Connection Type**.
 3. Enter a name, the server hostname or IP address, and the port.
-4. For Kyuubi, turn on **TLS** if the server accepts TLS on this port.
+4. For Kyuubi or Trino, turn on **TLS** if the server accepts TLS on this port.
    For Postgres, select a [TLS Mode](#use-postgres).
 5. For Kyuubi, select the authentication:
    - **Password**: enter your LDAP username and password.
-   - **Sign-in (OpenID Connect)**: select a
+   - **Sign-in**: select a
      [sign-in](#sign-in-with-openid-connect) and enter the database username.
 
-   For Postgres, enter the role name and password.
-6. Enter the initial database.
+   For Postgres, enter the role name and password. For Trino, see [Use Trino](#use-trino).
+6. Enter the initial database. For Trino, enter the initial catalog and optional schema.
 7. Enter session parameters as a JSON object with string values.
 8. Optional: To [browse the schemas](#browse-schemas) of the connection, go
    to the **Catalog** page and set **Schema Refresh** to **Manual** or **While
@@ -144,6 +144,107 @@ names. Use qualified names when a different `search_path` applies.
 - A SQL error in an explicit transaction keeps that transaction in the failed
   state. Qrow does not run `ROLLBACK` automatically.
 
+## Use Trino
+
+Select **Trino** in **Connection Type**. Enter the hostname and port of the
+coordinator. The default port is 8080. **TLS** selects HTTPS and checks the
+server certificate and hostname against the system trust store.
+
+Enter **Initial Catalog**, for example `tpch`. Enter **Initial Schema** if you
+want to use unqualified table names, for example `tiny`. The schema is optional.
+The schema browser reads the initial catalog. SQL names from the browser include
+the catalog, schema, and table, with double quotes.
+
+For **Password** authentication, enter the username. Leave the password blank
+if the server accepts a username without a password. Turn on **TLS** when you
+enter a password. Passwords use macOS Keychain.
+
+For **External** authentication, enter the Trino username and turn on **TLS**.
+The connection's host is the coordinator. You do not need a saved sign-in or
+an allowed-host list. This uses the coordinator's existing OAuth2 configuration,
+like DBeaver or DataGrip. See [Trino browser sign-in](#trino-browser-sign-in).
+
+Existing Trino connections that use direct OpenID Connect keep their saved
+**Sign-in** option. The coordinator must accept that provider's access token.
+New Trino connections offer **Password** and **External**.
+
+Enter session properties as a JSON object with string values. For example:
+
+```json
+{"query_max_run_time": "10m", "join_distribution_type": "AUTOMATIC"}
+```
+
+Each tab has separate session settings. `USE`, `SET SESSION`, `RESET SESSION`,
+prepared statements, roles, and transaction commands update that tab. A
+keep-alive does not replace its result cursor. Disconnect cancels an active
+query and sends `ROLLBACK` for an open transaction. The assistant receives
+`trino` as the connector type and the initial catalog and schema as context.
+
+### Trino limits
+
+- The schema browser reads one catalog. It shows schemas, tables, views, and
+  column types. It does not read table or column comments.
+- Qrow reads all result pages before it shows the first page. It keeps up to
+  100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
+  without keeping them. The result limits do not reduce server work.
+- Each HTTP response has a 16 MiB limit before JSON decoding. Decoding and one
+  response page use memory in addition to the retained result limits.
+- Nested values use JSON text. Binary and temporal values use the server's
+  JSON representation. Nulls remain distinct from empty strings.
+- **Response Timeout** bounds each HTTP request. It does not bound total query
+  time. Use the `query_max_run_time` session property for that limit.
+- Qrow retries a request only after an explicit authentication rejection. It
+  does not retry an uncertain network failure or follow HTTP redirects. A result URL
+  must use the same scheme, hostname, and port as the coordinator. Configure
+  reverse proxies to return URLs for that origin.
+- Cancellation sends HTTP `DELETE` to the query cursor. It cannot undo completed
+  SQL. A request already in progress can wait until its response timeout.
+- Client certificates, Kerberos, and the result spooling protocol are not
+  supported.
+- Automatic assistant relation context uses the initial schema. It does not
+  track `USE` commands. Use qualified names after a schema change.
+
+### Trino browser sign-in
+
+Use **External** when the Trino coordinator already has OAuth2 authentication.
+The coordinator sends the browser to the identity provider, handles its
+callback, and exchanges the authorization code. The coordinator keeps its
+client secret. You do not need a new identity-provider client, issuer URL,
+client ID, client secret, local callback listener, or saved sign-in.
+
+1. In a Trino connection, select **External** in **Authentication**.
+2. Enter the coordinator hostname, HTTPS port, and database username. Turn on
+   **TLS**, then save.
+3. Select the connection in **Connections**. If Trino requires authentication,
+   complete sign-in in the browser. A query or schema refresh also starts
+   sign-in when necessary. Other connection types cannot use **External**.
+
+The query toolbar shows **Waiting for Trino authentication…** while a connection
+attempt waits. Click **Cancel** to stop it before a query cursor exists.
+Queries show **Waiting for browser sign-in…**. Cancel stops that query's wait;
+other requests for the connection can continue their shared authentication.
+A red connection dot opens Activity for that connection when authentication fails.
+
+Trino tokens are opaque. Qrow keeps them only in memory. Sessions of the same
+connection and username share tokens. Different connection IDs, endpoints,
+usernames, and authentication settings use separate caches. A change to these
+settings discards the affected tokens. Restarting Qrow also clears this cache.
+Trino external authentication does not add an entry to **Sign-Ins**.
+Saved connections from the earlier Trino sign-in setup keep external authentication;
+the next save removes the obsolete shared Trino sign-in records.
+
+Trino can renew authentication without opening the browser. The sign-in has
+a two-minute deadline, separate from **Response Timeout**. Temporary polling
+failures can retry within this deadline. Rejected replacement tokens have a
+bounded retry count. Query cancellation, disconnection, and transaction
+cleanup do not start browser sign-in.
+
+Challenge and polling URLs must use the configured coordinator's HTTPS
+scheme, hostname, and port. URLs with credentials or fragments are rejected.
+Each polling continuation has the same checks. Configure a gateway to return
+URLs for that origin. Browser navigation can continue to the identity
+provider; the database HTTP client sends no credentials to it.
+
 ## Sign in with OpenID Connect
 
 A sign-in lets connections authenticate with an access token from an OpenID
@@ -152,7 +253,12 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
-The **Sign-Ins** sidebar shows each sign-in with its account. To open it,
+The **Sign-Ins** sidebar shows each saved sign-in with its type, **OIDC**.
+Select a connection to start its sign-in when necessary. A query also starts
+sign-in when it needs authentication. The sidebar has no **Sign in…** button.
+Click a sign-in row to see its account and settings. Its status dot is part
+of the row. In **Connections**, click a red error dot to open **Activity**
+for the connection whose sign-in failed. To open the sidebar,
 click the key button at the left end of the status bar, or select
 **View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
@@ -165,16 +271,17 @@ sign-ins need attention.
 1. Open the **Sign-Ins** sidebar and click **+**. In Connection Settings, you
    can also click **New sign-in…** at the bottom of the **Sign-In** list. The
    connection then uses the new sign-in.
-2. Enter a name, the issuer URL, and the client ID.
+2. Select **OpenID Connect** in **Provider**. Enter a name, the issuer URL,
+   and the client ID.
 3. Enter other scopes if the server requires them. Qrow always requests
    `openid`, `profile`, and `email`.
-4. Enter the database hosts that can receive the access tokens.
-5. Click **Save**, or press **Enter** or **⌘Enter**.
+4. Click **Save**, or press **Enter** or **⌘Enter**.
 
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
 default, Qrow uses an available port. If the provider accepts only some ports,
-enter them in **Callback Ports**. Qrow tries them in order and uses the first
+enter them in **Callback Ports**, separated by commas, for example `8765, 8766`.
+Qrow also accepts spaces. It tries the ports in order and uses the first
 port that no other program uses. The provider must support the
 authorization-code flow with PKCE (`S256`). Add the `offline_access` scope if
 the provider issues refresh tokens only with it. Use **Resource** only if the
@@ -188,7 +295,7 @@ To give a sign-in to a colleague, for example in a Slack message:
 2. Paste the text into the message.
 
 The text contains the name, the issuer, the client ID, the scopes, the
-resource, the database hosts, and the callback ports. It does not contain
+resource, and the callback ports. It does not contain
 your account or your tokens.
 
 To add a sign-in that a colleague sent to you:
@@ -196,8 +303,8 @@ To add a sign-in that a colleague sent to you:
 1. Copy the text of the message.
 2. Open the **Sign-Ins** sidebar and click the paste button beside **+**.
 3. Sign-in Settings opens with the values. Make sure that you trust the
-   issuer and the database hosts. Qrow sends your access tokens to these
-   hosts.
+   issuer. Qrow sends access tokens only to connections where you select this
+   sign-in.
 4. Click **Save**.
 
 Qrow ignores other text of the message around the settings. If a sign-in
@@ -208,13 +315,17 @@ database username, so a colleague must add their own connections.
 
 ### Sign in and use a sign-in
 
-Click **Sign in…** on the row of the sign-in. Qrow opens the default browser.
-Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
-stop. The row then shows the email or name of the account.
+Select a connection that uses the sign-in. Qrow opens the default browser
+when authentication is necessary. Finish the sign-in there. Qrow waits up
+to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
-Click a row to open **Sign-In Settings**. The **Account** field shows the
-status and the actions for the account on the same row. The actions are on
-the right. Right-click a row for **Sign in…**,
+Click a row, including its status dot, to open **Sign-In Settings**.
+The dot has no separate action. The disabled **Account** field shows
+the account value or the sign-in status, such as **Not signed in**.
+You cannot edit or focus the field. Waiting and error details appear below it.
+Click **Sign out** beside the field to unlock the authentication settings.
+When signed out, click **Sign in…** beside the field to open the browser.
+Right-click a row for **Sign in…**,
 **Cancel sign-in**, **Sign out**, or **Retry**, and for **Edit**,
 **Copy settings**, and **Delete**.
 
@@ -222,21 +333,25 @@ The **Connections** field shows the number of connections that use the
 sign-in. Neutral tags show the names below the heading. The tags wrap when
 they do not fit on one line.
 
-To use a sign-in, edit a connection, select **Sign-in (OpenID Connect)** in
-**Authentication**, and select the sign-in in the **Sign-In** list. The host of the connection must be
-one of the database hosts of the sign-in. Qrow does not send a token to
-another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
+To use a sign-in, edit a connection, select **Sign-in** in
+**Authentication**, and select the sign-in in the **Sign-In** list. The list
+shows the type beside each name in smaller, muted text.
+Selecting the sign-in authorizes the connection host to receive its access
+tokens. Qrow rejects requests from an unconfigured connection or old connection
+settings after a host change. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
 use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
+Sign-In Settings shows these account states:
+
 | State | Recovery |
 | --- | --- |
-| **Not signed in** | Click **Sign in…**. |
+| **Not signed in** | Select the connection or run a query. |
 | **Waiting for the browser…** | Finish the sign-in in the browser, or click **Cancel**. |
 | The account email or name | No action. |
-| **Expired · Sign in again** | Click **Sign in…**. |
+| **Expired · Sign in again** | Select the connection or run a query. |
 | **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
-| **The last action failed** | Open Sign-in Settings to read the error, then try again. |
+| **The last action failed** | Click the red dot to read the connection error in Activity, then try again. |
 
 When you run a query and its connection needs a new sign-in, Qrow opens the
 browser sign-in. This occurs when the sign-in is not signed in, when it has
@@ -959,11 +1074,11 @@ replace the file, and it does not poll. See the
 
 [Credential storage](../src/storage.rs) uses Keychain service
 `io.qrow.connection`, keyed by profile UUID. Keeping that identifier stable
-preserves access to existing passwords. Sign-in tokens use the separate
+preserves access to existing passwords. Direct OpenID Connect tokens use the separate
 service `io.qrow.sign-in`, keyed by sign-in UUID. Each record holds the
 issuer, client, subject, and token requirements of its tokens.
 
-The [sign-in service](../src/oidc/service.rs) is shared by all tabs. It runs
+The [direct OpenID Connect service](../src/oidc/service.rs) is shared by all tabs. It runs
 one refresh at a time for each sign-in, and discards a result that arrives
 after a sign-out or removal. The [browser flow](../src/oidc/flow.rs) uses
 discovery, PKCE with `S256`, a new `state` and `nonce` for each attempt, and a
@@ -971,3 +1086,8 @@ callback listener bound to `127.0.0.1` that closes after the attempt. The
 [ID token check](../src/oidc/jwt.rs) verifies the signature (RS256, PS256, or
 ES256), issuer, audience, expiry, and nonce. The worker asks for credentials
 before each new session.
+
+The [external authentication service](../src/external_auth.rs) shares in-memory
+tokens and authentication work for Trino connections. The
+[Trino challenge adapter](../src/connector/trino/external.rs) follows the
+[upstream Trino client protocol](https://github.com/trinodb/trino/tree/483/client/trino-client/src/main/java/io/trino/client/auth/external).

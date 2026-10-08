@@ -115,12 +115,14 @@ pub(super) fn parse_lifecycle(
 
 use super::profile_view::{connection_row, form_input};
 use super::{ProfileEditor, Qrow};
-use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn};
+use crate::model::{MAX_ASSISTANT_NOTES_BYTES, SignIn, SignInProvider};
 use gpui_kit::component::{
     IconName, IndexPath, Sizable as _,
     button::{Button, ButtonVariants as _},
     combobox::{Combobox, ComboboxState},
+    h_flex,
     input::{Input, Textarea},
+    label::Label,
     select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     setting::{SettingGroup, SettingPage},
     v_flex,
@@ -132,7 +134,7 @@ use gpui_kit::{
 
 /// Element IDs of the connection form inputs, by field index. Index 6 is the
 /// session parameters textarea, which has no ID setter in GPUI Kit 0.6.6.
-pub(super) const FIELD_IDS: [&str; 15] = [
+pub(super) const FIELD_IDS: [&str; 16] = [
     "connection-name",
     "connection-host",
     "connection-port",
@@ -148,9 +150,10 @@ pub(super) const FIELD_IDS: [&str; 15] = [
     "connection-refresh-period",
     "connection-refresh-timeout",
     "connection-response-timeout",
+    "connection-trino-schema",
 ];
 const PASSWORD: &str = "Password";
-const SIGN_IN: &str = "Sign-in (OpenID Connect)";
+const SIGN_IN: &str = "Sign-in";
 const DISCONNECT_AFTER: &str = "Disconnect after";
 const KEEP_CONNECTED: &str = "Keep connected";
 const PRIVATE_CATALOG: &str = "This connection";
@@ -259,6 +262,7 @@ pub(super) fn preferred_choices(
 pub(super) struct Row {
     label: SharedString,
     index: usize,
+    sign_in: Option<(Uuid, SignInProvider)>,
 }
 
 impl SelectItem for Row {
@@ -270,6 +274,38 @@ impl SelectItem for Row {
 
     fn value(&self) -> &usize {
         &self.index
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Some((id, provider)) = self.sign_in else {
+            return self.label.clone().into_any_element();
+        };
+        let provider = match provider {
+            SignInProvider::Oidc => "OIDC",
+            SignInProvider::TrinoExternal => "Trino",
+        };
+        h_flex()
+            .id(format!("sign-in-choice-{id}"))
+            .test_support()
+            .role(Role::ListItem)
+            .aria_label(format!("{}, {provider}", self.label))
+            .w_full()
+            .items_baseline()
+            .justify_between()
+            .gap_2()
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .child(Label::new(self.label.clone())),
+            )
+            .child(
+                Label::new(provider)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .flex_shrink_0(),
+            )
+            .into_any_element()
     }
 }
 
@@ -288,6 +324,7 @@ fn rows<T>(choices: &[(T, String)]) -> SearchableVec<Row> {
             .map(|(index, (_, label))| Row {
                 label: label.clone().into(),
                 index,
+                sign_in: None,
             })
             .collect::<Vec<_>>(),
     )
@@ -375,18 +412,66 @@ pub(super) fn chosen<T: Clone>(select: &RowSelect, choices: &[(T, String)], cx: 
 pub(super) type AuthenticationSelect = ChoiceSelect;
 
 pub(super) fn authentication_select(
-    uses_sign_in: bool,
+    authentication: crate::model::Authentication,
+    database_type: crate::model::DatabaseType,
     window: &mut Window,
     cx: &mut Context<Qrow>,
 ) -> AuthenticationSelect {
     cx.new(|cx| {
         SelectState::new(
-            SearchableVec::new(vec![PASSWORD.into(), SIGN_IN.into()]),
-            Some(IndexPath::default().row(usize::from(uses_sign_in))),
+            SearchableVec::new(authentication_choices(database_type, authentication)),
+            Some(IndexPath::default().row(usize::from(
+                authentication != crate::model::Authentication::Password,
+            ))),
             window,
             cx,
         )
     })
+}
+
+const EXTERNAL: &str = "External";
+
+fn authentication_choices(
+    database_type: crate::model::DatabaseType,
+    authentication: crate::model::Authentication,
+) -> Vec<String> {
+    if database_type == crate::model::DatabaseType::Trino {
+        let mut choices = vec![PASSWORD.into(), EXTERNAL.into()];
+        // Preserve previously saved direct OIDC connections without offering
+        // that setup to new Trino connections.
+        if matches!(authentication, crate::model::Authentication::Oidc { .. }) {
+            choices.push(SIGN_IN.into());
+        }
+        choices
+    } else {
+        vec![PASSWORD.into(), SIGN_IN.into()]
+    }
+}
+
+pub(super) fn reset_authentication(
+    select: &AuthenticationSelect,
+    database_type: crate::model::DatabaseType,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    select.update(cx, |select, cx| {
+        select.set_items(
+            SearchableVec::new(authentication_choices(
+                database_type,
+                crate::model::Authentication::Password,
+            )),
+            window,
+            cx,
+        );
+        select.set_selected_value(&PASSWORD.to_owned(), window, cx);
+    });
+}
+
+pub(super) fn uses_external(select: &AuthenticationSelect, cx: &App) -> bool {
+    select
+        .read(cx)
+        .selected_value()
+        .is_some_and(|choice| choice == EXTERNAL)
 }
 
 pub(super) fn uses_sign_in_from_event(event: &SelectEvent<SearchableVec<String>>) -> Option<bool> {
@@ -394,7 +479,7 @@ pub(super) fn uses_sign_in_from_event(event: &SelectEvent<SearchableVec<String>>
         return None;
     };
     match choice.as_str() {
-        PASSWORD => Some(false),
+        PASSWORD | EXTERNAL => Some(false),
         SIGN_IN => Some(true),
         _ => None,
     }
@@ -408,9 +493,13 @@ pub(super) fn uses_sign_in(select: &AuthenticationSelect, cx: &App) -> bool {
 }
 
 /// The choices of the Sign-in list: each sign-in by name. Names are unique.
-pub(super) fn sign_in_choices(sign_ins: &[SignIn]) -> Vec<(Uuid, String)> {
+pub(super) fn sign_in_choices(
+    sign_ins: &[SignIn],
+    _database_type: crate::model::DatabaseType,
+) -> Vec<(Uuid, String)> {
     sign_ins
         .iter()
+        .filter(|sign_in| sign_in.provider == crate::model::SignInProvider::Oidc)
         .map(|sign_in| (sign_in.id, sign_in.name.clone()))
         .collect()
 }
@@ -427,6 +516,7 @@ fn sign_in_rows(choices: &[(Uuid, String)], selected: Option<Uuid>) -> Vec<usize
 /// its placeholder.
 pub(super) fn sign_in_combobox(
     choices: &[(Uuid, String)],
+    sign_ins: &[SignIn],
     selected: Option<Uuid>,
     window: &mut Window,
     cx: &mut Context<Qrow>,
@@ -435,7 +525,20 @@ pub(super) fn sign_in_combobox(
         .into_iter()
         .map(|row| IndexPath::default().row(row))
         .collect();
-    let rows = rows(choices);
+    let rows = SearchableVec::new(
+        choices
+            .iter()
+            .enumerate()
+            .map(|(index, (id, name))| Row {
+                label: name.clone().into(),
+                index,
+                sign_in: sign_ins
+                    .iter()
+                    .find(|sign_in| sign_in.id == *id)
+                    .map(|sign_in| (*id, sign_in.provider)),
+            })
+            .collect::<Vec<_>>(),
+    );
     cx.new(|cx| ComboboxState::new(rows, selection, window, cx).searchable(true))
 }
 
@@ -769,10 +872,14 @@ fn catalog_field(form: &ProfileEditor, cx: &mut Context<Qrow>) -> AnyElement {
 
 pub(super) fn database_type_choices() -> Vec<(crate::model::DatabaseType, String)> {
     use crate::model::DatabaseType;
-    [DatabaseType::Kyuubi, DatabaseType::Postgres]
-        .into_iter()
-        .map(|kind| (kind, kind.label().into()))
-        .collect()
+    [
+        DatabaseType::Kyuubi,
+        DatabaseType::Postgres,
+        DatabaseType::Trino,
+    ]
+    .into_iter()
+    .map(|kind| (kind, kind.label().into()))
+    .collect()
 }
 
 pub(super) fn postgres_ssl_mode_choices() -> Vec<(crate::model::PostgresSslMode, String)> {

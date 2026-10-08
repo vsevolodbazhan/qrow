@@ -354,6 +354,8 @@ pub struct Profile {
     pub port: u16,
     pub username: String,
     pub database: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trino_schema: String,
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
@@ -548,6 +550,7 @@ pub enum DatabaseType {
     #[default]
     Kyuubi,
     Postgres,
+    Trino,
 }
 
 impl DatabaseType {
@@ -555,6 +558,7 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => "Spark (HiveServer2)",
             Self::Postgres => "Postgres",
+            Self::Trino => "Trino",
         }
     }
 
@@ -562,6 +566,7 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => "spark_kyuubi",
             Self::Postgres => "postgres",
+            Self::Trino => "trino",
         }
     }
 
@@ -569,13 +574,14 @@ impl DatabaseType {
         match self {
             Self::Kyuubi => 10009,
             Self::Postgres => 5432,
+            Self::Trino => 8080,
         }
     }
 
     pub fn quote_identifier(self, name: &str) -> String {
         let quote = match self {
             Self::Kyuubi => '`',
-            Self::Postgres => '"',
+            Self::Postgres | Self::Trino => '"',
         };
         format!(
             "{quote}{}{quote}",
@@ -602,12 +608,14 @@ pub enum Authentication {
     Password,
     /// An access token of a reusable sign-in, in the SASL password field.
     Oidc { sign_in: Uuid },
+    /// Browser authentication delegated to the Trino coordinator.
+    TrinoExternal,
 }
 
 impl Authentication {
     pub fn sign_in(self) -> Option<Uuid> {
         match self {
-            Self::Password => None,
+            Self::Password | Self::TrinoExternal => None,
             Self::Oidc { sign_in } => Some(sign_in),
         }
     }
@@ -875,6 +883,7 @@ impl Default for Profile {
             port: 10009,
             username: String::new(),
             database: "avia".into(),
+            trino_schema: String::new(),
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
@@ -911,6 +920,8 @@ impl Profile {
             && self.port == other.port
             && self.username == other.username
             && self.database == other.database
+            && (self.database_type != DatabaseType::Trino
+                || self.trino_schema == other.trino_schema)
             && self.parameters == other.parameters
             && if self.database_type == DatabaseType::Postgres {
                 self.postgres_ssl_mode() == other.postgres_ssl_mode()
@@ -947,6 +958,17 @@ impl Profile {
                 || self.authentication == Authentication::Password,
             "Postgres connections use password authentication."
         );
+        anyhow::ensure!(
+            self.database_type != DatabaseType::Trino
+                || self.authentication == Authentication::Password
+                || self.tls,
+            "Trino sign-ins require TLS."
+        );
+        anyhow::ensure!(
+            !matches!(self.authentication, Authentication::TrinoExternal)
+                || self.database_type == DatabaseType::Trino,
+            "Browser sign-in through Trino requires a Trino connection."
+        );
         self.lifecycle.validate()?;
         if let Some(dbt) = &self.dbt {
             dbt.validate()?;
@@ -978,16 +1000,34 @@ impl Profile {
     }
 }
 
-/// A reusable OpenID Connect sign-in. Several connections can use it. Each
-/// connection keeps its own database username. Tokens are in macOS Keychain,
-/// not in the workspace.
+/// The protocol used by a reusable sign-in.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInProvider {
+    #[default]
+    Oidc,
+    /// Legacy workspace records, migrated to connection authentication.
+    TrinoExternal,
+}
+impl SignInProvider {
+    fn is_oidc(&self) -> bool {
+        *self == Self::Oidc
+    }
+}
+
+/// A reusable sign-in. Each connection keeps its database username. Direct
+/// OIDC tokens use Keychain. Tokens are never stored in the workspace.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SignIn {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub provider: SignInProvider,
     /// The issuer identifier of the provider, for example a Keycloak realm URL.
+    #[serde(default)]
     pub issuer: String,
     /// The public client registered for Qrow. Qrow uses no client secret.
+    #[serde(default)]
     pub client_id: String,
     /// Scopes in addition to [`BASE_SCOPES`].
     #[serde(default)]
@@ -995,9 +1035,6 @@ pub struct SignIn {
     /// An optional RFC 8707 resource indicator for the access tokens.
     #[serde(default)]
     pub resource: Option<String>,
-    /// The database hosts that can receive the access tokens.
-    #[serde(default)]
-    pub allowed_hosts: Vec<String>,
     /// The loopback ports of the callback, in the order to try them. An
     /// empty list selects an available port.
     #[serde(default, alias = "callback_port", deserialize_with = "callback_ports")]
@@ -1034,11 +1071,11 @@ impl Default for SignIn {
         Self {
             id: Uuid::new_v4(),
             name: String::new(),
+            provider: SignInProvider::Oidc,
             issuer: String::new(),
             client_id: String::new(),
             scopes: vec![],
             resource: None,
-            allowed_hosts: vec![],
             callback_ports: vec![],
             identity: None,
         }
@@ -1050,18 +1087,11 @@ impl SignIn {
     /// any of these fields makes the stored tokens unusable.
     pub fn token_requirements_eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && self.provider == other.provider
             && self.issuer == other.issuer
             && self.client_id == other.client_id
             && extra_scopes(&self.scopes) == extra_scopes(&other.scopes)
             && self.resource == other.resource
-    }
-
-    /// Return whether `host` can receive the access tokens of this sign-in.
-    pub fn allows_host(&self, host: &str) -> bool {
-        let host = host.trim().trim_end_matches('.');
-        self.allowed_hosts
-            .iter()
-            .any(|allowed| allowed.trim_end_matches('.').eq_ignore_ascii_case(host))
     }
 
     /// The scopes of an authorization request: [`BASE_SCOPES`], then the
@@ -1078,48 +1108,40 @@ impl SignIn {
             self.name.chars().count() <= MAX_SIGN_IN_NAME,
             "Sign-in name must be {MAX_SIGN_IN_NAME} characters or fewer."
         );
-        let issuer = url::Url::parse(&self.issuer)
-            .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
-        anyhow::ensure!(
-            issuer.scheme() == "https"
-                && issuer.host_str().is_some()
-                && issuer.query().is_none()
-                && issuer.fragment().is_none()
-                && issuer.username().is_empty()
-                && issuer.password().is_none(),
-            "Enter the issuer as an HTTPS URL without a query or fragment."
-        );
-        anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
-        anyhow::ensure!(
-            self.client_id.chars().all(|c| (' '..='~').contains(&c)),
-            "The client ID can contain only printable ASCII characters."
-        );
-        for scope in &self.scopes {
+        if self.provider == SignInProvider::Oidc {
+            let issuer = url::Url::parse(&self.issuer)
+                .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
             anyhow::ensure!(
-                !scope.is_empty()
-                    && scope
-                        .chars()
-                        .all(|c| c == '!' || ('#'..='[').contains(&c) || (']'..='~').contains(&c)),
-                "Scope \"{scope}\" contains a character that a scope cannot contain."
+                issuer.scheme() == "https"
+                    && issuer.host_str().is_some()
+                    && issuer.query().is_none()
+                    && issuer.fragment().is_none()
+                    && issuer.username().is_empty()
+                    && issuer.password().is_none(),
+                "Enter the issuer as an HTTPS URL without a query or fragment."
             );
-        }
-        if let Some(resource) = &self.resource {
-            let parsed = url::Url::parse(resource)
-                .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+            anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
             anyhow::ensure!(
-                parsed.fragment().is_none(),
-                "The resource cannot contain a fragment."
+                self.client_id.chars().all(|c| (' '..='~').contains(&c)),
+                "The client ID can contain only printable ASCII characters."
             );
-        }
-        anyhow::ensure!(
-            !self.allowed_hosts.is_empty(),
-            "Enter at least one database host that can receive the tokens."
-        );
-        for host in &self.allowed_hosts {
-            anyhow::ensure!(
-                host.parse::<std::net::IpAddr>().is_ok() || url::Host::parse(host).is_ok(),
-                "\"{host}\" is not a host name or IP address."
-            );
+            for scope in &self.scopes {
+                anyhow::ensure!(
+                    !scope.is_empty()
+                        && scope.chars().all(|c| c == '!'
+                            || ('#'..='[').contains(&c)
+                            || (']'..='~').contains(&c)),
+                    "Scope \"{scope}\" contains a character that a scope cannot contain."
+                );
+            }
+            if let Some(resource) = &self.resource {
+                let parsed = url::Url::parse(resource)
+                    .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+                anyhow::ensure!(
+                    parsed.fragment().is_none(),
+                    "The resource cannot contain a fragment."
+                );
+            }
         }
         anyhow::ensure!(
             self.callback_ports.len() <= MAX_CALLBACK_PORTS,
@@ -1150,7 +1172,7 @@ fn callback_ports<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<V
 }
 
 /// The format version of shared sign-in settings.
-pub const SHARED_SIGN_IN_VERSION: u32 = 1;
+pub const SHARED_SIGN_IN_VERSION: u32 = 2;
 /// The longest text that Qrow reads as shared sign-in settings.
 const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
 
@@ -1161,13 +1183,16 @@ struct SharedSignIn {
     /// Marks the text as sign-in settings and gives the format version.
     qrow_sign_in: u32,
     name: String,
+    #[serde(default, skip_serializing_if = "SignInProvider::is_oidc")]
+    provider: SignInProvider,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     issuer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     client_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     scopes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resource: Option<String>,
-    database_hosts: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     callback_ports: Vec<u16>,
 }
@@ -1176,8 +1201,13 @@ impl SignIn {
     /// The settings of this sign-in as text that another user can paste.
     pub fn to_shared_text(&self) -> String {
         let shared = SharedSignIn {
-            qrow_sign_in: SHARED_SIGN_IN_VERSION,
+            qrow_sign_in: if self.provider == SignInProvider::Oidc {
+                1
+            } else {
+                SHARED_SIGN_IN_VERSION
+            },
             name: self.name.clone(),
+            provider: self.provider,
             issuer: self.issuer.clone(),
             client_id: self.client_id.clone(),
             scopes: extra_scopes(&self.scopes)
@@ -1185,7 +1215,6 @@ impl SignIn {
                 .map(str::to_owned)
                 .collect(),
             resource: self.resource.clone(),
-            database_hosts: self.allowed_hosts.clone(),
             callback_ports: self.callback_ports.clone(),
         };
         serde_json::to_string_pretty(&shared).expect("sign-in settings serialize")
@@ -1212,13 +1241,13 @@ impl SignIn {
             .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
         let sign_in = Self {
             name: shared.name.trim().to_owned(),
+            provider: shared.provider,
             issuer: shared.issuer.trim().to_owned(),
             client_id: shared.client_id.trim().to_owned(),
             scopes: shared.scopes,
             resource: shared
                 .resource
                 .filter(|resource| !resource.trim().is_empty()),
-            allowed_hosts: shared.database_hosts,
             callback_ports: shared.callback_ports,
             ..Self::default()
         };
@@ -1488,6 +1517,26 @@ impl Workspace {
     /// still use one list in storage, but every tab is normalized to an owned
     /// connection and each connection gets an active tab.
     pub fn normalize(&mut self) {
+        // Older Trino profiles referred to a reusable sign-in. The coordinator
+        // now owns authentication directly; legacy records have no credentials.
+        let legacy_external: BTreeSet<_> = self
+            .sign_ins
+            .iter()
+            .filter(|sign_in| sign_in.provider == SignInProvider::TrinoExternal)
+            .map(|sign_in| sign_in.id)
+            .collect();
+        for profile in &mut self.profiles {
+            if profile.database_type == DatabaseType::Trino
+                && profile
+                    .authentication
+                    .sign_in()
+                    .is_some_and(|id| legacy_external.contains(&id))
+            {
+                profile.authentication = Authentication::TrinoExternal;
+            }
+        }
+        self.sign_ins
+            .retain(|sign_in| sign_in.provider != SignInProvider::TrinoExternal);
         let conversations_without_tabs = self.version < 4;
         for profile in &mut self.profiles {
             profile.sanitize();
@@ -2031,19 +2080,14 @@ mod tests {
             issuer: "https://id.example.test/realms/data".into(),
             client_id: "qrow-desktop".into(),
             scopes: vec!["kyuubi".into(), "offline_access".into()],
-            allowed_hosts: vec![
-                "kyuubi.example.test".into(),
-                "10.0.0.1".into(),
-                "::1".into(),
-            ],
             ..SignIn::default()
         }
     }
 
     #[test]
-    fn sign_in_validation_requires_https_a_client_and_hosts() {
+    fn sign_in_validation_requires_https_and_a_client() {
         assert!(sign_in().validate().is_ok());
-        let invalid: [fn(&mut SignIn); 9] = [
+        let invalid: [fn(&mut SignIn); 7] = [
             |s| s.name = " ".into(),
             |s| s.issuer = "http://id.example.test".into(),
             |s| s.issuer = "https://id.example.test/?realm=x".into(),
@@ -2051,14 +2095,38 @@ mod tests {
             |s| s.client_id = "".into(),
             |s| s.scopes = vec!["two words".into()],
             |s| s.resource = Some("relative".into()),
-            |s| s.allowed_hosts = vec![],
-            |s| s.allowed_hosts = vec!["host/path".into()],
         ];
         for change in invalid {
             let mut value = sign_in();
             change(&mut value);
             assert!(value.validate().is_err(), "{value:?}");
         }
+    }
+
+    #[test]
+    fn legacy_oidc_database_hosts_are_ignored_and_removed_from_saved_settings() {
+        let original = sign_in();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json["allowed_hosts"] = serde_json::json!(["legacy.example.test"]);
+        let restored: SignIn = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, original);
+        assert!(
+            serde_json::to_value(&restored)
+                .unwrap()
+                .get("allowed_hosts")
+                .is_none()
+        );
+        let mut shared: serde_json::Value =
+            serde_json::from_str(&original.to_shared_text()).unwrap();
+        shared["database_hosts"] = serde_json::json!(["legacy.example.test"]);
+        let pasted = SignIn::from_shared_text(&shared.to_string()).unwrap();
+        pasted.validate().unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&pasted.to_shared_text())
+                .unwrap()
+                .get("database_hosts")
+                .is_none()
+        );
     }
 
     #[test]
@@ -2078,13 +2146,12 @@ mod tests {
         assert_eq!(
             json,
             serde_json::json!({
-                "qrow_sign_in": SHARED_SIGN_IN_VERSION,
+                "qrow_sign_in": 1,
                 "name": "Company",
                 "issuer": "https://id.example.test/realms/data",
                 "client_id": "qrow-desktop",
                 "scopes": ["kyuubi", "offline_access"],
                 "resource": "https://kyuubi.example.test",
-                "database_hosts": ["kyuubi.example.test", "10.0.0.1", "::1"],
                 "callback_ports": [8765, 8766],
             })
         );
@@ -2093,7 +2160,6 @@ mod tests {
         assert_eq!(pasted.identity, None);
         assert_eq!(pasted.scopes, vec!["kyuubi", "offline_access"]);
         assert_eq!(pasted.resource, value.resource);
-        assert_eq!(pasted.allowed_hosts, value.allowed_hosts);
         assert_eq!(pasted.callback_ports, value.callback_ports);
         // Empty optional settings stay out of the text.
         let json: serde_json::Value = serde_json::from_str(
@@ -2156,7 +2222,7 @@ mod tests {
         json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION);
         json.as_object_mut().unwrap().remove("client_id");
         let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
-        assert!(error.to_string().contains("client_id"), "{error}");
+        assert!(error.to_string().contains("client ID"), "{error}");
         // The settings pass the same checks as Sign-in Settings.
         json["client_id"] = serde_json::json!("qrow-desktop");
         json["issuer"] = serde_json::json!("http://id.example.test");
@@ -2182,19 +2248,14 @@ mod tests {
     }
 
     #[test]
-    fn sign_in_hosts_scopes_and_requirements() {
+    fn sign_in_scopes_and_requirements() {
         let value = sign_in();
-        assert!(value.allows_host("KYUUBI.example.test"));
-        assert!(value.allows_host("kyuubi.example.test."));
-        assert!(!value.allows_host("kyuubi.example.test.evil.test"));
-        assert!(!value.allows_host("other.example.test"));
         assert_eq!(
             value.requested_scopes(),
             vec!["openid", "profile", "email", "kyuubi", "offline_access"]
         );
         let mut renamed = value.clone();
         renamed.name = "Renamed".into();
-        renamed.allowed_hosts.push("another.example.test".into());
         assert!(value.token_requirements_eq(&renamed));
         // The base scopes are always requested, so naming them changes
         // nothing.
@@ -2851,5 +2912,125 @@ mod database_type_tests {
             DatabaseType::Kyuubi.quote_identifier("odd`name"),
             "`odd``name`"
         );
+    }
+}
+
+#[cfg(test)]
+mod trino_tests {
+    use super::*;
+    #[test]
+    fn profiles_round_trip_and_schema_changes_replace_the_session() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Trino,
+            host: "localhost".into(),
+            username: "qrow".into(),
+            database: "tpch".into(),
+            trino_schema: "tiny".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Profile>(&serde_json::to_string(&profile).unwrap()).unwrap(),
+            profile
+        );
+        let old = profile.clone();
+        profile.trino_schema = "sf1".into();
+        assert!(!profile.connection_identity_eq(&old));
+        profile.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(profile.validate().is_err());
+        profile.tls = true;
+        profile.validate().unwrap();
+        assert_eq!(
+            DatabaseType::Trino.quote_identifier("odd\"name"),
+            "\"odd\"\"name\""
+        );
+        assert_eq!(DatabaseType::Trino.default_port(), 8080);
+    }
+}
+
+#[cfg(test)]
+mod external_auth_tests {
+    use super::*;
+    #[test]
+    fn legacy_trino_references_migrate_without_changing_oidc_or_connection_identity() {
+        let external = SignIn {
+            name: "Legacy Trino".into(),
+            provider: SignInProvider::TrinoExternal,
+            ..SignIn::default()
+        };
+        let oidc = SignIn {
+            name: "OIDC".into(),
+            ..SignIn::default()
+        };
+        let legacy_auth = serde_json::json!({"method": "trino_external", "sign_in": external.id});
+        let authentication: Authentication = serde_json::from_value(legacy_auth).unwrap();
+        assert_eq!(authentication, Authentication::TrinoExternal);
+        let external_profile = Profile {
+            database_type: DatabaseType::Trino,
+            host: "trino.example".into(),
+            username: "alice".into(),
+            tls: true,
+            authentication,
+            ..Profile::default()
+        };
+        let oidc_profile = Profile {
+            database_type: DatabaseType::Trino,
+            authentication: Authentication::Oidc { sign_in: oidc.id },
+            ..Profile::default()
+        };
+        let mut workspace = Workspace {
+            profiles: vec![external_profile.clone(), oidc_profile.clone()],
+            sign_ins: vec![external, oidc.clone()],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        assert_eq!(workspace.profiles, vec![external_profile, oidc_profile]);
+        assert_eq!(workspace.sign_ins, vec![oidc]);
+        let serialized = serde_json::to_value(workspace.profiles[0].authentication).unwrap();
+        assert_eq!(serialized, serde_json::json!({"method":"trino_external"}));
+        assert!(workspace.profiles[0].authentication.sign_in().is_none());
+    }
+    #[test]
+    fn legacy_oidc_and_external_sign_ins_round_trip_without_client_settings() {
+        let old = SignIn {
+            name: "OIDC".into(),
+            issuer: "https://id.example".into(),
+            client_id: "desktop".into(),
+            ..SignIn::default()
+        };
+        let mut value = serde_json::to_value(&old).unwrap();
+        value.as_object_mut().unwrap().remove("provider");
+        let restored: SignIn = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.provider, SignInProvider::Oidc);
+        restored.validate().unwrap();
+        let external = SignIn {
+            name: "Trino".into(),
+            provider: SignInProvider::TrinoExternal,
+            ..SignIn::default()
+        };
+        external.validate().unwrap();
+        let shared = external.to_shared_text();
+        assert!(!shared.contains("client_id") && !shared.contains("issuer"));
+        let restored = SignIn::from_shared_text(&shared).unwrap();
+        assert_eq!(restored.provider, SignInProvider::TrinoExternal);
+        let profile = Profile {
+            name: "Trino".into(),
+            host: "trino.example".into(),
+            username: "alice".into(),
+            database_type: DatabaseType::Trino,
+            tls: true,
+            authentication: Authentication::TrinoExternal,
+            ..Profile::default()
+        };
+        profile.validate().unwrap();
+        let restored: Profile =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(restored.authentication, profile.authentication);
+        let unsupported = Profile {
+            database_type: DatabaseType::Kyuubi,
+            ..profile
+        };
+        assert!(unsupported.validate().is_err());
     }
 }

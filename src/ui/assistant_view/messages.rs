@@ -304,7 +304,13 @@ impl Qrow {
                         profile.name.clone()
                     },
                     connector: profile.database_type.connector_name(),
-                    initial_database: profile.database.clone(),
+                    initial_database: if profile.database_type == crate::model::DatabaseType::Trino
+                        && !profile.trino_schema.is_empty()
+                    {
+                        format!("{}.{}", profile.database, profile.trino_schema)
+                    } else {
+                        profile.database.clone()
+                    },
                     state,
                 }
             })
@@ -392,6 +398,8 @@ impl Qrow {
                 &tab.input.read(cx).value(),
                 if profile.database_type == crate::model::DatabaseType::Postgres {
                     "public"
+                } else if profile.database_type == crate::model::DatabaseType::Trino {
+                    &profile.trino_schema
                 } else {
                     &profile.database
                 },
@@ -414,6 +422,8 @@ impl Qrow {
                 &tab.input.read(cx).value(),
                 if profile.database_type == crate::model::DatabaseType::Postgres {
                     "public"
+                } else if profile.database_type == crate::model::DatabaseType::Trino {
+                    &profile.trino_schema
                 } else {
                     &profile.database
                 },

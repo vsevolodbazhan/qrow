@@ -20,6 +20,13 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
+    app.wait_for(cx, "connection-new-sign-in");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::label(window, format!("sign-in-choice-{id}")).as_deref(),
+            Some(format!("{name}, OIDC").as_str())
+        );
+    });
     app.settle(cx);
     app.update(cx, |window, cx| window.input(name, cx));
     app.settle(cx);
@@ -40,6 +47,53 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
     app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved sign-in", Duration::from_secs(20), |_, _| {
         app.saved().profiles[0].authentication == Authentication::Oidc { sign_in: id }
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn editing_an_oidc_connection_host_immediately_uses_the_saved_authorization(
+    cx: &mut TestAppContext,
+) {
+    let fixture = FixtureProvider::get();
+    let sign_in = fixture.sign_in("Company");
+    let mut profile = Kyuubi::get().profile("Analytics");
+    profile.port = fixture.tls_port;
+    profile.tls = true;
+    profile.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let connection = profile.id;
+    let mut tab = SavedTab::new(1, Some(connection));
+    tab.sql = "SELECT current_user() AS value".into();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            sign_ins: vec![sign_in],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            fixture.trust.clone(),
+            Some(Arc::new(fixture.browser("alice", &[]))),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "qrow");
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Edit");
+    app.fill(cx, "connection-host", "localhost");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    // Do not switch tabs: the save itself must authorize the new endpoint.
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "qrow");
+    app.wait_until(cx, "the saved host", Duration::from_secs(20), |_, _| {
+        app.saved().profiles[0].host == "localhost"
     });
 }
 
@@ -82,14 +136,15 @@ fn switching_from_a_copy_uses_the_selected_sign_in_and_releases_old_sessions(
         SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
     );
     app.click(cx, "show-sign-ins");
-    app.click(cx, format!("sign-in-{}-sign-in", main.id));
+    app.context_menu(cx, format!("sign-in-{}", main.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     app.wait_until(
         cx,
         "the main account",
         Duration::from_secs(20),
         |window, _| {
-            crate::support::label(window, format!("sign-in-{}-account", main.id)).as_deref()
-                == Some("alice@qrow.test")
+            crate::support::label(window, format!("sign-in-{}", main.id))
+                .is_some_and(|label| label.ends_with("alice@qrow.test"))
         },
     );
     use_main.store(false, Ordering::SeqCst);
@@ -236,9 +291,12 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     app.click(cx, "show-sign-ins");
     app.click(cx, format!("sign-in-{}", sign_in.id));
     app.wait_for(cx, "sign-in-account-sign-out");
+    app.click(cx, "sign-in-name");
+    app.click(cx, "sign-in-account");
     app.update(cx, |window, _| {
-        let status = window.find("sign-in-account-status");
-        assert_eq!(status.label(), Some("Signed in as alice@qrow.test."));
+        let status = window.find("sign-in-account");
+        assert_eq!(status.value(), Some("alice@qrow.test"));
+        assert_ne!(status.focused(), Some(true));
         let status = status.bounds();
         let sign_out = window.find("sign-in-account-sign-out").bounds();
         assert!(status.right() < sign_out.left());
@@ -265,10 +323,28 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
         "the signed-out account",
         std::time::Duration::from_secs(20),
         |window, _| {
-            crate::support::label(window, "sign-in-account-status").as_deref()
-                == Some("Not signed in.")
+            crate::support::value(window, "sign-in-account").as_deref() == Some("Not signed in")
         },
     );
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        assert!(window.find("sign-in-account-sign-in").visible());
+    });
+    app.click(cx, "cancel-sign-in-editor");
+    app.wait_gone(cx, "sign-in-name");
+    app.update(cx, |window, _| {
+        let indicator = window.find(format!("sign-in-status-{}", sign_in.id));
+        assert_eq!(indicator.role(), Some(gpui_kit::Role::Status));
+        assert!(
+            window
+                .find(format!("sign-in-{}", sign_in.id))
+                .bounds()
+                .contains(&indicator.bounds().center())
+        );
+    });
+    app.click(cx, format!("sign-in-status-{}", sign_in.id));
+    app.wait_for(cx, "sign-in-account-sign-in");
     app.click(cx, "cancel-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
@@ -298,7 +374,15 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     let kyuubi = Kyuubi::get();
     let fixture = FixtureProvider::get();
     // A colleague copied this sign-in and sent it in a chat message.
-    let shared = fixture.sign_in("Team").to_shared_text();
+    let occupied_callback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let available_callback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let ports = [
+        occupied_callback.local_addr().unwrap().port(),
+        available_callback.local_addr().unwrap().port(),
+    ];
+    let mut shared_sign_in = fixture.sign_in("Team");
+    shared_sign_in.callback_ports = ports.to_vec();
+    let shared = shared_sign_in.to_shared_text();
     let (mut workspace, credentials) =
         kyuubi.workspace("SELECT current_user() AS account", "not-used");
     let connection = workspace.profiles[0].id;
@@ -316,6 +400,12 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     app.click(cx, "show-sign-ins");
     app.click(cx, "paste-sign-in");
     app.wait_for(cx, "sign-in-pasted-note");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "sign-in-callback-ports").as_deref(),
+            Some(format!("{}, {}", ports[0], ports[1]).as_str())
+        );
+    });
     app.click(cx, "save-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.wait_until(cx, "the pasted sign-in", Duration::from_secs(20), |_, _| {
@@ -334,7 +424,7 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
         window.input(&port, cx);
     });
     app.click(cx, "connection-tls");
-    app.select(cx, "connection-authentication", "Sign-in (OpenID Connect)");
+    app.select(cx, "connection-authentication", "Sign-in");
     app.wait_for(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
     app.settle(cx);
@@ -367,6 +457,8 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
         },
     );
 
+    // The first callback port stays occupied, so sign-in uses the second.
+    drop(available_callback);
     // Run opens the browser sign-in first, then runs the query.
     app.click(cx, "run");
     app.wait_status(cx, "Complete");

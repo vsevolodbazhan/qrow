@@ -238,6 +238,7 @@ impl Qrow {
     fn query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let active = tab.saved.profile;
+        let authenticating = active.is_some_and(|id| self.external_authentication_pending(id));
         h_flex()
             .id("query-toolbar")
             .test_support()
@@ -246,7 +247,7 @@ impl Qrow {
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(!tab.busy, |el| {
+            .when(!tab.busy && !authenticating, |el| {
                 el.child(
                     Button::new("run")
                         .primary()
@@ -267,7 +268,7 @@ impl Qrow {
                         ),
                 )
             })
-            .when(tab.busy, |el| {
+            .when(tab.busy || authenticating, |el| {
                 el.child(
                     Button::new("cancel")
                         .small()
@@ -288,6 +289,18 @@ impl Qrow {
                     .disabled(!tab.can_disconnect())
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
+            .when(authenticating, |el| {
+                el.child(
+                    div()
+                        .id("connection-authentication-progress")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label("Waiting for Trino authentication")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Waiting for Trino authentication…"),
+                )
+            })
             .child(div().flex_1())
     }
 
