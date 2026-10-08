@@ -84,6 +84,8 @@ actions!(
         SubmitRename,
         CopyCatalogName,
         InsertCatalogName,
+        MoveConnectionUp,
+        MoveConnectionDown,
         Quit
     ]
 );
@@ -139,6 +141,8 @@ pub fn init(cx: &mut App) {
             InsertCatalogName,
             Some(gpui_kit::base::tree_key_context()),
         ),
+        KeyBinding::new("alt-up", MoveConnectionUp, Some("Connections > Tree")),
+        KeyBinding::new("alt-down", MoveConnectionDown, Some("Connections > Tree")),
     ]);
     set_menus(cx, false);
 }
@@ -2362,6 +2366,17 @@ impl Qrow {
                 .any(|tab| tab.saved.profile == Some(id) && tab.can_disconnect());
         let disconnect =
             cx.listener(move |this, _: &ClickEvent, _, cx| this.disconnect_profile(id, cx));
+        let ix = self
+            .profiles
+            .iter()
+            .position(|profile| profile.id == id)
+            .unwrap();
+        let first = ix == 0;
+        let last = ix + 1 == self.profiles.len();
+        let move_up =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, false, cx));
+        let move_down =
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.move_connection(id, true, cx));
         let has_dbt = profile.dbt.is_some();
         let dbt_parsing = self.dbt_parsing(id);
         let edited = profile.clone();
@@ -2415,6 +2430,16 @@ impl Qrow {
                     .item(PopupMenuItem::new("Edit").on_click(edit).disabled(busy))
                     .item(PopupMenuItem::new("Duplicate").on_click(duplicate))
                     .item(PopupMenuItem::new("Show activity").on_click(show_activity))
+                    .item(
+                        PopupMenuItem::new("Move up")
+                            .on_click(move_up)
+                            .disabled(first),
+                    )
+                    .item(
+                        PopupMenuItem::new("Move down")
+                            .on_click(move_down)
+                            .disabled(last),
+                    )
                     .item(
                         PopupMenuItem::new("Delete")
                             .on_click(delete)

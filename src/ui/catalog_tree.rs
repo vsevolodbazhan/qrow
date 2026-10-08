@@ -49,6 +49,63 @@ const CURRENT_CONNECTION_FILL: f32 = 0.18;
 /// The most label widths that the tree keeps between frames.
 const MAX_LABEL_WIDTHS: usize = 4096;
 
+#[derive(Clone)]
+struct DragConnection {
+    id: Uuid,
+    name: String,
+    database_type: crate::model::DatabaseType,
+}
+
+impl Render for DragConnection {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .bg(cx.theme().popover)
+            .text_color(cx.theme().popover_foreground)
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
+            .child(
+                Icon::default()
+                    .path(crate::assets::connection_icon(self.database_type))
+                    .size_4(),
+            )
+            .child(self.name.clone())
+    }
+}
+
+fn connection_drop_target(id: Uuid, after: bool, weak: WeakEntity<Qrow>) -> impl IntoElement {
+    div()
+        .id(SharedString::from(format!(
+            "connection-drop-{}-{id}",
+            if after { "after" } else { "before" }
+        )))
+        .test_support()
+        .absolute()
+        .left_0()
+        .w_full()
+        .h(relative(0.5))
+        .map(|el| if after { el.bottom_0() } else { el.top_0() })
+        .drag_over::<DragConnection>(move |style, drag, _, cx| {
+            if drag.id == id {
+                return style;
+            }
+            let style = style.border_color(cx.theme().primary);
+            if after {
+                style.border_b_2()
+            } else {
+                style.border_t_2()
+            }
+        })
+        .on_drop(move |drag: &DragConnection, _, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.reorder_connection(drag.id, id, after, cx)
+            });
+        })
+}
+
 /// What a tree row shows. The tree item ID is the key of its node.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Node {
@@ -642,6 +699,66 @@ struct ConnectionRow {
 }
 
 impl Qrow {
+    fn reorder_connection(&mut self, id: Uuid, target: Uuid, after: bool, cx: &mut Context<Self>) {
+        if id == target {
+            return;
+        }
+        let Some(source_ix) = self.profiles.iter().position(|profile| profile.id == id) else {
+            return;
+        };
+        let Some(target_ix) = self
+            .profiles
+            .iter()
+            .position(|profile| profile.id == target)
+        else {
+            return;
+        };
+        let destination_ix = target_ix + usize::from(after) - usize::from(source_ix < target_ix);
+        if source_ix == destination_ix {
+            return;
+        }
+        let profile = self.profiles.remove(source_ix);
+        self.profiles.insert(destination_ix, profile);
+        self.rebuild_catalog_tree(cx);
+        self.changed(cx);
+    }
+
+    pub(super) fn move_connection(&mut self, id: Uuid, down: bool, cx: &mut Context<Self>) {
+        let Some(ix) = self.profiles.iter().position(|profile| profile.id == id) else {
+            return;
+        };
+        let target_ix = if down {
+            ix.checked_add(1)
+        } else {
+            ix.checked_sub(1)
+        };
+        if let Some(target) = target_ix
+            .and_then(|ix| self.profiles.get(ix))
+            .map(|profile| profile.id)
+        {
+            self.reorder_connection(id, target, down, cx);
+            if let Some(ix) = self.catalog.state.read(cx).index_of(&connection_id(id)) {
+                self.catalog
+                    .state
+                    .read(cx)
+                    .scroll_handle()
+                    .scroll_to_item(ix, ScrollStrategy::Nearest);
+            }
+        }
+    }
+
+    fn move_selected_connection(&mut self, down: bool, cx: &mut Context<Self>) {
+        let selected = self
+            .catalog
+            .state
+            .read(cx)
+            .selected_item()
+            .map(|item| item.id.clone());
+        if let Some(Node::Connection(id)) = selected.as_ref().and_then(|id| self.catalog.node(id)) {
+            self.move_connection(*id, down, cx);
+        }
+    }
+
     /// Rebuild the tree items. Keeps the selected row when it still exists.
     pub(super) fn rebuild_catalog_tree(&mut self, cx: &mut Context<Self>) {
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
@@ -1451,6 +1568,13 @@ impl Qrow {
                     .id("connections-list")
                     .test_support()
                     .track_focus(&self.catalog.focus)
+                    .key_context("Connections")
+                    .on_action(cx.listener(|this, _: &MoveConnectionUp, _, cx| {
+                        this.move_selected_connection(false, cx)
+                    }))
+                    .on_action(cx.listener(|this, _: &MoveConnectionDown, _, cx| {
+                        this.move_selected_connection(true, cx)
+                    }))
                     .on_action(
                         cx.listener(|this, _: &CopyCatalogName, _, cx| this.copy_catalog_name(cx)),
                     )
@@ -2235,6 +2359,16 @@ fn connection_row(
         .accessibility_label(accessibility_label.clone())
         .child(
             h_flex()
+                .id(SharedString::from(format!("connection-drag-{id}")))
+                .cursor(CursorStyle::OpenHand)
+                .on_drag(
+                    DragConnection {
+                        id,
+                        name: row.name.clone(),
+                        database_type: row.database_type,
+                    },
+                    |drag, _, _, cx| cx.new(|_| drag.clone()),
+                )
                 .h_full()
                 .w_full()
                 .min_w_0()
@@ -2335,6 +2469,8 @@ fn connection_row(
         // The outline paints after the status slot, so the hover fill of the
         // slot does not cover it.
         .when(keyboard_position, |el| el.child(focus_outline(cx)))
+        .child(connection_drop_target(id, false, weak.clone()))
+        .child(connection_drop_target(id, true, weak.clone()))
         .on_mouse_down(MouseButton::Right, {
             let weak = weak.clone();
             move |event, window, cx| {
