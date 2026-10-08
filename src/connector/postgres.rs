@@ -642,9 +642,10 @@ mod tests {
         let handle = session.execute("SELECT pg_sleep(30)").unwrap();
         handle.cancel().unwrap();
         assert!(!session.cancel.closed.load(Ordering::SeqCst));
-        session.runtime.block_on(async {
-            tokio::task::yield_now().await;
-        });
+        session
+            .runtime
+            .block_on(&mut session.operation.as_mut().unwrap().task)
+            .unwrap();
         assert_eq!(session.poll().unwrap(), QueryState::Cancelled);
         assert_eq!(session.poll().unwrap(), QueryState::Cancelled);
         assert!(!session.cancel.closed.load(Ordering::SeqCst));
