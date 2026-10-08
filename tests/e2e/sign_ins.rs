@@ -323,10 +323,14 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
         "the signed-out account",
         std::time::Duration::from_secs(20),
         |window, _| {
-            crate::support::label(window, "sign-in-account-status").as_deref()
-                == Some("Not signed in.")
+            crate::support::value(window, "sign-in-account").as_deref() == Some("Not signed in")
         },
     );
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        assert!(window.find("sign-in-account-sign-in").visible());
+    });
     app.click(cx, "cancel-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));

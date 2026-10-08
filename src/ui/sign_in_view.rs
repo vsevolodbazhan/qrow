@@ -719,20 +719,33 @@ impl Qrow {
             self.sign_in_ui.statuses = statuses;
             changed = true;
         }
+        changed |= self.sync_account_field(window, cx);
+        changed
+    }
+
+    fn sync_account_field(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if let Some(editor) = &self.sign_in_ui.editor {
             let value = editor
                 .id
-                .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
-                .and_then(|sign_in| sign_in.identity.as_ref())
-                .map(|identity| identity.display())
+                .map(|id| self.account_value(id))
                 .unwrap_or_default();
             if editor.account.read(cx).value().as_ref() != value {
                 editor
                     .account
                     .update(cx, |field, cx| field.set_value(value, window, cx));
+                return true;
             }
         }
-        changed
+        false
+    }
+
+    fn account_value(&self, id: Uuid) -> String {
+        self.sign_ins
+            .iter()
+            .find(|sign_in| sign_in.id == id)
+            .and_then(|sign_in| sign_in.identity.as_ref())
+            .map(|identity| identity.display().to_owned())
+            .unwrap_or_else(|| self.account(id).summary)
     }
 
     /// The account of a sign-in, with the actions that apply to it.
@@ -1501,14 +1514,8 @@ impl Qrow {
             })
             .collect();
         let first = fields[0].clone();
-        let account = cx.new(|cx| {
-            InputState::new(window, cx).default_value(
-                base.identity
-                    .as_ref()
-                    .map(|identity| identity.display())
-                    .unwrap_or_default(),
-            )
-        });
+        let account =
+            cx.new(|cx| InputState::new(window, cx).default_value(self.account_value(base.id)));
         // The New Sign-in… button is in the open Sign-in list. A new list is
         // closed, so it does not take the keys of the dialog.
         if let Some(form) = self.form.as_ref().filter(|_| for_connection) {
@@ -1680,7 +1687,10 @@ impl Qrow {
                 blocked && matches!(action, SignInAction::SignIn | SignInAction::SignOut),
                 |button| button.tooltip("Wait for queries that use this sign-in to finish."),
             )
-            .on_click(cx.listener(move |this, _, _, cx| this.run_sign_in_action(id, action, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.run_sign_in_action(id, action, cx);
+                this.sync_account_field(window, cx);
+            }))
         });
         let field = Field::new().label("Account").child(
             v_flex()
@@ -1690,7 +1700,7 @@ impl Qrow {
                     h_flex()
                         .w_full()
                         .gap_2()
-                        .child(if signed_in {
+                        .child(
                             Input::new(input)
                                 .id("sign-in-account")
                                 .aria_label("Account")
@@ -1698,27 +1708,16 @@ impl Qrow {
                                 .readonly(true)
                                 .disabled(true)
                                 .flex_1()
-                                .min_w_0()
-                                .into_any_element()
-                        } else {
-                            div()
-                                .id("sign-in-account-status")
-                                .test_support()
-                                .flex_1()
-                                .min_w_0()
-                                .role(Role::Status)
-                                .aria_label(account.detail.clone())
-                                .child(account.detail.clone())
-                                .into_any_element()
-                        })
+                                .min_w_0(),
+                        )
                         .when(!account.actions.is_empty(), |el| {
                             el.child(h_flex().gap_2().flex_shrink_0().children(buttons))
                         }),
                 )
                 .when(
-                    signed_in
-                        && (account.working
-                            || matches!(
+                    account.working
+                        || (signed_in
+                            && matches!(
                                 self.oidc.status(id),
                                 Status::SignInRequired(..) | Status::NetworkFailure(..)
                             )),

@@ -244,8 +244,24 @@ fn the_sign_ins_button_counts_the_sign_ins_that_need_attention(cx: &mut TestAppC
     });
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Not signed in");
-    app.context_menu(cx, format!("sign-in-{}", sign_in.id));
-    app.choose(cx, "popup-menu", "Sign in…");
+    open_settings(&app, cx, &sign_in);
+    app.wait_until(cx, "the signed-out account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
+    });
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, cx| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        window.input("another-account", cx);
+        assert_eq!(
+            value(window, "sign-in-account").as_deref(),
+            Some("Not signed in")
+        );
+        let field = window.find("sign-in-account").bounds();
+        let action = window.find("sign-in-account-sign-in").bounds();
+        assert!(field.right() < action.left());
+        assert!(f32::from(field.center().y - action.center().y).abs() < 1.);
+    });
+    app.click(cx, "sign-in-account-sign-in");
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     app.wait_until(cx, "no attention count", WAIT, |window, _| {
         label(window, "show-sign-ins").as_deref() == Some("Sign-Ins")
@@ -357,9 +373,12 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.scroll_to(cx, "sign-in-account-sign-out");
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(cx, "the signed-out account", WAIT, |window, _| {
-        label(window, "sign-in-account-status").as_deref() == Some("Not signed in.")
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
     });
-    app.wait_gone(cx, "sign-in-account");
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+    });
     app.fill_labelled(cx, "Issuer", &format!("{}/new-realm", provider.issuer));
     app.update(cx, |window, _| {
         assert!(
@@ -899,6 +918,36 @@ fn cancel_ends_a_query_that_waits_for_the_browser(cx: &mut TestAppContext) {
     // The browser sign-in continues, and the sidebar can cancel it.
     open_sign_ins(&app, cx);
     wait_row(&app, cx, &sign_in, "Waiting for the browser…");
+}
+
+#[gpui_kit::test]
+fn the_account_field_remains_locked_while_waiting_for_the_browser(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (workspace, sign_in) = workspace(&provider, false);
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        workspace,
+        MemoryCredentials::default(),
+        SignIns::new(trust(), Some(Arc::new(|_: &str| Ok(())))),
+    );
+    open_sign_ins(&app, cx);
+    open_settings(&app, cx, &sign_in);
+    app.click(cx, "sign-in-account-sign-in");
+    app.wait_until(cx, "the waiting account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Waiting for the browser…")
+    });
+    app.click(cx, "sign-in-account");
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+        assert_eq!(
+            label(window, "sign-in-account-status").as_deref(),
+            Some("Waiting for the browser. Finish the sign-in there.")
+        );
+    });
+    app.click(cx, "sign-in-account-cancel");
+    app.wait_until(cx, "the cancelled account field", WAIT, |window, _| {
+        value(window, "sign-in-account").as_deref() == Some("Not signed in")
+    });
 }
 
 #[gpui_kit::test]
