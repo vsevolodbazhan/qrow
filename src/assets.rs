@@ -145,30 +145,6 @@ mod tests {
     }
 
     #[test]
-    fn connection_icons_use_the_rounded_lucide_stroke() {
-        use crate::model::DatabaseType;
-
-        for database_type in [
-            DatabaseType::Kyuubi,
-            DatabaseType::Postgres,
-            DatabaseType::Trino,
-        ] {
-            let path = connection_icon(database_type);
-            let icon = Assets.load(path).unwrap().unwrap();
-            let icon = std::str::from_utf8(&icon).unwrap();
-            for attribute in [
-                r#"viewBox="0 0 24 24""#,
-                r#"fill="none""#,
-                r#"stroke-width="2""#,
-                r#"stroke-linecap="round""#,
-                r#"stroke-linejoin="round""#,
-            ] {
-                assert!(icon.contains(attribute), "{path} lacks {attribute}");
-            }
-        }
-    }
-
-    #[test]
     fn the_paste_sign_in_icon_is_available() {
         assert!(Assets.load(CLIPBOARD_PASTE_ICON).unwrap().is_some());
     }

@@ -22,6 +22,36 @@ Rust dependencies retain their respective open-source licenses. See Cargo.lock
 for the resolved dependency list and each package's license metadata. This build
 is a personal prototype, not a prepared public distribution.
 
-The connection type icons in assets/connection-type-icons/ are simplified line
-drawings of the Apache Spark, PostgreSQL, and Trino logos in the Lucide style of
-the other interface icons. The names and logos are trademarks of their owners.
+The Postgres icon in assets/connection-type-icons/postgres.svg is from Devicon:
+https://github.com/devicons/devicon/blob/d98a72cb9a6d8e543ddbddc32bac231572349e96/icons/postgresql/postgresql-plain.svg
+Its fill color is changed to black. The interface applies the theme icon color.
+For the 16 px icon size, the thin outer outline is removed and the gaps between
+the ears and the head are wider.
+
+The MIT License (MIT)
+
+Copyright (c) 2015 konpa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The Trino icon in assets/connection-type-icons/trino.svg is from Simple Icons:
+https://github.com/simple-icons/simple-icons/blob/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/trino.svg
+Simple Icons distributes the icon under CC0 1.0 Universal.
+https://creativecommons.org/publicdomain/zero/1.0/
+For the 16 px icon size, only the outline, eyes, nose, and mouth of the bunny
+are kept.
