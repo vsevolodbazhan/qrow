@@ -9,6 +9,15 @@ bar, press **⌘B**, or select **View → Connections**.
 The connection icon identifies the connection type. Kyuubi connections use the
 Spark icon. Postgres connections use the elephant icon.
 
+Drag a connection name to change the order of the connections. Drop above or
+below the center of another connection row. A line shows the new position.
+Qrow saves the order and restores it at the next start. Reordering keeps the
+current connection, query tabs, sessions, and expanded schemas.
+
+You can also select **Move up** or **Move down** in the connection context
+menu. With a connection row selected in the tree, press **⌥↑** or **⌥↓**.
+Schema, table, and column rows cannot be reordered.
+
 Each tab has its own session. Switching connections keeps sessions, SQL, results,
 and Logs history in hidden tabs. A hidden tab can continue to run a query.
 

@@ -136,6 +136,56 @@ fn expand_connection(app: &TestApp, cx: &mut TestAppContext, profile: &Profile) 
     app.toggle_connection(cx, profile.id);
 }
 
+#[gpui_kit::test]
+fn reordering_connections_keeps_expanded_schemas_and_the_selected_column(cx: &mut TestAppContext) {
+    let current = offline_profile("Current");
+    let other = offline_profile("Other");
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &current);
+    let app = TestApp::launch_in(
+        cx,
+        directory,
+        workspace(vec![current.clone(), other.clone()]),
+        MemoryCredentials::default(),
+    );
+    expand_connection(&app, cx, &current);
+    app.click_labelled(cx, "avia");
+    app.click_labelled(cx, "bookings");
+    wait_shows(&app, cx, "gate string");
+    app.click_labelled(cx, "gate string");
+    // Reordering applies only to connection roots.
+    app.press(cx, "alt-down");
+    assert_eq!(app.saved().profiles[0].id, current.id);
+    app.update(cx, |window, cx| {
+        window.drag_to(
+            format!("profile-{}", other.id),
+            format!("connection-drop-before-{}", current.id),
+            cx,
+        );
+        assert_eq!(selected_tree_rows(window), ["gate string"]);
+        assert!(
+            window.find(connection_row(other.id)).bounds().top()
+                < window.find(connection_row(current.id)).bounds().top()
+        );
+        assert!(shows(window, "gate string"));
+        assert_connection_highlight(window, cx, current.id, true);
+    });
+    app.wait_until(
+        cx,
+        "the reordered connections",
+        Duration::from_secs(10),
+        |_, _| app.saved().profiles[0].id == other.id,
+    );
+    // Search rebuilds the tree in the same saved order.
+    app.fill_labelled(cx, "Search tables", "bookings");
+    app.update(cx, |window, _| {
+        assert!(
+            window.find(connection_row(other.id)).bounds().top()
+                < window.find(connection_row(current.id)).bounds().top()
+        );
+    });
+}
+
 fn wait_shows(app: &TestApp, cx: &mut TestAppContext, text: &str) {
     app.wait_until(cx, text, Duration::from_secs(10), |window, _| {
         labelled(window, text).is_some()

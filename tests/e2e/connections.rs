@@ -9,6 +9,48 @@ use std::time::Duration;
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn reordering_connections_preserves_a_live_session_and_its_results(cx: &mut TestAppContext) {
+    let (workspace, credentials) =
+        Kyuubi::get().connections(&["Alpha", "Beta", "Gamma"], "SELECT 42 AS value");
+    let alpha = workspace.profiles[0].id;
+    let gamma = workspace.profiles[2].id;
+    let query = workspace.tabs[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, "SELECT 42 AS value");
+    let reads = app.credentials.reads();
+    app.update(cx, |window, cx| {
+        window.drag_to(
+            format!("profile-{gamma}"),
+            format!("connection-drop-before-{alpha}"),
+            cx,
+        );
+    });
+    app.wait_until(cx, "the saved connection order", QUERY_TIMEOUT, |_, _| {
+        app.saved()
+            .profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+            .eq(["Gamma", "Alpha", "Beta"])
+    });
+    app.update(cx, |window, cx| {
+        assert_eq!(cell(window, 0, 1).as_deref(), Some("42"));
+        assert!(
+            window.find(connection_row(gamma)).bounds().top()
+                < window.find(connection_row(alpha)).bounds().top()
+        );
+        assert_tab_dot(window, query, Some(cx.theme().info.opacity(0.4)));
+    });
+    app.run_complete(cx, "SELECT 43 AS value");
+    app.wait_cell(cx, 0, 1, "43");
+    assert_eq!(
+        app.credentials.reads(),
+        reads,
+        "Reordering must keep the live session"
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn assistant_notes_save_in_connection_settings_without_interrupting_queries(
     cx: &mut TestAppContext,
 ) {

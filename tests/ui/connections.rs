@@ -65,6 +65,117 @@ fn connections(names: &[&str]) -> (Workspace, MemoryCredentials) {
     )
 }
 
+fn assert_order(app: &TestApp, cx: &mut TestAppContext, expected: &[&str]) {
+    app.wait_until(
+        cx,
+        "the saved connection order",
+        Duration::from_secs(10),
+        |_, _| {
+            app.saved()
+                .profiles
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .eq(expected.iter().copied())
+        },
+    );
+    let saved = app.saved();
+    app.update(cx, |window, _| {
+        let positions: Vec<_> = saved
+            .profiles
+            .iter()
+            .map(|profile| window.find(connection_row(profile.id)).bounds().top())
+            .collect();
+        assert!(positions.is_sorted_by(|a, b| a < b), "{positions:?}");
+    });
+}
+
+#[gpui_kit::test]
+fn dragging_connections_saves_order_and_keeps_the_active_tab(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Alpha", "Beta", "Gamma"]);
+    let ids: Vec<_> = workspace
+        .profiles
+        .iter()
+        .map(|profile| profile.id)
+        .collect();
+    let tabs = workspace.tabs.clone();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    for (source, target, after, expected) in [
+        (ids[2], ids[0], false, ["Gamma", "Alpha", "Beta"]),
+        (ids[2], ids[1], true, ["Alpha", "Beta", "Gamma"]),
+        (ids[0], ids[1], true, ["Beta", "Alpha", "Gamma"]),
+        (ids[2], ids[0], false, ["Beta", "Gamma", "Alpha"]),
+    ] {
+        app.update(cx, |window, cx| {
+            window.drag_to(
+                format!("profile-{source}"),
+                format!(
+                    "connection-drop-{}-{target}",
+                    if after { "after" } else { "before" }
+                ),
+                cx,
+            );
+        });
+        assert_order(&app, cx, &expected);
+        assert_eq!(app.saved().tabs, tabs);
+        assert_eq!(app.saved().active_tab, 0);
+    }
+    let restored = TestApp::launch(cx, app.saved());
+    assert_order(&restored, cx, &["Beta", "Gamma", "Alpha"]);
+    assert_eq!(restored.saved().tabs, tabs);
+}
+
+#[gpui_kit::test]
+fn connection_drops_on_self_or_outside_the_list_keep_order(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Alpha", "Beta"]);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.update(cx, |window, cx| {
+        window.drag_to(
+            format!("profile-{id}"),
+            format!("connection-drop-after-{id}"),
+            cx,
+        )
+    });
+    assert_order(&app, cx, &["Alpha", "Beta"]);
+    app.update(cx, |window, cx| {
+        window.drag_to(format!("profile-{id}"), "run", cx)
+    });
+    assert_order(&app, cx, &["Alpha", "Beta"]);
+    app.select_connection(cx, &app.saved().profiles[1]);
+    assert_eq!(app.saved().profiles.len(), 2);
+}
+
+#[gpui_kit::test]
+fn connections_move_by_menu_and_keyboard_with_boundary_guards(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Alpha", "Beta", "Gamma"]);
+    let beta = workspace.profiles[1].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(beta));
+    app.choose(cx, "popup-menu", "Move up");
+    app.wait_gone(cx, "popup-menu");
+    assert_order(&app, cx, &["Beta", "Alpha", "Gamma"]);
+    app.context_menu(cx, connection_row(beta));
+    app.choose(cx, "popup-menu", "Move up");
+    app.wait_for(cx, "popup-menu");
+    app.press(cx, "escape");
+    // The disclosure focuses and selects the tree row.
+    app.click(
+        cx,
+        format!(
+            "c{separator}{beta}{separator}disclosure",
+            separator = '\u{1f}'
+        ),
+    );
+    app.press(cx, "alt-up");
+    assert_order(&app, cx, &["Beta", "Alpha", "Gamma"]);
+    app.press(cx, "alt-down");
+    assert_order(&app, cx, &["Alpha", "Beta", "Gamma"]);
+    app.press(cx, "alt-down");
+    assert_order(&app, cx, &["Alpha", "Gamma", "Beta"]);
+    app.press(cx, "alt-down");
+    assert_order(&app, cx, &["Alpha", "Gamma", "Beta"]);
+}
+
 #[gpui_kit::test]
 fn new_connection_saves_its_password_in_the_injected_store(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
