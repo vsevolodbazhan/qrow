@@ -1215,7 +1215,7 @@ impl Qrow {
         changed |= self.drain_dbt(cx);
         self.activity
             .update(cx, |activity, cx| activity.sync_labels(window, cx));
-        changed |= self.tick_sign_ins(cx);
+        changed |= self.tick_sign_ins(window, cx);
         changed |= self.tick_assistant(window, cx);
         // Catalog tool calls, also the calls that the assistant just made,
         // wait for the catalogs and for their deadline.

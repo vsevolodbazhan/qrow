@@ -56,6 +56,7 @@ pub(super) struct SignInEditor {
     for_connection: bool,
     /// Name, issuer, client ID, scopes, resource, callback ports.
     fields: Vec<Entity<InputState>>,
+    account: Entity<InputState>,
     provider: connection_form::RowSelect,
     _provider_subscription: Subscription,
     /// The fields came from settings that another user shared.
@@ -554,7 +555,7 @@ impl Qrow {
 
     /// Applies the results of background sign-in work, and notes a change of
     /// status from a refresh. Returns whether something changed.
-    pub(super) fn tick_sign_ins(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn tick_sign_ins(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         let urls: Vec<BrowserPage> = self.sign_in_ui.urls.1.try_iter().collect();
         for (id, cancel, url) in urls {
@@ -717,6 +718,19 @@ impl Qrow {
         if statuses != self.sign_in_ui.statuses {
             self.sign_in_ui.statuses = statuses;
             changed = true;
+        }
+        if let Some(editor) = &self.sign_in_ui.editor {
+            let value = editor
+                .id
+                .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
+                .and_then(|sign_in| sign_in.identity.as_ref())
+                .map(|identity| identity.display())
+                .unwrap_or_default();
+            if editor.account.read(cx).value().as_ref() != value {
+                editor
+                    .account
+                    .update(cx, |field, cx| field.set_value(value, window, cx));
+            }
         }
         changed
     }
@@ -1487,6 +1501,14 @@ impl Qrow {
             })
             .collect();
         let first = fields[0].clone();
+        let account = cx.new(|cx| {
+            InputState::new(window, cx).default_value(
+                base.identity
+                    .as_ref()
+                    .map(|identity| identity.display())
+                    .unwrap_or_default(),
+            )
+        });
         // The New Sign-in… button is in the open Sign-in list. A new list is
         // closed, so it does not take the keys of the dialog.
         if let Some(form) = self.form.as_ref().filter(|_| for_connection) {
@@ -1519,6 +1541,7 @@ impl Qrow {
             id: id.filter(|id| self.sign_ins.iter().any(|sign_in| sign_in.id == *id)),
             for_connection,
             fields,
+            account,
             provider,
             _provider_subscription: provider_subscription,
             pasted,
@@ -1636,7 +1659,13 @@ impl Qrow {
 
     /// The Account field of Sign-in Settings: the status, the last error, and
     /// the account actions.
-    fn account_field(&self, id: Uuid, signed_in: bool, cx: &mut Context<Self>) -> Field {
+    fn account_field(
+        &self,
+        id: Uuid,
+        signed_in: bool,
+        input: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> Field {
         let account = self.account(id);
         let error = self.sign_in_ui.errors.get(&id).cloned();
         let buttons = account.actions.iter().map(|&action| {
@@ -1645,7 +1674,6 @@ impl Qrow {
                 "sign-in-account-{}",
                 action.slug()
             )))
-            .small()
             .label(action.button_label())
             .disabled(blocked)
             .when(
@@ -1662,7 +1690,16 @@ impl Qrow {
                     h_flex()
                         .w_full()
                         .gap_2()
-                        .child(
+                        .child(if signed_in {
+                            Input::new(input)
+                                .id("sign-in-account")
+                                .aria_label("Account")
+                                .focus_ring(false)
+                                .readonly(true)
+                                .flex_1()
+                                .min_w_0()
+                                .into_any_element()
+                        } else {
                             div()
                                 .id("sign-in-account-status")
                                 .test_support()
@@ -1670,11 +1707,32 @@ impl Qrow {
                                 .min_w_0()
                                 .role(Role::Status)
                                 .aria_label(account.detail.clone())
-                                .child(account.detail),
-                        )
+                                .child(account.detail.clone())
+                                .into_any_element()
+                        })
                         .when(!account.actions.is_empty(), |el| {
                             el.child(h_flex().gap_2().flex_shrink_0().children(buttons))
                         }),
+                )
+                .when(
+                    signed_in
+                        && (account.working
+                            || matches!(
+                                self.oidc.status(id),
+                                Status::SignInRequired(..) | Status::NetworkFailure(..)
+                            )),
+                    |el| {
+                        el.child(
+                            div()
+                                .id("sign-in-account-status")
+                                .test_support()
+                                .role(Role::Status)
+                                .aria_label(account.detail.clone())
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(account.detail),
+                        )
+                    },
                 )
                 .when_some(error, |el, error| {
                     el.child(
@@ -1690,7 +1748,7 @@ impl Qrow {
                 }),
         );
         if signed_in {
-            field.description("Sign out to change the issuer, client ID, scopes, or resource.")
+            field.description("Sign out to change authentication settings.")
         } else {
             field
         }
@@ -1705,7 +1763,8 @@ impl Qrow {
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id));
         let signed_in = existing.is_some_and(|sign_in| sign_in.identity.is_some());
         let pasted = editor.pasted;
-        let account = existing.map(|sign_in| self.account_field(sign_in.id, signed_in, cx));
+        let account =
+            existing.map(|sign_in| self.account_field(sign_in.id, signed_in, &editor.account, cx));
         let users = existing
             .map(|sign_in| self.connections_using(sign_in.id))
             .unwrap_or_default();

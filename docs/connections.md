@@ -308,9 +308,11 @@ Select a connection that uses the sign-in. Qrow opens the default browser
 when authentication is necessary. Finish the sign-in there. Qrow waits up
 to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
-Click a row to open **Sign-In Settings**. The **Account** field shows the
-status and the actions for the account on the same row. The actions are on
-the right. Right-click a row for **Sign in…**,
+Click a row to open **Sign-In Settings**. When signed in, the **Account** field
+shows the account value as read-only text. You can select and copy the value.
+Click **Sign out** beside the field to unlock the authentication settings.
+When signed out, the row shows the status and account actions.
+Right-click a row for **Sign in…**,
 **Cancel sign-in**, **Sign out**, or **Retry**, and for **Edit**,
 **Copy settings**, and **Delete**.
 

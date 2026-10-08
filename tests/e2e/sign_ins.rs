@@ -292,8 +292,8 @@ fn a_browser_sign_in_runs_sql_as_the_connection_user_over_tls(cx: &mut TestAppCo
     app.click(cx, format!("sign-in-{}", sign_in.id));
     app.wait_for(cx, "sign-in-account-sign-out");
     app.update(cx, |window, _| {
-        let status = window.find("sign-in-account-status");
-        assert_eq!(status.label(), Some("Signed in as alice@qrow.test."));
+        let status = window.find("sign-in-account");
+        assert_eq!(status.value(), Some("alice@qrow.test"));
         let status = status.bounds();
         let sign_out = window.find("sign-in-account-sign-out").bounds();
         assert!(status.right() < sign_out.left());

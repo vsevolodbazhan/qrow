@@ -312,7 +312,24 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     // Sign-in Settings shows the account, and signs out.
     open_settings(&app, cx, &sign_in);
     app.wait_until(cx, "the account", WAIT, |window, _| {
-        label(window, "sign-in-account-status").as_deref() == Some("Signed in as alice@qrow.test.")
+        value(window, "sign-in-account").as_deref() == Some("alice@qrow.test")
+    });
+    app.click(cx, "sign-in-account");
+    app.press(cx, "cmd-a");
+    app.press(cx, "cmd-c");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("alice@qrow.test")
+    );
+    app.update(cx, |window, cx| window.input("another-account", cx));
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "sign-in-account").as_deref(),
+            Some("alice@qrow.test")
+        );
+        assert!(!present(window, &"sign-in-account-status".into()));
     });
     for width in [850., 1280.] {
         cx.simulate_window_resize(
@@ -321,15 +338,15 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
         );
         app.settle(cx);
         app.update(cx, |window, _| {
-            let status = window.find("sign-in-account-status").bounds();
+            let status = window.find("sign-in-account").bounds();
             let sign_out = window.find("sign-in-account-sign-out").bounds();
             assert!(
                 status.right() < sign_out.left(),
-                "Sign out follows the status"
+                "Sign out follows the account field"
             );
             assert!(
                 f32::from(status.center().y - sign_out.center().y).abs() < 1.,
-                "the account status and Sign Out share a vertical center"
+                "the account field and Sign Out share a vertical center"
             );
             assert!(window.find("sign-in-account-sign-out").visible());
         });
@@ -345,6 +362,13 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.click(cx, "sign-in-account-sign-out");
     app.wait_until(cx, "the signed-out account", WAIT, |window, _| {
         label(window, "sign-in-account-status").as_deref() == Some("Not signed in.")
+    });
+    app.wait_gone(cx, "sign-in-account");
+    app.fill_labelled(cx, "Issuer", &format!("{}/new-realm", provider.issuer));
+    app.update(cx, |window, _| {
+        assert!(
+            value(window, "sign-in-issuer").is_some_and(|issuer| issuer.ends_with("/new-realm"))
+        );
     });
     assert!(tokens.load_tokens(sign_in.id).unwrap().is_none());
     app.click(cx, "cancel-sign-in-editor");
