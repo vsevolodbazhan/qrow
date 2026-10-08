@@ -118,7 +118,10 @@ A rename keeps the tab ID. Read tools can use another open tab. If a read tool
 uses an ID that is not in the open tabs, Qrow uses the tab of the conversation
 and returns its ID. Qrow always changes and runs SQL in the tab of the
 conversation, even if a tool call names another open tab. It checks that the
-tab and connection have not changed during the turn.
+tab and connection have not changed during the turn. When the assistant changes
+the selected statement, Qrow keeps that statement selected, and the assistant
+can run it in the same turn. If you change the selection during a turn, the
+assistant cannot run SQL until you send another message.
 Ask the assistant to change existing SQL when you want an edit or replacement.
 
 The assistant can write SQL before you select a connection. Select a connection

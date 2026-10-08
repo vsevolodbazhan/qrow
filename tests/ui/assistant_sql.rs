@@ -174,6 +174,13 @@ fn requests_target_one_statement_and_edits_use_the_sql_style(cx: &mut TestAppCon
             "An implicit run targeted another statement"
         );
     });
+    app.wait_idle(cx);
+
+    // An edit of the selected statement keeps it as the target of a run.
+    app.send(cx, "Edit the selected statement and run it");
+    app.wait_approval(cx, "Run in Query 1 on Synthetic? SELECT 10;");
+    app.click(cx, "assistant-cancel-query");
+    app.wait_reply(cx, "Edited run asked for approval");
 }
 
 #[gpui_kit::test]

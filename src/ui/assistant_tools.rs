@@ -22,16 +22,23 @@ fn remap_selection(
     selection: Range<usize>,
     edits: &[crate::assistant::broker::TextEdit],
 ) -> Option<Range<usize>> {
-    let mut shift = 0_i64;
+    let (mut start_shift, mut end_shift) = (0_i64, 0_i64);
     for edit in edits {
+        let shift = edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
         if edit.end <= selection.start {
-            shift += edit.replacement.len() as i64 - (edit.end - edit.start) as i64;
-        } else if edit.start < selection.end {
+            start_shift += shift;
+            end_shift += shift;
+        } else if edit.start >= selection.end {
+            continue;
+        } else if edit.start >= selection.start && edit.end <= selection.end {
+            // An edit inside the selection keeps the changed text selected.
+            end_shift += shift;
+        } else {
             return None;
         }
     }
-    let start = (selection.start as i64).checked_add(shift)?;
-    let end = (selection.end as i64).checked_add(shift)?;
+    let start = (selection.start as i64).checked_add(start_shift)?;
+    let end = (selection.end as i64).checked_add(end_shift)?;
     Some(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
 }
 
@@ -692,6 +699,7 @@ impl Qrow {
                 success: false,
                 content: json!({"version": 1, "error": error}),
             })?;
+        let selected_before = document.selected_range;
         let editor = tab.input.clone();
         let appended_range = plan
             .edits
@@ -717,19 +725,22 @@ impl Qrow {
             }
             editor.set_scroll_offset(scroll, cx);
         });
-        if let Some(range) = appended_range
-            && let Some(target) = &mut self.thread_run_mut(&call.thread_id).target
+        let selected = editor.read(cx).selected_range();
+        let selected = (!selected.is_empty()).then_some(selected);
+        // The edit moves the selection, and the target moves with it. A
+        // selection that the user changed during the turn stays stale.
+        if let Some(target) = &mut self.thread_run_mut(&call.thread_id).target
+            && (appended_range.is_some() || target.selected_range == selected_before)
         {
-            target.selected_range = Some(range);
+            target.selected_range = selected.clone();
         }
         let revision = self.tabs[index].revision;
-        let selected = editor.read(cx).selected_range();
         self.changed(cx);
         // A run without statement_range uses this selection, so the model does not read it back.
         Ok(success(
             json!({"version": 1, "tab_id": plan.tab_id, "editor_revision": revision,
                 "sql_bytes": plan.sql.len(), "formatted": plan.formatted,
-                "selected_range": (!selected.is_empty()).then_some(selected)}),
+                "selected_range": selected}),
         ))
     }
 
@@ -1733,9 +1744,34 @@ impl Qrow {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppendedQuery, EditorDocument, RunInput, resolve_tab_id, run_request};
+    use super::{
+        AppendedQuery, EditorDocument, RunInput, remap_selection, resolve_tab_id, run_request,
+    };
+    use crate::assistant::broker::TextEdit;
     use serde_json::json;
     use uuid::Uuid;
+
+    #[test]
+    fn an_edit_keeps_the_selection_on_the_same_text() {
+        let edit = |start, end, replacement: &str| TextEdit {
+            start,
+            end,
+            replacement: replacement.into(),
+        };
+        // Before, after, inside, and around the selection.
+        assert_eq!(remap_selection(10..20, &[edit(0, 2, "abcd")]), Some(12..22));
+        assert_eq!(remap_selection(10..20, &[edit(20, 20, "x")]), Some(10..20));
+        assert_eq!(
+            remap_selection(10..20, &[edit(10, 20, "abc")]),
+            Some(10..13)
+        );
+        assert_eq!(
+            remap_selection(10..20, &[edit(0, 1, ""), edit(12, 14, "xyz")]),
+            Some(9..20)
+        );
+        assert_eq!(remap_selection(10..20, &[edit(5, 15, "")]), None);
+        assert_eq!(remap_selection(10..20, &[edit(15, 25, "")]), None);
+    }
 
     #[gpui_kit::test]
     fn approved_demo_sql_keeps_execution_synthetic(cx: &mut gpui_kit::TestAppContext) {

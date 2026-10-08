@@ -567,6 +567,39 @@ for line in sys.stdin:
                 "editor_revision": tab["editor_revision"],
                 "sql": "-- Third statement\nSELECT 3",
             }, appended_before_retarget)
+        elif message.startswith("Edit the selected statement and run it"):
+            context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
+            tab = context["selected_tab"]
+            selected = tab["selected_range"]
+
+            def ran_edited(success, result):
+                code = result.get("error", {}).get("code")
+                finish_turn(thread_id, turn_id, "Edited run asked for approval" if code == "approval_cancelled" else f"Edited run failed: {result}")
+
+            def edited(success, result):
+                if not success:
+                    finish_turn(thread_id, turn_id, f"Edit failed: {result}")
+                    return
+                # Models usually send the range of the statement they changed.
+                call_tool(thread_id, turn_id, "query-run", {
+                    "version": 1,
+                    "tab_id": tab["id"],
+                    "connection_id": tab["connection_id"],
+                    "editor_revision": result["editor_revision"],
+                    "statement_range": result["selected_range"],
+                }, ran_edited)
+
+            call_tool(thread_id, turn_id, "tab-edit-sql", {
+                "version": 1,
+                "tab_id": tab["id"],
+                "connection_id": tab["connection_id"],
+                "editor_revision": tab["editor_revision"],
+                "edits": [{
+                    "start": selected["start"],
+                    "end": selected["end"],
+                    "replacement": "SELECT 10;",
+                }],
+            }, edited)
         elif message.startswith("Rewrite the last statement with edit tool"):
             context = json.loads(params["additionalContext"]["qrow_workspace"]["value"])
             tab = context["selected_tab"]
