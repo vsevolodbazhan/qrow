@@ -164,17 +164,17 @@ impl AssistantPane {
                                     .justify_start()
                                     .accessibility_label(accessible)
                                     .child(
-                                        h_flex()
+                                        v_flex()
                                             .w_full()
                                             .min_w_0()
-                                            .gap_2()
+                                            .gap_0p5()
                                             .child(
-                                                v_flex()
-                                                    .flex_1()
+                                                h_flex()
                                                     .min_w_0()
-                                                    .gap_0p5()
+                                                    .gap_2()
                                                     .child(
                                                         div()
+                                                            .flex_1()
                                                             .min_w_0()
                                                             .truncate()
                                                             .when(generating, |title| {
@@ -185,31 +185,35 @@ impl AssistantPane {
                                                             })
                                                             .when(!generating, |title| title.child(label)),
                                                     )
-                                                    .child(
-                                                        h_flex()
-                                                            .min_w_0()
-                                                            .gap_2()
-                                                            .text_xs()
-                                                            .text_color(cx.theme().muted_foreground)
-                                                            .child(div()
-                                                                .id(SharedString::from(format!("assistant-thread-place-{id}")))
-                                                                .test_support().aria_label(place.clone())
-                                                                .flex_1().min_w_0().truncate().child(place))
-                                                            .when(closed, |row| row.child(div()
-                                                                .id(SharedString::from(format!("assistant-thread-closed-{id}")))
-                                                                .test_support().aria_label("Tab closed")
-                                                                .flex_shrink_0().child("Tab closed")))
-                                                            .child(div()
-                                                                .id(SharedString::from(format!("assistant-thread-age-{id}")))
-                                                                .test_support().flex_shrink_0()
-                                                                .child(conversation_age(conversation.last_activity, unix_now_seconds()))),
+                                                    .when_some(
+                                                        qrow.assistant_status_dot(status, cx),
+                                                        |row, dot| {
+                                                            row.child(div()
+                                                                .id(SharedString::from(format!("assistant-thread-dot-{id}")))
+                                                                .test_support()
+                                                                .flex_none()
+                                                                .child(dot))
+                                                        },
                                                     ),
                                             )
-                                            .when_some(
-                                                qrow.assistant_status_dot(status, cx),
-                                                |row, dot| {
-                                                    row.child(div().flex_none().child(dot))
-                                                },
+                                            .child(
+                                                h_flex()
+                                                    .min_w_0()
+                                                    .gap_2()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(div()
+                                                        .id(SharedString::from(format!("assistant-thread-place-{id}")))
+                                                        .test_support().aria_label(place.clone())
+                                                        .flex_1().min_w_0().truncate().child(place))
+                                                    .when(closed, |row| row.child(div()
+                                                        .id(SharedString::from(format!("assistant-thread-closed-{id}")))
+                                                        .test_support().aria_label("Tab closed")
+                                                        .flex_shrink_0().child("Tab closed")))
+                                                    .child(div()
+                                                        .id(SharedString::from(format!("assistant-thread-age-{id}")))
+                                                        .test_support().flex_shrink_0()
+                                                        .child(conversation_age(conversation.last_activity, unix_now_seconds()))),
                                             ),
                                     )
                                     .selected(selected)

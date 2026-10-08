@@ -246,8 +246,9 @@ read-only. Select **Run automatically** only if you accept this risk.
 Use the thread list to change conversations. The list is to the right of the current
 conversation when the pane is wide. Qrow lists recent conversations first.
 Each row shows the conversation title, its connection, the time of its last
-activity, and its [state](#conversation-state). The connection and age use
-separate labels. **Tab closed** shows beside the connection when its tab is
+activity, and its [state](#conversation-state). The state dot shows at the end
+of the title line. The age shows at the end of the connection line. The
+connection and age use separate labels. **Tab closed** shows beside the connection when its tab is
 closed. Older saved conversations
 without an activity time show **Earlier**. On a narrow pane, select **Toggle
 Conversation List** to open the list. When you select a conversation there,

@@ -361,3 +361,36 @@ fn a_restart_does_not_restore_a_deleted_conversation(cx: &mut TestAppContext) {
     app.send(cx, "Explain `SELECT 1` after restart");
     app.wait_reply(cx, "I can help with this query");
 }
+
+#[gpui_kit::test]
+fn a_thread_row_shows_its_state_beside_the_title_and_its_age_at_the_end(cx: &mut TestAppContext) {
+    let (app, codex) = launch(cx, |workspace, _| {
+        workspace.settings.assistant.panel_width = 536.;
+    });
+    app.open_assistant(cx);
+    app.send(cx, "Title before first reply");
+    app.wait_until(cx, "the held reply", REPLY_TIMEOUT, |_, _| {
+        codex.marked("first-reply-pending")
+    });
+    app.show_threads(cx);
+    app.wait_for(cx, "assistant-thread-dot-synthetic-thread-1");
+    app.update(cx, |window, _| {
+        let row = bounds_of(window, "assistant-thread-synthetic-thread-1");
+        let dot = bounds_of(window, "assistant-thread-dot-synthetic-thread-1");
+        let place = bounds_of(window, "assistant-thread-place-synthetic-thread-1");
+        let age = bounds_of(window, "assistant-thread-age-synthetic-thread-1");
+        assert!(
+            dot.bottom() <= place.top(),
+            "The state dot is not on the title line"
+        );
+        let difference = f32::from(age.center().y - place.center().y).abs();
+        assert!(
+            difference <= 1.,
+            "The age is {difference}px off the connection line"
+        );
+        let gap = f32::from(dot.right() - age.right()).abs();
+        assert!(gap <= 1., "The state dot and the age end {gap}px apart");
+        assert!(age.right() <= row.right(), "The age is outside the row");
+    });
+    codex.mark("first-reply-release");
+}
