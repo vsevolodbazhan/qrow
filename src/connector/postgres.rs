@@ -1,4 +1,5 @@
 //! Postgres sessions. Values use the server's text representation.
+mod cancellation;
 mod tls;
 
 use super::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session};
@@ -39,8 +40,9 @@ impl PostgresConnector {
 struct Cancel {
     requested: AtomicBool,
     finished: AtomicBool,
-    gate: Arc<tokio::sync::Mutex<()>>,
     token: tokio_postgres::CancelToken,
+    host: String,
+    endpoint: cancellation::Endpoint,
     closed: Arc<AtomicBool>,
     tls: Option<MakeRustlsConnect>,
     timeout: Duration,
@@ -48,19 +50,21 @@ struct Cancel {
 
 impl Cancel {
     async fn send(&self) -> Result<()> {
-        let _guard = self.gate.lock().await;
         if self.finished.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
-        tokio::time::timeout(self.timeout, async {
-            match &self.tls {
-                Some(tls) => self.token.cancel_query(tls.clone()).await,
-                None => self.token.cancel_query(NoTls).await,
-            }
-        })
+        let result = tokio::time::timeout(
+            self.timeout,
+            cancellation::send(&self.token, &self.host, &self.endpoint, self.tls.clone()),
+        )
         .await
-        .context("Postgres did not answer the cancellation request in time")?
-        .context("Could not cancel the Postgres query")
+        .context("Postgres did not answer the cancellation request in time")
+        .and_then(|result| result.context("Could not cancel the Postgres query"));
+        if result.is_err() {
+            // A partially sent packet can still arrive. Do not reuse its backend.
+            self.closed.store(true, Ordering::SeqCst);
+        }
+        result
     }
 
     async fn until<T>(
@@ -93,11 +97,9 @@ impl Cancellation for Cancel {
             return Ok(());
         }
         self.requested.store(true, Ordering::SeqCst);
-        // Cancellation opens its own transport and can outlive the session.
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(self.send())
+        // The operation owns and awaits every cancellation transport. A handle
+        // must not send a packet after that operation has ended.
+        Ok(())
     }
 }
 
@@ -138,6 +140,32 @@ fn query_error(error: tokio_postgres::Error) -> anyhow::Error {
     }
 }
 
+async fn connect_client(
+    config: &Config,
+    tls: Option<&MakeRustlsConnect>,
+) -> std::result::Result<(Client, tokio::task::JoinHandle<()>), tokio_postgres::Error> {
+    match tls {
+        Some(tls) => {
+            let (client, connection) = config.connect(tls.clone()).await?;
+            Ok((
+                client,
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                }),
+            ))
+        }
+        None => {
+            let (client, connection) = config.connect(NoTls).await?;
+            Ok((
+                client,
+                tokio::spawn(async move {
+                    let _ = connection.await;
+                }),
+            ))
+        }
+    }
+}
+
 impl Connector for PostgresConnector {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
         anyhow::ensure!(
@@ -171,28 +199,37 @@ impl Connector for PostgresConnector {
                 (*self.trust.client_config()?).clone(),
             )),
         };
-        let (client, connection) = runtime.block_on(async {
+        let (client, connection, endpoint) = runtime.block_on(async {
             tokio::time::timeout(timeout, async {
-                match &tls {
-                    Some(tls) => {
-                        let (client, connection) = config.connect(tls.clone()).await?;
-                        Ok::<_, tokio_postgres::Error>((
-                            client,
-                            tokio::spawn(async move {
-                                let _ = connection.await;
-                            }),
-                        ))
-                    }
-                    None => {
-                        let (client, connection) = config.connect(NoTls).await?;
-                        Ok((
-                            client,
-                            tokio::spawn(async move {
-                                let _ = connection.await;
-                            }),
-                        ))
+                #[cfg(unix)]
+                if let [tokio_postgres::config::Host::Unix(directory)] = config.get_hosts() {
+                    let (client, connection) = connect_client(&config, tls.as_ref()).await?;
+                    let endpoint = cancellation::Endpoint::Unix(
+                        directory.join(format!(".s.PGSQL.{}", profile.port)),
+                    );
+                    return Ok((client, connection, endpoint));
+                }
+                let addresses =
+                    tokio::net::lookup_host((profile.host.as_str(), profile.port)).await?;
+                let mut last_error = None;
+                for address in addresses {
+                    let mut attempt = config.clone();
+                    // Keep cancellation on the backend that accepted the session.
+                    // The configured hostname remains the TLS verification name.
+                    attempt.hostaddr(address.ip());
+                    let connected = connect_client(&attempt, tls.as_ref()).await;
+                    match connected {
+                        Ok((client, connection)) => {
+                            return Ok((client, connection, cancellation::Endpoint::Tcp(address)));
+                        }
+                        Err(error) => last_error = Some(error),
                     }
                 }
+                Err::<_, anyhow::Error>(
+                    last_error
+                        .map(anyhow::Error::from)
+                        .unwrap_or_else(|| anyhow::anyhow!("Postgres host has no addresses")),
+                )
             })
             .await
             .context("Postgres did not answer the connection request in time")?
@@ -222,8 +259,9 @@ impl Connector for PostgresConnector {
         let cancel = Arc::new(Cancel {
             requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
-            gate: Arc::new(tokio::sync::Mutex::new(())),
             token: client.cancel_token(),
+            host: profile.host.clone(),
+            endpoint,
             closed: Arc::new(AtomicBool::new(false)),
             tls,
             timeout,
@@ -240,15 +278,20 @@ impl Connector for PostgresConnector {
 }
 
 impl PostgresSession {
-    fn start(&self, sql: &str) -> Operation {
+    fn start(&self, sql: &str) -> Result<Operation> {
+        anyhow::ensure!(
+            !self.cancel.closed.load(Ordering::SeqCst),
+            "Postgres session is closed"
+        );
         let (sender, receiver) = mpsc::channel();
         let client = self.client.clone();
         let sql = sql.to_owned();
         let cancel = Arc::new(Cancel {
             requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
-            gate: self.cancel.gate.clone(),
             token: self.cancel.token.clone(),
+            host: self.cancel.host.clone(),
+            endpoint: self.cancel.endpoint.clone(),
             closed: self.cancel.closed.clone(),
             tls: self.cancel.tls.clone(),
             timeout: self.cancel.timeout,
@@ -257,7 +300,7 @@ impl PostgresSession {
         let task = self.runtime.spawn(async move {
             let result = async {
                 let mut writer = BufWriter::new(tempfile::tempfile()?);
-                { let _guard = requested.gate.lock().await; requested.check()?; }
+                requested.check()?;
                 let statement = requested.until(client.prepare(&sql)).await?;
                 let types: Vec<_> = statement
                     .columns()
@@ -335,21 +378,25 @@ impl PostgresSession {
             requested.finished.store(true, Ordering::SeqCst);
             let _ = sender.send(result);
         });
-        Operation {
+        Ok(Operation {
             cancel,
             task,
             receiver,
             results: None,
             cancelled: false,
-        }
+        })
     }
 }
 
 impl Session for PostgresSession {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        anyhow::ensure!(
+            !self.cancel.closed.load(Ordering::SeqCst),
+            "Postgres session is closed"
+        );
         self.close_operation()?;
         crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql);
+        let operation = self.start(sql)?;
         let cancel = operation.cancel.clone();
         self.operation = Some(operation);
         Ok(cancel)
@@ -456,9 +503,13 @@ impl Session for PostgresSession {
     }
 
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        anyhow::ensure!(
+            !self.cancel.closed.load(Ordering::SeqCst),
+            "Postgres session is closed"
+        );
         self.close_keep_alive()?;
         crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql);
+        let operation = self.start(sql)?;
         let cancel = operation.cancel.clone();
         self.keep_alive = Some(operation);
         Ok(cancel)
@@ -529,6 +580,200 @@ fn metadata_sql(request: &MetadataRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (client, server) = tokio::io::duplex(1024);
+        let mut config = Config::new();
+        config.user("synthetic").ssl_mode(SslMode::Disable);
+        let ((client, connection), server) = runtime.block_on(async {
+            let handshake = async {
+                let mut server = server;
+                let length = server.read_u32().await.unwrap();
+                let mut startup = vec![0; length as usize - 4];
+                server.read_exact(&mut startup).await.unwrap();
+                // AuthenticationOk, synthetic BackendKeyData, ReadyForQuery.
+                server
+                    .write_all(&[
+                        b'R', 0, 0, 0, 8, 0, 0, 0, 0, b'K', 0, 0, 0, 12, 0, 0, 0, 1, 0, 0, 0, 2,
+                        b'Z', 0, 0, 0, 5, b'I',
+                    ])
+                    .await
+                    .unwrap();
+                server
+            };
+            let (connection, server) = tokio::join!(config.connect_raw(client, NoTls), handshake);
+            (connection.unwrap(), server)
+        });
+        let cancel = Arc::new(Cancel {
+            requested: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
+            token: client.cancel_token(),
+            host: "127.0.0.1".into(),
+            endpoint: cancellation::Endpoint::Tcp("127.0.0.1:0".parse().unwrap()),
+            closed: Arc::new(AtomicBool::new(false)),
+            tls: None,
+            timeout: Duration::from_millis(10),
+        });
+        let connection = runtime.spawn(async move {
+            let _ = connection.await;
+        });
+        (
+            PostgresSession {
+                client: Arc::new(client),
+                connection,
+                runtime,
+                cancel,
+                operation: None,
+                keep_alive: None,
+            },
+            server,
+        )
+    }
+
+    #[test]
+    fn cancellation_before_submission_does_not_open_a_transport() {
+        let (mut session, _server) = idle_session();
+        // This runtime does not run the query task until block_on below.
+        let handle = session.execute("SELECT pg_sleep(30)").unwrap();
+        handle.cancel().unwrap();
+        assert!(!session.cancel.closed.load(Ordering::SeqCst));
+        session.runtime.block_on(async {
+            tokio::task::yield_now().await;
+        });
+        assert_eq!(session.poll().unwrap(), QueryState::Cancelled);
+        assert_eq!(session.poll().unwrap(), QueryState::Cancelled);
+        assert!(!session.cancel.closed.load(Ordering::SeqCst));
+        let operation = session.operation.as_ref().unwrap();
+        assert!(operation.cancel.finished.load(Ordering::SeqCst));
+        operation.cancel.requested.store(false, Ordering::SeqCst);
+        handle.cancel().unwrap();
+        assert!(!operation.cancel.requested.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancellation_transport_failure_prevents_session_reuse() {
+        use tokio::io::AsyncReadExt;
+        let (mut session, _server) = idle_session();
+        let listener = session
+            .runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        Arc::get_mut(&mut session.cancel).unwrap().endpoint =
+            cancellation::Endpoint::Tcp(listener.local_addr().unwrap());
+        Arc::get_mut(&mut session.cancel).unwrap().timeout = Duration::from_secs(1);
+        let received = AtomicBool::new(false);
+        session.runtime.block_on(async {
+            let send = session.cancel.send();
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut packet = [0; 16];
+                stream.read_exact(&mut packet).await.unwrap();
+                assert_eq!(
+                    u32::from_be_bytes(packet[4..8].try_into().unwrap()),
+                    80877102
+                );
+                received.store(true, Ordering::SeqCst);
+                // Hold the socket open after receiving the complete CancelRequest.
+                std::future::pending::<()>().await;
+            };
+            tokio::pin!(server);
+            tokio::select! {
+                result = send => assert!(result.unwrap_err().to_string().contains("in time")),
+                _ = &mut server => unreachable!(),
+            }
+        });
+        assert!(received.load(Ordering::SeqCst));
+        assert!(
+            session
+                .execute("SELECT 42")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("closed")
+        );
+        assert!(
+            session
+                .execute_keep_alive("SELECT 1")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("closed")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_supports_unix_sockets() {
+        use tokio::io::AsyncReadExt;
+        let (mut session, _server) = idle_session();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".s.PGSQL.5432");
+        let listener = {
+            let _enter = session.runtime.enter();
+            tokio::net::UnixListener::bind(&path).unwrap()
+        };
+        Arc::get_mut(&mut session.cancel).unwrap().endpoint = cancellation::Endpoint::Unix(path);
+        Arc::get_mut(&mut session.cancel).unwrap().timeout = Duration::from_secs(1);
+        session.runtime.block_on(async {
+            let server = async {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut packet = [0; 16];
+                stream.read_exact(&mut packet).await.unwrap();
+                assert_eq!(
+                    u32::from_be_bytes(packet[4..8].try_into().unwrap()),
+                    80877102
+                );
+                // Closing the accepted socket completes the cancellation transport.
+            };
+            let (result, ()) = tokio::join!(session.cancel.send(), server);
+            result.unwrap();
+        });
+        assert!(!session.cancel.closed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn cancellation_failure_during_cleanup_prevents_replacement_work() {
+        use tokio::io::AsyncReadExt;
+        for keep_alive in [false, true] {
+            let (mut session, mut server) = idle_session();
+            let listener = session
+                .runtime
+                .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+                .unwrap();
+            Arc::get_mut(&mut session.cancel).unwrap().endpoint =
+                cancellation::Endpoint::Tcp(listener.local_addr().unwrap());
+            let cancellation_server = session.runtime.spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut packet = [0; 16];
+                stream.read_exact(&mut packet).await.unwrap();
+                std::future::pending::<()>().await;
+            });
+            if keep_alive {
+                session.execute_keep_alive("SELECT 1").unwrap();
+            } else {
+                session.execute("SELECT 1").unwrap();
+            }
+            // Prove preparation was submitted before cleanup requests cancellation.
+            assert_eq!(session.runtime.block_on(server.read_u8()).unwrap(), b'P');
+            // The operation has a short transport timeout. Cleanup gets enough time
+            // to join it after that failure and must then recheck session validity.
+            Arc::get_mut(&mut session.cancel).unwrap().timeout = Duration::from_secs(1);
+            let replacement = if keep_alive {
+                session.execute_keep_alive("SELECT 2")
+            } else {
+                session.execute("SELECT 2")
+            };
+            assert!(replacement.err().unwrap().to_string().contains("closed"));
+            assert!(session.operation.is_none());
+            assert!(session.keep_alive.is_none());
+            cancellation_server.abort();
+        }
+    }
 
     #[test]
     fn metadata_names_are_exact_literals() {
