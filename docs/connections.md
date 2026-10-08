@@ -310,7 +310,7 @@ when authentication is necessary. Finish the sign-in there. Qrow waits up
 to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
 Click a row to open **Sign-In Settings**. When signed in, the **Account** field
-shows the account value as read-only text. You can select and copy the value.
+shows the account value in a disabled field. You cannot edit or focus the field.
 Click **Sign out** beside the field to unlock the authentication settings.
 When signed out, the row shows the status and account actions.
 Right-click a row for **Sign in…**,

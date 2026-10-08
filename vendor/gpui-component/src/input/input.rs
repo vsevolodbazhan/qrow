@@ -680,7 +680,7 @@ impl RenderOnce for Input {
         BaseInput::new(id)
             .focused(focused)
             .disabled(disabled)
-            .track_focus(&frame_focus_handle)
+            .when(!disabled, |this| this.track_focus(&frame_focus_handle))
             .styles(|styles| {
                 styles.focused(|style| {
                     style.when(

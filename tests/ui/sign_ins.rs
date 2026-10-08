@@ -314,15 +314,11 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     app.wait_until(cx, "the account", WAIT, |window, _| {
         value(window, "sign-in-account").as_deref() == Some("alice@qrow.test")
     });
+    app.click(cx, "sign-in-name");
     app.click(cx, "sign-in-account");
-    app.press(cx, "cmd-a");
-    app.press(cx, "cmd-c");
-    assert_eq!(
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .as_deref(),
-        Some("alice@qrow.test")
-    );
+    app.update(cx, |window, _| {
+        assert_ne!(window.find("sign-in-account").focused(), Some(true));
+    });
     app.update(cx, |window, cx| window.input("another-account", cx));
     app.update(cx, |window, _| {
         assert_eq!(

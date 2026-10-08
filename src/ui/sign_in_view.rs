@@ -1696,6 +1696,7 @@ impl Qrow {
                                 .aria_label("Account")
                                 .focus_ring(false)
                                 .readonly(true)
+                                .disabled(true)
                                 .flex_1()
                                 .min_w_0()
                                 .into_any_element()

@@ -5,6 +5,10 @@ source has an Apache 2.0 license. See `LICENSE-APACHE`.
 
 Qrow changes these files:
 
+- `src/input/input.rs`: disabled inputs do not register a focusable frame.
+  Before, clicking a disabled input moved keyboard focus to its frame.
+  The sign-in UI and E2E tests check that the locked account field cannot
+  receive keyboard focus.
 - `src/menu/popup_menu.rs` and `src/menu/menu_item.rs`: standard menu items
   accept a tooltip, including when disabled. Dismissing a menu hides the
   tooltip. This gives a disabled Delete action a reason without an extra row.
