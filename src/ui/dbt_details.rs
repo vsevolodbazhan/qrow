@@ -117,24 +117,16 @@ impl Qrow {
                 )
                 .title(title_bar)
                 .child(view.clone())
-                .on_close(move |_, window, cx| {
-                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(cx));
                 })
         });
     }
 
-    /// The user closed the details sheet. Details that the user opened
-    /// from the lineage go back to the resource that the user came from,
-    /// in the same sheet: the sheet opens again with it.
-    fn dbt_details_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(view) = self.dbt_details.clone() else {
-            return;
-        };
-        if view.update(cx, |view, cx| view.back(window, cx)) {
-            self.open_dbt_details_sheet(view, window, cx);
-        } else {
-            self.dbt_details = None;
-        }
+    /// The user closed the details sheet. The way back through the lineage
+    /// closes with it: only the back button goes back.
+    fn dbt_details_closed(&mut self, cx: &mut Context<Self>) {
+        self.dbt_details = None;
         cx.notify();
     }
 
@@ -882,10 +874,10 @@ impl DbtDetailsView {
     }
 
     /// Show the resource that the user came from again, at the place where
-    /// the user left it. Tells whether there was one.
-    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// the user left it.
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(visit) = self.history.pop() else {
-            return false;
+            return;
         };
         self.open(
             visit.unique_id,
@@ -900,7 +892,6 @@ impl DbtDetailsView {
         if self.reading() {
             self.pending_anchor = visit.anchor;
         }
-        true
     }
 
     /// Show the details of `unique_id` from the top, with the column filter

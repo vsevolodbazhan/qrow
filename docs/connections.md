@@ -363,11 +363,11 @@ details**. A panel opens at the right side of the window. It shows:
     child to show its details in the panel. **Tests**, **Columns**,
     **Parents**, and **Children** stay open or closed, so you can follow the
     lineage further. The SQL parts close. To go back, click the back
-    button next to the close button of the panel, or close the panel. The
-    tooltip of the back button shows the name of the resource that you came
-    from. The panel then shows that resource, with its column filter, its
-    open parts, and the row that you clicked. Close the panel of the first
-    resource to close it.
+    button next to the close button of the panel. The tooltip of the back
+    button shows the name of the resource that you came from. The panel
+    then shows that resource, with its column filter, its open parts, and
+    the row that you clicked. The close button and **Escape** close the
+    panel at once, also after you followed the lineage.
 
 Qrow reads the SQL and prepares the column descriptions when you move the
 pointer onto the title of a closed part, so the part opens quickly. A part

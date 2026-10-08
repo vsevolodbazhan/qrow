@@ -625,23 +625,31 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         assert!(!crate::support::present(window, &column_id("col_002")));
         assert!(!crate::support::present(window, &"dbt-details-back".into()));
     });
-    // Closing the details of a parent goes back to the model, at the row
-    // that opened the parent. The window has one sheet at a time.
+    // The close button closes the details of a parent, also with a way
+    // back. The model details open again without the way back.
     app.click(cx, ("dbt-details-parent", 0usize));
     app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").as_deref() == Some(parent.as_str())
     });
-    app.press(cx, "escape");
+    app.click(cx, "close");
+    app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
+        !crate::support::present(window, &"dbt-details".into())
+    });
+    app.context_menu_labelled(cx, &alias);
+    app.choose(cx, "popup-menu", "Show dbt details");
     app.wait_until(cx, "the model details again", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").as_deref()
             == Some(dbt_manifest::model_id(1).as_str())
     });
     app.update(cx, |window, _| {
-        assert!(crate::support::present(
-            window,
-            &("dbt-details-parent", 0usize).into()
-        ));
         assert!(!crate::support::present(window, &"dbt-details-back".into()));
+    });
+    // Escape closes the sheet too.
+    app.click(cx, "dbt-details-parents-toggle");
+    app.wait_for(cx, ("dbt-details-parent", 0usize));
+    app.click(cx, ("dbt-details-parent", 0usize));
+    app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").as_deref() == Some(parent.as_str())
     });
     app.press(cx, "escape");
     app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
@@ -810,7 +818,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     });
     assert_eq!(top(cx, "dbt-details-compiled-sql-toggle"), Some(before));
 
-    // A parent opens from below the SQL. Its details close back to the
+    // A parent opens from below the SQL. The back button returns to the
     // model at the same place, with the SQL open again: the place is in
     // rows of SQL that come after the read.
     let parent_top = |cx: &mut TestAppContext| {
@@ -858,7 +866,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
-    app.press(cx, "escape");
+    app.click(cx, "dbt-details-back");
     // The model opens from the top, and only the read of its SQL brings
     // the row of SQL that was at the top.
     app.wait_until(cx, "the model at the parent row", TIMEOUT, |window, _| {
@@ -878,7 +886,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
     app.update(cx, |window, cx| {
-        window.press("escape", cx);
+        window.click("dbt-details-back", cx);
         window.render_frame(cx);
         let position = window.find("dbt-details-list").bounds().center();
         window.dispatch_event(
@@ -918,7 +926,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
     app.update(cx, |window, cx| {
-        window.press("escape", cx);
+        window.click("dbt-details-back", cx);
         window.render_frame(cx);
         let list = window.find("dbt-details-list").bounds();
         let position = gpui_kit::point(
