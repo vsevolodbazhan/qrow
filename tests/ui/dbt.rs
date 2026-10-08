@@ -438,11 +438,40 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     });
     let column_id =
         |name: &str| -> gpui_kit::ElementId { format!("dbt-details-column-{name}").into() };
+    // The parts below the SQL are closed, with the counts of their items.
     app.update(cx, |window, _| {
         assert_eq!(
             label(window, "dbt-details-Unique ID").as_deref(),
             Some(dbt_manifest::model_id(1).as_str())
         );
+        let columns = format!("Columns ({})", model.columns.len());
+        assert!(
+            crate::support::labelled(window, &columns).is_some(),
+            "{columns}"
+        );
+        for title in ["Tests (", "Parents (", "Children ("] {
+            assert_eq!(
+                crate::support::labelled_starting(window, title).len(),
+                1,
+                "{title}"
+            );
+        }
+        assert!(crate::support::labelled(window, "Table Tests").is_none());
+        assert!(!crate::support::present(window, &column_id("id")));
+        assert!(!crate::support::present(
+            window,
+            &"dbt-details-filter".into()
+        ));
+        assert!(!crate::support::present(
+            window,
+            &("dbt-details-parent", 0usize).into()
+        ));
+    });
+    app.click(cx, "dbt-details-columns-toggle");
+    app.wait_until(cx, "the columns", TIMEOUT, |window, _| {
+        crate::support::present(window, &column_id("id"))
+    });
+    app.update(cx, |window, _| {
         for name in ["id", "col_001", "col_002"] {
             assert!(crate::support::present(window, &column_id(name)), "{name}");
         }
@@ -465,9 +494,17 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
     // line at its end.
     let raw = qrow::dbt::read_sql(&manifest, model.raw_code.unwrap()).unwrap();
     let raw = raw.trim_end_matches('\n').to_owned();
+    // The pointer on the header of the closed part reads the SQL, so the
+    // part opens with the SQL in the next frame.
+    app.hover_labelled(cx, "Raw SQL");
+    app.settle(cx);
     app.click(cx, "dbt-details-raw-sql-toggle");
-    app.wait_until(cx, "the model SQL", TIMEOUT, |window, _| {
-        label(window, "dbt-details-raw-sql").as_deref() == Some(raw.as_str())
+    app.update(cx, |window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            label(window, "dbt-details-raw-sql").as_deref(),
+            Some(raw.as_str())
+        );
     });
     app.click(cx, "dbt-details-copy-raw-sql");
     let copied = cx.read_from_clipboard().and_then(|item| item.text());
@@ -533,8 +570,19 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         assert!(!crate::support::present(window, &column_id("col_002")));
     });
 
+    // The closed columns keep no rows, and open again with the filter.
+    app.click(cx, "dbt-details-columns-toggle");
+    app.wait_gone(cx, column_id("col_001"));
+    app.click(cx, "dbt-details-columns-toggle");
+    app.wait_for(cx, column_id("col_001"));
+    app.update(cx, |window, _| {
+        assert!(!crate::support::present(window, &column_id("col_002")));
+    });
+
     // A parent opens its details in the sheet without the filter, and the
     // back button returns to the model as it was, with the filter.
+    app.click(cx, "dbt-details-parents-toggle");
+    app.wait_for(cx, ("dbt-details-parent", 0usize));
     let parent = index
         .entry(*model.parents.first().expect("the model has a parent"))
         .unique_id
@@ -577,23 +625,31 @@ fn the_tree_marks_dbt_tables_and_shows_their_details(cx: &mut TestAppContext) {
         assert!(!crate::support::present(window, &column_id("col_002")));
         assert!(!crate::support::present(window, &"dbt-details-back".into()));
     });
-    // Closing the details of a parent goes back to the model, at the row
-    // that opened the parent. The window has one sheet at a time.
+    // The close button closes the details of a parent, also with a way
+    // back. The model details open again without the way back.
     app.click(cx, ("dbt-details-parent", 0usize));
     app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").as_deref() == Some(parent.as_str())
     });
-    app.press(cx, "escape");
+    app.click(cx, "close");
+    app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
+        !crate::support::present(window, &"dbt-details".into())
+    });
+    app.context_menu_labelled(cx, &alias);
+    app.choose(cx, "popup-menu", "Show dbt details");
     app.wait_until(cx, "the model details again", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").as_deref()
             == Some(dbt_manifest::model_id(1).as_str())
     });
     app.update(cx, |window, _| {
-        assert!(crate::support::present(
-            window,
-            &("dbt-details-parent", 0usize).into()
-        ));
         assert!(!crate::support::present(window, &"dbt-details-back".into()));
+    });
+    // Escape closes the sheet too.
+    app.click(cx, "dbt-details-parents-toggle");
+    app.wait_for(cx, ("dbt-details-parent", 0usize));
+    app.click(cx, ("dbt-details-parent", 0usize));
+    app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
+        label(window, "dbt-details-Unique ID").as_deref() == Some(parent.as_str())
     });
     app.press(cx, "escape");
     app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
@@ -762,7 +818,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     });
     assert_eq!(top(cx, "dbt-details-compiled-sql-toggle"), Some(before));
 
-    // A parent opens from below the SQL. Its details close back to the
+    // A parent opens from below the SQL. The back button returns to the
     // model at the same place, with the SQL open again: the place is in
     // rows of SQL that come after the read.
     let parent_top = |cx: &mut TestAppContext| {
@@ -773,6 +829,20 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
                 .map(|element| element.bounds().top())
         })
     };
+    for _ in 0..40 {
+        if top(cx, "dbt-details-parents-toggle").is_some() {
+            break;
+        }
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    // The header comes in at the bottom edge of the list: move it fully
+    // into view.
+    for _ in 0..2 {
+        wheel(cx, -120.);
+    }
+    app.settle(cx);
+    app.click(cx, "dbt-details-parents-toggle");
     for _ in 0..40 {
         if parent_top(cx).is_some() {
             break;
@@ -796,7 +866,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
     app.wait_until(cx, "the parent details", TIMEOUT, |window, _| {
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
-    app.press(cx, "escape");
+    app.click(cx, "dbt-details-back");
     // The model opens from the top, and only the read of its SQL brings
     // the row of SQL that was at the top.
     app.wait_until(cx, "the model at the parent row", TIMEOUT, |window, _| {
@@ -816,7 +886,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
     app.update(cx, |window, cx| {
-        window.press("escape", cx);
+        window.click("dbt-details-back", cx);
         window.render_frame(cx);
         let position = window.find("dbt-details-list").bounds().center();
         window.dispatch_event(
@@ -856,7 +926,7 @@ fn the_dbt_details_scroll_evenly_past_a_long_description(cx: &mut TestAppContext
         label(window, "dbt-details-Unique ID").is_some_and(|id| id != dbt_manifest::model_id(1))
     });
     app.update(cx, |window, cx| {
-        window.press("escape", cx);
+        window.click("dbt-details-back", cx);
         window.render_frame(cx);
         let list = window.find("dbt-details-list").bounds();
         let position = gpui_kit::point(
@@ -929,11 +999,9 @@ fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) 
             label(window, "dbt-details-description").as_deref(),
             Some("One row per flight booking. Use booking_id to join payments.")
         );
-        assert!(crate::support::present(
-            window,
-            &"dbt-details-column-booking_id".into()
-        ));
     });
+    app.click(cx, "dbt-details-columns-toggle");
+    app.wait_for(cx, "dbt-details-column-booking_id");
     app.scroll_to(cx, "dbt-details-compiled-sql-toggle");
     app.click(cx, "dbt-details-compiled-sql-toggle");
     wait_label(
@@ -951,6 +1019,8 @@ fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) 
         "select booking_id, gate, amount, booked_at\nfrom {{ source('flights', 'flight_events') }}",
     );
     app.click(cx, "dbt-details-raw-sql-toggle");
+    app.scroll_to(cx, "dbt-details-parents-toggle");
+    app.click(cx, "dbt-details-parents-toggle");
     app.update(cx, |window, cx| {
         window.click(("dbt-details-parent", 0usize), cx)
     });

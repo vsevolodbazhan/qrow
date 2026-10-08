@@ -7,7 +7,7 @@ use gpui::{
 
 use super::{Input, TextareaState};
 use crate::native_menu::NativeMenu;
-use crate::{RoleOverride, StyledExt as _};
+use crate::{FocusableExt as _, RoleOverride, StyledExt as _};
 
 /// A styled ordinary multi-line text field.
 #[derive(IntoElement)]
@@ -17,6 +17,7 @@ pub struct Textarea {
     height: Option<DefiniteLength>,
     appearance: bool,
     bordered: bool,
+    focus_ring: bool,
     disabled: bool,
     readonly: bool,
     tab_index: isize,
@@ -40,6 +41,7 @@ impl Textarea {
             height: None,
             appearance: true,
             bordered: true,
+            focus_ring: true,
             disabled: false,
             readonly: false,
             tab_index: 0,
@@ -129,6 +131,18 @@ impl Textarea {
     }
 }
 
+impl crate::FocusableExt for Textarea {
+    /// Turn the ring outside the border on or off, as for [`Input`].
+    fn focus_ring(mut self, enabled: bool) -> Self {
+        self.focus_ring = enabled;
+        self
+    }
+
+    fn is_focus_ring_enabled(&self) -> bool {
+        self.focus_ring
+    }
+}
+
 impl Styled for Textarea {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -142,6 +156,7 @@ impl Textarea {
         Input::from_state(self.state.clone())
             .appearance(self.appearance)
             .bordered(self.bordered)
+            .focus_ring(self.focus_ring)
             .disabled(self.disabled)
             .readonly(self.readonly)
             .tab_index(self.tab_index)
@@ -190,6 +205,10 @@ mod tests {
             assert!(Textarea::new(&state).paste_handler.is_none());
             let textarea = Textarea::new(&state).on_paste(|_, _, _| true);
             assert!(textarea.paste_handler.is_some());
+            // The textarea gives the input its focus ring setting.
+            let input = Textarea::new(&state).focus_ring(false).into_input();
+            assert!(!input.is_focus_ring_enabled());
+            assert!(Textarea::new(&state).into_input().is_focus_ring_enabled());
             Probe
         });
     }

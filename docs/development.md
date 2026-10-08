@@ -70,10 +70,17 @@ Use these rules for UI text:
   **Move to connection…**, **Copy qualified name**, **Show activity**. This rule
   also applies to the macOS menu bar.
 - States, choices, placeholders, empty states, and messages use sentence
-  case: **Not connected**, **While connected**, **No sign-ins**.
+  case: **Not connected**, **While connected**, **No connections**.
 - Dialog titles that are questions or conditions use sentence case:
   **Delete assistant conversation?**
 - Product names and acronyms keep their case: **Qrow**, **Codex**, **SQL**.
+
+### Fields
+
+Text fields, text areas, selects, and comboboxes show their focus with a
+tinted border only. Call `.focus_ring(false)` on each new field. The ring of
+GPUI Kit is painted outside the border, so a list or a panel that clips its
+content cuts the ring off.
 
 ## Hooks and continuous integration
 

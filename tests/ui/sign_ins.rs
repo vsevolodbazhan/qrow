@@ -211,7 +211,7 @@ fn a_new_sign_in_signs_in_with_the_browser_and_signs_out(cx: &mut TestAppContext
     let provider = Provider::start();
     let app = launch(cx, &provider, Workspace::default());
     open_sign_ins(&app, cx);
-    app.wait_for(cx, "sign-ins-empty");
+    app.wait_gone(cx, "sign-ins-list");
     app.click(cx, "add-sign-in");
     app.wait_for(cx, "sign-in-name");
 
@@ -491,7 +491,7 @@ fn an_unused_sign_in_can_be_deleted(cx: &mut TestAppContext) {
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
     app.choose(cx, "popup-menu", "Delete");
     app.click(cx, "confirm-delete-sign-in");
-    app.wait_for(cx, "sign-ins-empty");
+    app.wait_gone(cx, "sign-ins-list");
     app.wait_until(cx, "the removal", WAIT, |_, _| {
         app.saved().sign_ins.is_empty()
     });
@@ -556,7 +556,7 @@ fn failed_deletion_shows_a_red_dot_and_preserves_the_sign_in_for_retry(cx: &mut 
     app.context_menu(cx, format!("sign-in-{}", sign_in.id));
     app.choose(cx, "popup-menu", "Delete");
     app.click(cx, "confirm-delete-sign-in");
-    app.wait_for(cx, "sign-ins-empty");
+    app.wait_gone(cx, "sign-ins-list");
     app.wait_until(cx, "the saved removal", WAIT, |_, _| {
         app.saved().sign_ins.is_empty()
     });
@@ -1117,6 +1117,16 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
     let provider = Provider::start();
     let app = launch(cx, &provider, Workspace::default());
     open_sign_ins(&app, cx);
+    // The empty sidebar shows only its header, with the paste and add
+    // buttons.
+    app.update(cx, |window, _| {
+        assert!(!present(window, &"sign-ins-list".into()));
+        assert!(present(window, &"add-sign-in".into()));
+        assert_eq!(
+            label(window, "paste-sign-in").as_deref(),
+            Some("Paste sign-in")
+        );
+    });
     for (clipboard, reason) in [
         ("SELECT 1".to_owned(), "does not contain sign-in settings"),
         (
@@ -1128,7 +1138,7 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
         ),
     ] {
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(clipboard));
-        app.click(cx, "paste-first-sign-in");
+        app.click(cx, "paste-sign-in");
         app.wait_for(cx, "close-paste-sign-in-error");
         app.update(cx, |window, _| {
             let error = label(window, "paste-sign-in-error").unwrap_or_default();
@@ -1138,6 +1148,6 @@ fn pasting_text_that_is_not_a_sign_in_tells_why_and_adds_nothing(cx: &mut TestAp
         app.click(cx, "close-paste-sign-in-error");
         app.wait_gone(cx, "close-paste-sign-in-error");
     }
-    app.wait_for(cx, "sign-ins-empty");
+    assert!(!app.update(cx, |window, _| present(window, &"sign-ins-list".into())));
     assert!(app.saved().sign_ins.is_empty());
 }

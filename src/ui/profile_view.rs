@@ -1,5 +1,6 @@
 use super::settings_view::{setting_row, settings_dialog_size, settings_panel};
 use super::*;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     alert::Alert,
     combobox::Combobox,
@@ -49,6 +50,7 @@ pub(super) fn connection_row(
 /// A text input of the connection form, by field index.
 pub(super) fn form_input(form: &ProfileEditor, index: usize, label: &'static str) -> AnyElement {
     Input::new(&form.fields[index])
+        .focus_ring(false)
         .id(connection_form::FIELD_IDS[index])
         .w_full()
         .disabled(form.saving.is_some())
@@ -221,6 +223,7 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.authentication)
+                        .focus_ring(false)
                         .id("connection-authentication")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -276,6 +279,7 @@ impl Qrow {
                 true,
                 |_, form, _, _| {
                     Textarea::new(&form.parameters)
+                        .focus_ring(false)
                         .w_full()
                         .disabled(form.saving.is_some())
                         .font_family("Menlo")
@@ -299,6 +303,7 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.idle_behavior)
+                        .focus_ring(false)
                         .id("connection-idle-behavior")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -368,6 +373,7 @@ impl Qrow {
             .w_full()
             .child(
                 Combobox::new(&form.sign_in)
+                    .focus_ring(false)
                     .w_full()
                     .disabled(form.saving.is_some())
                     .placeholder("Choose a sign-in")

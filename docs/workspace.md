@@ -22,8 +22,10 @@ Each font picker has a **System Font** option. This option uses the macOS
 interface font.
 
 The theme defaults to **System**. System follows the macOS appearance and uses
-GPUI Kit's default light or dark theme. The selector also includes One Dark and
-the themes bundled from GPUI Kit. A selected theme takes effect immediately.
+GPUI Kit's default light or dark theme. The selector also includes One Dark,
+CM Twilight, and the themes bundled from GPUI Kit. CM Twilight is darker than
+One Dark. It uses the navy and orange colors of twilight in Chiang Mai. A
+selected theme takes effect immediately.
 
 The Assistant page has the **General** and **Codex** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.

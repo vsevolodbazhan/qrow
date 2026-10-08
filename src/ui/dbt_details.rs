@@ -12,6 +12,7 @@ use crate::dbt::{
     worker::{ManifestState, Refresher},
 };
 use crate::model::DbtProject;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::{
     SelectableText, StyledExt as _, TextSelectionEvent, TextSelectionHandle, input::Rope,
 };
@@ -116,24 +117,16 @@ impl Qrow {
                 )
                 .title(title_bar)
                 .child(view.clone())
-                .on_close(move |_, window, cx| {
-                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(window, cx));
+                .on_close(move |_, _, cx| {
+                    let _ = close.update(cx, |this, cx| this.dbt_details_closed(cx));
                 })
         });
     }
 
-    /// The user closed the details sheet. Details that the user opened
-    /// from the lineage go back to the resource that the user came from,
-    /// in the same sheet: the sheet opens again with it.
-    fn dbt_details_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(view) = self.dbt_details.clone() else {
-            return;
-        };
-        if view.update(cx, |view, cx| view.back(window, cx)) {
-            self.open_dbt_details_sheet(view, window, cx);
-        } else {
-            self.dbt_details = None;
-        }
+    /// The user closed the details sheet. The way back through the lineage
+    /// closes with it: only the back button goes back.
+    fn dbt_details_closed(&mut self, cx: &mut Context<Self>) {
+        self.dbt_details = None;
         cx.notify();
     }
 
@@ -185,6 +178,8 @@ pub(super) struct DbtDetailsView {
     rem_size: Option<gpui_kit::Pixels>,
     /// The compiled SQL part, then the raw SQL part.
     sql: [SqlPart; 2],
+    /// Whether each part below the SQL is open, by [`Part::position`].
+    open: [bool; 4],
     /// The resources that the user came from through the lineage, the last
     /// one on top.
     history: Vec<Visit>,
@@ -192,24 +187,34 @@ pub(super) struct DbtDetailsView {
     /// of its open SQL parts go on. Without their rows, the list can stop
     /// above the place, or not have the row of the place.
     pending_anchor: Option<(Row, gpui_kit::Pixels)>,
-    /// The Markdown of the description and of the column descriptions, by
-    /// element ID. A text view without a state of its own parses its text
-    /// again after a frame off the screen, and parses a large text in the
-    /// background. A description that scrolls back in then is empty for a
-    /// moment, and the list moves the rows below it.
-    markdown: RefCell<HashMap<String, Markdown>>,
+    /// The Markdown of the description and of the column descriptions. A
+    /// text view without a state of its own parses its text again after a
+    /// frame off the screen, and parses a large text in the background. A
+    /// description that scrolls back in then is empty for a moment, and the
+    /// list moves the rows below it. The sheet keeps the Markdown of the
+    /// resources that the user can go back to, so that they show at once.
+    markdown: RefCell<HashMap<MarkdownKey, Markdown>>,
     _subscription: gpui_kit::Subscription,
 }
 
 /// A resource that the user left through the lineage, and how the sheet
-/// showed it: the column filter, the open SQL parts, and the place in the
-/// list where the user clicked.
+/// showed it: the column filter, the open parts, and the place in the list
+/// where the user clicked.
 struct Visit {
     unique_id: String,
     title: SharedString,
     filter: String,
     sql_open: [bool; 2],
+    open: [bool; 4],
     anchor: Option<(Row, gpui_kit::Pixels)>,
+}
+
+/// What a Markdown text of the sheet belongs to: the description of a
+/// resource, or the description of one of its columns.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct MarkdownKey {
+    unique_id: String,
+    column: Option<SharedString>,
 }
 
 /// The Markdown of a row, and its parse.
@@ -259,16 +264,71 @@ enum Row {
     Missing,
     Facts,
     Description,
-    Tests,
-    ColumnsTitle,
-    Column(usize),
-    NoColumns,
-    ParentsTitle,
-    Parent(usize),
-    ChildrenTitle,
-    Child(usize),
     Sql(SqlKind),
     SqlChunk(SqlKind, usize),
+    /// The header of a part below the SQL. The header of the tests also
+    /// shows the tests, and the header of the columns the column filter.
+    Part(Part),
+    Column(usize),
+    NoColumns,
+    Parent(usize),
+    Child(usize),
+}
+
+impl Row {
+    /// Whether the row is the header of a part that opens.
+    fn is_header(self) -> bool {
+        matches!(self, Row::Sql(_) | Row::Part(_))
+    }
+
+    /// The part below the SQL that the row is in, if any.
+    fn part(self) -> Option<Part> {
+        match self {
+            Row::Part(part) => Some(part),
+            Row::Column(_) | Row::NoColumns => Some(Part::Columns),
+            Row::Parent(_) => Some(Part::Parents),
+            Row::Child(_) => Some(Part::Children),
+            _ => None,
+        }
+    }
+}
+
+/// The parts below the SQL. They are closed until the user opens them, so
+/// that the user can go to a part without a scroll through the others, and
+/// the sheet does not lay out the rows of a closed part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Part {
+    Tests,
+    Columns,
+    Parents,
+    Children,
+}
+
+impl Part {
+    const ALL: [Part; 4] = [Part::Tests, Part::Columns, Part::Parents, Part::Children];
+
+    fn title(self) -> &'static str {
+        match self {
+            Part::Tests => "Tests",
+            Part::Columns => "Columns",
+            Part::Parents => "Parents",
+            Part::Children => "Children",
+        }
+    }
+
+    /// The part of the element IDs of the part.
+    fn id(self) -> &'static str {
+        match self {
+            Part::Tests => "tests",
+            Part::Columns => "columns",
+            Part::Parents => "parents",
+            Part::Children => "children",
+        }
+    }
+
+    fn position(self) -> usize {
+        self as usize
+    }
 }
 
 /// The two SQL parts of a resource.
@@ -298,11 +358,6 @@ impl SqlKind {
 
     fn position(self) -> usize {
         self as usize
-    }
-
-    /// Whether another SQL part comes after this one.
-    fn followed(self) -> bool {
-        self.position() + 1 < Self::ALL.len()
     }
 
     /// What the part shows, or why the manifest does not have it.
@@ -567,6 +622,7 @@ impl DbtDetailsView {
             shown_changed: false,
             rem_size: None,
             sql: Default::default(),
+            open: [false; 4],
             history: Vec::new(),
             pending_anchor: None,
             markdown: RefCell::default(),
@@ -605,21 +661,26 @@ impl DbtDetailsView {
         self.keep_filter_rendered(cx);
     }
 
+    /// The positions of the columns that match the filter. Columns whose
+    /// name matches come first, the closest names on top. Then come the
+    /// columns that match only by their description. Each group keeps the
+    /// order of the manifest.
     fn matching_columns(&self, cx: &App) -> Vec<usize> {
-        let query = self.filter.read(cx).value().trim().to_owned();
+        let query = self.filter.read(cx).value().trim().to_lowercase();
         let Some(data) = &self.data else {
             return Vec::new();
         };
-        data.columns
+        let mut ranked: Vec<(ColumnMatch, usize)> = data
+            .columns
             .iter()
             .enumerate()
-            .filter(|(_, column)| {
-                query.is_empty()
-                    || contains_folded(&column.name, &query)
-                    || contains_folded(&column.description, &query)
+            .filter_map(|(position, column)| {
+                column_match(&column.name, &column.description, &query).map(|rank| (rank, position))
             })
-            .map(|(position, _)| position)
-            .collect()
+            .collect();
+        // A stable sort keeps the order of the manifest in each group.
+        ranked.sort_by_key(|(rank, _)| *rank);
+        ranked.into_iter().map(|(_, position)| position).collect()
     }
 
     fn make_rows(&self) -> Vec<Row> {
@@ -638,17 +699,20 @@ impl DbtDetailsView {
                 }
             }
         }
-        rows.extend([Row::Tests, Row::ColumnsTitle]);
-        if self.matching.is_empty() {
-            rows.push(Row::NoColumns);
-        } else {
-            rows.extend(self.matching.iter().copied().map(Row::Column));
-        }
         // The lineage is below the columns: the columns are read more often.
-        rows.push(Row::ParentsTitle);
-        rows.extend((0..data.parents.len()).map(Row::Parent));
-        rows.push(Row::ChildrenTitle);
-        rows.extend((0..data.children.len()).map(Row::Child));
+        for part in Part::ALL {
+            rows.push(Row::Part(part));
+            if !self.open[part.position()] {
+                continue;
+            }
+            match part {
+                Part::Tests => {}
+                Part::Columns if self.matching.is_empty() => rows.push(Row::NoColumns),
+                Part::Columns => rows.extend(self.matching.iter().copied().map(Row::Column)),
+                Part::Parents => rows.extend((0..data.parents.len()).map(Row::Parent)),
+                Part::Children => rows.extend((0..data.children.len()).map(Row::Child)),
+            }
+        }
         rows
     }
 
@@ -775,7 +839,14 @@ impl DbtDetailsView {
     /// keeps the filter row and its keyboard input when the user scrolls
     /// it out of view.
     fn keep_filter_rendered(&self, cx: &App) {
-        if let Some(title) = self.rows.iter().position(|row| *row == Row::ColumnsTitle) {
+        if !self.open[Part::Columns.position()] {
+            return;
+        }
+        if let Some(title) = self
+            .rows
+            .iter()
+            .position(|row| *row == Row::Part(Part::Columns))
+        {
             let focus = gpui_kit::Focusable::focus_handle(self.filter.read(cx), cx);
             self.list.splice_focusable(title..title + 1, [Some(focus)]);
         }
@@ -794,40 +865,58 @@ impl DbtDetailsView {
             title: self.title.clone(),
             filter: self.filter.read(cx).value().to_string(),
             sql_open: self.sql.each_ref().map(|part| part.open),
+            open: self.open,
             anchor: self.scroll_anchor(),
         });
-        self.open(unique_id, "", [false; 2], window, cx);
+        // The lists stay open, so that the user can follow the lineage
+        // further. The SQL parts close, as their SQL is read again.
+        self.open(unique_id, "", [false; 2], self.open, window, cx);
     }
 
     /// Show the resource that the user came from again, at the place where
-    /// the user left it. Tells whether there was one.
-    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// the user left it.
+    fn back(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(visit) = self.history.pop() else {
-            return false;
+            return;
         };
-        self.open(visit.unique_id, &visit.filter, visit.sql_open, window, cx);
+        self.open(
+            visit.unique_id,
+            &visit.filter,
+            visit.sql_open,
+            visit.open,
+            window,
+            cx,
+        );
         self.restore_scroll(visit.anchor);
         // The rows of an open SQL part come after the read.
         if self.reading() {
             self.pending_anchor = visit.anchor;
         }
-        true
     }
 
     /// Show the details of `unique_id` from the top, with the column filter
-    /// `filter` and the SQL parts in `sql_open` open.
+    /// `filter`, the SQL parts in `sql_open` open, and the parts below them
+    /// in `open` open.
     fn open(
         &mut self,
         unique_id: String,
         filter: &str,
         sql_open: [bool; 2],
+        open: [bool; 4],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.unique_id = unique_id;
+        self.open = open;
         self.pending_anchor = None;
-        // The SQL and the Markdown belong to the old resource.
-        self.markdown.borrow_mut().clear();
+        // The SQL belongs to the old resource. The Markdown of the
+        // resources in the history stays for a way back.
+        let kept: Vec<&str> = std::iter::once(self.unique_id.as_str())
+            .chain(self.history.iter().map(|visit| visit.unique_id.as_str()))
+            .collect();
+        self.markdown
+            .borrow_mut()
+            .retain(|key, _| kept.contains(&key.unique_id.as_str()));
         for (part, open) in self.sql.iter_mut().zip(sql_open) {
             part.reset();
             part.open = open;
@@ -848,29 +937,102 @@ impl DbtDetailsView {
     /// sheet keeps while the text stays the same.
     fn markdown(
         &self,
-        id: String,
+        column: Option<&SharedString>,
         text: &SharedString,
         row: Row,
         cx: &mut Context<Self>,
     ) -> TextView {
+        markdown_view(&self.markdown_state(column, text, row, cx))
+    }
+
+    /// The Markdown state of `text` in `row`: the description of the
+    /// resource, or of the column `column`. The state parses the text when
+    /// the sheet makes it.
+    fn markdown_state(
+        &self,
+        column: Option<&SharedString>,
+        text: &SharedString,
+        row: Row,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextViewState> {
+        let key = MarkdownKey {
+            unique_id: self.unique_id.clone(),
+            column: column.cloned(),
+        };
         let mut markdown = self.markdown.borrow_mut();
-        if let Some(current) = markdown.get(&id)
+        if let Some(current) = markdown.get(&key)
             && current.text == *text
         {
-            return markdown_view(&current.state);
+            return current.state.clone();
         }
         let state = cx.new(|cx| TextViewState::markdown(text, cx));
         let changes = cx.observe(&state, move |this, _, cx| this.markdown_parsed(row, cx));
-        let view = markdown_view(&state);
         markdown.insert(
-            id,
+            key,
             Markdown {
                 text: text.clone(),
-                state,
+                state: state.clone(),
                 _changes: changes,
             },
         );
-        view
+        state
+    }
+
+    /// Parse the column descriptions before the user opens the columns, for
+    /// example while the pointer is on their header.
+    fn prefetch_columns(&self, cx: &mut Context<Self>) {
+        let Some(data) = &self.data else {
+            return;
+        };
+        for (position, column) in data.columns.iter().enumerate() {
+            if !column.description.is_empty() {
+                self.markdown_state(
+                    Some(&column.name),
+                    &column.description,
+                    Row::Column(position),
+                    cx,
+                );
+            }
+        }
+    }
+
+    /// Open or close the part `part`. A closed part keeps no rows, and the
+    /// closed columns keep no Markdown.
+    fn toggle_part(&mut self, part: Part, cx: &mut Context<Self>) {
+        // The user moves the list now.
+        self.pending_anchor = None;
+        let open = !self.open[part.position()];
+        self.open[part.position()] = open;
+        if part == Part::Columns && !open {
+            let unique_id = &self.unique_id;
+            self.markdown
+                .borrow_mut()
+                .retain(|key, _| key.column.is_none() || key.unique_id != *unique_id);
+        }
+        let Some(header) = self.rows.iter().position(|row| *row == Row::Part(part)) else {
+            return;
+        };
+        let items = |rows: &[Row]| {
+            rows[header + 1..]
+                .iter()
+                .take_while(|row| !row.is_header())
+                .count()
+        };
+        let anchor = self.scroll_anchor();
+        let old = items(&self.rows);
+        self.rows = self.make_rows();
+        let new = items(&self.rows);
+        self.list.splice(header + 1..header + 1 + old, new);
+        self.list.remeasure_items(header..header + 1 + new);
+        self.keep_filter_rendered(cx);
+        if !self.restore_scroll(anchor) && anchor.is_some_and(|(row, _)| row.part() == Some(part)) {
+            // The rows that the user read are gone: show their header.
+            self.list.scroll_to(ListOffset {
+                item_ix: header,
+                offset_in_item: px(0.),
+            });
+        }
+        cx.notify();
     }
 
     /// The Markdown of `row` changed, for example after a parse in the
@@ -896,6 +1058,11 @@ impl DbtDetailsView {
         self.pending_anchor = None;
         let part = &mut self.sql[kind.position()];
         part.open = !part.open;
+        // A closed part keeps no SQL. A pointer on its header reads the SQL
+        // again before the next click.
+        if !part.open {
+            part.reset();
+        }
         // A manifest that changed since the read has other SQL, and a failed
         // read can work now.
         let stale = match &part.sql {
@@ -954,6 +1121,17 @@ impl DbtDetailsView {
         self.sql
             .iter()
             .any(|part| matches!(part.sql, Sql::Reading | Sql::Refreshing))
+    }
+
+    /// Read the SQL of the closed part `kind` before the user opens it, for
+    /// example while the pointer is on its header. A manifest that changed
+    /// waits for the click, as Qrow reads the manifest again first.
+    fn prefetch_sql(&mut self, kind: SqlKind, cx: &mut Context<Self>) {
+        let part = &self.sql[kind.position()];
+        let current = self.state.as_ref().is_some_and(|state| state.is_current());
+        if !part.open && matches!(part.sql, Sql::Unread) && current {
+            self.read_sql(kind, cx);
+        }
     }
 
     /// Read the SQL of the part `kind` in the background.
@@ -1090,12 +1268,7 @@ impl DbtDetailsView {
                         .test_support()
                         .role(Role::Label)
                         .aria_label(description.clone())
-                        .child(self.markdown(
-                            format!("dbt-description-{}", self.unique_id),
-                            description,
-                            Row::Description,
-                            cx,
-                        ))
+                        .child(self.markdown(None, description, Row::Description, cx))
                         .into_any_element(),
                 };
                 section("Description", content).into_any_element()
@@ -1105,24 +1278,7 @@ impl DbtDetailsView {
                 None => div().into_any_element(),
             },
             Row::SqlChunk(kind, position) => self.sql_chunk(kind, position, cx),
-            Row::Tests => {
-                let content = if data.tests.is_empty() {
-                    muted_text("No tests of the table.", muted)
-                } else {
-                    tests_element("dbt-details-tests", &data.tests, &self.code_font, muted)
-                };
-                section("Table Tests", content).into_any_element()
-            }
-            Row::ColumnsTitle => section(
-                &format!("Columns ({})", data.columns.len()),
-                Input::new(&self.filter)
-                    .id("dbt-details-filter")
-                    .small()
-                    .cleanable(true)
-                    .aria_label("Filter columns")
-                    .into_any_element(),
-            )
-            .into_any_element(),
+            Row::Part(part) => self.part(part, data, cx),
             Row::NoColumns => div()
                 .pt_3()
                 .child(muted_text(
@@ -1164,7 +1320,7 @@ impl DbtDetailsView {
                                 .id(SharedString::from(format!("{id}-text")))
                                 .test_support()
                                 .child(self.markdown(
-                                    format!("{id}-description"),
+                                    Some(&column.name),
                                     &column.description,
                                     Row::Column(position),
                                     cx,
@@ -1183,8 +1339,6 @@ impl DbtDetailsView {
                     })
                     .into_any_element()
             }
-            Row::ParentsTitle => lineage_title("Parents", data.parents.len(), muted),
-            Row::ChildrenTitle => lineage_title("Children", data.children.len(), muted),
             Row::Parent(position) => linked_row(
                 ("dbt-details-parent", position),
                 &data.parents[position],
@@ -1200,6 +1354,91 @@ impl DbtDetailsView {
         }
     }
 
+    /// The header of the part `part` below the SQL, with the count of its
+    /// items. An open part of tests also shows the tests, and an open part
+    /// of columns the column filter.
+    fn part(&self, part: Part, data: &Data, cx: &mut Context<Self>) -> AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let open = self.open[part.position()];
+        let count = match part {
+            Part::Tests => data.tests.len(),
+            Part::Columns => data.columns.len(),
+            Part::Parents => data.parents.len(),
+            Part::Children => data.children.len(),
+        };
+        let header = disclosure(
+            format!("dbt-details-{}-toggle", part.id()),
+            format!("{} ({count})", part.title()).into(),
+            open,
+            muted,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_part(part, cx)))
+        .when(part == Part::Columns && !open, |header| {
+            header.on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.prefetch_columns(cx);
+                }
+            }))
+        });
+        let body = match part {
+            _ if !open => None,
+            Part::Tests if data.tests.is_empty() => {
+                Some(muted_text("No tests of the table.", muted))
+            }
+            Part::Tests => Some(tests_element(
+                "dbt-details-tests",
+                &data.tests,
+                &self.code_font,
+                muted,
+            )),
+            Part::Columns => (!data.columns.is_empty()).then(|| {
+                Input::new(&self.filter)
+                    .focus_ring(false)
+                    .id("dbt-details-filter")
+                    .small()
+                    .cleanable(true)
+                    .aria_label("Filter columns")
+                    .into_any_element()
+            }),
+            Part::Parents | Part::Children => (count == 0).then(|| muted_text("None.", muted)),
+        };
+        v_flex()
+            .map(|header| self.group_spacing(header, Row::Part(part)))
+            .gap_2()
+            .child(header)
+            .children(body)
+            .into_any_element()
+    }
+
+    /// The parts that open are one group: the first one stands apart from
+    /// the description, and a closed part stands close to the next one.
+    fn group_spacing<E: Styled>(&self, header: E, row: Row) -> E {
+        if self.rows.iter().find(|row| row.is_header()) == Some(&row) {
+            header.pt_4()
+        } else {
+            header.pt_1()
+        }
+    }
+
+    /// Whether the row at `position` is the last row of an open part that
+    /// another part follows. Such a row ends with space before the next
+    /// part.
+    fn ends_open_part(&self, position: usize) -> bool {
+        let Some(row) = self.rows.get(position) else {
+            return false;
+        };
+        let open = match row {
+            Row::Sql(kind) => self.sql[kind.position()].open,
+            Row::Part(part) => self.open[part.position()],
+            Row::SqlChunk(..) => true,
+            row => row.part().is_some(),
+        };
+        open && self
+            .rows
+            .get(position + 1)
+            .is_some_and(|next| next.is_header())
+    }
+
     /// A SQL part: a header that opens it, then the SQL with a copy button.
     /// `available` tells whether the manifest has this SQL; when it does
     /// not, the part tells why.
@@ -1207,31 +1446,20 @@ impl DbtDetailsView {
         let muted = cx.theme().muted_foreground;
         let part = &self.sql[kind.position()];
         let open = part.open;
-        let title = kind.title();
-        let header = Button::new(SharedString::from(format!(
-            "dbt-details-{}-sql-toggle",
-            kind.id()
-        )))
-        .ghost()
-        .small()
-        .w_full()
-        .justify_start()
-        // The chevron lines up with the titles of the other parts.
-        .px_0()
-        .accessibility_label(title)
-        .child(
-            h_flex()
-                .w_full()
-                .gap_1p5()
-                .child(
-                    Icon::new(IconName::ChevronRight)
-                        .xsmall()
-                        .text_color(muted)
-                        .rotate(percentage(if open { 0.25 } else { 0. })),
-                )
-                .child(div().text_sm().font_semibold().child(title)),
+        let header = disclosure(
+            format!("dbt-details-{}-sql-toggle", kind.id()),
+            kind.title().into(),
+            open,
+            muted,
         )
-        .on_click(cx.listener(move |this, _, _, cx| this.toggle_sql(kind, cx)));
+        .on_click(cx.listener(move |this, _, _, cx| this.toggle_sql(kind, cx)))
+        .when(!open, |header| {
+            header.on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if *hovered {
+                    this.prefetch_sql(kind, cx);
+                }
+            }))
+        });
         let body = open.then(|| match &part.sql {
             Sql::Refreshing => muted_text(
                 "The dbt manifest changed. Qrow reads it again, then shows the SQL.",
@@ -1270,18 +1498,8 @@ impl DbtDetailsView {
                 )
                 .into_any_element(),
         });
-        // The parts are one group: a closed part stands close to the next
-        // one, and an open part ends with space before the next one.
-        let space_after = open && kind.followed() && !matches!(part.sql, Sql::Read(_));
         v_flex()
-            .map(|part| {
-                if kind.position() == 0 {
-                    part.pt_4()
-                } else {
-                    part.pt_1()
-                }
-            })
-            .when(space_after, |part| part.pb_3())
+            .map(|header| self.group_spacing(header, Row::Sql(kind)))
             .gap_2()
             .child(header)
             .children(body)
@@ -1314,8 +1532,6 @@ impl DbtDetailsView {
                 chunk.mt_1().pt_2().border_t_1().rounded_t_md()
             })
             .when(last, |chunk| chunk.pb_2().border_b_1().rounded_b_md())
-            // The space between the SQL and the next part.
-            .when(last && kind.followed(), |chunk| chunk.mb_3())
             .font_family(self.code_font.clone())
             .text_xs()
             .child(
@@ -1354,6 +1570,8 @@ impl Render for DbtDetailsView {
                     .w_full()
                     .min_w_0()
                     .pr_3()
+                    // An open part ends with space before the next part.
+                    .when(this.ends_open_part(position), |row| row.pb_3())
                     .child(this.render_row(position, cx))
                     .into_any_element()
             }),
@@ -1456,6 +1674,60 @@ fn data(state: &ManifestState, project: &DbtProject, unique_id: &str) -> Option<
     })
 }
 
+/// How a column matches the filter, the best match first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ColumnMatch {
+    Name,
+    NameStart,
+    NamePart,
+    Description,
+}
+
+/// How the column `name` with `description` matches `query`, which is in
+/// lowercase. An empty query matches all columns by name.
+fn column_match(name: &str, description: &str, query: &str) -> Option<ColumnMatch> {
+    if query.is_empty() {
+        return Some(ColumnMatch::Name);
+    }
+    let name = name.to_lowercase();
+    if name == query {
+        Some(ColumnMatch::Name)
+    } else if name.starts_with(query) {
+        Some(ColumnMatch::NameStart)
+    } else if name.contains(query) {
+        Some(ColumnMatch::NamePart)
+    } else if contains_folded(description, query) {
+        Some(ColumnMatch::Description)
+    } else {
+        None
+    }
+}
+
+/// The header of a part that opens on a click, with a chevron that turns
+/// down when the part is open.
+fn disclosure(id: String, title: SharedString, open: bool, muted: Hsla) -> Button {
+    Button::new(SharedString::from(id))
+        .ghost()
+        .small()
+        .w_full()
+        .justify_start()
+        // The chevron lines up with the text above the parts.
+        .px_0()
+        .accessibility_label(title.clone())
+        .child(
+            h_flex()
+                .w_full()
+                .gap_1p5()
+                .child(
+                    Icon::new(IconName::ChevronRight)
+                        .xsmall()
+                        .text_color(muted)
+                        .rotate(percentage(if open { 0.25 } else { 0. })),
+                )
+                .child(div().text_sm().font_semibold().child(title)),
+        )
+}
+
 /// A titled part of the sheet.
 fn section(title: &str, content: AnyElement) -> impl IntoElement {
     v_flex()
@@ -1463,20 +1735,6 @@ fn section(title: &str, content: AnyElement) -> impl IntoElement {
         .gap_2()
         .child(div().text_sm().font_semibold().child(title.to_owned()))
         .child(content)
-}
-
-fn lineage_title(title: &str, count: usize, muted: Hsla) -> AnyElement {
-    v_flex()
-        .pt_5()
-        .gap_2()
-        .child(
-            div()
-                .text_sm()
-                .font_semibold()
-                .child(format!("{title} ({count})")),
-        )
-        .when(count == 0, |part| part.child(muted_text("None.", muted)))
-        .into_any_element()
 }
 
 /// A parent or a child. A click shows its details in the sheet.
@@ -1640,8 +1898,33 @@ fn test_tag(name: SharedString) -> impl IntoElement {
 
 #[cfg(test)]
 mod tests {
-    use super::{SQL_CHUNK_LINES, argument_pairs, chunk_ranges, display_sql, relative_highlights};
+    use super::{
+        ColumnMatch, SQL_CHUNK_LINES, argument_pairs, chunk_ranges, column_match, display_sql,
+        relative_highlights,
+    };
     use gpui_kit::HighlightStyle;
+
+    #[test]
+    fn columns_that_match_by_name_come_before_columns_that_match_by_description() {
+        let rank = |name, description| column_match(name, description, "pdate");
+        assert_eq!(rank("PDATE", ""), Some(ColumnMatch::Name));
+        assert_eq!(rank("pdate_utc", ""), Some(ColumnMatch::NameStart));
+        assert_eq!(rank("max_pdate", ""), Some(ColumnMatch::NamePart));
+        assert_eq!(
+            rank("booked_at", "Use `pdate` to filter."),
+            Some(ColumnMatch::Description)
+        );
+        assert_eq!(rank("booked_at", "The time of the booking."), None);
+        assert!(ColumnMatch::Name < ColumnMatch::NameStart);
+        assert!(ColumnMatch::NameStart < ColumnMatch::NamePart);
+        assert!(ColumnMatch::NamePart < ColumnMatch::Description);
+        // Other letters than ASCII match in their lowercase form.
+        assert_eq!(
+            column_match("id", "Идентификатор бронирования", "бронирования"),
+            Some(ColumnMatch::Description)
+        );
+        assert_eq!(column_match("any", "", ""), Some(ColumnMatch::Name));
+    }
 
     #[test]
     fn shown_sql_has_no_empty_lines_at_the_ends() {

@@ -8,6 +8,7 @@ use crate::{
     oidc::{self, Failure, Status},
 };
 use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     ColorName, Icon,
     alert::Alert,
@@ -861,43 +862,6 @@ impl Qrow {
                             ),
                     ),
             )
-            .when(self.sign_ins.is_empty(), |el| {
-                el.child(
-                    v_flex()
-                        .id("sign-ins-empty")
-                        .p_3()
-                        .gap_2()
-                        .text_sm()
-                        .child(div().font_weight(FontWeight::MEDIUM).child("No sign-ins"))
-                        .child(
-                            div().text_color(cx.theme().muted_foreground).child(
-                                "A sign-in lets connections use your account at an OpenID Connect provider. Several connections can use one sign-in.",
-                            ),
-                        )
-                        .child(
-                            h_flex()
-                                .pt_1()
-                                .gap_2()
-                                .flex_wrap()
-                                .child(
-                                    Button::new("add-first-sign-in")
-                                        .label("Add sign-in…")
-                                        .disabled(self.demo)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.open_sign_in_editor(None, false, window, cx)
-                                        })),
-                                )
-                                .child(
-                                    Button::new("paste-first-sign-in")
-                                        .label("Paste sign-in…")
-                                        .disabled(self.demo)
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.paste_sign_in(window, cx)
-                                        })),
-                                ),
-                        ),
-                )
-            })
             .when(!self.sign_ins.is_empty(), |el| {
                 el.child(
                     v_flex()
@@ -1516,6 +1480,7 @@ impl Qrow {
             let (id, label, description, _) = field;
             Field::new().label(label).description(description).child(
                 Input::new(&editor.fields[index])
+                    .focus_ring(false)
                     .id(id)
                     .w_full()
                     .disabled(signed_in && TOKEN_FIELDS.contains(&index))

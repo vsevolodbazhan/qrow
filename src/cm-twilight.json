@@ -1,0 +1,145 @@
+{
+  "name": "CM Twilight",
+  "mode": "dark",
+  "font.size": 14,
+  "colors": {
+    "background": "#161a27",
+    "table.background": "#161a27",
+    "list.background": "#161a27",
+    "tab.active.background": "#161a27",
+    "sidebar.background": "#1c2133",
+    "popover.background": "#1c2133",
+    "tab_bar.background": "#1c2133",
+    "tab.background": "#1c2133",
+    "table.head.background": "#1c2133",
+    "table.foot.background": "#1c2133",
+    "list.head.background": "#1c2133",
+    "secondary.background": "#1c2133",
+    "muted.background": "#1c2133",
+    "accordion.background": "#1c2133",
+    "group_box.background": "#1c2133",
+    "tab_bar.segmented.background": "#1c2133",
+    "title_bar.background": "#242a3e",
+    "status_bar.background": "#242a3e",
+    "button.background": "#242a3e",
+    "secondary.hover.background": "#242a3e",
+    "list.hover.background": "#242a3e",
+    "table.hover.background": "#242a3e",
+    "accent.background": "#242a3e",
+    "sidebar.accent.background": "#242a3e",
+    "border": "#313954",
+    "input.border": "#313954",
+    "sidebar.border": "#313954",
+    "title_bar.border": "#313954",
+    "status_bar.border": "#313954",
+    "window.border": "#313954",
+    "button.active.background": "#313954",
+    "secondary.active.background": "#313954",
+    "foreground": "#c5cbdb",
+    "popover.foreground": "#c5cbdb",
+    "sidebar.foreground": "#c5cbdb",
+    "tab.foreground": "#c5cbdb",
+    "secondary.foreground": "#c5cbdb",
+    "button.foreground": "#c5cbdb",
+    "table.head.foreground": "#c5cbdb",
+    "table.foot.foreground": "#c5cbdb",
+    "group_box.foreground": "#c5cbdb",
+    "tab.active.foreground": "#e8ebf3",
+    "accent.foreground": "#e8ebf3",
+    "sidebar.accent.foreground": "#e8ebf3",
+    "muted.foreground": "#8d97b0",
+    "primary.background": "#f2a25c",
+    "ring": "#f2a25c",
+    "caret": "#f2a25c",
+    "table.active.border": "#f2a25c",
+    "list.active.border": "#f2a25c",
+    "sidebar.primary.background": "#f2a25c",
+    "info.background": "#86a8e8",
+    "primary.foreground": "#161a27",
+    "sidebar.primary.foreground": "#161a27",
+    "info.foreground": "#161a27",
+    "success.foreground": "#161a27",
+    "warning.foreground": "#161a27",
+    "danger.foreground": "#161a27",
+    "primary.active.background": "#d9874a",
+    "primary.hover.background": "#f6b47a",
+    "selection.background": "#304d86",
+    "list.active.background": "#f2a25c1f",
+    "table.active.background": "#f2a25c00",
+    "table.even.background": "#191d2b",
+    "list.even.background": "#191d2b",
+    "scrollbar.background": "#161a2700",
+    "scrollbar.thumb.background": "#3d4766",
+    "scrollbar.thumb.hover.background": "#55607f",
+    "danger.background": "#ee6d85",
+    "success.background": "#8cc9a5",
+    "warning.background": "#e9c46a",
+    "table.row.border": "#313954",
+    "overlay": "#0b0e1880",
+    "link": "#f2a25c",
+    "link.hover": "#f6b47a",
+    "progress_bar": "#f2a25c",
+    "slider_bar": "#f2a25c"
+  },
+  "highlight": {
+    "editor.foreground": "#c5cbdb",
+    "editor.background": "#161a27",
+    "editor.active_line.background": "#1c2133",
+    "editor.line_number": "#56607c",
+    "editor.active_line_number": "#e8ebf3",
+    "editor.invisible": "#3d4766",
+    "syntax": {
+      "keyword": {
+        "color": "#b39df3"
+      },
+      "operator": {
+        "color": "#b39df3"
+      },
+      "string": {
+        "color": "#8cc9a5"
+      },
+      "string.escape": {
+        "color": "#8cc9a5"
+      },
+      "number": {
+        "color": "#f2a25c"
+      },
+      "boolean": {
+        "color": "#f2a25c"
+      },
+      "constant": {
+        "color": "#f2a25c"
+      },
+      "function": {
+        "color": "#86a8e8"
+      },
+      "constructor": {
+        "color": "#86a8e8"
+      },
+      "type": {
+        "color": "#e9c46a"
+      },
+      "attribute": {
+        "color": "#e9c46a"
+      },
+      "variable": {
+        "color": "#c5cbdb"
+      },
+      "punctuation": {
+        "color": "#c5cbdb"
+      },
+      "punctuation.bracket": {
+        "color": "#c5cbdb"
+      },
+      "punctuation.delimiter": {
+        "color": "#c5cbdb"
+      },
+      "comment": {
+        "color": "#6f7a96"
+      },
+      "comment.doc": {
+        "color": "#6f7a96"
+      }
+    }
+  }
+}

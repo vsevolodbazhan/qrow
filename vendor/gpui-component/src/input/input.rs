@@ -123,6 +123,9 @@ pub struct Input {
     readonly: bool,
     bordered: bool,
     focus_bordered: bool,
+    /// Whether the focused input draws a ring outside its border. The
+    /// tinted border of `focus_bordered` stays without it.
+    focus_ring: bool,
     tab_index: isize,
     selected: bool,
     content_type: Option<InputContentType>,
@@ -159,13 +162,16 @@ impl Selectable for Input {
 }
 
 impl crate::FocusableExt for Input {
+    /// Turn the ring outside the border on or off. As with Select and
+    /// InputGroup, the focused input keeps its tinted border without the
+    /// ring. Use [`Input::focus_bordered`] to turn off the border too.
     fn focus_ring(mut self, enabled: bool) -> Self {
-        self.focus_bordered = enabled;
+        self.focus_ring = enabled;
         self
     }
 
     fn is_focus_ring_enabled(&self) -> bool {
-        self.focus_bordered
+        self.focus_ring
     }
 }
 
@@ -205,6 +211,7 @@ impl Input {
             readonly: false,
             bordered: true,
             focus_bordered: true,
+            focus_ring: true,
             tab_index: 0,
             selected: false,
             content_type: None,
@@ -718,7 +725,11 @@ impl RenderOnce for Input {
             .gap(gap_x)
             .refine_style(&self.style)
             .when(
-                focused && self.appearance && self.bordered && self.focus_bordered,
+                focused
+                    && self.appearance
+                    && self.bordered
+                    && self.focus_bordered
+                    && self.focus_ring,
                 |this| this.focus_ring_style(window, cx),
             )
             .children(prefix.map(|p| {
@@ -1070,6 +1081,31 @@ mod tests {
             false,
             Some(InputContentType::NewPassword)
         ));
+    }
+
+    /// Without the ring, a focused input keeps its tinted border, as Select
+    /// and InputGroup do.
+    #[gpui::test]
+    fn input_without_focus_ring_keeps_its_focus_border(cx: &mut gpui::TestAppContext) {
+        use crate::FocusableExt as _;
+        use gpui::{AppContext as _, Empty};
+
+        cx.update(crate::init);
+        let mut state = None;
+        cx.update(|cx| {
+            cx.open_window(Default::default(), |window, cx| {
+                state = Some(cx.new(|cx| InputState::new(window, cx)));
+                cx.new(|_| Empty)
+            })
+            .unwrap()
+        });
+        let state = state.unwrap();
+        let input = Input::new(&state).focus_ring(false);
+        assert!(!input.is_focus_ring_enabled());
+        assert!(input.focus_bordered);
+        let input = Input::new(&state).focus_bordered(false);
+        assert!(input.is_focus_ring_enabled());
+        assert!(!input.focus_bordered);
     }
 
     #[gpui::test]

@@ -5,6 +5,7 @@
 use super::{Qrow, StatusTooltip, button_pair::button_pair, panel_empty_state};
 use crate::activity::{Activity, ActivityEntry, TRIMMED_TEXT};
 use crate::logs::timestamp_label;
+use gpui_kit::base::FocusableExt as _;
 use gpui_kit::base::SelectableText;
 use gpui_kit::component::{
     ActiveTheme, Disableable as _, IconName, IndexPath, Selectable as _, Sizable as _,
@@ -425,6 +426,7 @@ impl ActivityView {
             .child(
                 div().w_64().flex_shrink_0().child(
                     Select::new(&self.connection)
+                        .focus_ring(false)
                         .id("activity-connection")
                         .small()
                         .placeholder("No connection")

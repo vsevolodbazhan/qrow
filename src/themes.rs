@@ -6,6 +6,8 @@ use gpui_kit::{App, Window};
 
 #[cfg(test)]
 pub(crate) const ONE_DARK_THEME: &str = "One Dark";
+#[cfg(test)]
+const CM_TWILIGHT_THEME: &str = "CM Twilight";
 
 const THEME_SET_SOURCES: &[&str] = &[
     include_str!("../themes/adventure.json"),
@@ -31,9 +33,11 @@ const THEME_SET_SOURCES: &[&str] = &[
     include_str!("../themes/twilight.json"),
 ];
 
-const ONE_DARK_THEME_SET: &str = concat!(
+const QROW_THEME_SET: &str = concat!(
     r#"{"name":"Qrow","themes":["#,
     include_str!("one-dark.json"),
+    ",",
+    include_str!("cm-twilight.json"),
     r#"]}"#,
 );
 
@@ -54,7 +58,7 @@ pub(crate) fn init(cx: &mut App) {
     for source in THEME_SET_SOURCES
         .iter()
         .copied()
-        .chain(std::iter::once(ONE_DARK_THEME_SET))
+        .chain(std::iter::once(QROW_THEME_SET))
     {
         registry
             .load_themes_from_str(source)
@@ -125,7 +129,7 @@ mod tests {
         for source in THEME_SET_SOURCES
             .iter()
             .copied()
-            .chain(std::iter::once(ONE_DARK_THEME_SET))
+            .chain(std::iter::once(QROW_THEME_SET))
         {
             let themes: ThemeSet = serde_json::from_str(source).unwrap();
             assert!(!themes.themes.is_empty());
@@ -133,10 +137,44 @@ mod tests {
     }
 
     #[test]
-    fn one_dark_keeps_its_public_name() {
-        let themes: ThemeSet = serde_json::from_str(ONE_DARK_THEME_SET).unwrap();
-        assert_eq!(themes.themes[0].name.as_ref(), ONE_DARK_THEME);
-        assert!(themes.themes[0].mode.is_dark());
+    fn qrow_themes_keep_their_public_names() {
+        let themes: ThemeSet = serde_json::from_str(QROW_THEME_SET).unwrap();
+        let names: Vec<_> = themes
+            .themes
+            .iter()
+            .map(|theme| theme.name.as_ref())
+            .collect();
+        assert_eq!(names, [ONE_DARK_THEME, CM_TWILIGHT_THEME]);
+        assert!(themes.themes.iter().all(|theme| theme.mode.is_dark()));
+    }
+
+    #[test]
+    fn cm_twilight_is_darker_than_one_dark_but_not_black() {
+        use std::rc::Rc;
+
+        let themes: ThemeSet = serde_json::from_str(QROW_THEME_SET).unwrap();
+        let luminance = |name: &str| {
+            let config = themes
+                .themes
+                .iter()
+                .find(|theme| theme.name.as_ref() == name)
+                .unwrap();
+            let mut theme = Theme::default();
+            theme.apply_config(&Rc::new(config.clone()));
+            [theme.background, theme.sidebar, theme.title_bar].map(|color| {
+                let color = color.to_rgb();
+                0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+            })
+        };
+        let one_dark = luminance(ONE_DARK_THEME);
+        let cm_twilight = luminance(CM_TWILIGHT_THEME);
+        for (twilight, dark) in cm_twilight.iter().zip(one_dark) {
+            assert!(
+                *twilight < dark,
+                "{cm_twilight:?} is not darker than {one_dark:?}"
+            );
+            assert!(*twilight > 0.05, "{cm_twilight:?} is close to black");
+        }
     }
 
     #[test]
@@ -147,7 +185,7 @@ mod tests {
         for source in THEME_SET_SOURCES
             .iter()
             .copied()
-            .chain(std::iter::once(ONE_DARK_THEME_SET))
+            .chain(std::iter::once(QROW_THEME_SET))
         {
             let themes: ThemeSet = serde_json::from_str(source).unwrap();
             for config in themes.themes {
