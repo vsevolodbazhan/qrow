@@ -851,7 +851,7 @@ impl Qrow {
         let scale = self.settings.ui_scale;
         let table = cx.new(|cx| {
             let mut results = Results::default();
-            results.set_ui_scale(scale);
+            results.set_ui_scale(scale, cx);
             TableState::new(results, window, cx).col_selectable(false)
         });
         Tab {
@@ -1333,7 +1333,7 @@ impl Qrow {
             }
             Event::Columns(columns) => {
                 tab.table.update(cx, |t, cx| {
-                    t.delegate_mut().schema(columns);
+                    t.delegate_mut().schema(columns, cx);
                     t.refresh(cx);
                 });
                 tab.set_status("Fetching preview…");
@@ -2052,13 +2052,18 @@ impl Qrow {
         self.sidebar_width *= ratio;
         self.editor_height *= ratio;
         apply_ui_theme(&self.settings, window, cx);
+        self.resize_result_columns(cx);
+        self.changed(cx);
+    }
+    /// Size result columns again for the current interface scale and font.
+    fn resize_result_columns(&self, cx: &mut Context<Self>) {
+        let scale = self.settings.ui_scale;
         for tab in &self.tabs {
             tab.table.update(cx, |table, cx| {
-                table.delegate_mut().set_ui_scale(scale);
+                table.delegate_mut().set_ui_scale(scale, cx);
                 table.refresh(cx);
             });
         }
-        self.changed(cx);
     }
     fn adjust_ui_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
         self.apply_ui_scale(self.settings.ui_scale + change, window, cx);
@@ -2112,12 +2117,14 @@ impl Qrow {
         if font_available(&font, &self.fonts) && self.settings.ui_font_family != font {
             self.settings.ui_font_family = font;
             apply_ui_theme(&self.settings, window, cx);
+            self.resize_result_columns(cx);
             self.changed(cx);
         }
     }
     fn reset_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let settings = Settings::default();
         self.settings.theme = settings.theme;
+        let font_changed = self.settings.ui_font_family != settings.ui_font_family;
         self.settings.ui_font_family = settings.ui_font_family;
         self.settings.editor_font_family = settings.editor_font_family;
         self.settings.editor_font_size = settings.editor_font_size;
@@ -2133,6 +2140,9 @@ impl Qrow {
         self.apply_ui_scale(settings.ui_scale, window, cx);
         themes::apply(&self.settings.theme, Some(window), cx);
         apply_ui_theme(&self.settings, window, cx);
+        if font_changed {
+            self.resize_result_columns(cx);
+        }
         self.changed(cx);
     }
     /// Open a context menu at the pointer. Callers defer this from their right
@@ -3239,7 +3249,7 @@ impl Qrow {
                 name: format!("metric_{n}"),
                 data_type: "DOUBLE".into(),
             }));
-            data.schema(columns);
+            data.schema(columns, cx);
             data.rows = (0..2250)
                 .map(|i| {
                     let mut row = vec![
