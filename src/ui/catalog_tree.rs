@@ -488,14 +488,8 @@ impl Builder<'_> {
                 format!("Loading schemas… {}/{}", status.done, status.total)
             };
             children.push(self.notice(id, profile, text, Tone::Loading, None));
-        } else if let Some(error) = self.tree.connection_error(profile) {
-            children.push(self.notice(
-                id,
-                profile,
-                error.to_owned(),
-                Tone::Error,
-                Some(Scope::Connection),
-            ));
+        } else if self.tree.connection_error(profile).is_some() {
+            // The connection status opens Activity with the refresh error.
         } else if catalog.fetched_at.is_none() && catalog.schemas.is_empty() {
             let text = if status.includes(&Scope::Connection) {
                 "Waiting…"
@@ -580,7 +574,7 @@ impl Builder<'_> {
         let loading = status.includes(&scope) || status.includes(&Scope::Connection);
         match (&node.relations, node.error_for(profile)) {
             (None, _) if loading => {
-                children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
+                children.push(self.notice(id, profile, "Loading relations…", Tone::Loading, None))
             }
             (None, Some(error)) => {
                 children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))

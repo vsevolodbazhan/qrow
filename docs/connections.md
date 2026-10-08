@@ -691,7 +691,9 @@ Per-relation reads can take longer because they send more requests. The same
 setting was added also use **One relation at a time**.
 
 A connection refresh starts with the schemas that Qrow read longest ago.
-The progress row shows the number of schemas that are done. A connection
+The progress row shows the number of schemas that are done. The row is removed
+when the refresh ends, before the session closes. An expanded schema shows
+**Loading relations…** while Qrow reads its tables and views. A connection
 with many schemas or tables can need many minutes. To make it faster, hide
 the schemas that you do not use.
 
@@ -728,10 +730,10 @@ had before the refresh. The error shows on the row of the refreshed part:
 
 - A connection: the connection row shows a red dot, also when the
   connection is collapsed. Point to the row to see **Unread error** beside
-  the connection name. The first row under the expanded
-  connection shows the error with **Refresh**. The dot goes away when you view
-  the Activity of the connection. The error text stays until the next refresh
-  starts.
+  the connection name. Click the dot to open Activity and read the error.
+  The expanded connection keeps its schemas and has no error or progress row
+  after the refresh ends. The dot goes away when you view Activity.
+  Select **Refresh** from the connection menu to try again.
 - A schema, a table, or a view: the row shows a warning icon. Point to the row
   to read the first line of the error. The first row under the expanded row
   shows the error with **Refresh**.

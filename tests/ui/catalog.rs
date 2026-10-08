@@ -295,10 +295,10 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                     window.try_find(refresh.clone()).is_none()
                         && labelled(
                             window,
-                            if depth == 0 {
-                                "Loading schemas…"
-                            } else {
-                                "Loading…"
+                            match depth {
+                                0 => "Loading schemas…",
+                                1 => "Loading relations…",
+                                _ => "Loading…",
                             },
                         )
                         .is_some()
@@ -804,7 +804,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
+fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut TestAppContext) {
     // A port that was free a moment ago refuses the connection.
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -820,19 +820,49 @@ fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
     credentials
         .set_password(profile.id, "synthetic-password")
         .unwrap();
-    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
 
     expand_connection(&app, cx, &profile);
-    wait_shows(&app, cx, "Not loaded");
+    wait_shows(&app, cx, "finance");
     assert_eq!(app.credentials.reads(), 0);
-    app.click_labelled(cx, "Refresh");
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(
         cx,
         "the refresh error",
         Duration::from_secs(20),
-        |window, _| shows(window, "refused"),
+        |window, _| {
+            label(window, connection_row(profile.id)).as_deref()
+                == Some("Unreachable, unread error, schema refresh error")
+        },
     );
+    app.update(cx, |window, cx| {
+        assert_connection_dot(window, profile.id, cx.theme().danger);
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{}\u{1f}error\u{1f}label", profile.id))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id))
+                .is_none()
+        );
+        assert!(!shows(window, "refused"));
+        assert!(!shows(window, "Loading schemas"));
+        assert!(labelled(window, "avia").is_some());
+        assert!(labelled(window, "finance").is_some());
+    });
     assert_eq!(app.credentials.reads(), 1);
+    app.click(cx, format!("connection-status-{}", profile.id));
+    app.wait_for(cx, "activity");
+    let activity = app.copy_activity(cx);
+    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("refused"), "{activity}");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Refresh");

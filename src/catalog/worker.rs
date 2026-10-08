@@ -614,6 +614,8 @@ impl Runner {
                     Some(duration),
                 );
                 let member = self.profile.id;
+                let close_session =
+                    matches!(result, Err(Interrupt::Unavailable(_) | Interrupt::TimedOut));
                 match result {
                     Ok(()) => {}
                     // The `Cancel` command can arrive after the flag stops the
@@ -640,16 +642,20 @@ impl Runner {
                     Err(Interrupt::TimedOut) => {
                         let message = format!("Refresh stopped after {}", format_minutes(timeout));
                         self.update(|catalog| catalog.set_error(&scope, message, member));
-                        // The cancelled request can still hold the session.
-                        self.close_session();
                     }
                     Err(Interrupt::Cold) => {}
                 }
+                self.status = Status {
+                    queued: self.queue.iter().cloned().collect(),
+                    ..Status::default()
+                };
+                self.publish(true);
                 self.save();
+                if close_session {
+                    self.close_session();
+                }
             }
             self.close_session();
-            self.status = Status::default();
-            self.publish(true);
         }
         self.close_session();
     }
@@ -1161,7 +1167,6 @@ impl Runner {
                 if healthy {
                     Ok(Err(message))
                 } else {
-                    self.close_session();
                     Err(Interrupt::Unavailable(message))
                 }
             }
