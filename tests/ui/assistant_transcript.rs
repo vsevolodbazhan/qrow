@@ -244,3 +244,29 @@ fn a_streamed_reply_shows_at_once_with_reduced_motion(cx: &mut TestAppContext) {
     assert_eq!(steps[0].len(), first_burst, "{steps:?}");
     assert!(steps.len() <= 4, "{steps:?}");
 }
+
+/// Each step of a streamed reply parses the message again, so the paragraphs
+/// of the new parse replace the paragraphs that the frame before drew. The
+/// shaped text of a replaced paragraph must not stay in memory.
+#[gpui_kit::test]
+fn replaced_paragraphs_release_their_shaped_text(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = codex.workspace(Workspace::default());
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    // The reveal steps use the test clock.
+    cx.update(|cx| cx.set_reduce_motion(false));
+    app.open_assistant(cx);
+    for reply in 1..=3 {
+        let message = format!("Stream a long reply {reply}");
+        app.send(cx, &message);
+        let end = format!("End of {message}");
+        wait_drawn(&app, cx, "the end of the reply", |window| {
+            transcript(window).iter().any(|entry| entry.contains(&end))
+        });
+    }
+    let retained = gpui_kit::base::text::retained_layout_count();
+    assert!(
+        retained <= 256,
+        "{retained} paragraph layouts stay in memory"
+    );
+}

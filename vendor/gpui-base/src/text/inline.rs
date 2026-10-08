@@ -250,12 +250,24 @@ struct RetainedLayout {
 }
 
 thread_local! {
-    static RETAINED_LAYOUTS: RefCell<HashMap<usize, RetainedLayout>> = RefCell::new(HashMap::new());
+    static RETAINED_LAYOUTS: RefCell<RetainedLayouts> = RefCell::new(RetainedLayouts::default());
 }
 
+/// The retained layouts, and the table size that starts the next sweep.
+///
 /// Dead entries (states that were dropped without a final paint, e.g. a
-/// replaced document) are swept once the table grows past this many.
-const RETAINED_SWEEP_AT: usize = 4096;
+/// replaced document or a streamed message that was parsed again) are never
+/// taken again. A sweep removes them once the table has grown to twice the
+/// entries that the last sweep kept, so dead entries never hold more shaped
+/// text than the live ones plus [`RETAINED_SWEEP_MIN`].
+#[derive(Default)]
+struct RetainedLayouts {
+    layouts: HashMap<usize, RetainedLayout>,
+    sweep_at: usize,
+}
+
+/// The smallest table size that starts a sweep.
+const RETAINED_SWEEP_MIN: usize = 64;
 
 fn state_key(state: &Arc<Mutex<InlineState>>) -> usize {
     Arc::as_ptr(state) as usize
@@ -264,7 +276,7 @@ fn state_key(state: &Arc<Mutex<InlineState>>) -> usize {
 /// Takes the layout retained for `state`, if the previous frame left one.
 fn take_retained_layout(state: &Arc<Mutex<InlineState>>) -> Option<RetainedLayout> {
     RETAINED_LAYOUTS.with(|layouts| {
-        let retained = layouts.borrow_mut().remove(&state_key(state))?;
+        let retained = layouts.borrow_mut().layouts.remove(&state_key(state))?;
         // The address may belong to a new state by now.
         retained
             .state
@@ -278,17 +290,28 @@ fn take_retained_layout(state: &Arc<Mutex<InlineState>>) -> Option<RetainedLayou
 /// by the previous frame is taken at layout time, so one that is present
 /// afterwards was put there this frame, by another element of the same state.
 fn has_retained_layout(state: &Arc<Mutex<InlineState>>) -> bool {
-    RETAINED_LAYOUTS.with(|layouts| layouts.borrow().contains_key(&state_key(state)))
+    RETAINED_LAYOUTS.with(|layouts| layouts.borrow().layouts.contains_key(&state_key(state)))
 }
 
 fn retain_layout(state: &Arc<Mutex<InlineState>>, retained: RetainedLayout) {
     RETAINED_LAYOUTS.with(|layouts| {
-        let mut layouts = layouts.borrow_mut();
-        if layouts.len() >= RETAINED_SWEEP_AT {
-            layouts.retain(|_, retained| retained.state.strong_count() > 0);
+        let mut table = layouts.borrow_mut();
+        if table.layouts.len() >= table.sweep_at.max(RETAINED_SWEEP_MIN) {
+            table
+                .layouts
+                .retain(|_, retained| retained.state.strong_count() > 0);
+            table.sweep_at = table.layouts.len() * 2;
+            let capacity = table.sweep_at.max(RETAINED_SWEEP_MIN);
+            table.layouts.shrink_to(capacity);
         }
-        layouts.insert(state_key(state), retained);
+        table.layouts.insert(state_key(state), retained);
     });
+}
+
+/// The number of layouts that the table holds, live or dead.
+#[cfg(any(test, feature = "test-support"))]
+pub fn retained_layout_count() -> usize {
+    RETAINED_LAYOUTS.with(|layouts| layouts.borrow().layouts.len())
 }
 
 impl InlineState {
@@ -1877,7 +1900,6 @@ mod retained_layout_tests {
         TestAppContext, Window, div, px,
     };
 
-    use super::RETAINED_LAYOUTS;
     use crate::text::{TextView, TextViewState};
 
     /// The same document shown twice in one window, as a preview beside the
@@ -1916,7 +1938,7 @@ mod retained_layout_tests {
             cx.update(|window, cx| window.draw(cx).clear(cx));
         }
 
-        let retained = RETAINED_LAYOUTS.with(|layouts| layouts.borrow().len());
+        let retained = super::retained_layout_count();
         assert_eq!(retained, 2, "one layout per paragraph state");
     }
 }
