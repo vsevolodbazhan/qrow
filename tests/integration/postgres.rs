@@ -250,16 +250,93 @@ fn verifies_tls_and_rejects_wrong_passwords_databases_and_settings() -> Result<(
 #[ignore = "needs the server fixture: ./qtest run postgres"]
 fn immediate_cancellation_prevents_or_stops_submission() -> Result<()> {
     let mut session = connect();
-    for _ in 0..10 {
+    for iteration in 0..30 {
         let cancel = session.execute("SELECT pg_sleep(30)")?;
         cancel.cancel()?;
         assert_eq!(
             wait_for_completion(&mut *session, Some(Instant::now() + Duration::from_secs(3)))?,
             Completion::Cancelled
         );
+        assert_eq!(session.poll()?, QueryState::Cancelled);
+        assert_eq!(
+            complete(&mut *session, "SELECT 42")?,
+            Completion::Finished { has_results: true },
+            "successor of cancelled query {iteration}"
+        );
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("42"));
+        // A handle retained by another thread must not affect successor work.
+        session.execute("SELECT 43")?;
+        cancel.cancel()?;
+        assert_eq!(
+            wait_for_completion(&mut *session, Some(Instant::now() + Duration::from_secs(3)))?,
+            Completion::Finished { has_results: true }
+        );
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("43"));
     }
-    complete(&mut *session, "SELECT 42")?;
-    assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("42"));
+    Ok(())
+}
+
+#[test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn cancellation_preserves_session_state_and_each_tls_mode() -> Result<()> {
+    let ca = std::fs::read(std::env::var("QROW_POSTGRES_CA")?)?;
+    let connector = PostgresConnector::new(Trust::from_pem(&ca)?);
+    let mut observer = connect();
+    for mode in [
+        PostgresSslMode::Disable,
+        PostgresSslMode::Require,
+        PostgresSslMode::VerifyFull,
+    ] {
+        let mut p = profile();
+        p.host = "localhost".into();
+        p.postgres_ssl_mode = Some(mode);
+        let mut session = connector.connect(&p, Secret::password("qrow-test-password"))?;
+        complete(
+            &mut *session,
+            "CREATE TEMPORARY TABLE cancellation_state AS SELECT pg_backend_pid() AS pid",
+        )?;
+        complete(&mut *session, "SELECT pid FROM cancellation_state")?;
+        let pid = session.fetch(1)?.rows[0][0].clone().unwrap();
+        let cancel = session.execute("SELECT pg_sleep(30) AS cancelled_work")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            complete(
+                &mut *observer,
+                &format!(
+                    "SELECT count(*) FROM pg_stat_activity WHERE pid = {pid} AND wait_event = 'PgSleep'"
+                ),
+            )?;
+            if observer.fetch(1)?.rows[0][0].as_deref() == Some("1") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "query did not reach pg_sleep with {mode:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+        cancel.cancel()?;
+        assert_eq!(
+            wait_for_completion(&mut *session, Some(Instant::now() + Duration::from_secs(3)))?,
+            Completion::Cancelled
+        );
+        assert_eq!(
+            complete(
+                &mut *session,
+                "SELECT pid = pg_backend_pid() FROM cancellation_state"
+            )?,
+            Completion::Finished { has_results: true }
+        );
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("t"));
+        // Retained handles cannot cancel a new query, even on the same backend.
+        session.execute("SELECT 43 AS value, pg_sleep(0.25)")?;
+        cancel.cancel()?;
+        assert_eq!(
+            wait_for_completion(&mut *session, Some(Instant::now() + Duration::from_secs(3)))?,
+            Completion::Finished { has_results: true }
+        );
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("43"));
+    }
     Ok(())
 }
 

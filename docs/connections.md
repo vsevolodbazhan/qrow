@@ -116,8 +116,11 @@ retry without TLS. Existing Postgres profiles keep their earlier choice.
 Profiles with the old TLS checkbox enabled use **Verify certificate**.
 
 Each tab has a separate Postgres session. Temporary tables and transaction
-state stay with that tab until the session closes. Cancel sends a Postgres
-cancellation request. SQL errors usually keep the session connected. After an
+state stay with that tab until the session closes. Cancel stops a query before
+submission, or sends a Postgres cancellation request for active work. Qrow waits
+for the cancellation socket to close before it reuses the session. If that
+request fails or times out, reconnect before you run another query.
+SQL errors usually keep the session connected. After an
 error in an explicit transaction, run `ROLLBACK` before other work.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
@@ -140,7 +143,6 @@ names. Use qualified names when a different `search_path` applies.
 - **Response Timeout** bounds connection setup, session settings, and cancellation.
   It does not set a query execution timeout. Use the `statement_timeout` session
   setting when you need one.
-- A late cancellation request can cancel the next query in the same session.
 - A SQL error in an explicit transaction keeps that transaction in the failed
   state. Qrow does not run `ROLLBACK` automatically.
 

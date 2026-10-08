@@ -342,6 +342,12 @@ On macOS, it also tests encrypted queries, result pages, and cancellation
 through the real Qrow window. The unit suite includes a protocol test that
 checks that required TLS cannot fall back to plaintext.
 
+Cancellation tests check the result of a new query after each cancelled query.
+They also check that an old cancellation handle cannot cancel new work.
+Protocol tests hold the cancellation socket open to check that cleanup waits
+for server closure. A cancellation timeout must prevent session reuse.
+Use `./qtest run postgres --runtime docker --repeat 5` to check these timing paths.
+
 The suite requires Docker. It does not use the Spark fixture or a native server
 runtime. It removes the container, its volumes, and certificates after the run.
 The backend CI job includes the connector tests. The Postgres UI tests require
