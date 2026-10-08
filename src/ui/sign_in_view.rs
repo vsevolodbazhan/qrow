@@ -100,8 +100,8 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-callback-ports",
         "Callback Ports",
-        "Optional. Local ports to try in order. Empty uses any free port.",
-        "8765 8766",
+        "Optional. Comma-separated ports. Empty uses any free port.",
+        "8765, 8766",
     ),
 ];
 
@@ -1487,7 +1487,7 @@ impl Qrow {
                 .iter()
                 .map(u16::to_string)
                 .collect::<Vec<_>>()
-                .join(" "),
+                .join(", "),
         ];
         let fields: Vec<_> = values
             .into_iter()

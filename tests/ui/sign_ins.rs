@@ -1117,7 +1117,7 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
     let (workspace, existing) = workspace(&provider, false);
     let app = launch(cx, &provider, workspace);
     let mut shared = provider.sign_in("Company");
-    shared.callback_ports = vec![8765];
+    shared.callback_ports = vec![8765, 8766];
     let message = format!("Here is our sign-in:\n{}", shared.to_shared_text());
     cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(message));
     open_sign_ins(&app, cx);
@@ -1136,7 +1136,7 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
         assert!(!present(window, &"sign-in-database-hosts".into()));
         assert_eq!(
             value(window, "sign-in-callback-ports").as_deref(),
-            Some("8765")
+            Some("8765, 8766")
         );
         // A new sign-in has no account yet.
         assert!(!present(window, &"sign-in-account-status".into()));
@@ -1159,12 +1159,16 @@ fn a_pasted_sign_in_opens_for_review_and_saves_as_a_new_sign_in(cx: &mut TestApp
     assert_ne!(pasted.id, existing.id);
     assert_ne!(pasted.id, shared.id);
     assert_eq!(pasted.identity, None);
-    assert_eq!(pasted.callback_ports, vec![8765]);
+    assert_eq!(pasted.callback_ports, vec![8765, 8766]);
     wait_row(&app, cx, pasted, "Not signed in");
     // Sign-in Settings of a saved sign-in shows no note.
     open_settings(&app, cx, pasted);
     app.update(cx, |window, _| {
         assert!(!present(window, &"sign-in-pasted-note".into()));
+        assert_eq!(
+            value(window, "sign-in-callback-ports").as_deref(),
+            Some("8765, 8766")
+        );
     });
 }
 

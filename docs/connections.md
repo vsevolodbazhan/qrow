@@ -270,7 +270,8 @@ sign-ins need attention.
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
 default, Qrow uses an available port. If the provider accepts only some ports,
-enter them in **Callback Ports**. Qrow tries them in order and uses the first
+enter them in **Callback Ports**, separated by commas, for example `8765, 8766`.
+Qrow also accepts spaces. It tries the ports in order and uses the first
 port that no other program uses. The provider must support the
 authorization-code flow with PKCE (`S256`). Add the `offline_access` scope if
 the provider issues refresh tokens only with it. Use **Resource** only if the

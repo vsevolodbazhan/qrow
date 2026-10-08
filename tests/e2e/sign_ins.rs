@@ -353,7 +353,15 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     let kyuubi = Kyuubi::get();
     let fixture = FixtureProvider::get();
     // A colleague copied this sign-in and sent it in a chat message.
-    let shared = fixture.sign_in("Team").to_shared_text();
+    let occupied_callback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let available_callback = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let ports = [
+        occupied_callback.local_addr().unwrap().port(),
+        available_callback.local_addr().unwrap().port(),
+    ];
+    let mut shared_sign_in = fixture.sign_in("Team");
+    shared_sign_in.callback_ports = ports.to_vec();
+    let shared = shared_sign_in.to_shared_text();
     let (mut workspace, credentials) =
         kyuubi.workspace("SELECT current_user() AS account", "not-used");
     let connection = workspace.profiles[0].id;
@@ -371,6 +379,12 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
     app.click(cx, "show-sign-ins");
     app.click(cx, "paste-sign-in");
     app.wait_for(cx, "sign-in-pasted-note");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "sign-in-callback-ports").as_deref(),
+            Some(format!("{}, {}", ports[0], ports[1]).as_str())
+        );
+    });
     app.click(cx, "save-sign-in-editor");
     app.wait_gone(cx, "sign-in-name");
     app.wait_until(cx, "the pasted sign-in", Duration::from_secs(20), |_, _| {
@@ -422,6 +436,8 @@ fn a_pasted_sign_in_runs_sql_in_a_connection_of_a_colleague(cx: &mut TestAppCont
         },
     );
 
+    // The first callback port stays occupied, so sign-in uses the second.
+    drop(available_callback);
     // Run opens the browser sign-in first, then runs the query.
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
