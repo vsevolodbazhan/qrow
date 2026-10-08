@@ -180,6 +180,7 @@ impl Qrow {
                 false,
                 |_, form, _, _| {
                     Select::new(&form.database_type)
+                        .focus_ring(false)
                         .id("connection-database-type")
                         .w_full()
                         .disabled(form.saving.is_some())
@@ -232,6 +233,7 @@ impl Qrow {
                     false,
                     |_, form, _, _| {
                         Select::new(&form.postgres_ssl_mode)
+                            .focus_ring(false)
                             .id("connection-postgres-ssl-mode")
                             .w_full()
                             .disabled(form.saving.is_some())
