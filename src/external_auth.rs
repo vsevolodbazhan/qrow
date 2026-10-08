@@ -210,6 +210,36 @@ impl Service {
             timeout: self.timeout,
         }))
     }
+    /// Check only memory; selecting a connection with a cached token needs no probe.
+    #[cfg(any(feature = "ui", test))]
+    pub(crate) fn is_authenticated(&self, profile: &Profile) -> bool {
+        self.shared
+            .registry
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.profile.connection_identity_eq(profile)
+                    && entry.valid.load(Ordering::SeqCst)
+                    && entry.state.lock().unwrap().token.is_some()
+            })
+    }
+    /// Failures belong to one connection, even if another uses the same sign-in.
+    #[cfg(any(feature = "ui", test))]
+    pub(crate) fn failed(&self, profile: &Profile) -> bool {
+        self.shared
+            .registry
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|entry| {
+                entry.profile.connection_identity_eq(profile)
+                    && entry.valid.load(Ordering::SeqCst)
+                    && entry.state.lock().unwrap().failed
+            })
+    }
     pub fn status(&self, id: Uuid) -> Status {
         let registry = self.shared.registry.lock().unwrap();
         let entries = &registry.entries;
@@ -464,6 +494,57 @@ mod tests {
             panic!()
         };
         (service, profile, sign_in, source)
+    }
+    #[test]
+    fn connection_selection_reuses_only_its_own_cached_token() {
+        let (service, profile, sign_in, source) = setup();
+        assert!(!service.is_authenticated(&profile));
+        source
+            .authenticate(None, Duration::from_secs(1), |_| {
+                Ok(Zeroizing::new("opaque".into()))
+            })
+            .unwrap();
+        assert!(service.is_authenticated(&profile));
+        let mut different = profile.clone();
+        different.username = "bob".into();
+        assert!(!service.is_authenticated(&different));
+        different = profile.clone();
+        different.id = Uuid::new_v4();
+        assert!(!service.is_authenticated(&different));
+        different = profile.clone();
+        different.port += 1;
+        assert!(!service.is_authenticated(&different));
+        service.clear(sign_in.id);
+        assert!(!service.is_authenticated(&profile));
+    }
+    #[test]
+    fn a_failed_connection_is_not_hidden_by_another_cached_token() {
+        let (service, profile, sign_in, source) = setup();
+        source
+            .authenticate(None, Duration::from_secs(1), |_| {
+                Ok(Zeroizing::new("opaque".into()))
+            })
+            .unwrap();
+        let mut other = profile.clone();
+        other.id = Uuid::new_v4();
+        service.configure(
+            std::slice::from_ref(&sign_in),
+            &[profile.clone(), other.clone()],
+        );
+        let Secret::External(other_source) = service.secret(&other).unwrap() else {
+            panic!()
+        };
+        assert!(
+            other_source
+                .authenticate(None, Duration::from_secs(1), |_| Err(Failure(
+                    "Synthetic failure"
+                )
+                .into()))
+                .is_err()
+        );
+        assert_eq!(service.status(sign_in.id), Status::SignedIn);
+        assert!(!service.failed(&profile));
+        assert!(service.failed(&other));
     }
     #[test]
     fn concurrent_callers_share_one_flight_and_one_cancel_does_not_stop_other_waiters() {

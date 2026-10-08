@@ -82,14 +82,15 @@ fn switching_from_a_copy_uses_the_selected_sign_in_and_releases_old_sessions(
         SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
     );
     app.click(cx, "show-sign-ins");
-    app.click(cx, format!("sign-in-{}-sign-in", main.id));
+    app.context_menu(cx, format!("sign-in-{}", main.id));
+    app.choose(cx, "popup-menu", "Sign in…");
     app.wait_until(
         cx,
         "the main account",
         Duration::from_secs(20),
         |window, _| {
-            crate::support::label(window, format!("sign-in-{}-account", main.id)).as_deref()
-                == Some("alice@qrow.test")
+            crate::support::label(window, format!("sign-in-{}", main.id))
+                .is_some_and(|label| label.ends_with("alice@qrow.test"))
         },
     );
     use_main.store(false, Ordering::SeqCst);

@@ -154,7 +154,7 @@ For sign-in authentication, select a sign-in and enter the Trino username.
 Turn on **TLS**. The database hosts of the sign-in must include the coordinator
 hostname. Choose the provider of the sign-in as follows:
 
-- **Browser sign-in through Trino** uses the coordinator's existing OAuth2
+- **Trino External Authentication** uses the coordinator's existing OAuth2
   configuration, like DBeaver or DataGrip external authentication. See
   [Trino browser sign-in](#trino-browser-sign-in).
 - **OpenID Connect** uses a public client and the direct provider login below.
@@ -205,14 +205,14 @@ client secret. You do not need a new identity-provider client, issuer URL,
 client ID, client secret, or local callback listener.
 
 1. Open **Sign-Ins** and click **+**.
-2. In **Provider**, select **Browser sign-in through Trino**.
+2. In **Provider**, select **Trino External Authentication**.
 3. Enter a name and the allowed **Database Hosts**, then save.
 4. In a Trino connection, select sign-in authentication and this sign-in.
    Enter the coordinator hostname, HTTPS port, and database username. Turn on
    **TLS**.
-5. Run a query. If Trino requires authentication, complete sign-in in the
-   browser. You can also click **Sign in…** in Sign-Ins after a connection
-   uses the sign-in.
+5. Select the connection in **Connections**. If Trino requires authentication,
+   complete sign-in in the browser. A query or schema refresh also starts
+   sign-in when necessary. Only Trino connections can use this provider.
 
 The query shows **Waiting for browser sign-in…** while authentication runs.
 **Cancel** stops that query's wait, including before a result cursor exists.
@@ -247,7 +247,11 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
-The **Sign-Ins** sidebar shows each sign-in with its account. To open it,
+The **Sign-Ins** sidebar shows each sign-in with its type: **OIDC** or **Trino**.
+Select a connection to start its sign-in when necessary. A query also starts
+sign-in when it needs authentication. The sidebar has no **Sign in…** button.
+Click a red error dot to open **Activity** for the connection whose sign-in
+failed. Click the sign-in name to see its account and settings. To open the sidebar,
 click the key button at the left end of the status bar, or select
 **View → Sign-Ins**. Click the button again to hide the sidebar. The button
 shows a yellow dot when sign-ins need attention: a connection uses a sign-in
@@ -304,9 +308,9 @@ database username, so a colleague must add their own connections.
 
 ### Sign in and use a sign-in
 
-Click **Sign in…** on the row of the sign-in. Qrow opens the default browser.
-Finish the sign-in there. Qrow waits up to five minutes. Click **Cancel** to
-stop. The row then shows the email or name of the account.
+Select a connection that uses the sign-in. Qrow opens the default browser
+when authentication is necessary. Finish the sign-in there. Qrow waits up
+to five minutes. Click **Cancel** to stop. The sidebar keeps the type **OIDC**.
 
 Click a row to open **Sign-In Settings**. The **Account** field shows the
 status and the actions for the account on the same row. The actions are on
@@ -325,14 +329,16 @@ another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
 use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 
+Sign-In Settings shows these account states:
+
 | State | Recovery |
 | --- | --- |
-| **Not signed in** | Click **Sign in…**. |
+| **Not signed in** | Select the connection or run a query. |
 | **Waiting for the browser…** | Finish the sign-in in the browser, or click **Cancel**. |
 | The account email or name | No action. |
-| **Expired · Sign in again** | Click **Sign in…**. |
+| **Expired · Sign in again** | Select the connection or run a query. |
 | **Cannot reach the provider** | Select **Retry**. Qrow keeps the account. |
-| **The last action failed** | Open Sign-in Settings to read the error, then try again. |
+| **The last action failed** | Click the red dot to read the connection error in Activity, then try again. |
 
 When you run a query and its connection needs a new sign-in, Qrow opens the
 browser sign-in. This occurs when the sign-in is not signed in, when it has

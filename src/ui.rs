@@ -1238,6 +1238,7 @@ impl Qrow {
         let mut activity = Vec::new();
         let workspace_visible = !self.activity.read(cx).is_open();
         let mut waits = Vec::new();
+        let mut sign_in_errors = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
                 .worker
@@ -1293,6 +1294,16 @@ impl Qrow {
                 .is_some()
                 .then(|| (tab.status.clone(), tab.status_detail.clone()));
             for event in events {
+                if let Event::Error { message, .. } = &event
+                    && let Some(profile) = self
+                        .profiles
+                        .iter()
+                        .find(|profile| Some(profile.id) == connection)
+                    && let Authentication::TrinoExternal { sign_in } = profile.authentication
+                    && (!tab.connected || self.external_auth.failed(profile))
+                {
+                    sign_in_errors.push((sign_in, profile.id, message.clone()));
+                }
                 if wait.is_some() && matches!(event, Event::Error { .. }) {
                     continue;
                 }
@@ -1315,6 +1326,9 @@ impl Qrow {
         }
         for (connection, entry) in activity {
             self.record_activity(connection, entry, cx);
+        }
+        for (sign_in, connection, message) in sign_in_errors {
+            self.record_sign_in_error(sign_in, connection, message, cx);
         }
         for (index, (sign_in, sql)) in waits {
             self.tabs[index].busy = false;
@@ -1799,6 +1813,14 @@ impl Qrow {
             // not change the owning connection of either tab, so it is not a
             // query Logs event. The tree keeps the focus.
             self.show_tab(index, false, window, cx);
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .cloned()
+            {
+                self.authenticate_connection(profile, cx);
+            }
         }
         self.select_catalog_connection(id, window, cx);
     }
@@ -1929,6 +1951,9 @@ impl Qrow {
         {
             self.wait_for_sign_in(index, sign_in, query, cx);
             return true;
+        }
+        if let Authentication::TrinoExternal { sign_in } = profile.authentication {
+            self.sign_in_ui.clear_connection_error(sign_in, profile.id);
         }
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;

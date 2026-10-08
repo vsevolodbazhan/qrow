@@ -195,9 +195,14 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
             })),
         ),
     );
-    app.click(cx, "run");
-    app.wait_status(cx, "Waiting for browser sign-in");
+    let connection = app.saved().profiles[0].id;
+    app.click(cx, format!("profile-{connection}"));
+    app.click(cx, "show-sign-ins");
+    app.wait_label(cx, "Trino");
+    app.wait_for(cx, format!("sign-in-{}-cancel", app.saved().sign_ins[0].id));
     release.store(true, Ordering::SeqCst);
+    app.wait_gone(cx, format!("sign-in-{}-cancel", app.saved().sign_ins[0].id));
+    app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "alice");
     app.click(cx, "disconnect");
@@ -205,8 +210,7 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
     assert_eq!(opens.load(Ordering::SeqCst), 1);
-    app.click(cx, "show-sign-ins");
-    app.wait_label(cx, "Signed in through Trino");
+    app.wait_label(cx, "Trino");
     assert!(app.saved().sign_ins[0].identity.is_none());
     assert!(
         !serde_json::to_string(&app.saved())

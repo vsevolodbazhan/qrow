@@ -839,6 +839,15 @@ impl Qrow {
 
     /// Ask the catalog worker to read `scope` again with `profile`.
     pub(super) fn refresh_catalog(&mut self, profile: Uuid, scope: Scope, cx: &mut Context<Self>) {
+        if let Some(connection) = self
+            .profiles
+            .iter()
+            .find(|connection| connection.id == profile)
+            && let crate::model::Authentication::TrinoExternal { sign_in } =
+                connection.authentication
+        {
+            self.sign_in_ui.clear_connection_error(sign_in, profile);
+        }
         self.ensure_catalog(profile);
         if let Some(worker) = self.catalog.worker(profile) {
             worker.refresh(profile, scope);
@@ -886,6 +895,19 @@ impl Qrow {
         // A refresh belongs to the connection that ran it, so its entries
         // go to the Activity of that connection.
         for (profile, event) in logs {
+            if event.severity == Severity::Error
+                && event.kind == crate::logs::LogKind::SchemaRefreshFinished
+                && let Some(connection) = self
+                    .profiles
+                    .iter()
+                    .find(|connection| connection.id == profile)
+                && let crate::model::Authentication::TrinoExternal { sign_in } =
+                    connection.authentication
+                && self.external_auth.failed(connection)
+            {
+                self.sign_in_ui
+                    .set_connection_error(sign_in, profile, event.text.clone());
+            }
             self.record_activity(profile, crate::activity::from_refresh(event), cx);
         }
         if changed {

@@ -113,7 +113,7 @@ port. It checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
 and result limits. It then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
-coordinator and provider redirects over verified HTTPS. Tests check browser
+coordinator and provider redirects over verified HTTPS. Tests check automatic sign-in on connection selection, browser
 progress, token reuse, and renewal without another browser login.
 The fixture provider uses only synthetic accounts and an HTTPS callback at
 Trino. It removes the container after the run.
