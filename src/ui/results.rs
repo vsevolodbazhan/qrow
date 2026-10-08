@@ -10,7 +10,6 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::collections::HashMap;
 
 pub struct Results {
     pub columns: Vec<DataColumn>,
@@ -67,7 +66,7 @@ impl Results {
 
     pub fn schema(&mut self, columns: Vec<DataColumn>, cx: &App) {
         let scale = self.ui_scale;
-        let mut header = HeaderMeasure::new(scale, cx);
+        let header = HeaderMeasure::new(scale, cx);
         // At 100% scale, the inner 4px inset keeps the original 6px text offset.
         let padding = Edges {
             top: self.px(3.),
@@ -113,45 +112,44 @@ impl Results {
 }
 /// Measures the name and the data type of a column header, so that a narrow
 /// default width does not cut the data type.
-struct HeaderMeasure<'a> {
-    text: &'a TextSystem,
-    font: FontId,
+struct HeaderMeasure {
+    // A cache of its own, because the measure runs outside a window.
+    text: WindowTextSystem,
+    font: Font,
     rem: Pixels,
     scale: f32,
-    chars: HashMap<(char, bool), Pixels>,
 }
-impl<'a> HeaderMeasure<'a> {
-    fn new(scale: f32, cx: &'a App) -> Self {
-        let text = cx.text_system();
+impl HeaderMeasure {
+    fn new(scale: f32, cx: &App) -> Self {
         Self {
-            text,
-            font: text.resolve_font(&font(cx.theme().font_family.clone())),
+            text: WindowTextSystem::new(cx.text_system().clone()),
+            font: font(cx.theme().font_family.clone()),
             rem: px(14. * scale),
             scale,
-            chars: HashMap::default(),
         }
     }
     /// The width of the text at 12/14 rem, or at 10/14 rem when `small`.
-    fn text(&mut self, text: &str, small: bool) -> Pixels {
+    fn text(&self, text: &str, small: bool) -> Pixels {
         let size = self.rem * if small { 10. / 14. } else { 12. / 14. };
-        text.chars()
-            .map(|ch| {
-                *self
-                    .chars
-                    .entry((ch, small))
-                    .or_insert_with(|| self.text.layout_width(self.font, size, ch))
-            })
-            .sum()
+        let run = TextRun {
+            len: text.len(),
+            font: self.font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        self.text.layout_line(text, size, &[run], None).width
     }
     /// The column width that shows the full header, including the paddings
     /// of the table cell and of `render_th`.
-    fn width(&mut self, column: &DataColumn) -> Pixels {
+    fn width(&self, column: &DataColumn) -> Pixels {
         let scale = self.scale;
         let name = self.text(&column.name, false);
         let data_type = self.text(&column.data_type, true);
         // Two `px_1` insets and one `gap_2` are 1 rem, the column paddings
         // are 4px, and the table keeps 6px less the right padding for its
-        // sort icon. Two more pixels absorb the cell border and kerning.
+        // sort icon. Two more pixels absorb the cell border and rounding.
         let cell = px(scale * 4.) + (px(6.) - px(scale * 2.)).max(px(0.)) + px(2.);
         name + data_type + self.rem + cell
     }
@@ -446,7 +444,7 @@ mod tests {
             assert!(widths[2] > px(120.));
             assert!(widths[3] > widths[2]);
 
-            let mut header = super::HeaderMeasure::new(1., cx);
+            let header = super::HeaderMeasure::new(1., cx);
             let text =
                 header.text("a_much_longer_column_name", false) + header.text("BIGINT", true);
             assert!(widths[3] > text);
