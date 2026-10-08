@@ -10,6 +10,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
+use std::collections::HashMap;
 
 pub struct Results {
     pub columns: Vec<DataColumn>,
@@ -37,10 +38,12 @@ impl Results {
     fn px(&self, value: f32) -> Pixels {
         px(self.ui_scale * value)
     }
-    pub fn set_ui_scale(&mut self, scale: f32) {
+    /// Set the interface scale and size the columns again. Call this also
+    /// after a change of the interface font.
+    pub fn set_ui_scale(&mut self, scale: f32, cx: &App) {
         self.ui_scale = scale;
         if !self.columns.is_empty() {
-            self.schema(self.columns.clone());
+            self.schema(self.columns.clone(), cx);
         }
     }
     pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
@@ -62,8 +65,9 @@ impl Results {
         false
     }
 
-    pub fn schema(&mut self, columns: Vec<DataColumn>) {
+    pub fn schema(&mut self, columns: Vec<DataColumn>, cx: &App) {
         let scale = self.ui_scale;
+        let mut header = HeaderMeasure::new(scale, cx);
         // At 100% scale, the inner 4px inset keeps the original 6px text offset.
         let padding = Edges {
             top: self.px(3.),
@@ -86,7 +90,7 @@ impl Results {
                     _ => 120.,
                 };
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(scale * width))
+                    .width(px(scale * width).max(header.width(c)))
                     .paddings(padding)
                     .movable(false)
             }));
@@ -107,6 +111,52 @@ impl Results {
         )
     }
 }
+/// Measures the name and the data type of a column header, so that a narrow
+/// default width does not cut the data type.
+struct HeaderMeasure<'a> {
+    text: &'a TextSystem,
+    font: FontId,
+    rem: Pixels,
+    scale: f32,
+    chars: HashMap<(char, bool), Pixels>,
+}
+impl<'a> HeaderMeasure<'a> {
+    fn new(scale: f32, cx: &'a App) -> Self {
+        let text = cx.text_system();
+        Self {
+            text,
+            font: text.resolve_font(&font(cx.theme().font_family.clone())),
+            rem: px(14. * scale),
+            scale,
+            chars: HashMap::default(),
+        }
+    }
+    /// The width of the text at 12/14 rem, or at 10/14 rem when `small`.
+    fn text(&mut self, text: &str, small: bool) -> Pixels {
+        let size = self.rem * if small { 10. / 14. } else { 12. / 14. };
+        text.chars()
+            .map(|ch| {
+                *self
+                    .chars
+                    .entry((ch, small))
+                    .or_insert_with(|| self.text.layout_width(self.font, size, ch))
+            })
+            .sum()
+    }
+    /// The column width that shows the full header, including the paddings
+    /// of the table cell and of `render_th`.
+    fn width(&mut self, column: &DataColumn) -> Pixels {
+        let scale = self.scale;
+        let name = self.text(&column.name, false);
+        let data_type = self.text(&column.data_type, true);
+        // Two `px_1` insets and one `gap_2` are 1 rem, the column paddings
+        // are 4px, and the table keeps 6px less the right padding for its
+        // sort icon. Two more pixels absorb the cell border and kerning.
+        let cell = px(scale * 4.) + (px(6.) - px(scale * 2.)).max(px(0.)) + px(2.);
+        name + data_type + self.rem + cell
+    }
+}
+
 impl TableDelegate for Results {
     fn columns_count(&self, _: &App) -> usize {
         self.headers.len()
@@ -340,34 +390,69 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
 #[cfg(test)]
 mod tests {
     use super::{DataColumn, Event, Results};
-    use gpui_kit::px;
+    use gpui_kit::{TestAppContext, px};
 
-    #[test]
-    fn scaling_preserves_page_and_query_state_and_clear_preserves_scale() {
-        let mut results = Results::default();
-        results.schema(vec![DataColumn {
-            name: "value".into(),
-            data_type: "STRING".into(),
-        }]);
-        results.rows = vec![vec![Some("value".into())]; 1250];
-        assert!(results.pagination.select(1, results.rows.len()));
-        results.selected = Some((1000, 1));
-        results.query_event(&Event::Cancelled, false);
+    fn column(name: &str, data_type: &str) -> DataColumn {
+        DataColumn {
+            name: name.into(),
+            data_type: data_type.into(),
+        }
+    }
 
-        results.set_ui_scale(1.5);
-        assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
-        assert_eq!(results.selected, Some((1000, 1)));
-        assert_eq!(
-            results.empty_message,
-            Some("Query cancelled before any rows arrived")
-        );
-        assert_eq!(results.px(48.), px(72.));
+    #[gpui_kit::test]
+    fn scaling_preserves_page_and_query_state_and_clear_preserves_scale(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results::default();
+            results.schema(vec![column("value", "STRING")], cx);
+            results.rows = vec![vec![Some("value".into())]; 1250];
+            assert!(results.pagination.select(1, results.rows.len()));
+            results.selected = Some((1000, 1));
+            results.query_event(&Event::Cancelled, false);
 
-        results.clear();
-        assert_eq!(results.ui_scale, 1.5);
-        assert_eq!(results.pagination.page(), 0);
-        assert!(results.rows.is_empty());
-        assert!(results.empty_message.is_none());
-        assert!(results.selected.is_none());
+            results.set_ui_scale(1.5, cx);
+            assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
+            assert_eq!(results.selected, Some((1000, 1)));
+            assert_eq!(
+                results.empty_message,
+                Some("Query cancelled before any rows arrived")
+            );
+            assert_eq!(results.px(48.), px(72.));
+
+            results.clear();
+            assert_eq!(results.ui_scale, 1.5);
+            assert_eq!(results.pagination.page(), 0);
+            assert!(results.rows.is_empty());
+            assert!(results.empty_message.is_none());
+            assert!(results.selected.is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn columns_widen_to_show_the_full_header(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results::default();
+            results.schema(
+                vec![
+                    column("id", "INT"),
+                    column("paid_bookings", "BIGINT"),
+                    column("a_much_longer_column_name", "BIGINT"),
+                ],
+                cx,
+            );
+            let widths: Vec<_> = results.headers.iter().map(|c| c.width).collect();
+            assert_eq!(widths[1], px(120.));
+            assert!(widths[2] > px(120.));
+            assert!(widths[3] > widths[2]);
+
+            let mut header = super::HeaderMeasure::new(1., cx);
+            let text =
+                header.text("a_much_longer_column_name", false) + header.text("BIGINT", true);
+            assert!(widths[3] > text);
+
+            results.set_ui_scale(2., cx);
+            assert!(results.headers[3].width > widths[3] * 1.5);
+        });
     }
 }
