@@ -532,6 +532,8 @@ pub struct Qrow {
     focus: FocusHandle,
     _quit: Subscription,
     _appearance: Subscription,
+    /// Gives the focus back when the focused element leaves the window.
+    _focus_lost: Subscription,
     _assistant_submit: Subscription,
     pending_quit: Option<(Workspace, storage::SaveReceipt)>,
     quit_warning_open: bool,
@@ -689,6 +691,16 @@ impl Qrow {
                 cx.notify();
             }
         });
+        // A list draws only its rows on the screen, and a closed part draws
+        // no content, so a focused field can leave the window. The keys then
+        // go to no element, and Escape and the close button of a sheet or a
+        // dialog do nothing. The focus goes to the nearest element around
+        // the field that is still in the window, for example the sheet.
+        let focus_lost = cx.on_focus_lost(window, |_, window, cx| {
+            if let Some(target) = window.focus_lost_restore_target(cx) {
+                window.focus(&target, cx);
+            }
+        });
         let catalog = catalog_tree::CatalogTree::new(environment.workspace().cloned(), window, cx);
         let catalog_subscriptions = [
             cx.subscribe(
@@ -750,6 +762,7 @@ impl Qrow {
             focus: cx.focus_handle(),
             _quit: quit,
             _appearance: appearance,
+            _focus_lost: focus_lost,
             _assistant_submit: assistant_submit,
             pending_quit: None,
             quit_warning_open: false,

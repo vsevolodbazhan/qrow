@@ -1049,3 +1049,29 @@ fn the_demo_opens_a_catalog_and_a_complete_dbt_project(cx: &mut TestAppContext) 
         "closing the demo removes its temporary manifest"
     );
 }
+
+#[gpui_kit::test]
+fn the_dbt_details_close_after_the_focused_filter_leaves(cx: &mut TestAppContext) {
+    let bytes = dbt_manifest::generate(&shape());
+    let (app, _manifest, id) = launch_project(cx, &bytes, DbtRefresh::Manual);
+    let alias = show_model_table(&app, cx, id);
+    // The focused column filter leaves the sheet with its closed part. The
+    // close button and Escape still close the sheet.
+    for close in ["button", "escape"] {
+        app.context_menu_labelled(cx, &alias);
+        app.choose(cx, "popup-menu", "Show dbt details");
+        app.wait_for(cx, "dbt-details-columns-toggle");
+        app.click(cx, "dbt-details-columns-toggle");
+        app.fill(cx, "dbt-details-filter", "col_001");
+        app.click(cx, "dbt-details-columns-toggle");
+        app.wait_gone(cx, "dbt-details-filter");
+        if close == "button" {
+            app.click(cx, "close");
+        } else {
+            app.press(cx, "escape");
+        }
+        app.wait_until(cx, "the closed sheet", TIMEOUT, |window, _| {
+            !crate::support::present(window, &"dbt-details".into())
+        });
+    }
+}
