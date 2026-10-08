@@ -240,18 +240,10 @@ fn external(
     timeout: Duration,
     browser: qrow::external_auth::Browser,
 ) -> (qrow::external_auth::Service, Secret) {
-    use qrow::model::{Authentication, SignIn, SignInProvider};
-    let sign_in = SignIn {
-        name: "Trino browser".into(),
-        provider: SignInProvider::TrinoExternal,
-        allowed_hosts: vec!["localhost".into()],
-        ..SignIn::default()
-    };
-    server.profile.authentication = Authentication::TrinoExternal {
-        sign_in: sign_in.id,
-    };
+    use qrow::model::Authentication;
+    server.profile.authentication = Authentication::TrinoExternal;
     let service = qrow::external_auth::Service::with_timeout(Some(browser), timeout);
-    service.configure(&[sign_in], std::slice::from_ref(&server.profile));
+    service.configure(std::slice::from_ref(&server.profile));
     let secret = service.secret(&server.profile).unwrap();
     (service, secret)
 }
@@ -466,7 +458,7 @@ fn external_sign_out_keeps_a_cleanup_credential_without_new_login() -> Result<()
     );
     let mut session = server.connect_secret(secret)?;
     session.execute("SELECT 1")?;
-    service.clear(server.profile.authentication.sign_in().unwrap());
+    service.clear(server.profile.id);
     session.close_operation()?;
     let requests = server.requests();
     assert!(requests[5].starts_with("DELETE /query/active "));
@@ -500,7 +492,7 @@ fn external_settings_invalidation_still_rolls_back_without_authentication() -> R
     complete(&mut *session, "START TRANSACTION")?;
     let mut changed = server.profile.clone();
     changed.username = "other-user".into();
-    service.configure(&[], &[changed]);
+    service.configure(&[changed]);
     session.close()?;
     let requests = server.requests();
     assert!(requests[5].ends_with("ROLLBACK"));

@@ -48,6 +48,7 @@ pub struct Service {
     trust: Trust,
     clock: Clock,
     records: Mutex<HashMap<Uuid, Arc<Record>>>,
+    profiles: Mutex<Vec<Profile>>,
     on_change: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
@@ -129,6 +130,7 @@ impl Service {
             trust,
             clock,
             records: Mutex::default(),
+            profiles: Mutex::default(),
             on_change: Mutex::default(),
         })
     }
@@ -157,7 +159,8 @@ impl Service {
     /// Lock order: `work`, then `config`. This method does not wait for
     /// `work`, which a refresh holds during network requests, because the
     /// interface thread calls it.
-    pub fn configure(&self, sign_ins: &[SignIn]) {
+    pub fn configure(&self, sign_ins: &[SignIn], profiles: &[Profile]) {
+        *lock(&self.profiles) = profiles.to_vec();
         let mut records = lock(&self.records);
         records.retain(|id, record| {
             let keep = sign_ins.iter().any(|sign_in| {
@@ -355,9 +358,14 @@ impl Service {
             (config.clone(), current)
         };
         anyhow::ensure!(
-            config.allows_host(host),
-            "The sign-in \"{}\" does not allow sending tokens to {host}. Add the host to the database hosts of the sign-in in the Sign-ins sidebar",
-            config.name
+            lock(&self.profiles).iter().any(|profile| {
+                profile.authentication == Authentication::Oidc { sign_in: id }
+                    && profile
+                        .host
+                        .trim_end_matches('.')
+                        .eq_ignore_ascii_case(host.trim_end_matches('.'))
+            }),
+            "No configured connection uses this sign-in for the requested host"
         );
         match current {
             None => {
@@ -558,6 +566,16 @@ impl Service {
         self.valid_token(&record, &config, &subject).map(drop)
     }
 
+    fn authorize_connection(&self, profile: &Profile) -> Result<()> {
+        anyhow::ensure!(
+            lock(&self.profiles)
+                .iter()
+                .any(|current| current.connection_identity_eq(profile)),
+            "Connection settings changed; reconnect"
+        );
+        Ok(())
+    }
+
     /// The credentials of a connection that uses a sign-in. This gets an
     /// access token now, so that a missing sign-in fails before the
     /// connection opens. Later calls, for example for cancellation, use the
@@ -566,6 +584,7 @@ impl Service {
         let Authentication::Oidc { sign_in } = profile.authentication else {
             anyhow::bail!("The connection does not use a sign-in");
         };
+        self.record(sign_in)?;
         let subject = self
             .identity(sign_in)
             .map(|identity| identity.subject)
@@ -574,24 +593,29 @@ impl Service {
             service: self.clone(),
             sign_in,
             subject,
-            host: profile.host.clone(),
+            profile: profile.clone(),
         };
         source.access_token()?;
         Ok(Secret::Token(Arc::new(source)))
     }
 }
 
-/// The tokens of one sign-in, for one identity and one database host.
+/// The tokens of one sign-in, for one identity and one connection.
 struct Bound {
     service: Arc<Service>,
     sign_in: Uuid,
     subject: String,
-    host: String,
+    profile: Profile,
 }
 
 impl TokenSource for Bound {
     fn access_token(&self) -> Result<Zeroizing<String>> {
-        self.service
-            .access_token(self.sign_in, &self.subject, &self.host)
+        self.service.authorize_connection(&self.profile)?;
+        let token = self
+            .service
+            .access_token(self.sign_in, &self.subject, &self.profile.host)?;
+        // A refresh can take long enough for the connection to be edited.
+        self.service.authorize_connection(&self.profile)?;
+        Ok(token)
     }
 }

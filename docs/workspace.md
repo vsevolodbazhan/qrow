@@ -112,7 +112,12 @@ option from the file.
 
 Workspace version 7 adds the database type of each connection. Profiles from
 older workspaces use Kyuubi. Earlier versions of Qrow cannot open a version 7
-workspace.
+workspace. Trino external authentication is stored on the connection, without
+an issuer or sign-in reference. Earlier Trino sign-in references load as
+external authentication. The next save removes their obsolete sign-in records.
+Direct OIDC sign-ins and their references remain unchanged. The connection
+host now determines where Qrow can send its OIDC token. The removed database
+host lists are ignored during loading and omitted from the next save.
 
 Workspace version 6 adds sign-ins, and the TLS and authentication choices of
 each connection. Earlier connections load with password authentication and

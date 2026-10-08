@@ -1,7 +1,7 @@
 //! Browser navigation for the disposable Trino/confidential OIDC fixture.
 #![allow(dead_code)]
 use qrow::{
-    model::{Authentication, DatabaseType, Profile, SignIn, SignInProvider},
+    model::{Authentication, DatabaseType, Profile},
     tls::Trust,
 };
 use std::{
@@ -13,19 +13,13 @@ use std::{
 };
 use url::Url;
 
-pub fn configuration() -> (Profile, SignIn, Trust) {
+pub fn configuration() -> (Profile, Trust) {
     assert_eq!(std::env::var("QROW_TRINO_OAUTH").unwrap(), "1");
     assert!(
         std::env::var("QROW_TRINO_FIXTURE")
             .unwrap()
             .starts_with("qrow-e2e-trino-")
     );
-    let sign_in = SignIn {
-        name: "Trino browser".into(),
-        provider: SignInProvider::TrinoExternal,
-        allowed_hosts: vec!["localhost".into()],
-        ..SignIn::default()
-    };
     let profile = Profile {
         name: "Trino browser".into(),
         database_type: DatabaseType::Trino,
@@ -35,14 +29,12 @@ pub fn configuration() -> (Profile, SignIn, Trust) {
         database: "tpch".into(),
         trino_schema: "tiny".into(),
         tls: true,
-        authentication: Authentication::TrinoExternal {
-            sign_in: sign_in.id,
-        },
+        authentication: Authentication::TrinoExternal,
         ..Profile::default()
     };
     let trust =
         Trust::from_pem(&std::fs::read(std::env::var("QROW_TRINO_CA").unwrap()).unwrap()).unwrap();
-    (profile, sign_in, trust)
+    (profile, trust)
 }
 
 pub fn refresh_grants() -> anyhow::Result<u64> {

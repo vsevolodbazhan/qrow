@@ -113,8 +113,10 @@ port. It checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
 and result limits. It then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
-coordinator and provider redirects over verified HTTPS. Tests check automatic sign-in on connection selection, browser
-progress, token reuse, and renewal without another browser login.
+coordinator and provider redirects over verified HTTPS. Tests check automatic
+sign-in on connection selection, browser
+progress and cancellation in the connection toolbar, token reuse without a
+saved sign-in, and renewal without another browser login.
 The fixture provider uses only synthetic accounts and an HTTPS callback at
 Trino. It removes the container after the run.
 
@@ -284,6 +286,10 @@ and TLS:
 - A custom Kyuubi authenticator. It accepts a valid access token for the
   database usernames of its identity, and gives other passwords to LDAP.
 - A new certificate authority and server certificate for each start.
+
+Run `./qtest run e2e/sign_ins backend/oidc --runtime docker` to check browser
+sign-in, token refresh, and connection authorization. The E2E tests also change
+the host of a saved OIDC connection and run a query immediately after saving.
 
 | User | Database usernames |
 | --- | --- |

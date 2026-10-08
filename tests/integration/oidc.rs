@@ -104,10 +104,27 @@ fn setup() -> Setup {
     }
 }
 
+fn configured_profiles(sign_ins: &[SignIn]) -> Vec<Profile> {
+    sign_ins
+        .iter()
+        .map(|sign_in| Profile {
+            id: sign_in.id,
+            host: "127.0.0.1".into(),
+            authentication: Authentication::Oidc {
+                sign_in: sign_in.id,
+            },
+            ..Profile::default()
+        })
+        .collect()
+}
+fn configure(service: &Service, sign_ins: &[SignIn]) {
+    service.configure(sign_ins, &configured_profiles(sign_ins));
+}
+
 impl Setup {
     fn add(&self, name: &str) -> SignIn {
         let sign_in = self.provider.sign_in(name);
-        self.service.configure(std::slice::from_ref(&sign_in));
+        configure(&self.service, std::slice::from_ref(&sign_in));
         sign_in
     }
     fn sign_in(&self, sign_in: &SignIn, user: &str) -> Result<qrow::model::Identity> {
@@ -162,7 +179,7 @@ fn a_new_service_reads_the_tokens_from_keychain() {
     let restarted = Service::new(setup.store.clone(), trust());
     let mut restored = sign_in.clone();
     restored.identity = setup.service.identity(sign_in.id);
-    restarted.configure(&[restored]);
+    configure(&restarted, &[restored]);
     assert_eq!(
         *restarted
             .access_token(sign_in.id, &subject("alice"), "127.0.0.1")
@@ -181,7 +198,7 @@ fn a_rotated_refresh_token_survives_a_failed_key_request() {
     let restarted = Service::new(setup.store.clone(), trust());
     let mut restored = sign_in.clone();
     restored.identity = setup.service.identity(sign_in.id);
-    restarted.configure(&[restored]);
+    configure(&restarted, &[restored]);
     setup.provider.set_keys_down(true);
     let error = restarted
         .access_token(sign_in.id, &subject("alice"), "127.0.0.1")
@@ -202,7 +219,7 @@ fn one_provider_can_have_several_identities_without_mixing_tokens() {
     let setup = setup();
     let alice = setup.provider.sign_in("Alice");
     let bob = setup.provider.sign_in("Bob");
-    setup.service.configure(&[alice.clone(), bob.clone()]);
+    configure(&setup.service, &[alice.clone(), bob.clone()]);
     setup.sign_in(&alice, "alice").unwrap();
     setup.sign_in(&bob, "bob").unwrap();
     let alice_token = setup
@@ -231,20 +248,81 @@ fn one_provider_can_have_several_identities_without_mixing_tokens() {
 }
 
 #[test]
-fn tokens_go_only_to_allowed_hosts() {
+fn tokens_go_only_to_hosts_of_configured_connections() {
     let setup = setup();
     let sign_in = signed_in(&setup, "alice");
     let error = setup
         .service
         .access_token(sign_in.id, &subject("alice"), "evil.example.test")
         .unwrap_err();
-    assert!(error.to_string().contains("does not allow"), "{error}");
+    assert!(
+        error.to_string().contains("No configured connection"),
+        "{error}"
+    );
     assert!(
         setup
             .service
             .access_token(sign_in.id, &subject("alice"), "127.0.0.1.")
             .is_ok()
     );
+}
+
+#[test]
+fn oidc_credentials_follow_configured_connections_and_reject_stale_snapshots() {
+    let setup = setup();
+    let sign_in = signed_in(&setup, "alice");
+    let mut profile = configured_profiles(std::slice::from_ref(&sign_in)).remove(0);
+    profile.host = "database.example.test".into();
+    setup.service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&profile),
+    );
+    let Secret::Token(source) = setup.service.secret(&profile).unwrap() else {
+        panic!()
+    };
+    assert!(source.access_token().is_ok());
+    let unconfigured = Profile {
+        id: Uuid::new_v4(),
+        ..profile.clone()
+    };
+    assert!(setup.service.secret(&unconfigured).is_err());
+    let changed = Profile {
+        host: "new-database.example.test".into(),
+        ..profile.clone()
+    };
+    setup.service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&changed),
+    );
+    assert!(source.access_token().is_err());
+    assert!(setup.service.secret(&profile).is_err());
+    assert!(setup.service.secret(&changed).is_ok());
+    setup.service.configure(std::slice::from_ref(&sign_in), &[]);
+    assert!(setup.service.secret(&changed).is_err());
+}
+
+#[test]
+fn a_host_change_during_oidc_refresh_does_not_release_a_token_to_the_old_connection() {
+    let setup = setup();
+    let sign_in = signed_in(&setup, "alice");
+    let profile = configured_profiles(std::slice::from_ref(&sign_in)).remove(0);
+    let Secret::Token(source) = setup.service.secret(&profile).unwrap() else {
+        panic!()
+    };
+    setup.clock.advance(300);
+    setup.provider.set_refresh_delay(Duration::from_millis(800));
+    let refresh = thread::spawn(move || source.access_token());
+    thread::sleep(Duration::from_millis(150));
+    let changed = Profile {
+        host: "new-database.example.test".into(),
+        ..profile
+    };
+    setup.service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&changed),
+    );
+    assert!(refresh.join().unwrap().is_err());
+    assert!(setup.service.secret(&changed).is_ok());
 }
 
 #[test]
@@ -434,7 +512,7 @@ fn a_sign_in_that_finishes_after_removal_is_discarded() {
         while location.lock().unwrap().is_none() {
             thread::sleep(Duration::from_millis(10));
         }
-        service.configure(&[]);
+        configure(&service, &[]);
         crate::oidc_provider::callback(location.lock().unwrap().as_deref().unwrap());
         assert!(running.join().unwrap().is_err());
     });
@@ -488,7 +566,7 @@ fn the_provider_must_present_a_trusted_certificate_and_the_configured_issuer() {
     let store = Arc::new(MemoryTokens::default());
     let untrusted = Service::new(store.clone(), other_trust());
     let sign_in = provider.sign_in("Provider");
-    untrusted.configure(std::slice::from_ref(&sign_in));
+    configure(&untrusted, std::slice::from_ref(&sign_in));
     let error = untrusted
         .sign_in(
             sign_in.id,
@@ -501,7 +579,7 @@ fn the_provider_must_present_a_trusted_certificate_and_the_configured_issuer() {
     let service = Service::new(store, trust());
     let mut other_issuer = provider.sign_in("Provider");
     other_issuer.issuer = format!("{}/", provider.issuer);
-    service.configure(std::slice::from_ref(&other_issuer));
+    configure(&service, std::slice::from_ref(&other_issuer));
     let error = service
         .sign_in(
             other_issuer.id,
@@ -524,6 +602,10 @@ fn a_connection_secret_refreshes_for_cancellation_after_expiry() {
         },
         ..Profile::default()
     };
+    setup.service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&profile),
+    );
     let secret = setup.service.secret(&profile).unwrap();
     let Secret::Token(source) = secret.clone() else {
         panic!("a sign-in gives a token source")
@@ -552,6 +634,10 @@ fn a_connection_without_a_sign_in_fails_before_connecting() {
         },
         ..Profile::default()
     };
+    setup.service.configure(
+        std::slice::from_ref(&sign_in),
+        std::slice::from_ref(&profile),
+    );
     let error = setup.service.secret(&profile).unwrap_err();
     assert_eq!(failure(&error), Failure::SignInRequired);
     assert!(error.to_string().contains("in the Sign-ins sidebar"));
@@ -582,7 +668,7 @@ fn configuration_does_not_wait_for_a_running_refresh() {
     let mut changed = sign_in.clone();
     changed.scopes.push("groups".into());
     let started = std::time::Instant::now();
-    setup.service.configure(std::slice::from_ref(&changed));
+    configure(&setup.service, std::slice::from_ref(&changed));
     assert!(
         started.elapsed() < Duration::from_millis(400),
         "configure waited for the refresh"

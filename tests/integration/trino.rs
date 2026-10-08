@@ -173,14 +173,11 @@ fn external_browser_confidential_oidc_login_cache_and_renewal() -> Result<()> {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
-    let (profile, sign_in, trust) = trino_oidc::configuration();
+    let (profile, trust) = trino_oidc::configuration();
     let opens = Arc::new(AtomicUsize::new(0));
     let service =
         qrow::external_auth::Service::new(Some(trino_oidc::browser(trust.clone(), opens.clone())));
-    service.configure(
-        std::slice::from_ref(&sign_in),
-        std::slice::from_ref(&profile),
-    );
+    service.configure(std::slice::from_ref(&profile));
     let connector = DatabaseConnector::new(trust);
     let secret = service.secret(&profile)?;
     let mut session = connector.connect(&profile, secret.clone())?;

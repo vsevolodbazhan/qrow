@@ -20,6 +20,13 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
     app.choose(cx, "popup-menu", "Edit");
     app.wait_for(cx, "connection-sign-in");
     app.click(cx, "connection-sign-in");
+    app.wait_for(cx, "connection-new-sign-in");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            crate::support::label(window, format!("sign-in-choice-{id}")).as_deref(),
+            Some(format!("{name}, OIDC").as_str())
+        );
+    });
     app.settle(cx);
     app.update(cx, |window, cx| window.input(name, cx));
     app.settle(cx);
@@ -40,6 +47,53 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
     app.wait_gone(cx, "save-profile");
     app.wait_until(cx, "the saved sign-in", Duration::from_secs(20), |_, _| {
         app.saved().profiles[0].authentication == Authentication::Oidc { sign_in: id }
+    });
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn editing_an_oidc_connection_host_immediately_uses_the_saved_authorization(
+    cx: &mut TestAppContext,
+) {
+    let fixture = FixtureProvider::get();
+    let sign_in = fixture.sign_in("Company");
+    let mut profile = Kyuubi::get().profile("Analytics");
+    profile.port = fixture.tls_port;
+    profile.tls = true;
+    profile.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let connection = profile.id;
+    let mut tab = SavedTab::new(1, Some(connection));
+    tab.sql = "SELECT current_user() AS value".into();
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            sign_ins: vec![sign_in],
+            tabs: vec![tab],
+            ..Workspace::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(
+            fixture.trust.clone(),
+            Some(Arc::new(fixture.browser("alice", &[]))),
+        ),
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "qrow");
+    app.context_menu(cx, connection_row(connection));
+    app.choose(cx, "popup-menu", "Edit");
+    app.fill(cx, "connection-host", "localhost");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    // Do not switch tabs: the save itself must authorize the new endpoint.
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "qrow");
+    app.wait_until(cx, "the saved host", Duration::from_secs(20), |_, _| {
+        app.saved().profiles[0].host == "localhost"
     });
 }
 

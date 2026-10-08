@@ -2,7 +2,7 @@
 //! their own challenge protocol; this service coordinates their callers.
 use crate::{
     connector::Secret,
-    model::{Authentication, DatabaseType, Profile, SignIn, SignInProvider},
+    model::{Authentication, DatabaseType, Profile},
 };
 use anyhow::{Result, anyhow};
 use std::{
@@ -82,7 +82,6 @@ struct State {
 }
 struct Entry {
     profile: Profile,
-    sign_in: SignIn,
     valid: AtomicBool,
     state: Mutex<State>,
 }
@@ -99,7 +98,6 @@ impl Entry {
 #[derive(Default)]
 struct Registry {
     entries: Vec<Arc<Entry>>,
-    sign_ins: Vec<SignIn>,
     profiles: Vec<Profile>,
 }
 #[derive(Default)]
@@ -135,21 +133,15 @@ impl Service {
     pub fn set_on_change(&self, notify: Arc<dyn Fn() + Send + Sync>) {
         *self.shared.notify.lock().unwrap() = Some(notify);
     }
-    /// Invalidate tokens and running work when a connection or provider changes.
-    pub fn configure(&self, sign_ins: &[SignIn], profiles: &[Profile]) {
+    /// Invalidate tokens and running work when connection settings change.
+    pub fn configure(&self, profiles: &[Profile]) {
         let mut registry = self.shared.registry.lock().unwrap();
-        registry.sign_ins = sign_ins.to_vec();
         registry.profiles = profiles.to_vec();
         registry.entries.retain(|entry| {
-            let keep = profiles
-                .iter()
-                .any(|profile| entry.profile.connection_identity_eq(profile))
-                && sign_ins.iter().any(|sign_in| {
-                    entry.sign_in.id == sign_in.id
-                        && sign_in.provider == SignInProvider::TrinoExternal
-                        && entry.sign_in.token_requirements_eq(sign_in)
-                        && entry.sign_in.allowed_hosts == sign_in.allowed_hosts
-                });
+            let keep = profiles.iter().any(|profile| {
+                profile.authentication == Authentication::TrinoExternal
+                    && entry.profile.connection_identity_eq(profile)
+            });
             if !keep {
                 entry.invalidate();
             }
@@ -157,13 +149,14 @@ impl Service {
         });
     }
     pub fn secret(&self, profile: &Profile) -> Result<Secret> {
-        let Authentication::TrinoExternal { sign_in } = profile.authentication else {
-            anyhow::bail!("This connection does not use Trino browser authentication");
-        };
+        anyhow::ensure!(
+            profile.authentication == Authentication::TrinoExternal,
+            "This connection does not use Trino external authentication"
+        );
         profile.validate()?;
         anyhow::ensure!(
             profile.database_type == DatabaseType::Trino && profile.tls,
-            "Trino browser authentication requires HTTPS"
+            "Trino external authentication requires HTTPS"
         );
         let mut registry = self.shared.registry.lock().unwrap();
         anyhow::ensure!(
@@ -173,32 +166,19 @@ impl Service {
                 .any(|current| current.connection_identity_eq(profile)),
             "Connection settings changed; reconnect"
         );
-        let config = registry
-            .sign_ins
+        let entry = match registry
+            .entries
             .iter()
-            .find(|config| config.id == sign_in && config.provider == SignInProvider::TrinoExternal)
-            .ok_or_else(|| anyhow!("Choose a browser sign-in through Trino"))?
-            .clone();
-        config.validate()?;
-        anyhow::ensure!(
-            config.allows_host(&profile.host),
-            "The sign-in does not allow this database host"
-        );
-        let entries = &mut registry.entries;
-        let entry = match entries.iter().find(|entry| {
-            entry.profile.connection_identity_eq(profile)
-                && entry.sign_in.token_requirements_eq(&config)
-                && entry.sign_in.allowed_hosts == config.allowed_hosts
-        }) {
+            .find(|entry| entry.profile.connection_identity_eq(profile))
+        {
             Some(entry) => entry.clone(),
             None => {
                 let entry = Arc::new(Entry {
                     profile: profile.clone(),
-                    sign_in: config.clone(),
                     valid: AtomicBool::new(true),
                     state: Mutex::default(),
                 });
-                entries.push(entry.clone());
+                registry.entries.push(entry.clone());
                 entry
             }
         };
@@ -225,8 +205,8 @@ impl Service {
                     && entry.state.lock().unwrap().token.is_some()
             })
     }
-    /// Failures belong to one connection, even if another uses the same sign-in.
-    #[cfg(any(feature = "ui", test))]
+    /// Failures belong to one connection, even if another has a cached token.
+    #[cfg(test)]
     pub(crate) fn failed(&self, profile: &Profile) -> bool {
         self.shared
             .registry
@@ -244,7 +224,7 @@ impl Service {
         let registry = self.shared.registry.lock().unwrap();
         let entries = &registry.entries;
         let mut status = Status::SignedOut;
-        for entry in entries.iter().filter(|entry| entry.sign_in.id == id) {
+        for entry in entries.iter().filter(|entry| entry.profile.id == id) {
             let state = entry.state.lock().unwrap();
             if state.flight.is_some() {
                 return Status::Waiting;
@@ -266,7 +246,7 @@ impl Service {
             .unwrap()
             .entries
             .retain(|entry| {
-                if entry.sign_in.id == id {
+                if entry.profile.id == id {
                     entry.invalidate();
                     false
                 } else {
@@ -296,7 +276,7 @@ impl Source {
     pub fn cached(&self) -> Result<Option<Zeroizing<String>>> {
         anyhow::ensure!(
             self.entry.valid.load(Ordering::SeqCst),
-            "Sign-in settings changed; reconnect"
+            "Connection settings changed; reconnect"
         );
         Ok(self
             .entry
@@ -342,7 +322,7 @@ impl Source {
         }
         anyhow::ensure!(
             self.entry.valid.load(Ordering::SeqCst),
-            "Sign-in settings changed; reconnect"
+            "Connection settings changed; reconnect"
         );
         let (flight, start) = {
             let mut state = self.entry.state.lock().unwrap();
@@ -467,37 +447,26 @@ fn open_browser(url: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::sync::Barrier;
-    fn setup() -> (Arc<Service>, Profile, SignIn, Source) {
-        let sign_in = SignIn {
-            name: "Trino".into(),
-            provider: SignInProvider::TrinoExternal,
-            allowed_hosts: vec!["localhost".into()],
-            ..SignIn::default()
-        };
+    fn setup() -> (Arc<Service>, Profile, Source) {
         let profile = Profile {
             name: "Trino".into(),
             host: "localhost".into(),
             username: "alice".into(),
             database_type: DatabaseType::Trino,
             tls: true,
-            authentication: Authentication::TrinoExternal {
-                sign_in: sign_in.id,
-            },
+            authentication: Authentication::TrinoExternal,
             ..Profile::default()
         };
         let service = Arc::new(Service::new(Some(Arc::new(|_| Ok(())))));
-        service.configure(
-            std::slice::from_ref(&sign_in),
-            std::slice::from_ref(&profile),
-        );
+        service.configure(std::slice::from_ref(&profile));
         let Secret::External(source) = service.secret(&profile).unwrap() else {
             panic!()
         };
-        (service, profile, sign_in, source)
+        (service, profile, source)
     }
     #[test]
     fn connection_selection_reuses_only_its_own_cached_token() {
-        let (service, profile, sign_in, source) = setup();
+        let (service, profile, source) = setup();
         assert!(!service.is_authenticated(&profile));
         source
             .authenticate(None, Duration::from_secs(1), |_| {
@@ -514,12 +483,12 @@ mod tests {
         different = profile.clone();
         different.port += 1;
         assert!(!service.is_authenticated(&different));
-        service.clear(sign_in.id);
+        service.clear(profile.id);
         assert!(!service.is_authenticated(&profile));
     }
     #[test]
     fn a_failed_connection_is_not_hidden_by_another_cached_token() {
-        let (service, profile, sign_in, source) = setup();
+        let (service, profile, source) = setup();
         source
             .authenticate(None, Duration::from_secs(1), |_| {
                 Ok(Zeroizing::new("opaque".into()))
@@ -527,10 +496,7 @@ mod tests {
             .unwrap();
         let mut other = profile.clone();
         other.id = Uuid::new_v4();
-        service.configure(
-            std::slice::from_ref(&sign_in),
-            &[profile.clone(), other.clone()],
-        );
+        service.configure(&[profile.clone(), other.clone()]);
         let Secret::External(other_source) = service.secret(&other).unwrap() else {
             panic!()
         };
@@ -542,13 +508,13 @@ mod tests {
                 .into()))
                 .is_err()
         );
-        assert_eq!(service.status(sign_in.id), Status::SignedIn);
+        assert_eq!(service.status(profile.id), Status::SignedIn);
         assert!(!service.failed(&profile));
         assert!(service.failed(&other));
     }
     #[test]
     fn concurrent_callers_share_one_flight_and_one_cancel_does_not_stop_other_waiters() {
-        let (service, _, sign_in, source) = setup();
+        let (service, profile, source) = setup();
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancellation = cancelled.clone();
         let leader = source.clone().with_control(Control::new(
@@ -599,7 +565,7 @@ mod tests {
         assert!(first.join().unwrap().unwrap_err().is::<Cancelled>());
         release.store(true, Ordering::SeqCst);
         assert_eq!(second.join().unwrap().unwrap().as_str(), "opaque");
-        assert_eq!(service.status(sign_in.id), Status::SignedIn);
+        assert_eq!(service.status(profile.id), Status::SignedIn);
     }
     fn check(cancel: &AtomicBool) -> Result<()> {
         if cancel.load(Ordering::SeqCst) {
@@ -609,8 +575,8 @@ mod tests {
         }
     }
     #[test]
-    fn cache_isolated_by_connection_endpoint_username_and_provider_configuration() {
-        let (service, profile, sign_in, source) = setup();
+    fn cache_isolated_by_connection_endpoint_username_and_authentication() {
+        let (service, profile, source) = setup();
         source
             .authenticate(None, Duration::from_secs(1), |_| {
                 Ok(Zeroizing::new("first".into()))
@@ -627,10 +593,7 @@ mod tests {
             let mut other = profile.clone();
             // Check each scope independently while all profiles remain configured.
             other.id = Uuid::new_v4();
-            service.configure(
-                std::slice::from_ref(&sign_in),
-                &[profile.clone(), other.clone()],
-            );
+            service.configure(&[profile.clone(), other.clone()]);
             let Secret::External(other_source) = service.secret(&other).unwrap() else {
                 panic!()
             };
@@ -645,40 +608,37 @@ mod tests {
                 port,
                 ..profile.clone()
             };
-            service.configure(
-                std::slice::from_ref(&sign_in),
-                &[profile.clone(), other.clone()],
-            );
+            service.configure(&[profile.clone(), other.clone()]);
             let Secret::External(other_source) = service.secret(&other).unwrap() else {
                 panic!()
             };
             assert!(other_source.cached().unwrap().is_none());
         }
-        let mut config = sign_in;
-        config.allowed_hosts.push("other.example".into());
-        service.configure(&[config], std::slice::from_ref(&profile));
+        let changed = Profile {
+            authentication: Authentication::Password,
+            ..profile
+        };
+        service.configure(std::slice::from_ref(&changed));
         assert!(source.cached().is_err());
+        assert!(service.secret(&changed).is_err());
     }
     #[test]
     fn stale_connection_snapshots_cannot_recreate_authentication() {
-        let (service, profile, sign_in, source) = setup();
+        let (service, profile, source) = setup();
         let changed = Profile {
             username: "new-user".into(),
             ..profile.clone()
         };
-        service.configure(
-            std::slice::from_ref(&sign_in),
-            std::slice::from_ref(&changed),
-        );
+        service.configure(std::slice::from_ref(&changed));
         assert!(source.cached().is_err());
         assert!(service.secret(&profile).is_err());
         assert!(service.secret(&changed).is_ok());
-        service.configure(&[sign_in], &[]);
+        service.configure(&[]);
         assert!(service.secret(&changed).is_err());
     }
     #[test]
     fn sign_out_discards_late_results_and_cancels_waiters() {
-        let (service, _, sign_in, source) = setup();
+        let (service, profile, source) = setup();
         let gate = Arc::new(Barrier::new(2));
         let started = gate.clone();
         let waiter = thread::spawn(move || {
@@ -691,8 +651,8 @@ mod tests {
             })
         });
         gate.wait();
-        service.clear(sign_in.id);
+        service.clear(profile.id);
         assert!(waiter.join().unwrap().unwrap_err().is::<Cancelled>());
-        assert_eq!(service.status(sign_in.id), Status::SignedOut);
+        assert_eq!(service.status(profile.id), Status::SignedOut);
     }
 }

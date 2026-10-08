@@ -164,7 +164,7 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
         },
         time::{Duration, Instant},
     };
-    let (profile, sign_in, trust) = trino_oidc::configuration();
+    let (profile, trust) = trino_oidc::configuration();
     let opens = Arc::new(AtomicUsize::new(0));
     let browser = trino_oidc::browser(trust.clone(), opens.clone());
     let release = Arc::new(AtomicBool::new(false));
@@ -175,7 +175,6 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
         cx,
         Workspace {
             profiles: vec![profile],
-            sign_ins: vec![sign_in],
             tabs: vec![tab],
             ..Workspace::default()
         },
@@ -197,11 +196,10 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     );
     let connection = app.saved().profiles[0].id;
     app.click(cx, format!("profile-{connection}"));
-    app.click(cx, "show-sign-ins");
-    app.wait_label(cx, "Trino");
-    app.wait_for(cx, format!("sign-in-{}-cancel", app.saved().sign_ins[0].id));
+    app.wait_for(cx, "connection-authentication-progress");
+    app.wait_for(cx, "cancel");
     release.store(true, Ordering::SeqCst);
-    app.wait_gone(cx, format!("sign-in-{}-cancel", app.saved().sign_ins[0].id));
+    app.wait_gone(cx, "connection-authentication-progress");
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "alice");
@@ -210,8 +208,7 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
     assert_eq!(opens.load(Ordering::SeqCst), 1);
-    app.wait_label(cx, "Trino");
-    assert!(app.saved().sign_ins[0].identity.is_none());
+    assert!(app.saved().sign_ins.is_empty());
     assert!(
         !serde_json::to_string(&app.saved())
             .unwrap()

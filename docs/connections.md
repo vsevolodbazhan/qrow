@@ -150,15 +150,14 @@ For **Password** authentication, enter the username. Leave the password blank
 if the server accepts a username without a password. Turn on **TLS** when you
 enter a password. Passwords use macOS Keychain.
 
-For sign-in authentication, select a sign-in and enter the Trino username.
-Turn on **TLS**. The database hosts of the sign-in must include the coordinator
-hostname. Choose the provider of the sign-in as follows:
+For **External** authentication, enter the Trino username and turn on **TLS**.
+The connection's host is the coordinator. You do not need a saved sign-in or
+an allowed-host list. This uses the coordinator's existing OAuth2 configuration,
+like DBeaver or DataGrip. See [Trino browser sign-in](#trino-browser-sign-in).
 
-- **Trino External Authentication** uses the coordinator's existing OAuth2
-  configuration, like DBeaver or DataGrip external authentication. See
-  [Trino browser sign-in](#trino-browser-sign-in).
-- **OpenID Connect** uses a public client and the direct provider login below.
-  The coordinator must accept the access token of that provider.
+Existing Trino connections that use direct OpenID Connect keep their saved
+**Sign-in** option. The coordinator must accept that provider's access token.
+New Trino connections offer **Password** and **External**.
 
 Enter session properties as a JSON object with string values. For example:
 
@@ -198,34 +197,32 @@ query and sends `ROLLBACK` for an open transaction. The assistant receives
 
 ### Trino browser sign-in
 
-Use this provider when the Trino coordinator already has OAuth2 authentication.
+Use **External** when the Trino coordinator already has OAuth2 authentication.
 The coordinator sends the browser to the identity provider, handles its
 callback, and exchanges the authorization code. The coordinator keeps its
 client secret. You do not need a new identity-provider client, issuer URL,
-client ID, client secret, or local callback listener.
+client ID, client secret, local callback listener, or saved sign-in.
 
-1. Open **Sign-Ins** and click **+**.
-2. In **Provider**, select **Trino External Authentication**.
-3. Enter a name and the allowed **Database Hosts**, then save.
-4. In a Trino connection, select sign-in authentication and this sign-in.
-   Enter the coordinator hostname, HTTPS port, and database username. Turn on
-   **TLS**.
-5. Select the connection in **Connections**. If Trino requires authentication,
+1. In a Trino connection, select **External** in **Authentication**.
+2. Enter the coordinator hostname, HTTPS port, and database username. Turn on
+   **TLS**, then save.
+3. Select the connection in **Connections**. If Trino requires authentication,
    complete sign-in in the browser. A query or schema refresh also starts
-   sign-in when necessary. Only Trino connections can use this provider.
+   sign-in when necessary. Other connection types cannot use **External**.
 
-The query shows **Waiting for browser sign-in…** while authentication runs.
-**Cancel** stops that query's wait, including before a result cursor exists.
-Other queries can continue the shared sign-in. **Cancel** on the Sign-Ins row
-stops authentication for all connections of that sign-in.
+The query toolbar shows **Waiting for Trino authentication…** while a connection
+attempt waits. Click **Cancel** to stop it before a query cursor exists.
+Queries show **Waiting for browser sign-in…**. Cancel stops that query's wait;
+other requests for the connection can continue their shared authentication.
+A red connection dot opens Activity for that connection when authentication fails.
 
-Trino tokens are opaque. Qrow keeps them only in memory. Tokens are shared by
-sessions of the same connection and username. Different connection IDs,
-endpoints, usernames, and connection settings use separate caches. A change
-to these settings or the sign-in's database hosts discards the affected tokens.
-**Sign out** clears the tokens and releases idle sessions. It does not end
-sign-in in the browser or revoke tokens at the identity provider. Restarting
-Qrow also clears this cache.
+Trino tokens are opaque. Qrow keeps them only in memory. Sessions of the same
+connection and username share tokens. Different connection IDs, endpoints,
+usernames, and authentication settings use separate caches. A change to these
+settings discards the affected tokens. Restarting Qrow also clears this cache.
+Trino external authentication does not add an entry to **Sign-Ins**.
+Saved connections from the earlier Trino sign-in setup keep external authentication;
+the next save removes the obsolete shared Trino sign-in records.
 
 Trino can renew authentication without opening the browser. The sign-in has
 a two-minute deadline, separate from **Response Timeout**. Temporary polling
@@ -247,7 +244,7 @@ browser. Several connections can use the same sign-in. Each connection keeps
 its own host, database username, and session settings. Kyuubi checks that the
 signed-in identity can use the database username of the connection.
 
-The **Sign-Ins** sidebar shows each sign-in with its type: **OIDC** or **Trino**.
+The **Sign-Ins** sidebar shows each saved sign-in with its type, **OIDC**.
 Select a connection to start its sign-in when necessary. A query also starts
 sign-in when it needs authentication. The sidebar has no **Sign in…** button.
 Click a red error dot to open **Activity** for the connection whose sign-in
@@ -268,8 +265,7 @@ sign-ins need attention.
    and the client ID.
 3. Enter other scopes if the server requires them. Qrow always requests
    `openid`, `profile`, and `email`.
-4. Enter the database hosts that can receive the access tokens.
-5. Click **Save**, or press **Enter** or **⌘Enter**.
+4. Click **Save**, or press **Enter** or **⌘Enter**.
 
 The provider must register Qrow as a public client without a client secret.
 The client must accept the redirect URI `http://127.0.0.1:PORT/callback`. By
@@ -288,7 +284,7 @@ To give a sign-in to a colleague, for example in a Slack message:
 2. Paste the text into the message.
 
 The text contains the name, the issuer, the client ID, the scopes, the
-resource, the database hosts, and the callback ports. It does not contain
+resource, and the callback ports. It does not contain
 your account or your tokens.
 
 To add a sign-in that a colleague sent to you:
@@ -296,8 +292,8 @@ To add a sign-in that a colleague sent to you:
 1. Copy the text of the message.
 2. Open the **Sign-Ins** sidebar and click the paste button beside **+**.
 3. Sign-in Settings opens with the values. Make sure that you trust the
-   issuer and the database hosts. Qrow sends your access tokens to these
-   hosts.
+   issuer. Qrow sends access tokens only to connections where you select this
+   sign-in.
 4. Click **Save**.
 
 Qrow ignores other text of the message around the settings. If a sign-in
@@ -323,9 +319,11 @@ sign-in. Neutral tags show the names below the heading. The tags wrap when
 they do not fit on one line.
 
 To use a sign-in, edit a connection, select **Sign-in** in
-**Authentication**, and select the sign-in in the **Sign-In** list. The host of the connection must be
-one of the database hosts of the sign-in. Qrow does not send a token to
-another host. Turn on **TLS** when the server accepts it. Without TLS, anyone
+**Authentication**, and select the sign-in in the **Sign-In** list. The list
+shows the type beside each name in smaller, muted text.
+Selecting the sign-in authorizes the connection host to receive its access
+tokens. Qrow rejects requests from an unconfigured connection or old connection
+settings after a host change. Turn on **TLS** when the server accepts it. Without TLS, anyone
 on the network path can read the access token and use it until it expires, so
 use a trusted network or VPN. Qrow never sends the refresh token to Kyuubi.
 

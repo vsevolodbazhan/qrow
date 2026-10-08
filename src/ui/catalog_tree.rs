@@ -839,15 +839,6 @@ impl Qrow {
 
     /// Ask the catalog worker to read `scope` again with `profile`.
     pub(super) fn refresh_catalog(&mut self, profile: Uuid, scope: Scope, cx: &mut Context<Self>) {
-        if let Some(connection) = self
-            .profiles
-            .iter()
-            .find(|connection| connection.id == profile)
-            && let crate::model::Authentication::TrinoExternal { sign_in } =
-                connection.authentication
-        {
-            self.sign_in_ui.clear_connection_error(sign_in, profile);
-        }
         self.ensure_catalog(profile);
         if let Some(worker) = self.catalog.worker(profile) {
             worker.refresh(profile, scope);
@@ -895,19 +886,6 @@ impl Qrow {
         // A refresh belongs to the connection that ran it, so its entries
         // go to the Activity of that connection.
         for (profile, event) in logs {
-            if event.severity == Severity::Error
-                && event.kind == crate::logs::LogKind::SchemaRefreshFinished
-                && let Some(connection) = self
-                    .profiles
-                    .iter()
-                    .find(|connection| connection.id == profile)
-                && let crate::model::Authentication::TrinoExternal { sign_in } =
-                    connection.authentication
-                && self.external_auth.failed(connection)
-            {
-                self.sign_in_ui
-                    .set_connection_error(sign_in, profile, event.text.clone());
-            }
             self.record_activity(profile, crate::activity::from_refresh(event), cx);
         }
         if changed {
@@ -1345,7 +1323,7 @@ impl Qrow {
         query_status.max(
             if self.activity.read(cx).activity().unseen_errors_of(id) > 0 {
                 Some(DotStatus::Error)
-            } else if self.catalog.is_refreshing(id) {
+            } else if self.catalog.is_refreshing(id) || self.external_authentication_pending(id) {
                 Some(DotStatus::Working)
             } else {
                 None
@@ -1357,75 +1335,78 @@ impl Qrow {
     pub(super) fn connections(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let action_size = self.ui_px(STATUS_SLOT_WIDTH);
         let active = self.active_profile();
-        let rows: Rc<HashMap<Uuid, ConnectionRow>> =
-            Rc::new(
-                self.profiles
-                    .iter()
-                    .map(|profile| {
-                        let id = profile.id;
-                        let refresh_error = self.catalog.connection_error(id);
-                        let status = self.connection_dot_status(id, cx);
-                        let connected = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.worker_profile == Some(id) && tab.connected);
-                        let unread_success = self.tabs.iter().any(|tab| {
-                            tab.saved.profile == Some(id) && tab.panel.has_unread_success()
-                        });
-                        let assistant_states: Vec<_> = self
-                            .tabs
-                            .iter()
-                            .filter(|tab| tab.saved.profile == Some(id))
-                            .filter_map(|tab| {
-                                self.settings
-                                    .assistant
-                                    .enabled
-                                    .then(|| self.tab_assistant_status(tab.saved.id))
-                                    .flatten()
-                            })
-                            .collect();
-                        let tooltip = StatusTooltip::new(
-                            profile.name.clone(),
-                            match status {
-                                Some(DotStatus::Connected) => "Idle",
-                                Some(DotStatus::Connecting) => "Connecting",
-                                Some(DotStatus::Working) => "In use",
-                                Some(DotStatus::Ready) if unread_success => "Unread result",
-                                Some(DotStatus::Ready) => "Unread reply",
-                                Some(DotStatus::Error) => "Unread error",
-                                Some(DotStatus::Attention) => "Needs approval",
-                                None => "Disconnected",
-                            },
-                        )
-                        .metadata("Host", profile.host.clone())
-                        .metadata("User", profile.username.clone());
-                        (
-                            id,
-                            ConnectionRow {
-                                database_type: profile.database_type,
-                                name: profile.name.clone(),
-                                tooltip,
-                                connected,
-                                unread_success,
-                                status,
-                                assistant_states,
-                                refresh_error: refresh_error.is_some(),
-                                running: self.tabs.iter().any(|tab| {
-                                    tab.worker_profile == Some(id) && tab.busy && tab.connected
-                                }),
-                                connecting: self.tabs.iter().any(|tab| {
+        let rows: Rc<HashMap<Uuid, ConnectionRow>> = Rc::new(
+            self.profiles
+                .iter()
+                .map(|profile| {
+                    let id = profile.id;
+                    let refresh_error = self.catalog.connection_error(id);
+                    let status = self.connection_dot_status(id, cx);
+                    let connected = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.worker_profile == Some(id) && tab.connected);
+                    let unread_success = self
+                        .tabs
+                        .iter()
+                        .any(|tab| tab.saved.profile == Some(id) && tab.panel.has_unread_success());
+                    let assistant_states: Vec<_> = self
+                        .tabs
+                        .iter()
+                        .filter(|tab| tab.saved.profile == Some(id))
+                        .filter_map(|tab| {
+                            self.settings
+                                .assistant
+                                .enabled
+                                .then(|| self.tab_assistant_status(tab.saved.id))
+                                .flatten()
+                        })
+                        .collect();
+                    let tooltip = StatusTooltip::new(
+                        profile.name.clone(),
+                        match status {
+                            Some(DotStatus::Connected) => "Idle",
+                            Some(DotStatus::Connecting) => "Connecting",
+                            Some(DotStatus::Working) => "In use",
+                            Some(DotStatus::Ready) if unread_success => "Unread result",
+                            Some(DotStatus::Ready) => "Unread reply",
+                            Some(DotStatus::Error) => "Unread error",
+                            Some(DotStatus::Attention) => "Needs approval",
+                            None => "Disconnected",
+                        },
+                    )
+                    .metadata("Host", profile.host.clone())
+                    .metadata("User", profile.username.clone());
+                    (
+                        id,
+                        ConnectionRow {
+                            database_type: profile.database_type,
+                            name: profile.name.clone(),
+                            tooltip,
+                            connected,
+                            unread_success,
+                            status,
+                            assistant_states,
+                            refresh_error: refresh_error.is_some(),
+                            running: self.tabs.iter().any(|tab| {
+                                tab.worker_profile == Some(id) && tab.busy && tab.connected
+                            }),
+                            connecting: self.external_authentication_pending(id)
+                                || self.tabs.iter().any(|tab| {
                                     tab.worker_profile == Some(id) && tab.busy && !tab.connected
                                 }),
-                                refreshing: self.catalog.is_refreshing(id),
-                                unread_error: self.tabs.iter().any(|tab| {
+                            refreshing: self.catalog.is_refreshing(id),
+                            unread_error: self.activity.read(cx).activity().unseen_errors_of(id)
+                                > 0
+                                || self.tabs.iter().any(|tab| {
                                     tab.saved.profile == Some(id) && tab.panel.unread_error
                                 }),
-                                active: active == Some(id),
-                            },
-                        )
-                    })
-                    .collect(),
-            );
+                            active: active == Some(id),
+                        },
+                    )
+                })
+                .collect(),
+        );
         let context = Rc::new(RowContext {
             nodes: self.catalog.nodes.clone(),
             rows,

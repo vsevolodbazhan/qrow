@@ -34,7 +34,7 @@ use std::{
 /// The result of background sign-in work.
 enum Outcome {
     SignedIn(Uuid, Result<Identity, (Failure, String)>),
-    External(Uuid, Uuid, Result<(), String>),
+    External(Uuid, Result<(), String>),
     SignedOut(Uuid, Result<(), String>),
     Removed(Uuid, Result<(), String>),
     Retried(Uuid, Result<(), String>),
@@ -54,7 +54,7 @@ pub(super) struct SignInEditor {
     /// Connection Settings opened the dialog. A new sign-in becomes the
     /// choice of its Sign-in list.
     for_connection: bool,
-    /// Name, issuer, client ID, scopes, resource, database hosts, callback port.
+    /// Name, issuer, client ID, scopes, resource, callback ports.
     fields: Vec<Entity<InputState>>,
     provider: connection_form::RowSelect,
     _provider_subscription: Subscription,
@@ -65,7 +65,7 @@ pub(super) struct SignInEditor {
 
 /// The fields of the Sign-in Settings dialog: element ID, label in title
 /// case, description, and placeholder.
-const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
+const EDITOR_FIELDS: [(&str, &str, &str, &str); 6] = [
     (
         "sign-in-name",
         "Name",
@@ -97,12 +97,6 @@ const EDITOR_FIELDS: [(&str, &str, &str, &str); 7] = [
         "https://db.example.com",
     ),
     (
-        "sign-in-database-hosts",
-        "Database Hosts",
-        "The servers that can receive the access tokens, separated by spaces.",
-        "db.example.com",
-    ),
-    (
         "sign-in-callback-ports",
         "Callback Ports",
         "Optional. Local ports to try in order. Empty uses any free port.",
@@ -117,7 +111,7 @@ const TOKEN_FIELDS: std::ops::RangeInclusive<usize> = 1..=4;
 pub(super) struct SignInState {
     /// Browser sign-ins that run, with their cancellation flags.
     pending: HashMap<Uuid, PendingSignIn>,
-    external_pending: HashMap<Uuid, (Uuid, Arc<AtomicBool>)>,
+    external_pending: HashMap<Uuid, Arc<AtomicBool>>,
     signing_out: HashSet<Uuid>,
     retrying: HashSet<Uuid>,
     /// The last failure of an action, shown with the sign-in.
@@ -168,19 +162,9 @@ impl SignInState {
         self.error_connections.remove(&id);
     }
 
-    pub(super) fn clear_connection_error(&mut self, id: Uuid, connection: Uuid) {
-        if self
-            .error_connections
-            .get(&id)
-            .is_none_or(|origin| *origin == connection)
-        {
-            self.clear_error(id);
-        }
-    }
-
     /// Stops browser sign-ins, for example when the window closes.
     pub(super) fn cancel_all(&self) {
-        for (_, cancel) in self.external_pending.values() {
+        for cancel in self.external_pending.values() {
             cancel.store(true, Ordering::SeqCst);
         }
         for pending in self.pending.values() {
@@ -227,14 +211,8 @@ struct Account {
     attention: bool,
 }
 
-fn provider_choices() -> [(SignInProvider, String); 2] {
-    [
-        (SignInProvider::Oidc, "OpenID Connect".into()),
-        (
-            SignInProvider::TrinoExternal,
-            "Trino External Authentication".into(),
-        ),
-    ]
+fn provider_choices() -> [(SignInProvider, String); 1] {
+    [(SignInProvider::Oidc, "OpenID Connect".into())]
 }
 
 fn split_list(value: &str) -> Vec<String> {
@@ -262,9 +240,8 @@ fn parse_editor(values: &[String], base: &SignIn) -> anyhow::Result<SignIn> {
         .collect();
     let resource = values[4].trim();
     sign_in.resource = (!resource.is_empty()).then(|| resource.to_owned());
-    sign_in.allowed_hosts = split_list(&values[5]);
     sign_in.callback_ports = split_list(if sign_in.provider == SignInProvider::Oidc {
-        &values[6]
+        &values[5]
     } else {
         ""
     })
@@ -300,7 +277,7 @@ impl Qrow {
                 .password(profile.id)
                 .map(|password| password.into()),
             Authentication::Oidc { .. } => service.secret(profile),
-            Authentication::TrinoExternal { .. } => external.secret(profile),
+            Authentication::TrinoExternal => external.secret(profile),
         })
     }
 
@@ -339,16 +316,11 @@ impl Qrow {
     }
 
     fn sync_sign_ins(&mut self, cx: &mut Context<Self>) {
-        self.oidc.configure(&self.sign_ins);
+        self.oidc.configure(&self.sign_ins, &self.profiles);
         self.changed(cx);
     }
 
-    fn is_external_sign_in(&self, id: Uuid) -> bool {
-        self.sign_ins
-            .iter()
-            .any(|sign_in| sign_in.id == id && sign_in.provider == SignInProvider::TrinoExternal)
-    }
-    fn start_external_sign_in(&mut self, id: Uuid, profile: Profile, cx: &mut Context<Self>) {
+    fn start_external_sign_in(&mut self, profile: Profile, cx: &mut Context<Self>) {
         use crate::connector::Connector;
         if self.demo
             || self.sign_in_ui.external_pending.contains_key(&profile.id)
@@ -359,8 +331,7 @@ impl Qrow {
         let cancel = Arc::new(AtomicBool::new(false));
         self.sign_in_ui
             .external_pending
-            .insert(profile.id, (id, cancel.clone()));
-        self.sign_in_ui.clear_connection_error(id, profile.id);
+            .insert(profile.id, cancel.clone());
         let connection = profile.id;
         let service = self.external_auth.clone();
         let connector = self.connector.clone();
@@ -385,19 +356,16 @@ impl Qrow {
                     crate::connector::error_message(&error)
                 }
             });
-            let _ = outcomes.send(Outcome::External(id, connection, result));
+            let _ = outcomes.send(Outcome::External(connection, result));
             let _ = wake.try_send(());
         });
         cx.notify();
     }
     /// Explicit connection selection authenticates without submitting editor SQL.
     pub(super) fn authenticate_connection(&mut self, profile: Profile, cx: &mut Context<Self>) {
-        let Some(id) = profile.authentication.sign_in() else {
-            return;
-        };
         match profile.authentication {
-            Authentication::TrinoExternal { .. } => self.start_external_sign_in(id, profile, cx),
-            Authentication::Oidc { .. } if self.sign_in_needs_browser(id) => {
+            Authentication::TrinoExternal => self.start_external_sign_in(profile, cx),
+            Authentication::Oidc { sign_in: id } if self.sign_in_needs_browser(id) => {
                 self.sign_in_ui
                     .attempt_connections
                     .entry(id)
@@ -407,6 +375,22 @@ impl Qrow {
             }
             _ => {}
         }
+    }
+
+    pub(super) fn external_authentication_pending(&self, connection: Uuid) -> bool {
+        self.sign_in_ui.external_pending.contains_key(&connection)
+            || self.external_auth.status(connection) == crate::external_auth::Status::Waiting
+    }
+
+    pub(super) fn cancel_external_authentication(
+        &mut self,
+        connection: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(cancel) = self.sign_in_ui.external_pending.get(&connection) {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        cx.notify();
     }
 
     /// Failures retain their originating connection even when another tab is selected.
@@ -427,18 +411,6 @@ impl Qrow {
     }
 
     pub(super) fn start_sign_in(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.is_external_sign_in(id) {
-            if let Some(profile) = self.connections_using(id).first().copied().cloned() {
-                self.start_external_sign_in(id, profile, cx);
-            } else {
-                self.sign_in_ui.errors.insert(
-                    id,
-                    "Choose this sign-in in a Trino connection first.".into(),
-                );
-                cx.notify();
-            }
-            return;
-        }
         if self.demo
             || self.sign_in_ui.pending.contains_key(&id)
             || self.sign_in_ui.signing_out.contains(&id)
@@ -490,14 +462,6 @@ impl Qrow {
     }
 
     pub(super) fn cancel_sign_in(&mut self, id: Uuid, cx: &mut Context<Self>) {
-        if self.is_external_sign_in(id) {
-            for (sign_in, cancel) in self.sign_in_ui.external_pending.values() {
-                if *sign_in == id {
-                    cancel.store(true, Ordering::SeqCst);
-                }
-            }
-            self.external_auth.clear(id);
-        }
         if let Some(pending) = self.sign_in_ui.pending.get(&id) {
             pending.cancel.store(true, Ordering::SeqCst);
         }
@@ -540,13 +504,6 @@ impl Qrow {
             return;
         }
         self.sign_in_ui.clear_error(id);
-        if self.is_external_sign_in(id) {
-            self.external_auth.clear(id);
-            self.release_sign_in_sessions(id);
-            self.sign_in_ui.signing_out.remove(&id);
-            cx.notify();
-            return;
-        }
         let service = self.oidc.clone();
         let outcomes = self.sign_in_ui.outcomes.0.clone();
         let wake = self.wake.clone();
@@ -579,12 +536,6 @@ impl Qrow {
             || self.sign_in_ui.pending.contains_key(&id)
             || self.sign_in_ui.signing_out.contains(&id)
         {
-            return;
-        }
-        if self.is_external_sign_in(id) {
-            self.external_auth.clear(id);
-            self.sign_ins.retain(|sign_in| sign_in.id != id);
-            self.sync_sign_ins(cx);
             return;
         }
         // Keychain work stays off the GPUI thread. Removal completes after
@@ -668,12 +619,16 @@ impl Qrow {
                     self.sign_in_ui.attempt_connections.remove(&id);
                     self.end_sign_in_waits(id, ended, cx);
                 }
-                Outcome::External(id, connection, result) => {
+                Outcome::External(connection, result) => {
                     self.sign_in_ui.external_pending.remove(&connection);
                     if let Err(message) = result
                         && !message.is_empty()
                     {
-                        self.record_sign_in_error(id, connection, message, cx);
+                        self.record_activity(
+                            connection,
+                            crate::activity::ActivityEntry::new(Severity::Error, message),
+                            cx,
+                        );
                     }
                 }
                 Outcome::SignedOut(id, result) => {
@@ -743,10 +698,10 @@ impl Qrow {
             }
         }
         let external_statuses = self
-            .sign_ins
+            .profiles
             .iter()
-            .filter(|sign_in| sign_in.provider == SignInProvider::TrinoExternal)
-            .map(|sign_in| (sign_in.id, self.external_auth.status(sign_in.id)))
+            .filter(|profile| profile.authentication == Authentication::TrinoExternal)
+            .map(|profile| (profile.id, self.external_auth.status(profile.id)))
             .collect::<Vec<_>>();
         if external_statuses != self.sign_in_ui.external_statuses {
             self.sign_in_ui.external_statuses = external_statuses;
@@ -779,13 +734,7 @@ impl Qrow {
                 attention: false,
             };
         }
-        if self.sign_in_ui.pending.contains_key(&id)
-            || self
-                .sign_in_ui
-                .external_pending
-                .values()
-                .any(|(sign_in, _)| *sign_in == id)
-        {
+        if self.sign_in_ui.pending.contains_key(&id) {
             return Account {
                 summary: "Waiting for the browser…".into(),
                 detail: "Waiting for the browser. Finish the sign-in there.".into(),
@@ -801,38 +750,6 @@ impl Qrow {
                 actions: vec![],
                 working: true,
                 attention: false,
-            };
-        }
-        if self.is_external_sign_in(id) {
-            use crate::external_auth::Status as ExternalStatus;
-            return match self.external_auth.status(id) {
-                ExternalStatus::Waiting => Account {
-                    summary: "Waiting for Trino sign-in…".into(),
-                    detail: "Waiting for Trino. Complete browser sign-in if a page opens.".into(),
-                    actions: vec![Cancel],
-                    working: true,
-                    attention: false,
-                },
-                ExternalStatus::SignedIn => Account {
-                    summary: "Signed in through Trino".into(),
-                    detail: "Tokens are cached in memory for each connection and username.".into(),
-                    actions: vec![SignOut],
-                    working: false,
-                    attention: failed,
-                },
-                status => Account {
-                    summary: if status == ExternalStatus::Failed {
-                        "Sign-in failed"
-                    } else {
-                        "Not signed in"
-                    }
-                    .into(),
-                    detail: "Trino opens the browser when a connection needs authentication."
-                        .into(),
-                    actions: vec![SignIn],
-                    working: false,
-                    attention: status == ExternalStatus::Failed || failed,
-                },
             };
         }
         match self.oidc.status(id) {
@@ -883,7 +800,6 @@ impl Qrow {
     /// open: it is not signed in, it has expired, or a browser sign-in runs.
     pub(super) fn sign_in_needs_browser(&self, id: Uuid) -> bool {
         !self.demo
-            && !self.is_external_sign_in(id)
             && (self.sign_in_ui.pending.contains_key(&id)
                 || matches!(
                     self.oidc.status(id),
@@ -1052,9 +968,7 @@ impl Qrow {
 
     /// Whether a browser sign-in or a sign-out runs.
     pub(super) fn sign_ins_working(&self) -> bool {
-        !self.sign_in_ui.pending.is_empty()
-            || !self.sign_in_ui.external_pending.is_empty()
-            || !self.sign_in_ui.signing_out.is_empty()
+        !self.sign_in_ui.pending.is_empty() || !self.sign_in_ui.signing_out.is_empty()
     }
 
     /// Runs `action` on the sign-in `id`.
@@ -1146,11 +1060,7 @@ impl Qrow {
         let account = self.account(id);
         let error = self.sign_in_ui.errors.get(&id).cloned();
         let slot_width = self.ui_px(28.);
-        let mut tooltip = format!(
-            "{}\nDatabase hosts: {}",
-            sign_in.issuer,
-            sign_in.allowed_hosts.join(", ")
-        );
+        let mut tooltip = sign_in.issuer.clone();
         if let Some(error) = &error {
             tooltip.push('\n');
             tooltip.push_str(error);
@@ -1387,7 +1297,14 @@ impl Qrow {
             .read_from_clipboard()
             .and_then(|item| item.text())
             .unwrap_or_default();
-        match SignIn::from_shared_text(&text) {
+        let pasted = SignIn::from_shared_text(&text).and_then(|sign_in| {
+            anyhow::ensure!(
+                sign_in.provider == SignInProvider::Oidc,
+                "Choose External in the Trino connection's Authentication field."
+            );
+            Ok(sign_in)
+        });
+        match pasted {
             Ok(mut sign_in) => {
                 sign_in.name = unique_sign_in_name(&sign_in.name, |name| {
                     self.sign_ins.iter().any(|other| other.name == name)
@@ -1501,7 +1418,8 @@ impl Qrow {
             })
             .unwrap_or_default();
         let choices = connection_form::sign_in_choices(&self.sign_ins, database_type);
-        let list = connection_form::sign_in_combobox(&choices, selected, window, cx);
+        let list =
+            connection_form::sign_in_combobox(&choices, &self.sign_ins, selected, window, cx);
         let subscription = Self::subscribe_sign_in_list(&list, window, cx);
         if let Some(form) = &mut self.form {
             form.sign_in_choices = choices;
@@ -1527,25 +1445,10 @@ impl Qrow {
         if blocked || self.demo || id.is_some_and(|id| self.account(id).working) {
             return;
         }
-        let mut base = id
+        let base = id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
             .cloned()
             .unwrap_or_default();
-        if id.is_none()
-            && for_connection
-            && self.form.as_ref().is_some_and(|form| {
-                connection_form::chosen(
-                    &form.database_type,
-                    &connection_form::database_type_choices(),
-                    cx,
-                ) == crate::model::DatabaseType::Trino
-            })
-        {
-            base.provider = SignInProvider::TrinoExternal;
-            if let Some(form) = &self.form {
-                base.allowed_hosts = vec![form.fields[1].read(cx).value().trim().to_owned()];
-            }
-        }
         self.show_sign_in_editor(base, id, for_connection, false, window, cx);
     }
 
@@ -1566,7 +1469,6 @@ impl Qrow {
             base.client_id.clone(),
             extra_scopes(&base.scopes).join(" "),
             base.resource.clone().unwrap_or_default(),
-            base.allowed_hosts.join(" "),
             base.callback_ports
                 .iter()
                 .map(u16::to_string)
@@ -1636,20 +1538,7 @@ impl Qrow {
             let footer = weak.update(cx, |this, cx| this.sign_in_footer(cx)).ok();
             let rem = window.rem_size();
             let viewport = window.viewport_size();
-            let height_rem = weak
-                .update(cx, |this, cx| {
-                    this.sign_in_ui.editor.as_ref().map_or(44., |editor| {
-                        if connection_form::chosen(&editor.provider, &provider_choices(), cx)
-                            == SignInProvider::TrinoExternal
-                        {
-                            if editor.id.is_some() { 36. } else { 28. }
-                        } else {
-                            44.
-                        }
-                    })
-                })
-                .unwrap_or(44.);
-            let height = (rem * height_rem).min(viewport.height - rem * 4.);
+            let height = (rem * 44.).min(viewport.height - rem * 4.);
             dialog
                 .title("Sign-In Settings")
                 .w(profile_view::dialog_width(window))
@@ -1815,28 +1704,22 @@ impl Qrow {
             .id
             .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id));
         let signed_in = existing.is_some_and(|sign_in| sign_in.identity.is_some());
-        let provider = connection_form::chosen(&editor.provider, &provider_choices(), cx);
-        let external = provider == SignInProvider::TrinoExternal;
         let pasted = editor.pasted;
         let account = existing.map(|sign_in| self.account_field(sign_in.id, signed_in, cx));
         let users = existing
             .map(|sign_in| self.connections_using(sign_in.id))
             .unwrap_or_default();
-        let fields = EDITOR_FIELDS
-            .into_iter()
-            .enumerate()
-            .filter(|(index, _)| !external || matches!(index, 0 | 5))
-            .map(|(index, field)| {
-                let (id, label, description, _) = field;
-                Field::new().label(label).description(description).child(
-                    Input::new(&editor.fields[index])
-                        .focus_ring(false)
-                        .id(id)
-                        .w_full()
-                        .disabled(signed_in && TOKEN_FIELDS.contains(&index))
-                        .aria_label(label),
-                )
-            });
+        let fields = EDITOR_FIELDS.into_iter().enumerate().map(|(index, field)| {
+            let (id, label, description, _) = field;
+            Field::new().label(label).description(description).child(
+                Input::new(&editor.fields[index])
+                    .focus_ring(false)
+                    .id(id)
+                    .w_full()
+                    .disabled(signed_in && TOKEN_FIELDS.contains(&index))
+                    .aria_label(label),
+            )
+        });
         let count = users.len();
         let provider_locked = signed_in || count > 0;
         let connections = Field::new()
@@ -1916,7 +1799,7 @@ impl Qrow {
                     .child("Authentication"),
             )
             .when(pasted, |el| {
-                let note = "Pasted from the clipboard. Make sure that you trust the issuer and the database hosts before you save.";
+                let note = "Pasted from the clipboard. Make sure that you trust the issuer before you save.";
                 el.child(
                     div()
                         .id("sign-in-pasted-note")
@@ -2066,7 +1949,6 @@ mod tests {
             "qrow-desktop",
             "openid profile, kyuubi kyuubi",
             "",
-            "kyuubi-a.example.test, kyuubi-b.example.test",
             "",
         ]
         .map(str::to_owned)
@@ -2078,14 +1960,10 @@ mod tests {
         let sign_in = parse_editor(&values(), &SignIn::default()).unwrap();
         assert_eq!(sign_in.issuer, "https://id.example.test/realms/data");
         assert_eq!(sign_in.scopes, vec!["kyuubi"]);
-        assert_eq!(
-            sign_in.allowed_hosts,
-            vec!["kyuubi-a.example.test", "kyuubi-b.example.test"]
-        );
         assert_eq!(sign_in.resource, None);
         assert!(sign_in.callback_ports.is_empty());
         let mut values = values();
-        values[6] = "8765, 8766 8765".into();
+        values[5] = "8765, 8766 8765".into();
         values[4] = "https://kyuubi.example.test".into();
         let sign_in = parse_editor(&values, &SignIn::default()).unwrap();
         assert_eq!(sign_in.callback_ports, vec![8765, 8766]);
@@ -2094,7 +1972,7 @@ mod tests {
             Some("https://kyuubi.example.test")
         );
         for ports in ["port", "8765 0", "70000"] {
-            values[6] = ports.into();
+            values[5] = ports.into();
             assert!(
                 parse_editor(&values, &SignIn::default()).is_err(),
                 "{ports}"

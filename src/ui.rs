@@ -684,13 +684,13 @@ impl Qrow {
             },
         );
         let external_auth = Arc::new(crate::external_auth::Service::new(environment.browser()));
-        external_auth.configure(&workspace.sign_ins, &workspace.profiles);
+        external_auth.configure(&workspace.profiles);
         let external_wake = wake.clone();
         external_auth.set_on_change(Arc::new(move || {
             let _ = external_wake.try_send(());
         }));
         let oidc = oidc::Service::new(environment.tokens(), environment.trust());
-        oidc.configure(&workspace.sign_ins);
+        oidc.configure(&workspace.sign_ins, &workspace.profiles);
         let status_wake = wake.clone();
         oidc.set_on_change(Arc::new(move || {
             let _ = status_wake.try_send(());
@@ -1153,7 +1153,8 @@ impl Qrow {
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
-        self.external_auth.configure(&self.sign_ins, &self.profiles);
+        self.oidc.configure(&self.sign_ins, &self.profiles);
+        self.external_auth.configure(&self.profiles);
         self.dirty = Some(Instant::now());
         let _ = self.wake.try_send(());
         // The UI scale and the Logs font settings change here.
@@ -1238,7 +1239,6 @@ impl Qrow {
         let mut activity = Vec::new();
         let workspace_visible = !self.activity.read(cx).is_open();
         let mut waits = Vec::new();
-        let mut sign_in_errors = Vec::new();
         for (index, tab) in self.tabs.iter_mut().enumerate() {
             let events: Vec<_> = tab
                 .worker
@@ -1294,16 +1294,6 @@ impl Qrow {
                 .is_some()
                 .then(|| (tab.status.clone(), tab.status_detail.clone()));
             for event in events {
-                if let Event::Error { message, .. } = &event
-                    && let Some(profile) = self
-                        .profiles
-                        .iter()
-                        .find(|profile| Some(profile.id) == connection)
-                    && let Authentication::TrinoExternal { sign_in } = profile.authentication
-                    && (!tab.connected || self.external_auth.failed(profile))
-                {
-                    sign_in_errors.push((sign_in, profile.id, message.clone()));
-                }
                 if wait.is_some() && matches!(event, Event::Error { .. }) {
                     continue;
                 }
@@ -1326,9 +1316,6 @@ impl Qrow {
         }
         for (connection, entry) in activity {
             self.record_activity(connection, entry, cx);
-        }
-        for (sign_in, connection, message) in sign_in_errors {
-            self.record_sign_in_error(sign_in, connection, message, cx);
         }
         for (index, (sign_in, sql)) in waits {
             self.tabs[index].busy = false;
@@ -1589,7 +1576,8 @@ impl Qrow {
                         }
                     }
                 }
-                self.external_auth.configure(&self.sign_ins, &self.profiles);
+                self.oidc.configure(&self.sign_ins, &self.profiles);
+                self.external_auth.configure(&self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
                     self.tabs[self.active].saved.profile = Some(id);
@@ -1952,9 +1940,6 @@ impl Qrow {
             self.wait_for_sign_in(index, sign_in, query, cx);
             return true;
         }
-        if let Authentication::TrinoExternal { sign_in } = profile.authentication {
-            self.sign_in_ui.clear_connection_error(sign_in, profile.id);
-        }
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
@@ -2052,6 +2037,9 @@ impl Qrow {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
+        if let Some(connection) = self.active_profile() {
+            self.cancel_external_authentication(connection, cx);
+        }
         self.cancel_tab(self.active, cx);
     }
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2795,16 +2783,25 @@ impl Qrow {
         let sign_in_choices =
             connection_form::sign_in_choices(&self.sign_ins, profile.database_type);
         let authentication = connection_form::authentication_select(
-            profile.authentication.sign_in().is_some(),
+            profile.authentication,
+            profile.database_type,
             window,
             cx,
         );
         let sign_in = connection_form::sign_in_combobox(
             &sign_in_choices,
+            &self.sign_ins,
             profile.authentication.sign_in(),
             window,
             cx,
         );
+        if profile.database_type == crate::model::DatabaseType::Trino
+            && matches!(profile.authentication, Authentication::Oidc { .. })
+        {
+            authentication.update(cx, |select, cx| {
+                select.set_selected_value(&"Sign-in".to_owned(), window, cx)
+            });
+        }
         let authentication_subscription =
             cx.subscribe_in(&authentication, window, |_, _, event, _, cx| {
                 if connection_form::uses_sign_in_from_event(event).is_some() {
@@ -2873,6 +2870,12 @@ impl Qrow {
                                     )
                                 });
                             }
+                            connection_form::reset_authentication(
+                                &form.authentication,
+                                selected,
+                                window,
+                                cx,
+                            );
                             form.profile.database_type = selected;
                         }
                     }
@@ -3162,27 +3165,22 @@ impl Qrow {
             }
             profile.assistant_notes = form.assistant_notes.read(cx).value().trim().to_owned();
             profile.dbt = form.dbt.project(cx)?;
-            profile.authentication = if profile.database_type
-                != crate::model::DatabaseType::Postgres
+            profile.authentication = if profile.database_type == crate::model::DatabaseType::Trino
+                && connection_form::uses_external(&form.authentication, cx)
+            {
+                Authentication::TrinoExternal
+            } else if profile.database_type != crate::model::DatabaseType::Postgres
                 && connection_form::uses_sign_in(&form.authentication, cx)
             {
                 let sign_in =
                     connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx)
                         .and_then(|id| self.sign_ins.iter().find(|sign_in| sign_in.id == id))
                         .ok_or_else(|| anyhow::anyhow!("Choose a sign-in for this connection."))?;
-                anyhow::ensure!(
-                    sign_in.allows_host(&profile.host),
-                    "The sign-in \"{}\" does not send tokens to {}. Add the host to the database hosts of the sign-in.",
-                    sign_in.name,
-                    profile.host
-                );
                 match sign_in.provider {
                     crate::model::SignInProvider::Oidc => Authentication::Oidc {
                         sign_in: sign_in.id,
                     },
-                    crate::model::SignInProvider::TrinoExternal => Authentication::TrinoExternal {
-                        sign_in: sign_in.id,
-                    },
+                    crate::model::SignInProvider::TrinoExternal => Authentication::TrinoExternal,
                 }
             } else {
                 Authentication::Password

@@ -157,22 +157,14 @@ impl Qrow {
         );
         let postgres = database_type == crate::model::DatabaseType::Postgres;
         let trino = database_type == crate::model::DatabaseType::Trino;
+        let uses_external = trino && connection_form::uses_external(&form.authentication, cx);
         let uses_sign_in = !postgres && connection_form::uses_sign_in(&form.authentication, cx);
         let chosen_sign_in =
             connection_form::chosen_sign_in(&form.sign_in, &form.sign_in_choices, cx);
         let sign_in_description = chosen_sign_in
-            .map(|id| {
-                if self.sign_ins.iter().any(|sign_in| {
-                    sign_in.id == id
-                        && sign_in.provider == crate::model::SignInProvider::TrinoExternal
-                }) {
-                    "Trino opens the browser when authentication is necessary.".to_owned()
-                } else {
-                    match self.oidc.identity(id) {
-                        Some(identity) => format!("Signed in as {}.", identity.display()),
-                        None => "Not signed in. Sign in from the Sign-ins sidebar.".to_owned(),
-                    }
-                }
+            .map(|id| match self.oidc.identity(id) {
+                Some(identity) => format!("Signed in as {}.", identity.display()),
+                None => "The browser opens when a connection needs sign-in.".to_owned(),
             })
             .unwrap_or_else(|| {
                 if form.sign_in_choices.is_empty() {
@@ -257,7 +249,7 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "TLS",
-                    if uses_sign_in && !form.tls {
+                    if (uses_sign_in || uses_external) && !form.tls {
                         "Without TLS, others on the network can read and use the access token."
                     } else {
                         "Encrypts the connection. The server must accept TLS on this port."
@@ -283,7 +275,11 @@ impl Qrow {
                 connection_row(
                     qrow,
                     "Authentication",
-                    "Several connections can share one sign-in, each with its own username.",
+                    if trino {
+                        "Use a password or browser sign-in."
+                    } else {
+                        "Use a password or a saved sign-in."
+                    },
                     &["sign-in", "ldap", "password", "oidc"],
                     false,
                     |_, form, _, _| {
@@ -315,7 +311,7 @@ impl Qrow {
                 false,
                 |_, form, _, _| form_input(form, 3, "Username"),
             ))
-            .items((!uses_sign_in).then(|| {
+            .items((!uses_sign_in && !uses_external).then(|| {
                 connection_row(
                     qrow,
                     "Password",
