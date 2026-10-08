@@ -55,6 +55,15 @@ Qrow changes these files:
   text, as over Markdown text. Before, it stayed an arrow, so the SQL of the
   dbt details sheet did not look selectable. GPUI tests cannot read the
   cursor, so this change has no test.
+- `src/text/inline.rs` and `src/text/mod.rs`: the table that keeps the shaped
+  text of a Markdown paragraph for the next frame removes the entries of
+  dropped paragraphs when it grows to twice the size after its last cleanup,
+  and at 64 entries or more. Before, it removed them only at 4,096 entries.
+  Each streamed reply step and each closed tooltip drops paragraphs, so after
+  some work the table held thousands of dropped paragraphs: about 25 MB in
+  a measured session. `retained_layout_count`, for tests only, gives the
+  number of entries. The Qrow UI test
+  `replaced_paragraphs_release_their_shaped_text` is the regression test.
 
 Remove a patch when a GPUI Kit release includes its fix. Update the crate set
 as one unit.
