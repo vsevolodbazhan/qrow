@@ -735,9 +735,10 @@ had before the refresh. The error shows on the row of the refreshed part:
   The expanded connection keeps its schemas and has no error or progress row
   after the refresh ends. The dot goes away when you view Activity.
   Select **Refresh** from the connection menu to try again.
-- A schema, a table, or a view: the row shows a warning icon. Point to the row
-  to read the first line of the error. The first row under the expanded row
-  shows the error with **Refresh**.
+- A schema, a table, or a view: the row shows a red status dot. Point to
+  the dot to read the first line of the error. Click it to open Activity for
+  that connection. The dot stays until a refresh succeeds. The first row
+  under the expanded row shows the error with **Refresh**.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show activity** from the connection menu to open it. The connection row uses

@@ -1,10 +1,10 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, assert_catalog_icon, assert_connection_dot,
-    assert_connection_highlight, assert_connection_keyboard_position, assert_tooltip_header_center,
-    assert_tree_row_outline, bounds_of, connection_row, elements, label, labelled, menu_item,
-    offline_profile, press_at, selected_tree_rows, shows, value,
+    MemoryCredentials, TestApp, assert_catalog_error_dot, assert_catalog_icon,
+    assert_connection_dot, assert_connection_highlight, assert_connection_keyboard_position,
+    assert_tooltip_header_center, assert_tree_row_outline, bounds_of, connection_row, elements,
+    label, labelled, menu_item, offline_profile, press_at, selected_tree_rows, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -316,7 +316,7 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             assert_status_alignment(&app, cx, &status);
         }
         drop(listener);
-        // Failed refreshes keep the same centerline for their dot or icon.
+        // Failed refreshes keep the same centerline for their status dots.
         for (depth, parent) in parents.iter().enumerate() {
             let status = if depth == 0 {
                 let status = format!("connection-status-{}", profiles[0].id);
@@ -338,6 +338,43 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             };
             app.wait_for(cx, status.clone());
             assert_status_alignment(&app, cx, &status);
+            if depth > 0 {
+                app.update(cx, |window, cx| {
+                    assert_catalog_error_dot(window, &status, cx.theme().danger);
+                    assert_eq!(
+                        label(window, status.clone()).as_deref(),
+                        Some(if depth == 1 {
+                            "finance, schema refresh error, show Activity"
+                        } else {
+                            "daily, schema refresh error, show Activity"
+                        })
+                    );
+                });
+                app.click(cx, status.clone());
+                app.wait_for(cx, "activity");
+                let activity = app.copy_activity(cx);
+                assert!(activity.contains("Schema refresh failed"), "{activity}");
+                assert!(
+                    activity.contains(if depth == 1 {
+                        "finance"
+                    } else {
+                        "finance.daily"
+                    }),
+                    "The dot must open the Activity of its connection: {activity}"
+                );
+                app.press(cx, "escape");
+                app.wait_gone(cx, "activity");
+                app.update(cx, |window, cx| {
+                    assert_catalog_error_dot(window, &status, cx.theme().danger);
+                });
+                app.update(cx, |window, _| {
+                    assert!(
+                        window
+                            .find(format!("{parent}\u{1f}error\u{1f}label"))
+                            .visible()
+                    );
+                });
+            }
         }
         app.update(cx, |window, _| window.remove_window());
         cx.run_until_parked();

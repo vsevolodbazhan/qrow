@@ -1,8 +1,9 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{
-    TestApp, assert_catalog_icon, assert_connection_highlight, bounds_of, connection_row, labelled,
-    selected_tree_rows,
+    TestApp, assert_catalog_error_dot, assert_catalog_icon, assert_connection_highlight, bounds_of,
+    connection_row, labelled, selected_tree_rows,
 };
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
@@ -20,6 +21,82 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAppContext) {
+    for relation in [false, true] {
+        let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 1", "not-the-password");
+        workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+        let profile = workspace.profiles[0].clone();
+        let directory = tempfile::tempdir().unwrap();
+        let mut catalog = Catalog::new(&profile);
+        catalog.apply_schemas(vec!["finance".into()], &CatalogSettings::default(), 1);
+        if relation {
+            catalog.apply_relations(
+                "finance",
+                None,
+                vec![RelationEntry {
+                    name: "daily".into(),
+                    kind: RelationKind::Table,
+                    comment: None,
+                }],
+                1,
+            );
+        }
+        storage::save_catalog(
+            &storage::catalog_path(&directory.path().join("workspace.json"), profile.id),
+            &catalog,
+        )
+        .unwrap();
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        let schema = format!("s\u{1f}{}\u{1f}finance", profile.id);
+        let parent = if relation {
+            format!("r\u{1f}{}\u{1f}finance\u{1f}daily", profile.id)
+        } else {
+            schema.clone()
+        };
+        app.toggle_connection(cx, profile.id);
+        app.wait_for(cx, format!("{schema}\u{1f}label"));
+        app.click(cx, format!("{schema}\u{1f}label"));
+        if relation {
+            app.wait_for(cx, format!("{parent}\u{1f}label"));
+            app.click(cx, format!("{parent}\u{1f}label"));
+        }
+        let refresh = format!("{parent}\u{1f}notice\u{1f}refresh");
+        app.wait_for(cx, refresh.clone());
+        app.click(cx, refresh);
+        let status = format!("{parent}\u{1f}error-icon");
+        app.wait_for(cx, status.clone());
+        app.update(cx, |window, cx| {
+            assert_catalog_error_dot(window, &status, cx.theme().danger);
+        });
+        app.click(cx, status.clone());
+        app.wait_for(cx, "activity");
+        let activity = app.copy_activity(cx);
+        assert!(activity.contains("Schema refresh failed"), "{activity}");
+        assert!(
+            activity.contains("rejected SASL PLAIN authentication"),
+            "{activity}"
+        );
+        assert!(activity.contains("finance"), "{activity}");
+        if relation {
+            assert!(activity.contains("daily"), "{activity}");
+        }
+        app.press(cx, "escape");
+        app.wait_gone(cx, "activity");
+        app.update(cx, |window, cx| {
+            assert_catalog_error_dot(window, &status, cx.theme().danger);
+            assert!(
+                window
+                    .try_find(format!("{parent}\u{1f}error\u{1f}refresh"))
+                    .is_some()
+            );
+        });
+        app.update(cx, |window, _| window.remove_window());
+        cx.run_until_parked();
+    }
+}
 
 /// Delay authentication of the refresh session while query sessions use the
 /// real server normally. This makes the refresh cross the tab's idle deadline.

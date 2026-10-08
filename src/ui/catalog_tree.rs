@@ -1953,6 +1953,13 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
+    let error_status = error.as_ref().and_then(|_| match node {
+        Node::Schema { profile, name, .. } | Node::Relation { profile, name, .. } => Some((
+            *profile,
+            format!("{name}, schema refresh error, show Activity"),
+        )),
+        _ => None,
+    });
     let menu_id = id.clone();
     let schema_detail = matches!(node, Node::Schema { .. });
     let leaf = matches!(node, Node::Column { .. });
@@ -2025,15 +2032,22 @@ fn render_entry(
                     .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
             )
         })
-        .when(error.is_some(), |el| {
+        .when_some(error_status, |el, (profile, label)| {
             el.child(
-                status_lane(child_id(&id, "error-icon"), ui_px(STATUS_SLOT_WIDTH))
-                    .test_support()
+                h_flex()
+                    .id(child_id(&id, "error-status"))
+                    .h_full()
                     .child(
-                        Icon::new(AssetIconName::TriangleAlert)
-                            .xsmall()
-                            .text_color(cx.theme().danger),
-                    ),
+                        status_slot(
+                            child_id(&id, "error-icon").to_string(),
+                            ui_px(STATUS_SLOT_WIDTH),
+                            label,
+                            show_activity(profile, weak),
+                        )
+                        .child(DotStatus::Error.dot(cx)),
+                    )
+                    .when(!*menu_open, |el| el.tooltip(context.live_tooltip(&id)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
             )
         })
         .when(selected, |el| el.child(focus_outline(cx)))
@@ -2244,7 +2258,7 @@ fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
         .justify_center()
 }
 
-/// A button for one status dot at the end of a connection row. The header and
+/// A button for one status dot at the end of a catalog row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
 fn status_slot(
@@ -2263,7 +2277,7 @@ fn status_slot(
         .on_click(on_click)
 }
 
-/// A click on a status dot of a connection row opens the Activity of the
+/// A click on a status dot of a catalog row opens the Activity of the
 /// connection, which has the details.
 fn show_activity(
     id: Uuid,
