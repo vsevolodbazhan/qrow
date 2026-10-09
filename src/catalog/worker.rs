@@ -1232,7 +1232,7 @@ impl Runner {
             match self.session().poll()? {
                 QueryState::Finished { has_results } => break has_results,
                 QueryState::Cancelled => anyhow::bail!("The catalog request was cancelled"),
-                QueryState::Running => {}
+                QueryState::Running | QueryState::Streaming { .. } => {}
             }
             // Do not wait for the server to confirm a cancellation. The next
             // request closes the operation.

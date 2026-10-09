@@ -1,8 +1,18 @@
 //! Postgres sessions. Values use the server's text representation.
 mod cancellation;
+#[cfg(test)]
+mod driver_tests;
+mod results;
+mod schema;
 mod tls;
+mod transport;
+#[cfg(test)]
+mod transport_tests;
 
-use super::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session};
+use super::{
+    Cancellation, ConnectionControl, Connector, MetadataRequest, QueryError, QueryState, Secret,
+    Session,
+};
 use crate::{
     model::{
         Authentication, Batch, Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PostgresSslMode, Profile,
@@ -14,16 +24,18 @@ use anyhow::{Context, Result};
 use futures_util::{StreamExt, pin_mut};
 use std::{
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
+    io::{BufWriter, Write},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
-use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage, config::SslMode};
+use tokio_postgres::{
+    Client, Config, NoTls, SimpleQueryMessage, config::SslMode, tls::MakeTlsConnect,
+};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 #[derive(Default)]
@@ -46,6 +58,11 @@ struct Cancel {
     closed: Arc<AtomicBool>,
     tls: Option<MakeRustlsConnect>,
     timeout: Duration,
+    transport: Arc<transport::Abort>,
+    secondary: Mutex<Option<Arc<transport::Abort>>>,
+    deadline: Mutex<Option<Instant>>,
+    send_started: AtomicBool,
+    completion: (Mutex<bool>, Condvar),
 }
 
 impl Cancel {
@@ -53,17 +70,46 @@ impl Cancel {
         if self.finished.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
             return Ok(());
         }
+        if self.send_started.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let timeout = self
+            .deadline
+            .lock()
+            .unwrap()
+            .map_or(self.timeout, |deadline| {
+                deadline.saturating_duration_since(Instant::now())
+            });
         let result = tokio::time::timeout(
-            self.timeout,
-            cancellation::send(&self.token, &self.host, &self.endpoint, self.tls.clone()),
+            timeout,
+            cancellation::send(
+                &self.token,
+                &self.host,
+                &self.endpoint,
+                self.tls.clone(),
+                |socket| {
+                    *self.secondary.lock().unwrap() = Some(socket.clone());
+                    if self.closed.load(Ordering::SeqCst) {
+                        socket.abort_transport();
+                    }
+                },
+            ),
         )
         .await
         .context("Postgres did not answer the cancellation request in time")
-        .and_then(|result| result.context("Could not cancel the Postgres query"));
+        .and_then(|result| result.context("Could not cancel the Postgres query"))
+        .and_then(|()| {
+            anyhow::ensure!(
+                !self.closed.load(Ordering::SeqCst),
+                "Postgres cancellation transport was interrupted"
+            );
+            Ok(())
+        });
         if result.is_err() {
             // A partially sent packet can still arrive. Do not reuse its backend.
-            self.closed.store(true, Ordering::SeqCst);
+            self.abort_transport();
         }
+        self.secondary.lock().unwrap().take();
         result
     }
 
@@ -89,6 +135,12 @@ impl Cancel {
         }
         Ok(())
     }
+
+    fn finish(&self) {
+        self.finished.store(true, Ordering::SeqCst);
+        *self.completion.0.lock().unwrap() = true;
+        self.completion.1.notify_all();
+    }
 }
 
 impl Cancellation for Cancel {
@@ -101,21 +153,47 @@ impl Cancellation for Cancel {
         // must not send a packet after that operation has ended.
         Ok(())
     }
+    fn cancel_with_deadline(&self, deadline: Instant) -> Result<()> {
+        if self.finished.load(Ordering::SeqCst) || self.closed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        {
+            let mut current = self.deadline.lock().unwrap();
+            *current = Some(current.map_or(deadline, |old| old.min(deadline)));
+        }
+        self.cancel()?;
+        let mut finished = self.completion.0.lock().unwrap();
+        while !*finished {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                self.abort_transport();
+                anyhow::bail!("Postgres cancellation cleanup exceeded its deadline");
+            }
+            finished = self
+                .completion
+                .1
+                .wait_timeout(finished, remaining)
+                .unwrap()
+                .0;
+        }
+        Ok(())
+    }
+    fn abort_transport(&self) {
+        self.transport.abort_transport();
+        if let Some(socket) = self.secondary.lock().unwrap().as_ref() {
+            socket.abort_transport();
+        }
+    }
 }
 
-struct Results {
-    columns: Vec<Column>,
-    limited: bool,
-    exhausted: bool,
-    rows: BufReader<File>,
-    context: crate::export::Context,
-}
+use results::{Mode, Output, Progress, Results};
 
 struct Operation {
     cancel: Arc<Cancel>,
     task: tokio::task::JoinHandle<()>,
     receiver: mpsc::Receiver<Result<Results>>,
     results: Option<Results>,
+    progress: Arc<Progress>,
     cancelled: bool,
 }
 
@@ -141,26 +219,54 @@ fn query_error(error: tokio_postgres::Error) -> anyhow::Error {
     }
 }
 
-async fn connect_client(
+async fn connect_client<
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+>(
     config: &Config,
     tls: Option<&MakeRustlsConnect>,
-) -> std::result::Result<(Client, tokio::task::JoinHandle<()>), tokio_postgres::Error> {
+    host: &str,
+    socket: S,
+    transport: &Arc<transport::Abort>,
+) -> Result<(Client, tokio::task::JoinHandle<()>)> {
+    let closed = transport.closed.clone();
     match tls {
         Some(tls) => {
-            let (client, connection) = config.connect(tls.clone()).await?;
+            let mut tls = tls.clone();
+            let tls = <MakeRustlsConnect as MakeTlsConnect<S>>::make_tls_connect(&mut tls, host)?;
+            let (client, connection) = config
+                .connect_raw(
+                    socket,
+                    transport::GuardedTls {
+                        tls,
+                        limit: transport.limit.clone(),
+                        boundary: transport.boundary.clone(),
+                    },
+                )
+                .await?;
             Ok((
                 client,
                 tokio::spawn(async move {
                     let _ = connection.await;
+                    closed.store(true, Ordering::SeqCst);
                 }),
             ))
         }
         None => {
-            let (client, connection) = config.connect(NoTls).await?;
+            let (client, connection) = config
+                .connect_raw(
+                    transport::Wire::controlled(
+                        socket,
+                        transport.limit.clone(),
+                        transport.boundary.clone(),
+                    ),
+                    NoTls,
+                )
+                .await?;
             Ok((
                 client,
                 tokio::spawn(async move {
                     let _ = connection.await;
+                    closed.store(true, Ordering::SeqCst);
                 }),
             ))
         }
@@ -169,6 +275,28 @@ async fn connect_client(
 
 impl Connector for PostgresConnector {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
+        self.connect_session(profile, secret, None)
+    }
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        self.connect_session(profile, secret, Some(control))
+    }
+}
+
+impl PostgresConnector {
+    fn connect_session(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: Option<&ConnectionControl>,
+    ) -> Result<Box<dyn Session>> {
+        if let Some(control) = control {
+            control.check()?;
+        }
         anyhow::ensure!(
             profile.authentication == Authentication::Password,
             "Postgres connections use password authentication."
@@ -200,36 +328,63 @@ impl Connector for PostgresConnector {
                 (*self.trust.client_config()?).clone(),
             )),
         };
-        let (client, connection, endpoint) = runtime.block_on(async {
+        let limit = if control.is_some() {
+            transport::EXPORT_FRAME_BYTES
+        } else {
+            transport::PREVIEW_FRAME_BYTES
+        };
+        let (client, connection, transport) = runtime.block_on(async {
             tokio::time::timeout(timeout, async {
                 #[cfg(unix)]
                 if let [tokio_postgres::config::Host::Unix(directory)] = config.get_hosts() {
-                    let (client, connection) = connect_client(&config, tls.as_ref()).await?;
-                    let endpoint = cancellation::Endpoint::Unix(
-                        directory.join(format!(".s.PGSQL.{}", profile.port)),
-                    );
-                    return Ok((client, connection, endpoint));
+                    let path = directory.join(format!(".s.PGSQL.{}", profile.port));
+                    let (socket, transport) = transport::Abort::unix(&path, limit).await?;
+                    if let Some(control) = control {
+                        control.register(transport.clone())?;
+                    }
+                    let connected =
+                        connect_client(&config, tls.as_ref(), &profile.host, socket, &transport)
+                            .await;
+                    return match connected {
+                        Ok((client, connection)) => Ok((client, connection, transport)),
+                        Err(error) => {
+                            transport.abort_transport();
+                            Err(error)
+                        }
+                    };
                 }
                 let addresses =
                     tokio::net::lookup_host((profile.host.as_str(), profile.port)).await?;
                 let mut last_error = None;
                 for address in addresses {
-                    let mut attempt = config.clone();
-                    // Keep cancellation on the backend that accepted the session.
-                    // The configured hostname remains the TLS verification name.
-                    attempt.hostaddr(address.ip());
-                    let connected = connect_client(&attempt, tls.as_ref()).await;
+                    if let Some(control) = control {
+                        control.check()?;
+                    }
+                    let (socket, transport) = match transport::Abort::tcp(address, limit).await {
+                        Ok(connected) => connected,
+                        Err(error) => {
+                            last_error = Some(error);
+                            continue;
+                        }
+                    };
+                    if let Some(control) = control {
+                        control.register(transport.clone())?;
+                    }
+                    let connected =
+                        connect_client(&config, tls.as_ref(), &profile.host, socket, &transport)
+                            .await;
                     match connected {
                         Ok((client, connection)) => {
-                            return Ok((client, connection, cancellation::Endpoint::Tcp(address)));
+                            return Ok((client, connection, transport));
                         }
-                        Err(error) => last_error = Some(error),
+                        Err(error) => {
+                            transport.abort_transport();
+                            last_error = Some(error);
+                        }
                     }
                 }
                 Err::<_, anyhow::Error>(
-                    last_error
-                        .map(anyhow::Error::from)
-                        .unwrap_or_else(|| anyhow::anyhow!("Postgres host has no addresses")),
+                    last_error.unwrap_or_else(|| anyhow::anyhow!("Postgres host has no addresses")),
                 )
             })
             .await
@@ -244,6 +399,9 @@ impl Connector for PostgresConnector {
         // Parameters remain separate from SQL, including names and values with quotes.
         runtime.block_on(async {
             for (name, value) in &profile.parameters {
+                if let Some(control) = control {
+                    control.check()?;
+                }
                 tokio::time::timeout(
                     timeout,
                     client.query(
@@ -257,15 +415,23 @@ impl Connector for PostgresConnector {
             }
             Ok::<_, anyhow::Error>(())
         })?;
+        if let Some(control) = control {
+            control.check()?;
+        }
         let cancel = Arc::new(Cancel {
             requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
             token: client.cancel_token(),
             host: profile.host.clone(),
-            endpoint,
-            closed: Arc::new(AtomicBool::new(false)),
+            endpoint: transport.endpoint()?,
+            closed: transport.closed.clone(),
             tls,
             timeout,
+            transport,
+            secondary: Mutex::default(),
+            deadline: Mutex::default(),
+            send_started: AtomicBool::new(false),
+            completion: (Mutex::new(false), Condvar::new()),
         });
         Ok(Box::new(PostgresSession {
             client: Arc::new(client),
@@ -292,7 +458,69 @@ fn export_type(name: &str, modifier: i32) -> String {
 }
 
 impl PostgresSession {
-    fn start(&self, sql: &str) -> Result<Operation> {
+    fn close_owned_operation(&self, mut operation: Operation) -> Result<()> {
+        if !operation.task.is_finished() {
+            operation.cancel.cancel()?;
+        }
+        let result = self.runtime.block_on(async {
+            tokio::time::timeout(self.cancel.timeout, &mut operation.task)
+                .await
+                .context("Postgres did not finish operation cleanup in time")?
+                .context("Postgres operation task failed")
+        });
+        if result.is_err() {
+            operation.cancel.abort_transport();
+            operation.task.abort();
+        }
+        result?;
+        anyhow::ensure!(
+            !operation.cancel.closed.load(Ordering::SeqCst),
+            "Postgres session is closed after operation cleanup"
+        );
+        Ok(())
+    }
+    fn execute_mode(&mut self, sql: &str, mode: Mode) -> Result<Arc<dyn Cancellation>> {
+        crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
+        if mode == Mode::Export {
+            anyhow::ensure!(
+                sql.len() <= schema::MAX_SQL_BYTES,
+                "Postgres export SQL exceeds the 1 MiB limit"
+            );
+        }
+        self.close_operation()?;
+        self.close_keep_alive()?;
+        self.cancel.transport.limit.store(
+            if mode == Mode::Export {
+                transport::EXPORT_FRAME_BYTES
+            } else {
+                transport::PREVIEW_FRAME_BYTES
+            },
+            Ordering::SeqCst,
+        );
+        if mode == Mode::Export {
+            self.client.clear_type_cache();
+            let result = self.runtime.block_on(async {
+                tokio::time::timeout(
+                    self.cancel.timeout,
+                    self.client
+                        .reset_buffers_when_idle(self.cancel.transport.boundary.clone()),
+                )
+                .await
+                .context("Postgres did not reach the export buffer boundary in time")?
+                .context("Could not reset Postgres export buffers")
+            });
+            if result.is_err() {
+                self.cancel.abort_transport();
+            }
+            result?;
+        }
+        let operation = self.start(sql, mode)?;
+        let cancel = operation.cancel.clone();
+        self.operation = Some(operation);
+        Ok(cancel)
+    }
+
+    fn start(&self, sql: &str, mode: Mode) -> Result<Operation> {
         anyhow::ensure!(
             !self.cancel.closed.load(Ordering::SeqCst),
             "Postgres session is closed"
@@ -309,35 +537,43 @@ impl PostgresSession {
             closed: self.cancel.closed.clone(),
             tls: self.cancel.tls.clone(),
             timeout: self.cancel.timeout,
+            transport: self.cancel.transport.clone(),
+            secondary: Mutex::default(),
+            deadline: Mutex::default(),
+            send_started: AtomicBool::new(false),
+            completion: (Mutex::new(false), Condvar::new()),
         });
         let requested = cancel.clone();
+        let progress = Arc::new(Progress::default());
+        let task_progress = progress.clone();
+        let (mut output, rows) = results::source(mode)?;
         let task = self.runtime.spawn(async move {
+            let mut source = Some(rows);
+            let mut protocol_started = false;
             let result = async {
-                let mut writer = BufWriter::new(tempfile::tempfile()?);
                 requested.check()?;
-                let statement = requested.until(client.prepare(&sql)).await?;
-                let types: Vec<_> = statement
-                    .columns()
-                    .iter()
-                    .map(|column| export_type(column.type_().name(), column.type_modifier()))
-                    .collect();
-                let context = if statement.columns().is_empty() {
+                protocol_started = true;
+                let statement = requested.until(client.prepare_bounded(&sql)).await?;
+                let types = schema::types(&client, &requested, &statement).await?;
+                let has_results = !statement.columns().is_empty();
+                drop(statement);
+                let context = if !has_results {
                     crate::export::Context::default()
                 } else {
-                    let settings = requested.until(client.query_one(
-                        "SELECT current_setting('DateStyle'), current_setting('IntervalStyle'), current_setting('TimeZone')", &[]
+                    let description = requested.until(client.prepare_bounded(
+                        "SELECT pg_catalog.current_setting('DateStyle'), pg_catalog.current_setting('IntervalStyle'), pg_catalog.current_setting('TimeZone')"
                     )).await?;
+                    let settings = requested.until(client.query_one(&description, &[])).await?;
+                    let values: [&str; 3] = [settings.try_get(0)?, settings.try_get(1)?, settings.try_get(2)?];
+                    anyhow::ensure!(values.iter().all(|value| value.len() <= 64 * 1024), "Postgres export settings exceed their metadata limit");
                     crate::export::Context { postgres: Some(crate::export::PostgresContext {
-                        date_style: settings.get(0), interval_style: settings.get(1), time_zone: settings.get(2),
+                        date_style: values[0].into(), interval_style: values[1].into(), time_zone: values[2].into(),
                     }) }
                 };
                 requested.check()?;
                 let stream = requested.until(client.simple_query_raw(&sql)).await?;
                 pin_mut!(stream);
-                let mut columns = Vec::new();
-                let mut rows = 0;
-                let mut bytes: usize = 0;
-                let mut limited = false;
+                let mut width = 0;
                 let mut cancellation_tick = tokio::time::interval(Duration::from_millis(100));
                 loop {
                     let message = tokio::select! {
@@ -350,7 +586,15 @@ impl PostgresSession {
                     let Some(message) = message else { break; };
                     match message.map_err(query_error)? {
                         SimpleQueryMessage::RowDescription(description) => {
-                            columns = description
+                            if mode == Mode::Export {
+                                anyhow::ensure!(description.len() <= 4096, "Postgres export schema exceeds 4,096 columns");
+                                let bytes = description.len().saturating_mul(std::mem::size_of::<Column>())
+                                    .saturating_add(description.iter().map(|column| column.name().len()).sum::<usize>())
+                                    .saturating_add(types.iter().map(String::len).sum::<usize>());
+                                anyhow::ensure!(bytes <= crate::export::budget::MAX_ROW_BYTES, "Postgres export schema exceeds 16 MiB");
+                            }
+                            width = description.len();
+                            let columns = description
                                 .iter()
                                 .enumerate()
                                 .map(|(index, column)| Column {
@@ -361,70 +605,92 @@ impl PostgresSession {
                                         .unwrap_or_else(|| "text".into()),
                                 })
                                 .collect();
+                            let rows = source.take().context("Postgres returned more than one result set")?;
+                            sender.send(Ok(Results { columns, exhausted: false, rows, context: context.clone() }))
+                                .map_err(|_| anyhow::anyhow!("Postgres result consumer closed"))?;
                         }
                         SimpleQueryMessage::Row(row) => {
-                            let row_bytes = row.len().saturating_mul(std::mem::size_of::<Option<String>>())
-                                .saturating_add((0..row.len()).filter_map(|i| row.get(i)).map(str::len).sum::<usize>());
-                            if rows >= MAX_RESULT_ROWS || bytes.saturating_add(row_bytes) > MAX_RESULT_BYTES {
-                                limited = true;
-                            }
-                            // Inspect borrowed values before retaining them. Binary lengths
-                            // keep JSON escaping from expanding the temporary file.
-                            if !limited {
-                                writer.write_all(&(row.len() as u64).to_le_bytes())?;
-                                for index in 0..row.len() {
-                                    match row.get(index) {
-                                        None => writer.write_all(&u64::MAX.to_le_bytes())?,
-                                        Some(value) => {
-                                            writer.write_all(&(value.len() as u64).to_le_bytes())?;
-                                            writer.write_all(value.as_bytes())?;
+                            anyhow::ensure!(row.len() == width, "Postgres returned a row with the wrong width");
+                            match &mut output {
+                                Output::Prefix(prefix) => prefix.append(&row, &task_progress)?,
+                                Output::Direct(sender) => {
+                                    crate::export::budget::selected_row_bytes((0..row.len()).map(|index| row.get(index)))?;
+                                    let owned: Row = (0..row.len()).map(|index| row.get(index).map(str::to_owned)).collect();
+                                    let send = sender.send(owned);
+                                    pin_mut!(send);
+                                    loop {
+                                        tokio::select! {
+                                            sent = &mut send => {
+                                                sent.map_err(|_| anyhow::anyhow!("Postgres export consumer closed"))?;
+                                                break;
+                                            }
+                                            _ = cancellation_tick.tick() => {
+                                                if requested.requested.load(Ordering::SeqCst) {
+                                                    requested.send().await?;
+                                                    requested.check()?;
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                bytes += row_bytes;
-                                rows += 1;
                             }
                         }
                         _ => {}
                     }
                 }
-                writer.flush()?;
-                let mut file = writer.into_inner()?;
-                file.rewind()?;
-                Ok::<_, anyhow::Error>(Results {
-                    columns,
-                    limited,
-                    exhausted: false,
-                    rows: BufReader::new(file),
-                    context,
-                })
+                if let Output::Prefix(prefix) = &mut output { prefix.commit(&task_progress)?; }
+                Ok::<_, anyhow::Error>(())
             }
             .await;
-            requested.finished.store(true, Ordering::SeqCst);
-            let _ = sender.send(result);
+            if let Err(error) = &result {
+                // Wake consumers before server cleanup. Cancel retains ownership
+                // until cancellation and the protocol barrier finish.
+                task_progress.fail(error);
+            }
+            drop(output);
+            let result = if result.is_err() && protocol_started && !requested.closed.load(Ordering::SeqCst) {
+                // A local sink/limit failure can leave SQL running. Stop it before
+                // the Sync barrier; a server SQL error has already stopped it.
+                if result.as_ref().err().is_some_and(|error| !error.is::<QueryError>()) {
+                    let _ = requested.cancel();
+                    let _ = requested.send().await;
+                }
+                match tokio::time::timeout(requested.timeout, client.check_connection()).await {
+                    Ok(Ok(())) => result,
+                    _ => { requested.abort_transport(); result }
+                }
+            } else { result };
+            requested.finish();
+            task_progress.finish(&result);
+            if let Some(rows) = source {
+                let result = result.map(|()| Results {
+                    columns: Vec::new(), exhausted: false, rows,
+                    context: crate::export::Context::default(),
+                });
+                let _ = sender.send(result);
+            }
         });
         Ok(Operation {
             cancel,
             task,
             receiver,
             results: None,
+            progress,
             cancelled: false,
         })
     }
 }
 
 impl Session for PostgresSession {
+    fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
+        Some(self.cancel.transport.clone())
+    }
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
-        anyhow::ensure!(
-            !self.cancel.closed.load(Ordering::SeqCst),
-            "Postgres session is closed"
-        );
-        self.close_operation()?;
-        crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql)?;
-        let cancel = operation.cancel.clone();
-        self.operation = Some(operation);
-        Ok(cancel)
+        self.execute_mode(sql, Mode::Preview)
+    }
+
+    fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute_mode(sql, Mode::Export)
     }
 
     fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
@@ -440,6 +706,22 @@ impl Session for PostgresSession {
         if operation.cancelled {
             return Ok(QueryState::Cancelled);
         }
+        let completed = match operation.progress.completed() {
+            Ok(completed) => completed,
+            Err(error) => {
+                if error
+                    .downcast_ref::<QueryError>()
+                    .is_some_and(|error| error.0.starts_with("57014:"))
+                {
+                    if !operation.cancel.finished.load(Ordering::SeqCst) {
+                        return Ok(QueryState::Running);
+                    }
+                    operation.cancelled = true;
+                    return Ok(QueryState::Cancelled);
+                }
+                return Err(error);
+            }
+        };
         if operation.results.is_none() {
             match operation.receiver.try_recv() {
                 Ok(Ok(results)) => operation.results = Some(results),
@@ -458,8 +740,11 @@ impl Session for PostgresSession {
                 }
             }
         }
-        Ok(QueryState::Finished {
-            has_results: !operation.results.as_ref().unwrap().columns.is_empty(),
+        let has_results = !operation.results.as_ref().unwrap().columns.is_empty();
+        Ok(if completed {
+            QueryState::Finished { has_results }
+        } else {
+            QueryState::Streaming { has_results }
         })
     }
 
@@ -482,55 +767,30 @@ impl Session for PostgresSession {
     }
 
     fn fetch(&mut self, count: usize) -> Result<Batch> {
-        let results = self
+        let operation = self
             .operation
             .as_mut()
-            .and_then(|operation| operation.results.as_mut())
             .context("Postgres query has no result")?;
-        let mut rows = Vec::new();
-        for _ in 0..count {
-            if results.rows.fill_buf()?.is_empty() {
-                results.exhausted = rows.is_empty();
-                break;
-            }
-            let mut length = [0; 8];
-            results.rows.read_exact(&mut length)?;
-            let count = u64::from_le_bytes(length) as usize;
-            let mut row: Row = Vec::with_capacity(count);
-            for _ in 0..count {
-                results.rows.read_exact(&mut length)?;
-                let length = u64::from_le_bytes(length);
-                if length == u64::MAX {
-                    row.push(None);
-                } else {
-                    let mut bytes = vec![0; length as usize];
-                    results.rows.read_exact(&mut bytes)?;
-                    row.push(Some(String::from_utf8(bytes)?));
-                }
-            }
-            rows.push(row);
-        }
-        Ok(Batch { rows })
+        let results = operation
+            .results
+            .as_mut()
+            .context("Postgres query has no result")?;
+        results.fetch(count, &operation.progress, &self.runtime)
     }
 
     fn result_limited(&self) -> bool {
-        self.operation
-            .as_ref()
-            .and_then(|operation| operation.results.as_ref())
-            .is_some_and(|results| results.limited && results.exhausted)
+        self.operation.as_ref().is_some_and(|operation| {
+            operation.progress.limited()
+                && operation
+                    .results
+                    .as_ref()
+                    .is_some_and(|results| results.exhausted)
+        })
     }
 
     fn close_operation(&mut self) -> Result<()> {
         if let Some(operation) = self.operation.take() {
-            if !operation.task.is_finished() {
-                operation.cancel.cancel()?;
-            }
-            self.runtime.block_on(async {
-                tokio::time::timeout(self.cancel.timeout, operation.task)
-                    .await
-                    .context("Postgres did not finish operation cleanup in time")?
-                    .context("Postgres operation task failed")
-            })?;
+            self.close_owned_operation(operation)?;
         }
         Ok(())
     }
@@ -541,8 +801,18 @@ impl Session for PostgresSession {
             "Postgres session is closed"
         );
         self.close_keep_alive()?;
+        anyhow::ensure!(
+            self.operation
+                .as_ref()
+                .is_none_or(|operation| operation.cancel.finished.load(Ordering::SeqCst)),
+            "Postgres query is still running"
+        );
         crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql)?;
+        self.cancel
+            .transport
+            .limit
+            .store(transport::PREVIEW_FRAME_BYTES, Ordering::SeqCst);
+        let operation = self.start(sql, Mode::Preview)?;
         let cancel = operation.cancel.clone();
         self.keep_alive = Some(operation);
         Ok(cancel)
@@ -550,27 +820,23 @@ impl Session for PostgresSession {
 
     fn close_keep_alive(&mut self) -> Result<()> {
         if let Some(operation) = self.keep_alive.take() {
-            if !operation.task.is_finished() {
-                operation.cancel.cancel()?;
-            }
-            self.runtime.block_on(async {
-                tokio::time::timeout(self.cancel.timeout, operation.task)
-                    .await
-                    .context("Postgres did not finish operation cleanup in time")?
-                    .context("Postgres operation task failed")
-            })?;
+            self.close_owned_operation(operation)?;
         }
         Ok(())
     }
 
     fn close(&mut self) -> Result<()> {
-        self.cancel.closed.store(true, Ordering::SeqCst);
+        self.cancel.abort_transport();
         self.connection.abort();
         if let Some(operation) = self.operation.take() {
+            operation.cancel.abort_transport();
             operation.task.abort();
+            operation.cancel.finish();
         }
         if let Some(operation) = self.keep_alive.take() {
+            operation.cancel.abort_transport();
             operation.task.abort();
+            operation.cancel.finish();
         }
         Ok(())
     }
@@ -629,15 +895,21 @@ mod tests {
         assert_eq!(export_type("date", -1), "date");
     }
 
-    fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
+    pub(super) fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         let (client, server) = tokio::io::duplex(1024);
+        let transport = transport::Abort::synthetic();
         let mut config = Config::new();
-        config.user("synthetic").ssl_mode(SslMode::Disable);
+        // NoTls keeps the primary fixture plain. Prefer allows a secondary
+        // TLS connector to exercise its SSL negotiation with this token.
+        config
+            .user("synthetic")
+            .host("127.0.0.1")
+            .ssl_mode(SslMode::Prefer);
         let ((client, connection), server) = runtime.block_on(async {
             let handshake = async {
                 let mut server = server;
@@ -654,7 +926,12 @@ mod tests {
                     .unwrap();
                 server
             };
-            let (connection, server) = tokio::join!(config.connect_raw(client, NoTls), handshake);
+            let wire = transport::Wire::controlled(
+                client,
+                transport.limit.clone(),
+                transport.boundary.clone(),
+            );
+            let (connection, server) = tokio::join!(config.connect_raw(wire, NoTls), handshake);
             (connection.unwrap(), server)
         });
         let cancel = Arc::new(Cancel {
@@ -663,9 +940,14 @@ mod tests {
             token: client.cancel_token(),
             host: "127.0.0.1".into(),
             endpoint: cancellation::Endpoint::Tcp("127.0.0.1:0".parse().unwrap()),
-            closed: Arc::new(AtomicBool::new(false)),
+            closed: transport.closed.clone(),
             tls: None,
             timeout: Duration::from_millis(10),
+            transport,
+            secondary: Mutex::default(),
+            deadline: Mutex::default(),
+            send_started: AtomicBool::new(false),
+            completion: (Mutex::new(false), Condvar::new()),
         });
         let connection = runtime.spawn(async move {
             let _ = connection.await;
@@ -822,6 +1104,160 @@ mod tests {
             assert!(session.keep_alive.is_none());
             cancellation_server.abort();
         }
+    }
+
+    #[test]
+    fn cancellation_deadline_aborts_primary_and_secondary_during_tls_or_eof() {
+        use tokio::io::AsyncReadExt;
+        for tls in [false, true] {
+            let (mut session, _server) = idle_session();
+            let primary_listener = session
+                .runtime
+                .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+                .unwrap();
+            let (primary, transport) = session
+                .runtime
+                .block_on(transport::Abort::tcp(
+                    primary_listener.local_addr().unwrap(),
+                    transport::EXPORT_FRAME_BYTES,
+                ))
+                .unwrap();
+            let (mut primary_peer, _) =
+                session.runtime.block_on(primary_listener.accept()).unwrap();
+            let listener = session
+                .runtime
+                .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+                .unwrap();
+            let cancel = Arc::get_mut(&mut session.cancel).unwrap();
+            cancel.endpoint = cancellation::Endpoint::Tcp(listener.local_addr().unwrap());
+            cancel.closed = transport.closed.clone();
+            cancel.transport = transport;
+            cancel.timeout = Duration::from_secs(10);
+            if tls {
+                cancel.tls = Some(MakeRustlsConnect::new(tls::encryption_only().unwrap()));
+            }
+            let requested = session.cancel.clone();
+            let send = session.runtime.spawn(async move { requested.send().await });
+            let mut secondary_peer = session.runtime.block_on(async {
+                let (mut peer, _) = listener.accept().await.unwrap();
+                let mut packet = vec![0; if tls { 8 } else { 16 }];
+                peer.read_exact(&mut packet).await.unwrap();
+                assert_eq!(
+                    u32::from_be_bytes(packet[4..8].try_into().unwrap()),
+                    if tls { 80877103 } else { 80877102 }
+                );
+                // Hold SSL negotiation or CancelRequest EOF indefinitely.
+                peer
+            });
+            let secondary = session.cancel.secondary.lock().unwrap().clone().unwrap();
+            let requested = session.cancel.clone();
+            let started = Instant::now();
+            let deadline = started + Duration::from_millis(100);
+            let cleanup = std::thread::spawn(move || requested.cancel_with_deadline(deadline));
+            session.runtime.block_on(async {
+                tokio::time::timeout(Duration::from_secs(2), async {
+                    assert!(send.await.unwrap().is_err());
+                    assert_eq!(primary_peer.read(&mut [0; 1]).await.unwrap(), 0);
+                    assert_eq!(secondary_peer.read(&mut [0; 1]).await.unwrap(), 0);
+                })
+                .await
+                .unwrap();
+            });
+            assert!(
+                cleanup
+                    .join()
+                    .unwrap()
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("deadline")
+            );
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(session.cancel.transport.closed.load(Ordering::SeqCst));
+            assert!(secondary.closed.load(Ordering::SeqCst));
+            assert!(
+                session
+                    .execute("SELECT 42")
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("closed")
+            );
+            drop(primary);
+        }
+    }
+
+    #[test]
+    fn sql_error_waits_for_sync_ready_for_query_before_session_reuse() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn through_sync(server: &mut tokio::io::DuplexStream) {
+            loop {
+                let tag = server.read_u8().await.unwrap();
+                let length = server.read_u32().await.unwrap() as usize;
+                assert!((4..4096).contains(&length));
+                server.read_exact(&mut vec![0; length - 4]).await.unwrap();
+                if tag == b'S' {
+                    break;
+                }
+            }
+        }
+        let (mut session, mut server) = idle_session();
+        Arc::get_mut(&mut session.cancel).unwrap().timeout = Duration::from_secs(2);
+        session.execute("SELECT missing_column").unwrap();
+        session.runtime.block_on(async {
+            through_sync(&mut server).await;
+            let fields = b"SERROR\0C42703\0Msynthetic missing column\0\0";
+            server.write_u8(b'E').await.unwrap();
+            server.write_u32((fields.len() + 4) as u32).await.unwrap();
+            server.write_all(fields).await.unwrap();
+            // The original ReadyForQuery and the cleanup Sync response are held.
+            through_sync(&mut server).await;
+        });
+        assert!(
+            !session
+                .operation
+                .as_ref()
+                .unwrap()
+                .cancel
+                .finished
+                .load(Ordering::SeqCst)
+        );
+        assert!(
+            session
+                .poll()
+                .unwrap_err()
+                .to_string()
+                .contains("42703: synthetic missing column")
+        );
+        session.runtime.block_on(async {
+            server.write_all(b"Z\0\0\0\x05IZ\0\0\0\x05I").await.unwrap();
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while !session.operation.as_ref().unwrap().task.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
+        assert!(
+            session
+                .poll()
+                .unwrap_err()
+                .to_string()
+                .contains("42703: synthetic missing column")
+        );
+        assert!(
+            session
+                .operation
+                .as_ref()
+                .unwrap()
+                .cancel
+                .finished
+                .load(Ordering::SeqCst)
+        );
+        assert!(!session.cancel.closed.load(Ordering::SeqCst));
+        session.close_operation().unwrap();
+        session.execute("SELECT 42").unwrap();
     }
 
     #[test]

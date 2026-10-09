@@ -118,10 +118,16 @@ Profiles with the old TLS checkbox enabled use **Verify certificate**.
 Each tab has a separate Postgres session. Temporary tables and transaction
 state stay with that tab until the session closes. Cancel stops a query before
 submission, or sends a Postgres cancellation request for active work. Qrow waits
-for the cancellation socket to close before it reuses the session. If that
+for the cancellation socket to close and for the server to report that it is
+ready for the next command before it reuses the session. If that
 request fails or times out, reconnect before you run another query.
 SQL errors usually keep the session connected. After an
 error in an explicit transaction, run `ROLLBACK` before other work.
+
+Each Postgres server message has a 128 MiB transport limit. Qrow checks its
+declared length before the driver reads the body. A message above this limit
+closes the session. Reconnect before you run another query. The preview limits
+in [results](results.md) still apply to rows that Qrow keeps.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
 materialized views, and foreign tables. It reads column types and comments.
@@ -139,13 +145,20 @@ result columns do not need these requests.
 ### Postgres limits
 
 - Query results use the server's text format, including arrays, JSON, and dates.
-- Qrow reads the result stream before it shows the first page. It keeps up to
-  the result limits in a temporary file. It checks row sizes before retention.
-  Later pages read that file. It drains
-  rows beyond the limits without keeping them. Large results can delay the
-  first page even when only a preview is needed.
-- The Postgres client library can buffer a server row before Qrow checks its
-  size. Result limits do not cap the memory used to receive one oversized row.
+- Qrow shows the first page while it reads the result stream. The tab stays
+  busy until the server finishes. It keeps up to the result limits in a
+  temporary file and checks row sizes before retention. Later pages read that
+  file. It reads and discards rows beyond the limits without cancelling SQL.
+- The client library can buffer one row before Qrow checks the row's cell
+  sizes. The transport ceiling applies before this allocation. The preview
+  retention limit does not limit the memory for one accepted server message.
+- Direct exports limit SQL text to 1 MiB. Schema descriptions have at most
+  4,096 columns and 1,024 bytes for each name. Qrow reads custom type names
+  without collecting enum labels or composite members. It clears retained
+  protocol buffers before the export starts. This keeps the same session
+  and transaction.
+  Export data frames have a 16 MiB ceiling. Diagnostic, authentication,
+  notification, and session-status frames have a 1 MiB ceiling before decoding.
 - **Response Timeout** bounds connection setup, session settings, and cancellation.
   It does not set a query execution timeout. Use the `statement_timeout` session
   setting when you need one.

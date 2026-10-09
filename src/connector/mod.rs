@@ -22,7 +22,13 @@ use zeroize::Zeroizing;
 #[derive(Debug, PartialEq)]
 pub enum QueryState {
     Running,
-    Finished { has_results: bool },
+    /// The schema is ready and rows can be fetched while SQL still runs.
+    Streaming {
+        has_results: bool,
+    },
+    Finished {
+        has_results: bool,
+    },
     Cancelled,
 }
 
@@ -113,6 +119,14 @@ pub enum MetadataRequest {
 
 pub trait Session: Send {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>>;
+    /// Start one execution whose result is consumed without preview limits.
+    fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute(sql)
+    }
+    /// Wait for server completion and protocol cleanup after reading rows.
+    fn finish_execution(&mut self) -> Result<Completion> {
+        wait_for_completion(self, None)
+    }
     /// Start a catalog request as the current operation. Read its rows with
     /// [`poll`](Self::poll), [`columns`](Self::columns), and
     /// [`fetch`](Self::fetch), like the rows of a query.
@@ -161,13 +175,33 @@ pub fn wait_for_completion<S: Session + ?Sized>(
                 return Ok(Completion::Finished { has_results });
             }
             QueryState::Cancelled => return Ok(Completion::Cancelled),
-            QueryState::Running => {
+            QueryState::Running | QueryState::Streaming { .. } => {
                 anyhow::ensure!(
                     deadline.is_none_or(|deadline| Instant::now() < deadline),
                     "The operation did not end in time"
                 );
                 thread::sleep(POLL_INTERVAL);
             }
+        }
+    }
+}
+
+/// Wait for a result schema or a completed command. Streaming does not mean
+/// that SQL ended; callers must finish execution before releasing the session.
+pub fn wait_for_result<S: Session + ?Sized>(
+    session: &mut S,
+    deadline: Option<Instant>,
+) -> Result<QueryState> {
+    loop {
+        match session.poll()? {
+            QueryState::Running => {
+                anyhow::ensure!(
+                    deadline.is_none_or(|deadline| Instant::now() < deadline),
+                    "The result schema did not arrive in time"
+                );
+                thread::sleep(POLL_INTERVAL);
+            }
+            state => return Ok(state),
         }
     }
 }
@@ -350,6 +384,7 @@ mod tests {
     fn waits_until_the_operation_ends() {
         let mut session = Scripted(VecDeque::from([
             QueryState::Running,
+            QueryState::Streaming { has_results: true },
             QueryState::Finished { has_results: true },
         ]));
         let started = Instant::now();
@@ -370,5 +405,24 @@ mod tests {
         let mut session = Scripted(VecDeque::new());
         let error = wait_for_completion(&mut session, Some(Instant::now())).unwrap_err();
         assert_eq!(error.to_string(), "The operation did not end in time");
+    }
+
+    #[test]
+    fn schema_readiness_does_not_claim_execution_completion() {
+        let mut session = Scripted(VecDeque::from([
+            QueryState::Streaming { has_results: true },
+            QueryState::Streaming { has_results: true },
+            QueryState::Finished { has_results: true },
+        ]));
+        assert_eq!(
+            wait_for_result(&mut session, None).unwrap(),
+            QueryState::Streaming { has_results: true }
+        );
+        let started = Instant::now();
+        assert_eq!(
+            session.finish_execution().unwrap(),
+            Completion::Finished { has_results: true }
+        );
+        assert!(started.elapsed() >= POLL_INTERVAL);
     }
 }

@@ -892,6 +892,100 @@ fn run_export_cancel_stops_execute_and_schema_replies_before_releasing_the_worke
 }
 
 #[test]
+fn finished_exports_close_without_another_status_request() {
+    use qrow::{
+        export,
+        logs::ExecutionId,
+        worker::{Event, Worker},
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    for has_results in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let p = profile(listener.local_addr().unwrap().port());
+        let server = thread::spawn(move || {
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let req: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(req.statement, "SELECT synthetic_empty");
+            peer.reply(TExecuteStatementResp::new(
+                success(),
+                Some(operation(has_results)),
+            ));
+            let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+            peer.reply(status(TOperationState::FINISHED_STATE, has_results));
+            if has_results {
+                let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+                peer.reply(TGetResultSetMetadataResp::new(
+                    success(),
+                    Some(TTableSchema::new(vec![TColumnDesc::new(
+                        "value".into(),
+                        TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(TPrimitiveTypeEntry::new(
+                            TTypeId::INT_TYPE,
+                            None,
+                        ))]),
+                        0,
+                        None,
+                    )])),
+                ));
+                let _: TFetchResultsReq = peer.read("FetchResults");
+                peer.reply(TFetchResultsResp::new(
+                    success(),
+                    Some(false),
+                    Some(TRowSet::new(0, vec![], Some(vec![]), None, None)),
+                ));
+            }
+            let _: TCloseOperationReq = peer.read("CloseOperation");
+            peer.reply(TCloseOperationResp::new(success()));
+            let _: TCloseSessionReq = peer.read("CloseSession");
+            peer.reply(TCloseSessionResp::new(success()));
+        });
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
+        );
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                p,
+                "SELECT synthetic_empty".into(),
+                ExecutionId(204),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        loop {
+            match worker.events.recv_timeout(Duration::from_secs(3)).unwrap() {
+                Event::Downloaded { spool, .. } => {
+                    assert!(has_results);
+                    assert_eq!(spool.status(), export::spool::Status::Complete { rows: 0 });
+                    break;
+                }
+                Event::Ready { .. } if !has_results => {
+                    assert!(
+                        download
+                            .wait_spool()
+                            .err()
+                            .unwrap()
+                            .to_string()
+                            .contains("without a result set")
+                    );
+                    break;
+                }
+                Event::Error { message, .. } | Event::DownloadFailed { message, .. } => {
+                    panic!("{message}")
+                }
+                _ => {}
+            }
+        }
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+        server.join().unwrap();
+    }
+}
+
+#[test]
 fn run_export_cancel_interrupts_the_previous_profiles_session_close() {
     use qrow::{
         export,

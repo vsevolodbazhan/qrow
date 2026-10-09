@@ -89,6 +89,17 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.
 - Worker tests check session coordination and bounded fetching.
+- Postgres tests check first-page display before server completion, direct
+  reads above both preview limits, cancellation of a blocked row consumer,
+  and temporary tables, settings, and uncommitted data in the same session.
+  They check bounded custom-type descriptions and writer failure before
+  stalled cancellation cleanup. Synthetic driver tests check an ordered
+  buffer reset behind a partial frame and block later requests until it ends.
+- Postgres transport tests use synthetic peers. They check cancellation during
+  SSL negotiation, the TLS handshake, authentication, and socket registration.
+  They check fragmented messages, rejection of a large declared message before
+  body allocation, cancellation deadlines for both sockets, and the server's
+  ReadyForQuery confirmation before session reuse after a SQL error.
 - Property tests check SQL validation with arbitrary Unicode and quoting.
   Keep the Proptest regression seeds that a fixed failure adds.
 - Export tests use the `csv` crate to check text syntax. The Kyuubi,
@@ -105,14 +116,15 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   bound to the captured query. UI tests check background export ownership,
   Retry, and replay settings. Kyuubi Docker tests export the live cursor and
   retry a failed save after another query without submitting the old SQL.
+  The cancellation test pauses server responses before the Cancel click, then
+  releases them for protocol cleanup. The copy-limit test uses cells below
+  8 MiB whose combined CSV output exceeds 10 MiB.
   Direct export tests check first-page retention, original-session temporary
   views, original result SQL after editor changes, and warnings after
   disconnect. Wire tests cancel before SASL, the operation handle, and the
   schema arrive, and while a previous session closes. UI tests check that
   cancelling the save panel submits no SQL and reads no credentials.
-  The cancellation test pauses server responses before the Cancel click, then
-  releases them for protocol cleanup. The copy-limit test uses cells below
-  8 MiB whose combined CSV output exceeds 10 MiB.
+  Wire tests check that completed queries close without another status request.
   Export tests wait for the preview update after the file appears. File
   completion and window updates can arrive at different times.
 - Storage tests check competing processes, and the release of the workspace
