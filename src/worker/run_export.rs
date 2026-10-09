@@ -261,7 +261,9 @@ impl Runner {
             QueryState::Finished { has_results: false }
             | QueryState::Streaming { has_results: false } => {
                 export::check_cancelled(request.download.cancelled())?;
-                if self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled {
+                if !finished
+                    && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
+                {
                     return Err(export::Cancelled.into());
                 }
                 self.session.as_mut().unwrap().close_operation()?;
@@ -344,7 +346,9 @@ impl Runner {
                     elapsed: started.elapsed(),
                 });
             }
-            if self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled {
+            if !finished
+                && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
+            {
                 return Err(export::Cancelled.into());
             }
             export::check_cancelled(request.download.cancelled())?;
