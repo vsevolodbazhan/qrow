@@ -1,6 +1,7 @@
 use crate::{
     connector::{
-        Cancellation, Completion, Connector, QueryError, Secret, Session, wait_for_completion,
+        Cancellation, Completion, Connector, QueryError, QueryState, Secret, Session,
+        wait_for_result,
     },
     logs::{ExecutionId, LogEvent, LogKind, Severity},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
@@ -643,8 +644,10 @@ impl Runner {
         if self.cancelled.load(Ordering::SeqCst) {
             cancellation.cancel()?;
         }
-        match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
-            Completion::Cancelled => {
+        let state = wait_for_result(self.session.as_mut().unwrap().as_mut(), None)?;
+        let finished = matches!(state, QueryState::Finished { .. });
+        match state {
+            QueryState::Cancelled => {
                 self.session.as_mut().unwrap().close_operation()?;
                 *self.target.lock().unwrap() = None;
                 self.log(
@@ -657,7 +660,7 @@ impl Runner {
                 self.emit(Event::Cancelled);
                 Ok(())
             }
-            Completion::Finished { has_results } => {
+            QueryState::Streaming { has_results } | QueryState::Finished { has_results } => {
                 if self.cancelled.load(Ordering::SeqCst) {
                     self.session.as_mut().unwrap().close_operation()?;
                     *self.target.lock().unwrap() = None;
@@ -675,6 +678,9 @@ impl Runner {
                     return Ok(());
                 }
                 if !has_results {
+                    if self.finish_preview_execution()? {
+                        return Ok(());
+                    }
                     self.session.as_mut().unwrap().close_operation()?;
                     *self.target.lock().unwrap() = None;
                     self.complete_execution(false);
@@ -685,14 +691,41 @@ impl Runner {
                     return Ok(());
                 }
                 let columns = self.session.as_mut().unwrap().columns()?;
-                self.complete_execution(true);
+                if finished {
+                    self.complete_execution(true);
+                }
                 self.emit(Event::Columns(columns));
                 self.emit(Event::ExportContext(
                     self.session.as_ref().unwrap().export_context(),
                 ));
                 self.fetch_preview()
             }
+            QueryState::Running => anyhow::bail!("The query result is not ready"),
         }
+    }
+
+    fn finish_preview_execution(&mut self) -> Result<bool> {
+        if self
+            .execution
+            .as_ref()
+            .is_some_and(|execution| !execution.execution_completed)
+        {
+            let completion = self
+                .session
+                .as_mut()
+                .context("Session is disconnected")?
+                .finish_execution()?;
+            if completion == Completion::Cancelled {
+                self.cancelled.store(true, Ordering::SeqCst);
+            }
+            if self.finish_cancelled_fetch()? {
+                return Ok(true);
+            }
+            if let Completion::Finished { has_results } = completion {
+                self.complete_execution(has_results);
+            }
+        }
+        self.finish_cancelled_fetch()
     }
 
     fn fetch_preview(&mut self) -> Result<()> {
@@ -760,6 +793,9 @@ impl Runner {
                 || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
+                if self.finish_preview_execution()? {
+                    return Ok(());
+                }
                 if limited
                     && count > 0
                     && live_cursor
@@ -808,6 +844,9 @@ impl Runner {
             more: true,
             limited: false,
         });
+        if self.finish_preview_execution()? {
+            return Ok(());
+        }
         self.set_cursor(
             if self
                 .profile
@@ -1001,7 +1040,7 @@ impl Runner {
         if !self.cancelled.load(Ordering::SeqCst) {
             return Ok(false);
         }
-        // Execution has finished. Closing releases the cursor, without rolling back SQL.
+        // The operation owns cancellation cleanup. Closing does not roll back SQL.
         self.session
             .as_mut()
             .context("Session is disconnected")?

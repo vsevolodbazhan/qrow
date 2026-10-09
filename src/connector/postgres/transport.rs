@@ -31,6 +31,7 @@ pub(super) struct Abort {
     socket: Socket,
     pub(super) closed: Arc<AtomicBool>,
     pub(super) limit: Arc<AtomicUsize>,
+    pub(super) boundary: Arc<AtomicBool>,
 }
 
 impl Abort {
@@ -40,6 +41,7 @@ impl Abort {
             socket: Socket::Synthetic,
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(PREVIEW_FRAME_BYTES)),
+            boundary: Arc::new(AtomicBool::new(true)),
         })
     }
     pub(super) async fn tcp(
@@ -52,6 +54,7 @@ impl Abort {
             socket: Socket::Tcp(socket.try_clone()?),
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(limit)),
+            boundary: Arc::new(AtomicBool::new(true)),
         });
         Ok((tokio::net::TcpStream::from_std(socket)?, abort))
     }
@@ -66,6 +69,7 @@ impl Abort {
             socket: Socket::Unix(socket.try_clone()?),
             closed: Arc::new(AtomicBool::new(false)),
             limit: Arc::new(AtomicUsize::new(limit)),
+            boundary: Arc::new(AtomicBool::new(true)),
         });
         Ok((tokio::net::UnixStream::from_std(socket)?, abort))
     }
@@ -116,10 +120,20 @@ pub(super) struct Wire<S> {
     sent: usize,
     body: usize,
     failed: bool,
+    boundary: Arc<AtomicBool>,
 }
 
 impl<S> Wire<S> {
+    #[cfg(test)]
     pub(super) fn new(stream: S, limit: Arc<AtomicUsize>) -> Self {
+        Self::controlled(stream, limit, Arc::new(AtomicBool::new(true)))
+    }
+
+    pub(super) fn controlled(
+        stream: S,
+        limit: Arc<AtomicUsize>,
+        boundary: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             stream,
             limit,
@@ -128,6 +142,7 @@ impl<S> Wire<S> {
             sent: 0,
             body: 0,
             failed: false,
+            boundary,
         }
     }
 }
@@ -167,9 +182,16 @@ impl<S: AsyncRead + Unpin> AsyncRead for Wire<S> {
                 });
             }
             this.received += count;
+            this.boundary.store(false, Ordering::SeqCst);
             if this.received == 5 {
                 let length = u32::from_be_bytes(this.header[1..].try_into().unwrap()) as usize;
-                if length < 4 || length.saturating_add(1) > this.limit.load(Ordering::SeqCst) {
+                let mut limit = this.limit.load(Ordering::SeqCst);
+                if limit == EXPORT_FRAME_BYTES
+                    && matches!(this.header[0], b'E' | b'N' | b'R' | b'S' | b'A')
+                {
+                    limit = 1024 * 1024;
+                }
+                if length < 4 || length.saturating_add(1) > limit {
                     this.failed = true;
                     return Poll::Ready(Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -183,6 +205,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for Wire<S> {
             let count = (5 - this.sent).min(output.remaining());
             output.put_slice(&this.header[this.sent..this.sent + count]);
             this.sent += count;
+            if this.sent == 5 && this.body == 0 {
+                this.boundary.store(true, Ordering::SeqCst);
+            }
             return Poll::Ready(Ok(()));
         }
         let count = this.body.min(output.remaining()).min(8192);
@@ -197,6 +222,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for Wire<S> {
         }
         output.advance(count);
         this.body -= count;
+        if this.body == 0 {
+            this.boundary.store(true, Ordering::SeqCst);
+        }
         Poll::Ready(Ok(()))
     }
 }
@@ -226,6 +254,7 @@ impl<S: TlsStream + Unpin> TlsStream for Wire<S> {
 pub(super) struct GuardedTls<T> {
     pub(super) tls: T,
     pub(super) limit: Arc<AtomicUsize>,
+    pub(super) boundary: Arc<AtomicBool>,
 }
 
 impl<S: Send + 'static, T: TlsConnect<S> + Send + 'static> TlsConnect<S> for GuardedTls<T>
@@ -239,7 +268,13 @@ where
     type Future =
         Pin<Box<dyn Future<Output = std::result::Result<Self::Stream, Self::Error>> + Send>>;
     fn connect(self, stream: S) -> Self::Future {
-        Box::pin(async move { Ok(Wire::new(self.tls.connect(stream).await?, self.limit)) })
+        Box::pin(async move {
+            Ok(Wire::controlled(
+                self.tls.connect(stream).await?,
+                self.limit,
+                self.boundary,
+            ))
+        })
     }
 }
 
@@ -288,6 +323,25 @@ mod tests {
             assert_eq!(bytes, [0; 64]);
             assert!(wire.read(&mut bytes).await.is_err());
         });
+    }
+
+    #[test]
+    fn export_diagnostics_and_authentication_have_a_smaller_predecode_ceiling() {
+        for tag in *b"ENRSA" {
+            runtime().block_on(async {
+                let (client, mut server) = tokio::io::duplex(16);
+                server.write_u8(tag).await.unwrap();
+                server.write_u32(2 * 1024 * 1024).await.unwrap();
+                let mut wire = Wire::new(client, Arc::new(AtomicUsize::new(EXPORT_FRAME_BYTES)));
+                let mut out = [0; 16];
+                assert_eq!(
+                    wire.read(&mut out).await.unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                );
+                assert_eq!(out, [0; 16]);
+                assert!(wire.read(&mut out).await.is_err());
+            });
+        }
     }
 
     #[test]
