@@ -169,19 +169,24 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     let browser = trino_oidc::browser(trust.clone(), opens.clone());
     let release = Arc::new(AtomicBool::new(false));
     let browser_release = release.clone();
+    let entered = Arc::new(AtomicBool::new(false));
+    let browser_entered = entered.clone();
     let mut tab = SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT current_user AS value".into();
+    let other = crate::support::offline_profile("Other connection");
     let app = TestApp::launch_with_sign_ins(
         cx,
         Workspace {
-            profiles: vec![profile],
-            tabs: vec![tab],
+            tabs: vec![tab, SavedTab::new(1, Some(other.id))],
+            profiles: vec![profile, other],
+            active_tab: 1,
             ..Workspace::default()
         },
         MemoryCredentials::default(),
         SignIns::new(
             trust,
             Some(Arc::new(move |url| {
+                browser_entered.store(true, Ordering::SeqCst);
                 let deadline = Instant::now() + Duration::from_secs(15);
                 while !browser_release.load(Ordering::SeqCst) {
                     anyhow::ensure!(
@@ -196,11 +201,27 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
     );
     let connection = app.saved().profiles[0].id;
     app.click(cx, format!("profile-{connection}"));
+    let idle_until = Instant::now() + Duration::from_millis(250);
+    app.wait_until(
+        cx,
+        "idle Trino selection",
+        Duration::from_secs(5),
+        |window, _| {
+            assert!(!entered.load(Ordering::SeqCst));
+            assert!(crate::support::present(window, &"run".into()));
+            assert!(!crate::support::present(
+                window,
+                &"connection-authentication-progress".into()
+            ));
+            Instant::now() >= idle_until
+        },
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Waiting for browser sign-in");
     app.wait_for(cx, "connection-authentication-progress");
     app.wait_for(cx, "cancel");
     release.store(true, Ordering::SeqCst);
     app.wait_gone(cx, "connection-authentication-progress");
-    app.click(cx, "run");
     app.wait_status(cx, "Complete");
     app.wait_cell(cx, 0, 1, "alice");
     app.click(cx, "disconnect");

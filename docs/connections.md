@@ -217,13 +217,15 @@ client ID, client secret, local callback listener, or saved sign-in.
 1. In a Trino connection, select **External** in **Authentication**.
 2. Enter the coordinator hostname, HTTPS port, and database username. Turn on
    **TLS**, then save.
-3. Select the connection in **Connections**. If Trino requires authentication,
-   complete sign-in in the browser. A query or schema refresh also starts
-   sign-in when necessary. Other connection types cannot use **External**.
+3. Select the connection in **Connections**. Selection does not start sign-in.
+4. Run a query. If Trino requires authentication, complete sign-in in the browser.
+   A schema refresh also starts sign-in when necessary.
 
-The query toolbar shows **Waiting for Trino authentication…** while a connection
-attempt waits. Click **Cancel** to stop it before a query cursor exists.
-Queries show **Waiting for browser sign-in…**. Cancel stops that query's wait;
+Other connection types cannot use **External**.
+
+The query toolbar shows **Waiting for Trino authentication…** while a query
+or schema refresh waits for sign-in. Queries show **Waiting for browser sign-in…**.
+Click **Cancel** to stop the active query's wait, even before a query cursor exists;
 other requests for the connection can continue their shared authentication.
 A red connection dot opens Activity for that connection when authentication fails.
 

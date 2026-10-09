@@ -1361,9 +1361,7 @@ fn trino_connection_selects_and_restores_external_authentication(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn selecting_trino_authenticates_without_running_editor_sql_and_routes_errors(
-    cx: &mut TestAppContext,
-) {
+fn selecting_trino_defers_authentication_until_run_and_routes_errors(cx: &mut TestAppContext) {
     use crate::support::trino_protocol::{Reply, Server};
     let mut server = Server::new(true, vec![Reply {
         status: 401,
@@ -1384,6 +1382,7 @@ fn selecting_trino_authenticates_without_running_editor_sql_and_routes_errors(
         Workspace {
             profiles: vec![server.profile.clone(), unrelated.clone()],
             tabs: vec![tab, SavedTab::new(1, Some(unrelated.id))],
+            active_tab: 1,
             ..Workspace::default()
         },
         MemoryCredentials::default(),
@@ -1399,11 +1398,23 @@ fn selecting_trino_authenticates_without_running_editor_sql_and_routes_errors(
         ),
     );
     app.click(cx, format!("profile-{connection}"));
-    app.wait_until(cx, "automatic browser launch", WAIT, |_, _| {
+    let idle_until = std::time::Instant::now() + Duration::from_millis(250);
+    app.wait_until(cx, "idle Trino selection", WAIT, |window, _| {
+        assert!(!entered.load(Ordering::SeqCst));
+        assert!(server.requests().is_empty());
+        assert!(present(window, &"run".into()));
+        assert!(!present(
+            window,
+            &"connection-authentication-progress".into()
+        ));
+        std::time::Instant::now() >= idle_until
+    });
+    app.click(cx, "run");
+    app.wait_until(cx, "query browser launch", WAIT, |_, _| {
         entered.load(Ordering::SeqCst)
     });
     app.wait_for(cx, "connection-authentication-progress");
-    // A different visible connection must not receive the failure.
+    // A different visible connection must not receive the query failure.
     app.click(cx, format!("profile-{}", unrelated.id));
     release.store(true, Ordering::SeqCst);
     app.wait_until(cx, "connection authentication error", WAIT, |window, _| {
@@ -1418,10 +1429,11 @@ fn selecting_trino_authenticates_without_running_editor_sql_and_routes_errors(
             Some(server.profile.name.as_str())
         )
     });
-    assert!(
-        app.copy_activity(cx)
-            .contains("Cannot open the sign-in browser")
-    );
+    assert!(app.copy_activity(cx).contains("Query failed"));
+    app.click(cx, "activity-close");
+    assert!(!app.logs(cx).contains("Cannot open the sign-in browser"));
+    app.click(cx, format!("profile-{connection}"));
+    assert!(app.logs(cx).contains("Cannot open the sign-in browser"));
     assert_eq!(server.requests().len(), 1);
     assert!(server.requests()[0].ends_with("SELECT 1"));
     assert!(!server.requests()[0].contains("SELECT 42"));
@@ -1461,6 +1473,27 @@ fn selecting_oidc_connection_starts_browser_sign_in(cx: &mut TestAppContext) {
     wait_row(&app, cx, &sign_in, "alice@qrow.test");
     assert_eq!(provider.authorization_grants(), 1);
     assert!(!app.logs(cx).contains("Submitted query"));
+}
+
+#[gpui_kit::test]
+fn selecting_legacy_trino_oidc_defers_sign_in_until_run(cx: &mut TestAppContext) {
+    let provider = Provider::start();
+    let (mut workspace, sign_in) = workspace(&provider, true);
+    workspace.profiles[0].database_type = qrow::model::DatabaseType::Trino;
+    workspace.tabs[0].sql = "SELECT 42".into();
+    let connection = workspace.profiles[0].id;
+    let app = launch(cx, &provider, workspace);
+    app.click(cx, format!("profile-{connection}"));
+    let idle_until = std::time::Instant::now() + Duration::from_millis(250);
+    app.wait_until(cx, "idle legacy Trino selection", WAIT, |window, _| {
+        assert_eq!(provider.authorization_grants(), 0);
+        assert!(present(window, &"run".into()));
+        std::time::Instant::now() >= idle_until
+    });
+    app.click(cx, "run");
+    open_sign_ins(&app, cx);
+    wait_row(&app, cx, &sign_in, "alice@qrow.test");
+    assert_eq!(provider.authorization_grants(), 1);
 }
 
 #[gpui_kit::test]

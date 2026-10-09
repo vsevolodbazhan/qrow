@@ -34,7 +34,6 @@ use std::{
 /// The result of background sign-in work.
 enum Outcome {
     SignedIn(Uuid, Result<Identity, (Failure, String)>),
-    External(Uuid, Result<(), String>),
     SignedOut(Uuid, Result<(), String>),
     Removed(Uuid, Result<(), String>),
     Retried(Uuid, Result<(), String>),
@@ -112,7 +111,6 @@ const TOKEN_FIELDS: std::ops::RangeInclusive<usize> = 1..=4;
 pub(super) struct SignInState {
     /// Browser sign-ins that run, with their cancellation flags.
     pending: HashMap<Uuid, PendingSignIn>,
-    external_pending: HashMap<Uuid, Arc<AtomicBool>>,
     signing_out: HashSet<Uuid>,
     retrying: HashSet<Uuid>,
     /// The last failure of an action, shown with the sign-in.
@@ -136,7 +134,6 @@ impl SignInState {
     pub(super) fn new(browser: Option<Browser>) -> Self {
         Self {
             pending: HashMap::new(),
-            external_pending: HashMap::new(),
             signing_out: HashSet::new(),
             retrying: HashSet::new(),
             errors: HashMap::new(),
@@ -156,9 +153,6 @@ impl SignInState {
 
     /// Stops browser sign-ins, for example when the window closes.
     pub(super) fn cancel_all(&self) {
-        for cancel in self.external_pending.values() {
-            cancel.store(true, Ordering::SeqCst);
-        }
         for pending in self.pending.values() {
             pending.cancel.store(true, Ordering::SeqCst);
         }
@@ -312,51 +306,12 @@ impl Qrow {
         self.changed(cx);
     }
 
-    fn start_external_sign_in(&mut self, profile: Profile, cx: &mut Context<Self>) {
-        use crate::connector::Connector;
-        if self.demo
-            || self.sign_in_ui.external_pending.contains_key(&profile.id)
-            || self.external_auth.is_authenticated(&profile)
-        {
+    /// Shared OIDC sign-ins start on selection, except for Trino connections.
+    pub(super) fn authenticate_connection(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        if profile.database_type == crate::model::DatabaseType::Trino {
             return;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.sign_in_ui
-            .external_pending
-            .insert(profile.id, cancel.clone());
-        let connection = profile.id;
-        let service = self.external_auth.clone();
-        let connector = self.connector.clone();
-        let outcomes = self.sign_in_ui.outcomes.0.clone();
-        let wake = self.wake.clone();
-        std::thread::spawn(move || {
-            let result = (|| {
-                let secret =
-                    service
-                        .secret(&profile)?
-                        .with_control(crate::external_auth::Control::new(
-                            Arc::new(move || cancel.load(Ordering::SeqCst)),
-                            Arc::new(|_| {}),
-                        ));
-                let mut session = connector.connect(&profile, secret)?;
-                session.close()
-            })()
-            .map_err(|error: anyhow::Error| {
-                if error.is::<crate::external_auth::Cancelled>() {
-                    String::new()
-                } else {
-                    crate::connector::error_message(&error)
-                }
-            });
-            let _ = outcomes.send(Outcome::External(connection, result));
-            let _ = wake.try_send(());
-        });
-        cx.notify();
-    }
-    /// Explicit connection selection authenticates without submitting editor SQL.
-    pub(super) fn authenticate_connection(&mut self, profile: Profile, cx: &mut Context<Self>) {
         match profile.authentication {
-            Authentication::TrinoExternal => self.start_external_sign_in(profile, cx),
             Authentication::Oidc { sign_in: id } if self.sign_in_needs_browser(id) => {
                 self.sign_in_ui
                     .attempt_connections
@@ -370,19 +325,7 @@ impl Qrow {
     }
 
     pub(super) fn external_authentication_pending(&self, connection: Uuid) -> bool {
-        self.sign_in_ui.external_pending.contains_key(&connection)
-            || self.external_auth.status(connection) == crate::external_auth::Status::Waiting
-    }
-
-    pub(super) fn cancel_external_authentication(
-        &mut self,
-        connection: Uuid,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(cancel) = self.sign_in_ui.external_pending.get(&connection) {
-            cancel.store(true, Ordering::SeqCst);
-        }
-        cx.notify();
+        self.external_auth.status(connection) == crate::external_auth::Status::Waiting
     }
 
     /// Failures retain their originating connection even when another tab is selected.
@@ -609,18 +552,6 @@ impl Qrow {
                     }
                     self.sign_in_ui.attempt_connections.remove(&id);
                     self.end_sign_in_waits(id, ended, cx);
-                }
-                Outcome::External(connection, result) => {
-                    self.sign_in_ui.external_pending.remove(&connection);
-                    if let Err(message) = result
-                        && !message.is_empty()
-                    {
-                        self.record_activity(
-                            connection,
-                            crate::activity::ActivityEntry::new(Severity::Error, message),
-                            cx,
-                        );
-                    }
                 }
                 Outcome::SignedOut(id, result) => {
                     self.sign_in_ui.signing_out.remove(&id);
