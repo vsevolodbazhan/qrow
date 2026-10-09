@@ -64,7 +64,7 @@ fn csv_export_preserves_postgres_decimal_text_and_nulls(cx: &mut TestAppContext)
 #[ignore = "needs the server fixture: ./qtest run postgres"]
 fn markdown_json_export_normalizes_real_postgres_values(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace(
-        "SELECT 'a|b' AS text, NULL::text AS absent, ''::text AS empty, 123.45::numeric AS amount, 9223372036854775807::bigint AS id, TRUE AS ok, decode('005cff','hex') AS bytes, to_jsonb(ARRAY[1,2]) AS items, DATE '2026-10-09' AS day, TIMESTAMP '2026-10-09 01:02:03.123456' AS moment",
+        "SELECT 'a|b' AS text, NULL::text AS absent, ''::text AS empty, 123.45::numeric AS amount, 9223372036854775807::bigint AS id, TRUE AS ok, decode('005cff','hex') AS bytes, '[\n1,\r\n2\n]'::json AS items, DATE '2026-10-09' AS day, TIMESTAMP '2026-10-09 01:02:03.123456' AS moment",
     );
     let app = TestApp::launch_with(cx, workspace, credentials);
     super::export::assert_markdown_json(cx, &app);
