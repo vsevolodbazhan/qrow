@@ -178,6 +178,16 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
         Some(expected.join("\n"))
     );
 
+    // The open menu keeps its own keys: Down moves within the menu, and
+    // Escape closes the menu without clearing the selection.
+    click_cell(&app, cx, 2, 2, MouseButton::Right, Modifiers::default());
+    app.wait_for(cx, "popup-menu");
+    app.press(cx, "down");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "popup-menu");
+    // The selection stays, and ⌘C copies it.
+    assert_eq!(copy(&app, cx), expected.join("\n"));
+
     // A right-click outside selects that cell.
     click_cell(&app, cx, 4, 3, MouseButton::Right, Modifiers::default());
     app.wait_for(cx, "popup-menu");

@@ -624,15 +624,27 @@ fn page_step(table: &Entity<TableState<Results>>, cx: &App) -> isize {
     rows.saturating_sub(1).max(1) as isize
 }
 
+/// Whether the keys belong to the table. The open context menu of the table
+/// is inside the results view too; while it has the focus, its keys stay
+/// with the menu.
+fn table_keys(window: &Window) -> bool {
+    !window
+        .context_stack()
+        .iter()
+        .any(|context| context.contains("PopupMenu"))
+}
+
 /// The keyboard of the results table. The handlers run before the table's
 /// own handlers, so the table keeps no row or column selection of its own.
 fn keyboard(table: &Entity<TableState<Results>>) -> Div {
     macro_rules! step {
         ($action:ty, $rows:expr, $columns:expr, $extend:expr) => {{
             let table = table.clone();
-            move |_: &$action, _: &mut Window, cx: &mut App| {
-                cx.stop_propagation();
-                move_focus(&table, $rows, $columns, $extend, cx);
+            move |_: &$action, window: &mut Window, cx: &mut App| {
+                if table_keys(window) {
+                    cx.stop_propagation();
+                    move_focus(&table, $rows, $columns, $extend, cx);
+                }
             }
         }};
     }
@@ -654,18 +666,25 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
         .capture_action(step!(ExtendSelectionDown, 1, 0, true))
         .capture_action(step!(ExtendSelectionLeft, 0, -1, true))
         .capture_action(step!(ExtendSelectionRight, 0, 1, true))
-        .capture_action(move |_: &SelectPageUp, _, cx| {
-            cx.stop_propagation();
-            let step = page_step(&page_up, cx);
-            move_focus(&page_up, -step, 0, false, cx);
+        .capture_action(move |_: &SelectPageUp, window, cx| {
+            if table_keys(window) {
+                cx.stop_propagation();
+                let step = page_step(&page_up, cx);
+                move_focus(&page_up, -step, 0, false, cx);
+            }
         })
-        .capture_action(move |_: &SelectPageDown, _, cx| {
-            cx.stop_propagation();
-            let step = page_step(&page_down, cx);
-            move_focus(&page_down, step, 0, false, cx);
+        .capture_action(move |_: &SelectPageDown, window, cx| {
+            if table_keys(window) {
+                cx.stop_propagation();
+                let step = page_step(&page_down, cx);
+                move_focus(&page_down, step, 0, false, cx);
+            }
         })
-        .capture_action(move |_: &Cancel, _, cx| {
+        .capture_action(move |_: &Cancel, window, cx| {
             // Escape clears a selection; without one, it goes on to the window.
+            if !table_keys(window) {
+                return;
+            }
             cancel.update(cx, |state, cx| {
                 if state.delegate_mut().selection.take().is_some() {
                     cx.stop_propagation();
@@ -673,12 +692,18 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
                 }
             });
         })
-        .on_action(move |_: &Copy, _, cx| {
+        .on_action(move |_: &Copy, window, cx| {
+            if !table_keys(window) {
+                return;
+            }
             if let Some(text) = copy.read(cx).delegate().selection_text() {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
         })
-        .on_action(move |_: &SelectAll, _, cx| {
+        .on_action(move |_: &SelectAll, window, cx| {
+            if !table_keys(window) {
+                return;
+            }
             all.update(cx, |state, cx| {
                 state.delegate_mut().select_page();
                 cx.notify();
