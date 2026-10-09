@@ -678,7 +678,7 @@ impl Runner {
                     return Ok(());
                 }
                 if !has_results {
-                    if self.finish_preview_execution()? {
+                    if !finished && self.finish_preview_execution()? {
                         return Ok(());
                     }
                     self.session.as_mut().unwrap().close_operation()?;
