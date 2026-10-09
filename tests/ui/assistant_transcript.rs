@@ -60,6 +60,30 @@ fn older_messages_load_above_the_conversation(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui_kit::test]
+fn a_saved_partial_history_still_loads_older_messages(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = with_history(&codex);
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.wait_reply(cx, "History reply 6");
+    app.wait_for(cx, "assistant-load-older");
+
+    // After a restart the saved copy shows the latest page, and the older
+    // pages still come from Codex.
+    let app = app.relaunch(cx);
+    app.open_assistant(cx);
+    app.wait_for(cx, "assistant-load-older");
+    app.update(cx, |window, _| {
+        assert_eq!(transcript(window), history(5..=6))
+    });
+    app.click(cx, "assistant-load-older");
+    app.wait_reply(cx, "History reply 4");
+    app.update(cx, |window, _| {
+        assert_eq!(transcript(window), history(3..=6))
+    });
+}
+
 /// Draws a frame without a full refresh, so that a view that did not change
 /// shows its last frame again.
 fn draw(window: &mut Window, cx: &mut gpui_kit::App) {
@@ -268,5 +292,87 @@ fn replaced_paragraphs_release_their_shaped_text(cx: &mut TestAppContext) {
     assert!(
         retained <= 256,
         "{retained} paragraph layouts stay in memory"
+    );
+}
+
+/// The messages and tool cards of the shown transcript, top to bottom, with
+/// the ID of each tool card.
+fn rows(window: &Window) -> Vec<(String, Option<String>)> {
+    let mut rows: Vec<_> = crate::support::elements(window)
+        .into_iter()
+        .filter_map(|element| {
+            let id = element.path().last().map(|id| format!("{id:?}"))?;
+            let name = id.trim_start_matches("Name(\"").trim_end_matches("\")");
+            let card = name
+                .strip_prefix("assistant-tool-")
+                .filter(|rest| uuid::Uuid::parse_str(rest).is_ok());
+            if !name.starts_with("assistant-entry-") && card.is_none() {
+                return None;
+            }
+            let label = element.label()?.to_owned();
+            Some((element.bounds().top(), label, card.map(str::to_owned)))
+        })
+        .collect();
+    rows.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
+    rows.into_iter()
+        .map(|(_, label, card)| (label, card))
+        .collect()
+}
+
+/// Opens the tool card `card` and returns its tab and detail.
+fn card_detail(app: &TestApp, cx: &mut TestAppContext, card: &str) -> (String, String) {
+    let detail = format!("assistant-tool-detail-{card}");
+    app.click(cx, ElementId::Name(format!("assistant-tool-{card}").into()));
+    app.wait_for(cx, ElementId::Name(detail.clone().into()));
+    app.update(cx, |window, _| {
+        (
+            label(window, format!("assistant-tool-tab-{card}")).unwrap_or_default(),
+            label(window, detail.clone()).unwrap(),
+        )
+    })
+}
+
+#[gpui_kit::test]
+fn a_saved_conversation_shows_as_it_did_live_without_codex(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let profile = offline_profile("Synthetic");
+    let workspace = codex.workspace(Workspace {
+        tabs: vec![SavedTab::new(1, Some(profile.id))],
+        profiles: vec![profile],
+        ..Workspace::default()
+    });
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.send(cx, "Write SELECT 1 into this tab");
+    app.wait_editor(cx, "SELECT 1");
+    app.wait_idle(cx);
+    app.send(cx, "Show a bold reply");
+    app.wait_idle(cx);
+    let live = app.update(cx, |window, _| rows(window));
+    let card = live
+        .iter()
+        .find_map(|(_, card)| card.clone())
+        .unwrap_or_else(|| panic!("The live turn has no tool card: {live:?}"));
+    let live_detail = card_detail(&app, cx, &card);
+    // The card closes again, as a loaded card starts.
+    app.click(cx, ElementId::Name(format!("assistant-tool-{card}").into()));
+    app.wait_gone(
+        cx,
+        ElementId::Name(format!("assistant-tool-detail-{card}").into()),
+    );
+
+    // Codex does not start after the restart. The conversation still shows
+    // the messages, the reply, and the tool card with its detail.
+    codex.mark("hold-initialize");
+    let app = app.relaunch(cx);
+    app.dispatch(cx, qrow::ui::ToggleAssistant);
+    app.wait_until(cx, "the saved transcript", REPLY_TIMEOUT, |window, _| {
+        rows(window) == live
+    });
+    assert_eq!(card_detail(&app, cx, &card), live_detail);
+    assert_eq!(
+        app.update(cx, |window, _| label(window, "assistant-model"))
+            .as_deref(),
+        Some("Model: waiting for Codex")
     );
 }

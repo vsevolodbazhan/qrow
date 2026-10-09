@@ -5,7 +5,7 @@ use crate::support::{
     offline_profile, present,
 };
 use gpui_kit::{ElementId, TestAppContext};
-use qrow::model::{AssistantTitleSource::Codex, SavedTab, Workspace};
+use qrow::model::{AssistantTitleSource::Generated, SavedTab, Workspace};
 use qrow::sql::KeywordCase;
 use qrow::ui::OpenSettings;
 
@@ -61,7 +61,7 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
     app.wait_editor(cx, "SELECT 1");
     app.wait_idle(cx);
     // The first message starts title generation alongside the reply.
-    app.wait_conversations(cx, &[("Title: Write SELECT 1", Codex)]);
+    app.wait_conversations(cx, &[("Title: Write SELECT 1", Generated)]);
     app.send(cx, "Write SELECT 2 into this tab");
     app.wait_editor(cx, "SELECT 1;\n\nSELECT 2");
     app.wait_idle(cx);
@@ -69,7 +69,7 @@ fn appended_sql_keeps_earlier_queries_and_titles_the_conversation(cx: &mut TestA
     app.settle(cx);
     assert_eq!(
         app.conversations(),
-        [("Title: Write SELECT 1".to_owned(), Codex)]
+        [("Title: Write SELECT 1".to_owned(), Generated)]
     );
     // Qrow formats a long query when the assistant appends it. The comment
     // above the query stays as written.

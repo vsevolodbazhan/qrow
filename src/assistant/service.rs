@@ -1,22 +1,25 @@
-//! Background ownership of the Codex process and its synchronous protocol.
+//! Background ownership of the harness processes and their synchronous
+//! protocols.
 //!
 //! Qrow's window thread sends commands and receives events. It never waits for
-//! a Codex response, including while a query-tool call waits for the worker.
-//! The worker thread sleeps until a command or Codex output arrives.
+//! a harness response, including while a query-tool call waits for the worker.
+//! The worker thread sleeps until a command or harness output arrives.
 
 use super::{
-    AssistantEvent, CodexHarness, Conversation, ConversationHistory, ConversationPage,
-    HarnessSnapshot, LoginStart, TitleRequest, ToolCall, ToolDefinition, ToolResult, Turn,
-    TurnRequest,
+    AssistantEvent, ClaudeHarness, CodexHarness, Conversation, ConversationHistory,
+    ConversationPage, HarnessSnapshot, LoginStart, TitleRequest, ToolCall, ToolDefinition,
+    ToolResult, Turn, TurnRequest,
     codex::Input,
+    harness::Harness,
     inbox::{CommandSender, Inbox, SendError},
 };
+use crate::model::AssistantHarness;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     sync::{
         Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread,
@@ -205,36 +208,66 @@ impl Drop for DoneSignal {
     }
 }
 
+/// The process identifiers of the harness processes. Each process leads its
+/// own process group, so a stop can end a process and its descendants when
+/// the worker does not respond.
+#[derive(Clone, Default)]
+pub(crate) struct ProcessIds(Arc<Mutex<BTreeSet<u32>>>);
+
+impl ProcessIds {
+    fn ids(&self) -> std::sync::MutexGuard<'_, BTreeSet<u32>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn add(&self, pid: u32) {
+        if pid > 0 {
+            self.ids().insert(pid);
+        }
+    }
+
+    pub(crate) fn remove(&self, pid: u32) {
+        self.ids().remove(&pid);
+    }
+
+    /// Keeps only `pid`, or no process for 0. Codex has one process.
+    fn replace(&self, pid: u32) {
+        let mut ids = self.ids();
+        ids.clear();
+        if pid > 0 {
+            ids.insert(pid);
+        }
+    }
+
+    fn kill_all(&self) {
+        for pid in std::mem::take(&mut *self.ids()) {
+            #[cfg(unix)]
+            if pid > 1 {
+                let _ = super::codex::terminate_process_group(pid);
+            }
+            #[cfg(windows)]
+            let _ = super::codex::terminate_process_tree(pid);
+        }
+    }
+}
+
 /// The end of a worker thread after a stop request.
 struct WorkerExit {
-    pid: Arc<AtomicU32>,
+    pids: ProcessIds,
     done: mpsc::Receiver<()>,
 }
 
 impl WorkerExit {
     /// Waits for the worker. After three quarters of `timeout`, kills the
-    /// Codex process group, because a Codex descendant can keep its output
-    /// open after Codex exits.
+    /// harness process groups, because a descendant can keep its output open
+    /// after the harness exits.
     fn wait(self, timeout: Duration) -> std::io::Result<()> {
         if self.done.recv_timeout(timeout - timeout / 4).is_ok() {
             return Ok(());
         }
-        kill_codex(&self.pid);
+        self.pids.kill_all();
         self.done
             .recv_timeout(timeout / 4)
-            .map_err(|_| std::io::Error::other("Codex assistant did not stop"))
-    }
-}
-
-fn kill_codex(pid: &AtomicU32) {
-    let pid = pid.load(Ordering::Acquire);
-    #[cfg(unix)]
-    if pid > 1 {
-        let _ = super::codex::terminate_process_group(pid);
-    }
-    #[cfg(windows)]
-    if pid > 0 {
-        let _ = super::codex::terminate_process_tree(pid);
+            .map_err(|_| std::io::Error::other("The assistant harness did not stop"))
     }
 }
 
@@ -242,17 +275,48 @@ fn kill_codex(pid: &AtomicU32) {
 /// ends.
 static BACKGROUND_STOPS: Mutex<Vec<mpsc::Receiver<()>>> = Mutex::new(Vec::new());
 
+/// What the worker starts.
+#[derive(Clone, Debug)]
+pub struct Launch {
+    pub harness: AssistantHarness,
+    pub executable: PathBuf,
+    /// The working folder of the harness. `None` uses a new empty temporary
+    /// folder. Claude Code files its sessions by working folder, so a stable
+    /// folder keeps them together.
+    pub working_directory: Option<PathBuf>,
+}
+
 impl Service {
+    /// Starts Codex in a temporary folder.
     pub fn launch(executable: PathBuf, wake: Arc<dyn Fn() + Send + Sync>) -> std::io::Result<Self> {
+        Self::launch_harness(
+            Launch {
+                harness: AssistantHarness::Codex,
+                executable,
+                working_directory: None,
+            },
+            wake,
+        )
+    }
+
+    pub fn launch_harness(
+        launch: Launch,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> std::io::Result<Self> {
+        let Launch {
+            harness: kind,
+            executable,
+            working_directory,
+        } = launch;
         let (commands, inbox) = Inbox::channel(COMMAND_CAPACITY);
         let (event_tx, events) = mpsc::sync_channel(EVENT_CAPACITY);
         let (done_tx, done) = mpsc::channel();
         let stopping = Arc::new(AtomicBool::new(false));
-        let pid = Arc::new(AtomicU32::new(0));
+        let pids = ProcessIds::default();
         let cleanup_ids = Arc::new(Mutex::new(Vec::<String>::new()));
         let cleanup_result = Arc::new(Mutex::new(None));
         let thread_stopping = Arc::clone(&stopping);
-        let thread_pid = Arc::clone(&pid);
+        let thread_pids = pids.clone();
         let thread_cleanup_ids = Arc::clone(&cleanup_ids);
         let thread_cleanup_result = Arc::clone(&cleanup_result);
         #[cfg(test)]
@@ -291,21 +355,47 @@ impl Service {
                         }
                     }
                 };
-                let directory = match tempfile::Builder::new().prefix("qrow-assistant-").tempdir() {
-                    Ok(directory) => directory,
-                    Err(error) => {
-                        emit(Event::Disconnected(format!(
-                            "Could not create assistant workspace: {error}"
-                        )));
-                        return;
-                    }
+                let temporary = match working_directory {
+                    Some(_) => None,
+                    None => match tempfile::Builder::new().prefix("qrow-assistant-").tempdir() {
+                        Ok(directory) => Some(directory),
+                        Err(error) => {
+                            emit(Event::Disconnected(format!(
+                                "Could not create assistant workspace: {error}"
+                            )));
+                            return;
+                        }
+                    },
                 };
-                let mut harness = match CodexHarness::launch_with_inbox(
-                    &executable,
-                    directory.path(),
-                    inbox,
-                    move |id| thread_pid.store(id, Ordering::Release),
-                ) {
+                let directory = match (&working_directory, &temporary) {
+                    (Some(directory), _) => {
+                        if let Err(error) = std::fs::create_dir_all(directory) {
+                            emit(Event::Disconnected(format!(
+                                "Could not create assistant workspace: {error}"
+                            )));
+                            return;
+                        }
+                        directory.clone()
+                    }
+                    (None, Some(temporary)) => temporary.path().to_path_buf(),
+                    (None, None) => return,
+                };
+                let launched = match kind {
+                    AssistantHarness::Codex => {
+                        CodexHarness::launch_with_inbox(&executable, &directory, inbox, move |id| {
+                            thread_pids.replace(id)
+                        })
+                        .map(Harness::Codex)
+                    }
+                    AssistantHarness::Claude => ClaudeHarness::launch_with_inbox(
+                        &executable,
+                        &directory,
+                        inbox,
+                        thread_pids,
+                    )
+                    .map(Harness::Claude),
+                };
+                let mut harness = match launched {
                     Ok(harness) => harness,
                     Err(error) => {
                         emit(Event::Disconnected(error.to_string()));
@@ -370,7 +460,8 @@ impl Service {
 
                 if let Err(error) = harness.shutdown() {
                     let _ = emit(Event::Disconnected(format!(
-                        "Could not stop Codex: {error}"
+                        "Could not stop {}: {error}",
+                        kind.name()
                     )));
                 }
             })?;
@@ -378,7 +469,7 @@ impl Service {
             commands,
             events,
             stopping,
-            exit: Some(WorkerExit { pid, done }),
+            exit: Some(WorkerExit { pids, done }),
             cleanup_ids,
             cleanup_result,
             #[cfg(test)]
@@ -408,7 +499,7 @@ impl Service {
         let Some(exit) = self.request_stop() else {
             return;
         };
-        let pid = Arc::clone(&exit.pid);
+        let pids = exit.pids.clone();
         let (stopped, stop) = mpsc::channel::<()>();
         let spawned = thread::Builder::new()
             .name("qrow-assistant-stop".into())
@@ -417,7 +508,7 @@ impl Service {
                 let _ = exit.wait(STOP_TIMEOUT);
             });
         if spawned.is_err() {
-            kill_codex(&pid);
+            pids.kill_all();
             return;
         }
         let mut stops = BACKGROUND_STOPS
@@ -468,10 +559,10 @@ impl Service {
         {
             Some(Ok(())) => Ok(()),
             Some(Err(error)) => Err(std::io::Error::other(format!(
-                "Codex could not delete demo conversations: {error}"
+                "The harness could not delete demo conversations: {error}"
             ))),
             None => Err(std::io::Error::other(
-                "Codex did not confirm demo conversation deletion",
+                "The harness did not confirm demo conversation deletion",
             )),
         }
     }
@@ -483,7 +574,7 @@ impl Drop for Service {
     }
 }
 
-fn execute(harness: &mut CodexHarness, command: Command) -> Event {
+fn execute(harness: &mut Harness, command: Command) -> Event {
     let operation = command.operation();
     let id = command.identifier();
     let result = match command {

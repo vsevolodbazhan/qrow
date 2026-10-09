@@ -1,8 +1,10 @@
 //! The single input channel of the assistant worker.
 //!
-//! Window commands and Codex output arrive on one channel, so the worker
-//! sleeps until one of them has work. Each source has its own bound: Codex
-//! output cannot use the space for window commands.
+//! Window commands and harness output arrive on one channel, so the worker
+//! sleeps until one of them has work. Each source has its own bound: harness
+//! output cannot use the space for window commands. Codex has one process.
+//! Claude Code has one process for each conversation, and each process
+//! output has a source number.
 
 use super::service::Command;
 use serde_json::Value;
@@ -23,6 +25,11 @@ pub(crate) enum Message {
     Codex(Result<Value, String>),
     /// The Codex output reader stopped and sends nothing more.
     CodexClosed,
+    /// A message from the harness process `source`, or the reason that its
+    /// output is unreadable.
+    Output(u64, Result<Value, String>),
+    /// The output reader of the process `source` stopped.
+    OutputClosed(u64),
     /// The window stops the worker.
     Stop,
 }
@@ -103,12 +110,50 @@ impl Drop for OutputSender {
     }
 }
 
+/// Sends the output of one of several harness processes to the worker.
+/// When it is dropped, the worker receives `OutputClosed`.
+pub(crate) struct ProcessSender {
+    source: u64,
+    sender: mpsc::Sender<Message>,
+    bound: Bound,
+}
+
+impl ProcessSender {
+    /// Returns the message with the error, so that the caller can try again.
+    pub(crate) fn send(
+        &self,
+        output: Result<Value, String>,
+    ) -> Result<(), (SendError, Result<Value, String>)> {
+        if self.bound.queued.fetch_add(1, Ordering::AcqRel) >= self.bound.capacity {
+            self.bound.release();
+            return Err((SendError::Full, output));
+        }
+        self.sender
+            .send(Message::Output(self.source, output))
+            .map_err(|error| {
+                self.bound.release();
+                let Message::Output(_, output) = error.0 else {
+                    unreachable!("the sender sent an output message")
+                };
+                (SendError::Disconnected, output)
+            })
+    }
+}
+
+impl Drop for ProcessSender {
+    fn drop(&mut self) {
+        let _ = self.sender.send(Message::OutputClosed(self.source));
+    }
+}
+
 pub(crate) struct Inbox {
     receiver: mpsc::Receiver<Message>,
     /// Keeps the channel open, so that a receive waits and does not fail.
     sender: mpsc::Sender<Message>,
     commands: Bound,
     output: Bound,
+    /// One bound for the output of all processes of a multi-process harness.
+    processes: Bound,
     /// Messages that arrived while a request waited for its response, in arrival order.
     held: VecDeque<Message>,
     held_output: usize,
@@ -131,6 +176,7 @@ impl Inbox {
             sender,
             commands,
             output: Bound::new(0),
+            processes: Bound::new(0),
             held: VecDeque::new(),
             held_output: 0,
             output_closed: false,
@@ -146,6 +192,21 @@ impl Inbox {
         OutputSender {
             sender: self.sender.clone(),
             bound: self.output.clone(),
+        }
+    }
+
+    /// Sets the bound of the process output. At most `capacity` messages of
+    /// all processes wait until the inbox receives them.
+    pub(crate) fn set_process_capacity(&mut self, capacity: usize) {
+        self.processes = Bound::new(capacity);
+    }
+
+    /// Makes the sender for the output reader of the process `source`.
+    pub(crate) fn process_sender(&self, source: u64) -> ProcessSender {
+        ProcessSender {
+            source,
+            sender: self.sender.clone(),
+            bound: self.processes.clone(),
         }
     }
 
@@ -168,8 +229,9 @@ impl Inbox {
         match &message {
             Message::Codex(_) => self.output.release(),
             Message::CodexClosed => self.output_closed = true,
+            Message::Output(..) => self.processes.release(),
             Message::Stop => self.stopped = true,
-            Message::Command(_) => {}
+            Message::Command(_) | Message::OutputClosed(_) => {}
         }
         Some(message)
     }
@@ -286,6 +348,29 @@ mod tests {
         // The held command does not run after a stop request.
         assert!(matches!(inbox.next(None), Some(Message::Stop)));
         assert!(matches!(inbox.next(None), Some(Message::Stop)));
+    }
+
+    #[test]
+    fn several_processes_share_one_bound_and_close_separately() {
+        let (_commands, mut inbox) = Inbox::channel(1);
+        inbox.set_process_capacity(2);
+        let first = inbox.process_sender(1);
+        let second = inbox.process_sender(2);
+        first.send(Ok(json!({}))).unwrap();
+        second.send(Ok(json!({}))).unwrap();
+        assert!(matches!(
+            first.send(Ok(json!({}))),
+            Err((SendError::Full, Ok(_)))
+        ));
+        assert!(matches!(inbox.next(None), Some(Message::Output(1, Ok(_)))));
+        second.send(Ok(json!({}))).unwrap();
+        drop(first);
+        assert!(matches!(inbox.next(None), Some(Message::Output(2, Ok(_)))));
+        assert!(matches!(inbox.next(None), Some(Message::Output(2, Ok(_)))));
+        assert!(matches!(inbox.next(None), Some(Message::OutputClosed(1))));
+        // The other process still sends after the first one closed.
+        second.send(Ok(json!({}))).unwrap();
+        assert!(matches!(inbox.next(None), Some(Message::Output(2, Ok(_)))));
     }
 
     #[test]

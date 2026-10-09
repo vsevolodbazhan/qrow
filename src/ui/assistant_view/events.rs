@@ -2,6 +2,60 @@
 use super::*;
 
 impl Qrow {
+    /// Gives a conversation the title that the user chose.
+    pub(super) fn apply_assistant_rename(&mut self, id: &str, title: &str, cx: &mut Context<Self>) {
+        let Some(conversation) = self
+            .assistant
+            .conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == id)
+        else {
+            return;
+        };
+        let tab_to_name = conversation
+            .title_follows_conversation
+            .then_some(conversation.tab_id)
+            .flatten();
+        conversation.title = title.to_owned();
+        conversation.title_source = AssistantTitleSource::User;
+        if let Some(tab_id) = tab_to_name {
+            self.name_assistant_tab(tab_id, title);
+        }
+        self.changed(cx);
+    }
+
+    /// Removes a deleted conversation and its saved transcript. The tab
+    /// stays open without a conversation.
+    pub(super) fn remove_assistant_conversation(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = id.to_owned();
+        if self.assistant_state.browsed_thread.as_deref() == Some(id.as_str()) {
+            self.assistant_state.browsed_thread = None;
+            self.show_assistant_composer(self.active_tab_id().map(ComposerTarget::Tab), window, cx);
+        }
+        self.assistant_state
+            .drafts
+            .remove(&ComposerTarget::Detached(id.clone()));
+        self.assistant_state.runs.remove(&id);
+        self.assistant_state.loaded_threads.remove(&id);
+        self.assistant_state.older_cursors.remove(&id);
+        self.assistant_state.loaded_cursors.remove(&id);
+        self.assistant
+            .conversations
+            .retain(|conversation| conversation.thread_id != id);
+        self.assistant_state.transcripts.remove(&id);
+        self.assistant_state.unstarted_threads.remove(&id);
+        self.assistant_state.regenerating_titles.remove(&id);
+        self.assistant_state.pending_titles.remove(&id);
+        self.assistant_state.title_history_reads.remove(&id);
+        self.delete_local_transcript(&id);
+        self.changed(cx);
+    }
+
     pub(in crate::ui) fn tick_assistant(
         &mut self,
         window: &mut Window,
@@ -34,6 +88,7 @@ impl Qrow {
         self.tick_assistant_queries(cx);
         if changed {
             self.sync_assistant_pane(cx);
+            self.schedule_transcript_save(cx);
         }
         if workspace_changed {
             cx.notify();
@@ -47,10 +102,7 @@ impl Qrow {
         initial: bool,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_state.status = if matches!(
-            snapshot.account().kind(),
-            AccountKind::ChatGpt { .. } | AccountKind::ApiKey
-        ) {
+        self.assistant_state.status = if snapshot.account().kind().signed_in() {
             Status::Ready
         } else {
             Status::SignInRequired
@@ -99,6 +151,7 @@ impl Qrow {
                 };
                 let id = conversation.id;
                 self.assistant_state.loaded_threads.insert(id.clone());
+                self.track_local_transcript(&id);
                 self.assistant_state.unstarted_threads.insert(id.clone());
                 if !self.tabs.iter().any(|tab| tab.saved.id == first.tab_id)
                     || self.assistant.conversation_for_tab(first.tab_id).is_some()
@@ -107,6 +160,10 @@ impl Qrow {
                     return;
                 }
                 let mut entry = AssistantConversation::new(id.clone(), first.mode);
+                entry.harness = self
+                    .assistant_state
+                    .harness
+                    .unwrap_or(self.settings.assistant.harness);
                 entry.last_activity = unix_now_seconds();
                 entry.tab_id = Some(first.tab_id);
                 entry.title_follows_conversation = self
@@ -123,18 +180,30 @@ impl Qrow {
                 self.changed(cx);
             }
             AssistantServiceEvent::Resumed(conversation) => {
-                self.assistant_command(AssistantCommand::Read(conversation.id), cx);
+                // A saved transcript already shows the conversation.
+                if !self.local_transcript_shows(&conversation.id) && self.harness_features().history
+                {
+                    self.assistant_command(AssistantCommand::Read(conversation.id), cx);
+                }
             }
             AssistantServiceEvent::History(history) => {
                 let thread = history.conversation.id;
-                if let Some(cursor) = history.older_cursor {
-                    if !self.assistant_state.loaded_cursors.contains_key(&thread) {
-                        self.assistant_state
-                            .older_cursors
-                            .insert(thread.clone(), cursor);
+                // A conversation that shows from its saved transcript keeps
+                // the boundary of the history that it has. A later read of
+                // the latest page does not move it.
+                if !self.local_transcript_shows(&thread) {
+                    match history.older_cursor {
+                        Some(cursor) => {
+                            if !self.assistant_state.loaded_cursors.contains_key(&thread) {
+                                self.assistant_state
+                                    .older_cursors
+                                    .insert(thread.clone(), cursor);
+                            }
+                        }
+                        None => {
+                            self.assistant_state.older_cursors.remove(&thread);
+                        }
                     }
-                } else {
-                    self.assistant_state.older_cursors.remove(&thread);
                 }
                 let selected = self.displayed_thread().as_deref() == Some(thread.as_str());
                 let thread_id = thread.clone();
@@ -144,6 +213,10 @@ impl Qrow {
                 if selected && entries.len() > previous_count {
                     self.scroll_assistant_to_bottom(cx);
                 }
+                // From now on Qrow keeps the transcript, also the history
+                // that the harness gave for a conversation without a file.
+                self.track_local_transcript(&thread_id);
+                self.save_transcripts(Some(&thread_id));
                 // The final text of a reply can be longer than the streamed text.
                 self.reveal_assistant_replies(cx);
                 if self.assistant_state.title_history_reads.remove(&thread_id)
@@ -195,15 +268,17 @@ impl Qrow {
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
                 self.thread_run_mut(&thread_id).sent_messages.pop_front();
                 self.acknowledge_notes(&thread_id, true, cx);
-                if let Some(entry) =
-                    self.assistant_state
-                        .transcripts
-                        .get_mut(&thread_id)
-                        .and_then(|entries| {
-                            entries.iter_mut().rev().find(|entry| {
-                                entry.speaker == Speaker::User && entry.turn_id.is_none()
-                            })
+                let starting = self.thread_run_mut(&thread_id).starting_entry.take();
+                if let Some(entry) = self
+                    .assistant_state
+                    .transcripts
+                    .get_mut(&thread_id)
+                    .and_then(|entries| {
+                        entries.iter_mut().rev().find(|entry| match starting {
+                            Some(id) => entry.id == id,
+                            None => entry.speaker == Speaker::User && entry.turn_id.is_none(),
                         })
+                    })
                 {
                     entry.turn_id = Some(turn.id.clone());
                 }
@@ -225,25 +300,43 @@ impl Qrow {
                 if !text.is_empty() {
                     self.thread_run_mut(&thread_id).pending_reply = false;
                 }
+                let reply = self
+                    .thread_run(&thread_id)
+                    .and_then(|run| run.reply_message);
                 let entries = self
                     .assistant_state
                     .transcripts
-                    .entry(thread_id)
+                    .entry(thread_id.clone())
                     .or_default();
-                let new_message = if let Some(last) = entries.last_mut().filter(|entry| {
+                let (new_message, reply) = if let Some(last) = entries.last_mut().filter(|entry| {
                     entry.speaker == Speaker::Assistant
                         && entry.turn_id.as_deref() == Some(&turn_id)
                 }) {
+                    // The next reply message of the turn is a new paragraph.
+                    let reply = match reply {
+                        Some(reply) if reply.entry == last.id && reply.completed => {
+                            last.push_text("\n\n");
+                            Some(ReplyMessage {
+                                entry: last.id,
+                                start: last.text().len(),
+                                completed: false,
+                            })
+                        }
+                        reply => reply,
+                    };
                     last.push_text(&text);
-                    false
+                    (false, reply)
                 } else {
-                    entries.push(TranscriptEntry::streamed(
-                        Speaker::Assistant,
-                        &text,
-                        Some(turn_id),
-                    ));
-                    true
+                    let entry = TranscriptEntry::streamed(Speaker::Assistant, &text, Some(turn_id));
+                    let reply = ReplyMessage {
+                        entry: entry.id,
+                        start: 0,
+                        completed: false,
+                    };
+                    entries.push(entry);
+                    (true, Some(reply))
                 };
+                self.thread_run_mut(&thread_id).reply_message = reply;
                 self.reveal_assistant_replies(cx);
                 // The transcript follows a growing reply while you stay at its end.
                 if selected && new_message {
@@ -292,7 +385,10 @@ impl Qrow {
                         "The turn ended before the query ran.",
                     );
                 }
-                self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
+                // The final text of a reply can be longer than the streamed text.
+                if self.harness_features().history {
+                    self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
+                }
                 if let Some(position) = self
                     .assistant
                     .conversations
@@ -307,10 +403,72 @@ impl Qrow {
                 if let Some(error) = error {
                     self.assistant_state
                         .transcripts
-                        .entry(thread_id)
+                        .entry(thread_id.clone())
                         .or_default()
                         .push(TranscriptEntry::new(Speaker::Error, error, Some(turn.id)));
                 }
+                self.save_transcripts(Some(&thread_id));
+                self.send_queued_message(&thread_id, window, cx);
+            }
+            AssistantServiceEvent::Harness(AssistantEvent::MessageCompleted {
+                thread_id,
+                turn_id,
+                text,
+            }) => {
+                let reply = self
+                    .thread_run(&thread_id)
+                    .and_then(|run| run.reply_message);
+                let entries = self
+                    .assistant_state
+                    .transcripts
+                    .entry(thread_id.clone())
+                    .or_default();
+                // Streamed parts can be lost under load. The full text
+                // replaces the part of the entry that its parts built. The
+                // earlier messages of the turn in the entry stay.
+                let reply = match entries.last_mut().filter(|entry| {
+                    entry.speaker == Speaker::Assistant
+                        && entry.turn_id.as_deref() == Some(turn_id.as_str())
+                }) {
+                    Some(entry) => {
+                        let start = match reply {
+                            Some(reply) if reply.entry == entry.id && !reply.completed => {
+                                reply.start.min(entry.text().len())
+                            }
+                            // No part of this message arrived.
+                            Some(reply) if reply.entry == entry.id => entry.text().len() + 2,
+                            _ => 0,
+                        };
+                        let earlier = entry
+                            .text()
+                            .get(..start)
+                            .map_or_else(|| format!("{}\n\n", entry.text()), str::to_owned);
+                        let full = format!("{earlier}{text}");
+                        if *entry.text() != full {
+                            entry.set_text(full);
+                        }
+                        ReplyMessage {
+                            entry: entry.id,
+                            start: earlier.len(),
+                            completed: true,
+                        }
+                    }
+                    None => {
+                        let entry =
+                            TranscriptEntry::streamed(Speaker::Assistant, &text, Some(turn_id));
+                        let reply = ReplyMessage {
+                            entry: entry.id,
+                            start: 0,
+                            completed: true,
+                        };
+                        entries.push(entry);
+                        reply
+                    }
+                };
+                let run = self.thread_run_mut(&thread_id);
+                run.reply_message = Some(reply);
+                run.pending_reply = false;
+                self.reveal_assistant_replies(cx);
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
                 self.assistant_state.pending_titles.remove(&thread_id);
@@ -327,7 +485,7 @@ impl Qrow {
                         tab_to_name = conversation.tab_id;
                     }
                     conversation.title = title.clone();
-                    conversation.title_source = AssistantTitleSource::Codex;
+                    conversation.title_source = AssistantTitleSource::Generated;
                     if let Some(tab_id) = tab_to_name {
                         self.name_assistant_tab(tab_id, &title);
                     }
@@ -337,9 +495,10 @@ impl Qrow {
             AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
                 self.assistant_state.pending_titles.remove(&thread_id);
                 if self.assistant_state.regenerating_titles.remove(&thread_id) {
-                    self.assistant_state.notice = Some(AssistantNotice::warning(
-                        "Codex did not return a title. Try again.",
-                    ));
+                    self.assistant_state.notice = Some(AssistantNotice::warning(format!(
+                        "{} did not return a title. Try again.",
+                        self.settings.assistant.harness.name()
+                    )));
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::ToolCall(call)) => {
@@ -375,55 +534,18 @@ impl Qrow {
             AssistantServiceEvent::Renamed(id) => {
                 if let Some((pending_id, title)) = self.assistant_state.pending_rename.take()
                     && pending_id == id
-                    && let Some(conversation) = self
-                        .assistant
-                        .conversations
-                        .iter_mut()
-                        .find(|conversation| conversation.thread_id == id)
                 {
-                    let tab_to_name = conversation
-                        .title_follows_conversation
-                        .then_some(conversation.tab_id)
-                        .flatten();
-                    conversation.title = title.clone();
-                    conversation.title_source = AssistantTitleSource::User;
-                    if let Some(tab_id) = tab_to_name {
-                        self.name_assistant_tab(tab_id, &title);
-                    }
-                    self.changed(cx);
+                    self.apply_assistant_rename(&id, &title, cx);
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
-                if self.assistant_state.browsed_thread.as_deref() == Some(id.as_str()) {
-                    self.assistant_state.browsed_thread = None;
-                    self.show_assistant_composer(
-                        self.active_tab_id().map(ComposerTarget::Tab),
-                        window,
-                        cx,
-                    );
-                }
-                self.assistant_state
-                    .drafts
-                    .remove(&ComposerTarget::Detached(id.clone()));
-                self.assistant_state.runs.remove(&id);
-                self.assistant_state.loaded_threads.remove(&id);
-                self.assistant_state.older_cursors.remove(&id);
-                self.assistant_state.loaded_cursors.remove(&id);
-                self.assistant
-                    .conversations
-                    .retain(|conversation| conversation.thread_id != id);
-                self.assistant_state.transcripts.remove(&id);
-                self.assistant_state.unstarted_threads.remove(&id);
-                self.assistant_state.regenerating_titles.remove(&id);
-                self.assistant_state.pending_titles.remove(&id);
-                self.assistant_state.title_history_reads.remove(&id);
-                // The tab stays open without a conversation.
-                self.changed(cx);
+                self.remove_assistant_conversation(&id, window, cx)
             }
             AssistantServiceEvent::Disconnected(error) => {
                 self.assistant_state.sign_in = SignIn::Idle;
                 self.assistant_state.status = Status::Disconnected(error);
                 self.assistant_state.service = None;
+                self.assistant_state.harness = None;
                 self.assistant_state.pending_titles.clear();
                 self.reset_assistant_runs(window, cx);
             }
@@ -501,6 +623,11 @@ impl Qrow {
                 if let Some(thread) = id.as_ref()
                     && matches!(operation, Operation::Start | Operation::Steer)
                 {
+                    // No turn starts, so the messages that wait for one go
+                    // back to the message field after the rejected message.
+                    if operation == Operation::Start {
+                        self.restore_queued_messages(thread, window, cx);
+                    }
                     self.restore_sent_message(thread, window, cx);
                     // The record stays unknown, so the next message sends
                     // the notes again.
@@ -524,6 +651,7 @@ impl Qrow {
                 if operation == Operation::Answer {
                     self.assistant_state.status = Status::Disconnected(error);
                     self.assistant_state.service = None;
+                    self.assistant_state.harness = None;
                     self.reset_assistant_runs(window, cx);
                     return;
                 }

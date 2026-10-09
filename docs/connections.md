@@ -446,7 +446,7 @@ Settings. The page shows only while the assistant is on.
 
 The notes can have up to 16 KB. Near the limit, the help text below the field
 shows the number of bytes. Qrow saves the notes as plain text in the
-workspace and sends them to Codex. Do not put passwords, tokens, or other
+workspace and sends them to the assistant harness. Do not put passwords, tokens, or other
 secrets in them. [Assistant](assistant.md#connection-notes) tells when Qrow
 sends the notes.
 

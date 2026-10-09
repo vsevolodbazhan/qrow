@@ -27,8 +27,9 @@ Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built usi
 
 ## Assistant
 
-Qrow can open an AI assistant beside your query tab. It uses a separately
-installed Codex executable and your Codex sign-in, so you can use your OpenAI subscription.
+Qrow can open an AI assistant beside your query tab. It runs on a separately
+installed Codex or Claude Code executable with your own sign-in, so you can use
+your OpenAI or Claude subscription.
 
 The feature is off by default. Enable it in **Qrow → Settings… → Assistant**. Qrow can ask before an assistant
 query runs, or run assistant queries automatically. 
@@ -60,10 +61,9 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
   Other operating systems are not supported. The assistant also needs a compatible
-  Codex executable.
+  Codex or Claude Code executable.
 - **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
-- **Codex only**. For now, assistant can only be powered by Codex. Claude support is planned.
 
 ## Installation
 

@@ -1,9 +1,10 @@
-//! The assistant pane of a window and its conversations with Codex.
+//! The assistant pane of a window and its conversations with the harness:
+//! Codex or Claude Code.
 use super::*;
 use crate::{
     assistant::{
-        AccountKind, AssistantEvent, HarnessSnapshot, HistoryTurn, MAX_MESSAGE_BYTES, TitleRequest,
-        ToolCall, TurnRequest,
+        AssistantEvent, HarnessSnapshot, HistoryTurn, MAX_MESSAGE_BYTES, TitleRequest, ToolCall,
+        TurnRequest,
         broker::{
             ActionTarget, ConnectionContext, ConnectionState, MAX_CONTEXT_SQL_BYTES, QueryState,
             ResultSummary, SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
@@ -16,7 +17,7 @@ use crate::{
         tools,
     },
     model::{
-        AssistantConversation, AssistantExecutionMode, AssistantTitleSource,
+        AssistantConversation, AssistantExecutionMode, AssistantHarness, AssistantTitleSource,
         MAX_ASSISTANT_CONVERSATION_TITLE,
     },
 };
@@ -58,9 +59,10 @@ pub(super) fn unix_now_seconds() -> u64 {
         .as_secs()
 }
 
-mod codex;
 mod conversations;
 mod events;
+mod harness;
+mod local;
 mod messages;
 mod pane;
 mod reveal;
@@ -70,14 +72,16 @@ mod thread_list;
 mod transcript;
 mod transcript_view;
 
-use codex::*;
 use conversations::*;
+use harness::*;
+use local::*;
 use pane::*;
 use reveal::*;
 use session::*;
 use transcript::*;
 use transcript_view::*;
 
+pub(super) use local::transcript_store;
 pub(super) use pane::AssistantPane;
 pub use session::CODEX_IDLE_TIMEOUT;
 pub(super) use session::{

@@ -2,20 +2,20 @@
 //! shutdown.
 use super::*;
 
-pub(super) struct LaunchChild {
+pub(in crate::assistant) struct LaunchChild {
     child: Option<Child>,
 }
 
 impl LaunchChild {
-    pub(super) fn new(child: Child) -> Self {
+    pub(in crate::assistant) fn new(child: Child) -> Self {
         Self { child: Some(child) }
     }
 
-    pub(super) fn child_mut(&mut self) -> &mut Child {
+    pub(in crate::assistant) fn child_mut(&mut self) -> &mut Child {
         self.child.as_mut().expect("launch child is present")
     }
 
-    pub(super) fn into_inner(mut self) -> Child {
+    pub(in crate::assistant) fn into_inner(mut self) -> Child {
         self.child.take().expect("launch child is present")
     }
 }
@@ -29,12 +29,15 @@ impl Drop for LaunchChild {
     }
 }
 
-pub(super) struct WriteCommand {
-    pub(super) bytes: Vec<u8>,
-    pub(super) completed: SyncSender<std::result::Result<(), String>>,
+pub(in crate::assistant) struct WriteCommand {
+    pub(in crate::assistant) bytes: Vec<u8>,
+    pub(in crate::assistant) completed: SyncSender<std::result::Result<(), String>>,
 }
 
-pub(super) fn write_protocol_stream(mut stdin: ChildStdin, commands: &Receiver<WriteCommand>) {
+pub(in crate::assistant) fn write_protocol_stream(
+    mut stdin: ChildStdin,
+    commands: &Receiver<WriteCommand>,
+) {
     while let Ok(command) = commands.recv() {
         let result = stdin
             .write_all(&command.bytes)
@@ -268,7 +271,7 @@ fn send_protocol_message(
     }
 }
 
-pub(super) fn read_stderr_tail(mut stderr: impl Read, tail: &Mutex<VecDeque<u8>>) {
+pub(in crate::assistant) fn read_stderr_tail(mut stderr: impl Read, tail: &Mutex<VecDeque<u8>>) {
     let mut buffer = [0_u8; 4096];
     loop {
         let count = match stderr.read(&mut buffer) {
@@ -286,7 +289,7 @@ pub(super) fn read_stderr_tail(mut stderr: impl Read, tail: &Mutex<VecDeque<u8>>
 }
 
 #[cfg(unix)]
-pub(super) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
+pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
     if terminate_process_group(child.id()).is_ok() || child.try_wait()?.is_some() {
         Ok(())
     } else {
@@ -314,7 +317,7 @@ pub(crate) fn terminate_process_group(pid: u32) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(super) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
+pub(in crate::assistant) fn kill_process_tree(child: &mut Child) -> std::io::Result<()> {
     child.kill()
 }
 

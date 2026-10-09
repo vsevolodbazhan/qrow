@@ -637,7 +637,7 @@ fn notes_description(bytes: usize) -> String {
             group_digits(MAX_ASSISTANT_NOTES_BYTES)
         )
     } else {
-        "Sent to Codex and saved as plain text. Do not enter secrets.".to_owned()
+        "Sent to the assistant and saved as plain text. Do not enter secrets.".to_owned()
     }
 }
 
@@ -660,8 +660,8 @@ pub(super) fn assistant_page(qrow: &WeakEntity<Qrow>) -> SettingPage {
         .group(SettingGroup::new().item(connection_row(
             qrow,
             "Assistant Notes",
-            "Sent to Codex and saved as plain text. Do not enter secrets.",
-            &["assistant", "notes", "codex", "context"],
+            "Sent to the assistant and saved as plain text. Do not enter secrets.",
+            &["assistant", "notes", "codex", "claude", "context"],
             true,
             |_, form, _, cx| {
                 let bytes = form.assistant_notes.read(cx).value().len();
@@ -897,8 +897,8 @@ mod tests {
 
     #[test]
     fn the_notes_help_counts_bytes_near_the_limit() {
-        assert!(notes_description(0).starts_with("Sent to Codex"));
-        assert!(notes_description(NOTES_COUNT_FROM - 1).starts_with("Sent to Codex"));
+        assert!(notes_description(0).starts_with("Sent to the assistant"));
+        assert!(notes_description(NOTES_COUNT_FROM - 1).starts_with("Sent to the assistant"));
         assert_eq!(
             notes_description(NOTES_COUNT_FROM),
             "12,288 of 16,384 bytes. Do not enter secrets."

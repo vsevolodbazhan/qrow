@@ -92,14 +92,31 @@ input, focus, or window activation. Then the caret stays visible and does not
 blink, because each blink repaints the window. There is no continuous idle
 repaint loop.
 
-The assistant worker thread owns the Codex process. Window commands and Codex
-output arrive on one channel. The worker sleeps until a command or a Codex
-message arrives, or until a title request reaches its time limit. It does not
-poll while the assistant is idle. The window thread
-does not wait for Codex. **Reconnect**, the **Enabled** setting, and the
-[idle stop](assistant.md#pane-and-connection-state) stop Codex on a separate
-thread. That thread kills the Codex process group if Codex does not stop in
-1.5 seconds. Quit waits up to 2 seconds for these threads. The idle stop uses
+A [transcript writer](../src/assistant/transcripts.rs) thread saves the
+[copies of assistant conversations](assistant.md#saved-conversations). It
+writes each file atomically, and it writes only the last version when several
+saves of one file wait. A conversation that you open reads its file on a
+background thread.
+
+The assistant worker thread owns the harness: the Codex process, or the
+Claude Code processes. Codex runs all conversations in one process. Claude
+Code runs one process for each active conversation, and one short control
+process for the models, the account, and titles. Window commands and harness
+output arrive on one channel. The worker sleeps until a command or a harness
+message arrives, or until a title request or an idle conversation process
+reaches its time limit. It does not poll while the assistant is idle. When
+the channel is full, the Claude Code output readers wait, and Claude Code
+waits for them. The window thread does not wait for the harness. **Reconnect**, the
+**Enabled** setting, a harness switch, and the
+[idle stop](assistant.md#pane-and-connection-state) stop the harness on a
+separate thread. That thread kills the process groups of the harness if it
+does not stop in 1.5 seconds.
+
+Claude Code calls the Qrow tools through an MCP server that Qrow declares in
+the launch arguments. Claude Code sends the MCP messages to Qrow on the same
+stream-json connection, so Qrow does not open a port or a socket. The
+[Claude Code harness](../src/assistant/claude.rs) keeps all Claude Code
+message shapes in one module. Quit waits up to 2 seconds for these threads. The idle stop uses
 one window timer, and it does not poll.
 
 A window gets display refresh ticks only while GPUI requests frames. It stops

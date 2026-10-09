@@ -574,6 +574,16 @@ Idle-stop tests wait for Qrow to process the history response after a reply.
 Codex events restart the idle period, so process them before you advance the
 test clock.
 
+The synthetic Claude Code in
+[`tests/desktop/fake-claude.py`](../tests/desktop/fake-claude.py) speaks the
+stream-json protocol of `claude -p`. `FakeClaude::beside(&directory)` puts its
+executable in the workspace directory of a `FakeCodex`, so a test can use
+both harnesses. `claude.select(settings)` selects Claude Code. Its marker
+files work as the Codex markers do, for example `signed-out` and `release`.
+`claude.turns()` lists the messages of the turns that it ran. The unit tests
+of the [Claude Code harness](../src/assistant/claude/tests.rs) use the same
+script.
+
 Follow these rules:
 
 - Find controls by element ID. Do not find them by the text that they show.

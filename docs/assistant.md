@@ -7,46 +7,93 @@ the same time in different tabs.
 
 ## Set up the assistant
 
-Install the Codex command-line program separately. Sign in to Codex with
-ChatGPT to use your subscription. Qrow does not include Codex or store its
-credentials.
+The assistant runs on a harness: the Codex or the Claude Code command-line
+program. Install the harness separately, and use it with your own account:
+
+- **Codex**: sign in with ChatGPT to use your subscription, or use an API key.
+- **Claude Code**: sign in with your Claude subscription or Claude Console
+  account in Terminal with `claude auth login`. Claude Code 2.1.259 or later
+  is necessary.
+
+Qrow does not include a harness or store its credentials.
 
 Open **Qrow → Settings… → Assistant**. In **General**, turn on **Enabled** and
 read the data sharing notice. When the notice changes, for example when the
 assistant gets access to schema names, Qrow turns the assistant off until you
-read the new notice and turn it on again. Qrow looks for `codex` on your `PATH` and in the
-usual Homebrew folders. If Qrow cannot find it, enter the full path in
-**Codex → Executable**. The assistant is off by default. Qrow does not start
-Codex until you open the assistant pane.
+read the new notice and turn it on again. Select **Codex** or **Claude Code**
+in **General → Harness**. Qrow looks for `codex` or `claude` on your `PATH`
+and in the usual Homebrew folders. For Claude Code, it also looks in
+`~/.local/bin` and `~/.claude/local`. If Qrow cannot find the program, enter
+its full path in **Codex → Executable** or **Claude Code → Executable**. The
+assistant is off by default. Qrow does not start the harness until you open
+the assistant pane.
 
 Select the default query mode in **General → Query Execution**. A new
 conversation starts with this mode. Each conversation keeps its own mode after
 you change it. The two modes are **Ask before running** and **Run
 automatically**.
 
+### Use the two harnesses
+
+The harness that you select runs new conversations. Each conversation keeps
+the harness that started it. One harness runs at a time. When you select the
+other harness while a turn runs, Qrow asks first, because the running turns
+stop. A database query that already started continues.
+
+A conversation of the other harness shows its [saved
+copy](#saved-conversations). The thread list shows the name of its harness.
+To send a message in it, select **Use Codex** or **Use Claude Code** below
+the conversation. You can rename and delete it without the switch. A rename
+changes only the title in Qrow. A delete of a Codex conversation while Claude
+Code runs removes it from Qrow, and Codex keeps its history.
+
+Claude Code works as Codex does, with these differences:
+
+- **Sign-in**: Qrow does not sign in to Claude Code for you. See [Pane and
+  connection state](#pane-and-connection-state).
+- **Messages during a turn**: Claude Code cannot add a message to a running
+  turn. A message that you send during a turn shows at once and starts the
+  next turn when the current turn ends.
+- **Model controls**: Claude Code has no service tier. The reasoning level
+  **Default** lets Claude Code select the level. The level **Max** starts the
+  conversation process again before the message.
+- **Your Claude Code settings**: Qrow starts Claude Code without your user
+  and project settings, so your hooks, plugins, MCP servers, and `CLAUDE.md`
+  files do not apply to the assistant. Managed settings of your organization
+  apply. Thus a provider that you set up in your settings files, for example
+  Amazon Bedrock or Google Vertex AI in `env`, does not apply either.
+- **Tools**: Claude Code can use only the Qrow tools. It cannot run commands
+  or read and write files.
+- **History**: Claude Code keeps each conversation in its own data folder
+  (`~/.claude`, or `CLAUDE_CONFIG_DIR`). Qrow shows a conversation only from
+  its saved copy, and it never reads Claude Code history. When you delete a
+  conversation, Qrow also deletes its Claude Code session files.
+
 ## Work with SQL
 
 Select a query tab. Click the assistant button near the right end of the
 status bar, select **Toggle assistant** in the **View** menu, or press **⌘J**. Write a message and press **Enter** or
-**⌘Enter** to send it. Press **Shift-Enter** to start a new line. While Codex works, the Send button becomes
-**Cancel**. While Codex starts a new conversation after its first message, you
-cannot send or cancel. Type a follow-up and press **Enter** to steer the current turn.
-**Cancel** interrupts the Codex turn. It does not cancel a database query that
+**⌘Enter** to send it. Press **Shift-Enter** to start a new line. While the assistant works, the Send button becomes
+**Cancel**. While the harness starts a new conversation after its first message, you
+cannot send or cancel. Type a follow-up and press **Enter** to steer the current
+turn. With Claude Code, the follow-up starts the next turn. **Cancel**
+interrupts the turn and puts follow-ups that did not start back in the
+message field. It does not cancel a database query that
 already started. The Send button returns when the turn ends.
 
 A message can have up to 64 KB of text. The workspace context that Qrow adds
 to a message has a separate limit of 1 MB. If your text is larger than 64 KB,
 Qrow does not send it. Qrow shows a notice and keeps the text in the message
-field. If Codex does not accept a message, Qrow puts its text back in the
-message field and shows the Codex error in the conversation.
+field. If the harness does not accept a message, Qrow puts its text back in the
+message field and shows the error in the conversation.
 
-You can draft a message while Codex starts. The model, reasoning, service tier,
-and Send controls stay disabled until Codex is ready. The pane does not show
+You can draft a message while the harness starts. The model, reasoning, service tier,
+and Send controls stay disabled until the harness is ready. The pane does not show
 routine status text above the message field.
 
-While Codex works on a reply, a shimmering **Working…** line shows at the end of
+While the assistant works on a reply, a shimmering **Working…** line shows at the end of
 the conversation. It shows from the time that you send a message until the
-turn ends or fails. It also shows while Codex writes text or uses tools. It does
+turn ends or fails. It also shows while the assistant writes text or uses tools. It does
 not show while a query waits for your approval.
 
 See [Conversation state](#conversation-state) for the status that the thread
@@ -55,7 +102,7 @@ list and the assistant toggle show.
 Qrow renders your messages, assistant replies, and errors as Markdown. Messages
 can show headings, lists, code, links, and tables.
 
-Codex sends a reply in parts of different sizes. Qrow shows the reply word by
+The harness sends a reply in parts of different sizes. Qrow shows the reply word by
 word at an even speed, about 0.3 seconds after the text arrives, and each word
 fades in. Qrow does not split bold text, inline code, a link, or a table row.
 If you reduce motion in macOS, each part shows when it arrives.
@@ -281,19 +328,22 @@ conversation while it works or waits for approval. Two conversations can have th
 Automatic title requests do not replace a title that you set. Select
 **Regenerate title** to ask Codex for a new title from the conversation
 messages. This title replaces a title that you set. If the conversation is not
-open, Qrow first reads its messages from Codex. If Codex cannot make a title,
+open, Qrow first reads its [saved transcript](#saved-conversations), or reads
+its messages from Codex when it has no saved transcript. If Codex cannot make a title,
 Qrow keeps the current title and shows a notice. When you
-delete a conversation, Qrow asks Codex to remove it. The tab stays open without
+delete a conversation, Qrow asks Codex to remove it and deletes its saved
+transcript. The tab stays open without
 a conversation. This action does not change SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text
-in its own data directory.
+in its own data directory, and Qrow keeps a [copy](#saved-conversations).
 Codex creates a conversation when you send its first message, and Qrow saves
 it then.
 If Codex cannot find a saved conversation, Qrow keeps its entry. If you restore
 the Codex history, you can try to open it again. You can also delete the entry
 from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
 conversation text from its workspace.
-Select **Load older messages** to read earlier conversation text.
+A conversation without a saved transcript loads its latest messages from
+Codex. Select **Load older messages** to read earlier conversation text.
 Codex sends each message to Qrow on one line of up to 8 MB. Qrow discards a
 larger line and continues to use Codex. Only the request that the line
 answers fails. If a page of conversation history is too large, Qrow reads
@@ -306,17 +356,18 @@ new reply. New text in that reply follows the bottom while you stay near it.
 The SQL mode menu beside **Send** shows **Ask first** or **Auto run**. Select
 **Ask before running** or **Run automatically** from this menu to change the mode.
 Changing the mode does not send a message. Select a model, reasoning level,
-and service tier below the message field. Codex supplies
-the available choices. Qrow selects Codex's default model when the workspace
+and service tier below the message field. The harness supplies
+the available choices, and Qrow keeps the choices of each harness separately.
+Qrow selects the harness's default model when the workspace
 has no model choice. Qrow shows that model's default reasoning level as the
 selected level. Select **Default** for service tier to use the tier that Codex
 chooses. The controls show icons when the pane is narrow. Your change applies
 to the next message. If a saved model is no longer available, Qrow selects
-Codex's default model and shows a notice. If a saved reasoning level or service
-tier is no longer available, Qrow uses the Codex default for that control and
+the harness's default model and shows a notice. If a saved reasoning level or service
+tier is no longer available, Qrow uses the harness default for that control and
 shows a notice.
 
-Codex thinks before each step, for example before each tool call and before the
+The model thinks before each step, for example before each tool call and before the
 reply. A higher reasoning level makes each step slower. A turn that edits and
 runs a query has several steps. If assistant turns are slow, select a lower
 reasoning level.
@@ -357,6 +408,29 @@ and the numbers of models, sources, and tests. It also lists the models of the
 tables that the tab SQL names, with the first line of their description, up to
 8 KB.
 
+### Saved conversations
+
+Qrow keeps a copy of each conversation on this computer. When you open a
+conversation, Qrow shows it from this copy. It does not start or wait for
+the harness, so you can read earlier conversations while the harness starts, or while it
+is stopped. Qrow loads the conversation in the harness only when you send a message.
+
+The copy shows the conversation as it was: your messages, the replies, the
+errors, and the tool call cards with their state, row count, and duration. A
+card opens to the same query tab, arguments, and result. A card whose call did
+not end, for example because Qrow quit during the call, shows **Cancelled**.
+
+Qrow saves the copy about one second after a change, at the end of each turn,
+and at quit. Each copy is a file in the `assistant/transcripts` folder next to
+the workspace file. Only your user account can read it. A tool result in the
+copy can contain query rows. When a copy is larger than 8 MB, Qrow keeps its
+newest part. Delete a conversation to delete its copy.
+
+A Codex conversation from before this version has no copy. The first time that you
+open it, Qrow loads its latest messages from Codex and saves them. Tool call
+cards from before this version do not come back. The demo does not save
+copies.
+
 ## Conversations and query tabs
 
 Each conversation belongs to one query tab. The tab belongs to a connection,
@@ -375,7 +449,7 @@ conversation of the selected tab.
 A conversation continues to work when you select another tab or connection.
 You can start a turn in each conversation, and the turns work at the same time.
 Each conversation changes and runs SQL only in its own tab. It can read the
-other tabs. Parallel turns use your Codex plan limits faster.
+other tabs. Parallel turns use your plan limits faster.
 
 A tab cannot close while its conversation works or waits for approval. When
 you close the tab, the conversation stays in the thread list. The list shows
@@ -398,7 +472,7 @@ the top right corner of the button.
 The dot shows the most urgent state of all conversations.
 The thread list shows a dot for each conversation.
 
-- A blue dot means that Codex works on a turn.
+- A blue dot means that the assistant works on a turn.
 - A yellow dot means that a query waits for your approval.
 - A green dot means that an unread reply is ready.
 - A red dot means that a turn ended with an unread error.
@@ -427,8 +501,8 @@ Drag the pane's left edge to change its width. A narrow pane shows either the
 thread list or the current conversation. Qrow saves the width and starts
 with the pane closed. Closing the pane does not stop a database query.
 
-Codex continues to run after you close the pane. If the pane stays closed for
-10 minutes and Codex has no work, Qrow stops Codex to save memory and CPU
+The harness continues to run after you close the pane. If the pane stays closed for
+10 minutes and the harness has no work, Qrow stops the harness to save memory and CPU
 time. Each Codex command or message starts the 10 minutes again. Qrow does not
 stop Codex while one of these items continues:
 
@@ -438,22 +512,29 @@ stop Codex while one of these items continues:
 - A sign-in.
 - A conversation without a turn. A new Codex process cannot open it.
 
-When you open the pane again, Qrow starts Codex. The pane shows the usual
-startup state, and the controls wait for Codex. The conversations and their
-messages stay in the pane. Qrow loads the history of each conversation again
-from Codex when you show it. Signed-in accounts stay signed in, because Codex
+Claude Code uses one process for each conversation, and each process uses
+about 200 MB of memory. A conversation process without a turn for 10 minutes
+stops. At most 3 conversation processes run: when you send a message in a
+fourth conversation, Qrow stops the idle process that you used least
+recently. The next message of a stopped conversation starts its process again.
+
+When you open the pane again, Qrow starts the harness. The pane shows the usual
+startup state, and the controls wait for the harness. The conversations and their
+messages stay in the pane. A conversation without a
+[saved transcript](#saved-conversations) loads its history again from Codex
+when you show it. Signed-in accounts stay signed in, because Codex
 keeps the account.
 
 Assistant notices use an alert in the pane. These notices report an unavailable
 saved option, a title error, or another exceptional condition. Routine status
 does not add text above the message field.
 
-If you quit Qrow while Codex is working, Qrow uses the [workspace close
+If you quit Qrow while the assistant is working, Qrow uses the [workspace close
 confirmation](workspace.md#quit-and-save) before it stops the turn. At quit,
 Qrow waits up to 2 seconds for Codex to stop. If Codex does not stop in 1.5
 seconds, Qrow stops Codex and its child processes.
 
-If Codex disconnects, Qrow keeps your unsent draft for the current app session.
+If the harness disconnects, Qrow keeps your unsent draft for the current app session.
 A first message that did not start its conversation goes back to the message
 field of its tab.
 **Reconnect** replaces **Send** and **Cancel** below the message field. Its
@@ -470,6 +551,12 @@ If the sign-in fails, Qrow shows the Codex error below the button until you
 sign in. If you sign in with another Codex client, the pane opens the
 conversation. If Codex uses an API key, Codex applies API-key billing. Manage
 sign-out in Codex, because its account is shared with other Codex clients.
+
+If Claude Code is signed out, the pane shows **Sign in to Claude Code** and
+the command `claude auth login`. Select **Copy command**, run the command in
+Terminal, and complete the sign-in in Anthropic's page. Then select **Check
+again**. Qrow never shows a Claude sign-in page or reads your Claude
+credentials. Claude Code keeps the account, so you sign out in Claude Code.
 
 The demo uses synthetic query data and an in-memory workspace. Qrow asks Codex
 to delete demo conversations on normal exit. It reads the deletion replies

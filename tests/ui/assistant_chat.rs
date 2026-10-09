@@ -87,7 +87,7 @@ fn controls_wait_until_codex_starts(cx: &mut TestAppContext) {
 fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
     let mut workspace = codex.workspace(Workspace::default());
-    workspace.settings.assistant.service_tier = Some("retired".into());
+    workspace.settings.assistant.codex.service_tier = Some("retired".into());
     let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
     app.open_assistant(cx);
     // Codex no longer offers the saved tier, so its default replaces it.
@@ -102,7 +102,8 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
     });
     app.wait_until(cx, "the replaced tier", Duration::from_secs(10), |_, _| {
         let saved = app.saved().settings.assistant;
-        saved.model.as_deref() == Some("synthetic-model") && saved.service_tier.is_none()
+        saved.codex.model.as_deref() == Some("synthetic-model")
+            && saved.codex.service_tier.is_none()
     });
     app.click(cx, "assistant-tier");
     app.choose(cx, "popup-menu", "Fast");
@@ -110,7 +111,7 @@ fn composer_controls_show_the_selected_codex_settings(cx: &mut TestAppContext) {
         label(window, "assistant-tier").as_deref() == Some("Service Tier: Fast")
     });
     app.wait_until(cx, "the saved tier", Duration::from_secs(10), |_, _| {
-        app.saved().settings.assistant.service_tier.as_deref() == Some("fast")
+        app.saved().settings.assistant.codex.service_tier.as_deref() == Some("fast")
     });
     app.update(cx, |window, _| {
         assert_eq!(

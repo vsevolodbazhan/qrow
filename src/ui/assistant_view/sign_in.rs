@@ -1,5 +1,10 @@
-//! Sign-in to Codex with a ChatGPT account.
+//! Sign-in to the harness. Qrow starts the Codex sign-in with a ChatGPT
+//! account. Claude Code sign-in stays in Claude Code: Qrow shows the command
+//! and reads the account again.
 use super::*;
+
+/// The command that signs in to Claude Code with Anthropic's own flow.
+const CLAUDE_SIGN_IN_COMMAND: &str = "claude auth login";
 
 impl Qrow {
     pub(super) fn begin_assistant_sign_in(&mut self, cx: &mut Context<Self>) {
@@ -19,8 +24,76 @@ impl Qrow {
 }
 
 impl AssistantPane {
-    /// Replaces the transcript while Codex has no account.
-    pub(super) fn sign_in(&self, qrow: &Qrow, cx: &Context<Self>) -> impl IntoElement {
+    /// Replaces the transcript while the harness has no account.
+    pub(super) fn sign_in(&self, qrow: &Qrow, cx: &Context<Self>) -> AnyElement {
+        if !qrow.harness_features().sign_in {
+            return self.claude_sign_in(cx).into_any_element();
+        }
+        self.codex_sign_in(qrow, cx).into_any_element()
+    }
+
+    /// Claude Code keeps its own sign-in. Qrow shows the command and checks
+    /// the account again on request.
+    fn claude_sign_in(&self, cx: &Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        Empty::new()
+            .size_full()
+            .border_0()
+            .header(
+                EmptyHeader::new()
+                    .media(
+                        EmptyMedia::new()
+                            .with_variant(EmptyMediaVariant::Icon)
+                            .child(Icon::new(AssetIconName::Bot)),
+                    )
+                    .title(EmptyTitle::new().child("Sign in to Claude Code"))
+                    .description(EmptyDescription::new().child(
+                        "The assistant uses your Claude Code account. Sign in in Terminal, then check again.",
+                    )),
+            )
+            .content(
+                EmptyContent::new()
+                    .child(
+                        div()
+                            .id("assistant-claude-sign-in-command")
+                            .test_support()
+                            .role(Role::Paragraph)
+                            .aria_label(CLAUDE_SIGN_IN_COMMAND)
+                            .px_2()
+                            .py_1()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .font_family(gpui_kit::component::theme::Theme::global(cx).mono_font_family.clone())
+                            .text_sm()
+                            .text_color(muted)
+                            .child(CLAUDE_SIGN_IN_COMMAND),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                Button::new("assistant-copy-sign-in-command")
+                                    .label("Copy command")
+                                    .on_click(|_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            CLAUDE_SIGN_IN_COMMAND.to_owned(),
+                                        ))
+                                    }),
+                            )
+                            .child(
+                                Button::new("assistant-check-sign-in")
+                                    .primary()
+                                    .label("Check again")
+                                    .on_click(on_qrow(&self.qrow, |this, _, _, cx| {
+                                        this.assistant_command(AssistantCommand::Refresh, cx);
+                                    })),
+                            ),
+                    ),
+            )
+    }
+
+    fn codex_sign_in(&self, qrow: &Qrow, cx: &Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
         let sign_in = &qrow.assistant_state.sign_in;
         Empty::new()

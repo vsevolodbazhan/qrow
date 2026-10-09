@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 7;
+pub const WORKSPACE_VERSION: u32 = 8;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
@@ -31,7 +31,7 @@ pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
 /// Version 2 adds schema, table, and column names and comments. Version 3
 /// adds the assistant notes of connections. Version 4 adds the descriptions,
 /// tests, and lineage of dbt projects.
-pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 4;
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 5;
 /// The largest assistant notes of one connection, in bytes.
 pub const MAX_ASSISTANT_NOTES_BYTES: usize = 16 * 1024;
 pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
@@ -285,6 +285,46 @@ pub enum AssistantExecutionMode {
     RunAutomatically,
 }
 
+/// The command-line program that runs the assistant. Each conversation
+/// belongs to the harness that created it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantHarness {
+    #[default]
+    Codex,
+    Claude,
+}
+
+impl AssistantHarness {
+    pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+
+    /// The name of the program, for interface text.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+        }
+    }
+}
+
+/// The model choices of one harness. Each harness offers its own models.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantModelChoice {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+impl AssistantModelChoice {
+    fn sanitize(&mut self) {
+        sanitize_optional_string(&mut self.model);
+        sanitize_optional_string(&mut self.reasoning_effort);
+        sanitize_optional_string(&mut self.service_tier);
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[non_exhaustive]
 #[serde(default)]
@@ -292,11 +332,15 @@ pub struct AssistantSettings {
     pub enabled: bool,
     pub data_sharing_notice_version: u32,
     pub default_execution_mode: AssistantExecutionMode,
+    /// The harness of new conversations, and the one that Qrow starts.
+    pub harness: AssistantHarness,
     pub codex_executable: Option<String>,
+    pub claude_executable: Option<String>,
     pub panel_width: f32,
-    pub model: Option<String>,
-    pub reasoning_effort: Option<String>,
-    pub service_tier: Option<String>,
+    /// The Codex choices keep the field names of earlier workspaces.
+    #[serde(flatten)]
+    pub codex: AssistantModelChoice,
+    pub claude: AssistantModelChoice,
     pub sql_keyword_case: KeywordCase,
 }
 
@@ -306,11 +350,12 @@ impl Default for AssistantSettings {
             enabled: false,
             data_sharing_notice_version: 0,
             default_execution_mode: AssistantExecutionMode::AskBeforeRunning,
+            harness: AssistantHarness::default(),
             codex_executable: None,
+            claude_executable: None,
             panel_width: DEFAULT_ASSISTANT_PANEL_WIDTH,
-            model: None,
-            reasoning_effort: None,
-            service_tier: None,
+            codex: AssistantModelChoice::default(),
+            claude: AssistantModelChoice::default(),
             sql_keyword_case: KeywordCase::default(),
         }
     }
@@ -329,9 +374,32 @@ impl AssistantSettings {
             .panel_width
             .clamp(MIN_ASSISTANT_PANEL_WIDTH, MAX_ASSISTANT_PANEL_WIDTH);
         sanitize_optional_string(&mut self.codex_executable);
-        sanitize_optional_string(&mut self.model);
-        sanitize_optional_string(&mut self.reasoning_effort);
-        sanitize_optional_string(&mut self.service_tier);
+        sanitize_optional_string(&mut self.claude_executable);
+        self.codex.sanitize();
+        self.claude.sanitize();
+    }
+
+    /// The model choices of the selected harness.
+    pub fn choice(&self) -> &AssistantModelChoice {
+        match self.harness {
+            AssistantHarness::Codex => &self.codex,
+            AssistantHarness::Claude => &self.claude,
+        }
+    }
+
+    pub fn choice_mut(&mut self) -> &mut AssistantModelChoice {
+        match self.harness {
+            AssistantHarness::Codex => &mut self.codex,
+            AssistantHarness::Claude => &mut self.claude,
+        }
+    }
+
+    /// The configured executable of the selected harness.
+    pub fn executable(&self) -> Option<&str> {
+        match self.harness {
+            AssistantHarness::Codex => self.codex_executable.as_deref(),
+            AssistantHarness::Claude => self.claude_executable.as_deref(),
+        }
     }
 }
 
@@ -1301,7 +1369,9 @@ impl SavedTab {
 pub enum AssistantTitleSource {
     #[default]
     Temporary,
-    Codex,
+    /// The harness generated the title. Earlier workspaces call it `codex`.
+    #[serde(rename = "codex", alias = "generated")]
+    Generated,
     User,
 }
 
@@ -1309,6 +1379,10 @@ pub enum AssistantTitleSource {
 #[non_exhaustive]
 pub struct AssistantConversation {
     pub thread_id: String,
+    /// The harness that keeps the conversation. Earlier workspaces have only
+    /// Codex conversations.
+    #[serde(default)]
+    pub harness: AssistantHarness,
     pub title: String,
     pub title_source: AssistantTitleSource,
     /// A tab opened by New Conversation follows its conversation title.
@@ -1341,6 +1415,7 @@ impl AssistantConversation {
     pub fn new(thread_id: impl Into<String>, execution_mode: AssistantExecutionMode) -> Self {
         Self {
             thread_id: thread_id.into(),
+            harness: AssistantHarness::default(),
             title: "New conversation".into(),
             title_source: AssistantTitleSource::Temporary,
             title_follows_conversation: false,
@@ -2557,9 +2632,16 @@ mod tests {
             enabled: true,
             panel_width: f32::NAN,
             codex_executable: Some("   ".into()),
-            model: Some(" gpt-test ".into()),
-            reasoning_effort: Some(" high ".into()),
-            service_tier: Some(" fast ".into()),
+            claude_executable: Some(" ".into()),
+            codex: AssistantModelChoice {
+                model: Some(" gpt-test ".into()),
+                reasoning_effort: Some(" high ".into()),
+                service_tier: Some(" fast ".into()),
+            },
+            claude: AssistantModelChoice {
+                model: Some(" opus ".into()),
+                ..AssistantModelChoice::default()
+            },
             ..AssistantSettings::default()
         };
         settings.sanitize();
@@ -2567,9 +2649,11 @@ mod tests {
         assert!(!settings.enabled);
         assert_eq!(settings.data_sharing_notice_version, 0);
         assert_eq!(settings.codex_executable, None);
-        assert_eq!(settings.model.as_deref(), Some("gpt-test"));
-        assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
-        assert_eq!(settings.service_tier.as_deref(), Some("fast"));
+        assert_eq!(settings.claude_executable, None);
+        assert_eq!(settings.codex.model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.codex.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(settings.codex.service_tier.as_deref(), Some("fast"));
+        assert_eq!(settings.claude.model.as_deref(), Some("opus"));
 
         settings.panel_width = MAX_ASSISTANT_PANEL_WIDTH + 1.;
         settings.enabled = true;
@@ -2577,6 +2661,39 @@ mod tests {
         settings.sanitize();
         assert_eq!(settings.panel_width, MAX_ASSISTANT_PANEL_WIDTH);
         assert!(settings.enabled);
+    }
+
+    #[test]
+    fn earlier_assistant_settings_and_conversations_load_as_codex() {
+        let settings: AssistantSettings = serde_json::from_str(
+            r#"{"model":"gpt-test","reasoning_effort":"high","service_tier":"fast"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.harness, AssistantHarness::Codex);
+        assert_eq!(settings.choice().model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.choice().service_tier.as_deref(), Some("fast"));
+        assert_eq!(settings.claude, AssistantModelChoice::default());
+        // The Codex choices keep their field names, so an earlier Qrow reads them.
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["model"], "gpt-test");
+        assert_eq!(saved["claude"]["model"], serde_json::Value::Null);
+
+        let mut claude = settings;
+        claude.harness = AssistantHarness::Claude;
+        claude.choice_mut().model = Some("opus".into());
+        assert_eq!(claude.codex.model.as_deref(), Some("gpt-test"));
+        assert_eq!(claude.choice().model.as_deref(), Some("opus"));
+
+        let conversation: AssistantConversation = serde_json::from_str(
+            r#"{"thread_id":"thread-1","title":"Old","title_source":"codex","last_activity":1,"execution_mode":"ask_before_running"}"#,
+        )
+        .unwrap();
+        assert_eq!(conversation.harness, AssistantHarness::Codex);
+        assert_eq!(conversation.title_source, AssistantTitleSource::Generated);
+        assert_eq!(
+            serde_json::to_value(&conversation).unwrap()["title_source"],
+            "codex"
+        );
     }
 
     #[test]
