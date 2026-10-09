@@ -70,18 +70,12 @@ impl Worker {
     ) -> io::Result<Arc<Download>> {
         profile.validate().map_err(io::Error::other)?;
         crate::sql::validate_single_for(&sql, profile.database_type).map_err(io::Error::other)?;
-        if profile.database_type == DatabaseType::Postgres && sql.len() > 1024 * 1024 {
-            return Err(io::Error::other(
-                "Postgres export SQL exceeds the 1 MiB limit",
-            ));
-        }
-        if !matches!(
+        if matches!(
             profile.database_type,
-            DatabaseType::Kyuubi | DatabaseType::Postgres
-        ) {
-            return Err(io::Error::other(
-                "Run and export is not available for this connector yet.",
-            ));
+            DatabaseType::Postgres | DatabaseType::Trino
+        ) && sql.len() > 1024 * 1024
+        {
+            return Err(io::Error::other("Export SQL exceeds the 1 MiB limit"));
         }
         if expected
             .is_some_and(|expected| !matches_session(&self.session_identity, &profile, expected))
@@ -89,13 +83,10 @@ impl Worker {
             return Err(io::Error::other(SessionChanged));
         }
         let memory = budget::GLOBAL.allowance(export::spool::PRODUCER_MEMORY)?;
-        let transport = budget::GLOBAL.allowance(
-            if profile.database_type == DatabaseType::Postgres {
-                192
-            } else {
-                64
-            } * budget::MIB,
-        )?;
+        let transport = budget::GLOBAL.allowance(match profile.database_type {
+            DatabaseType::Postgres | DatabaseType::Trino => 192 * budget::MIB,
+            DatabaseType::Kyuubi => 64 * budget::MIB,
+        })?;
         let download = Download::pending(cancel.clone());
         let weak = Arc::downgrade(&download);
         let guard = jobs.register_with_cancel(

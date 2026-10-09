@@ -4,6 +4,243 @@ use std::sync::Arc;
 #[path = "../../support/trino_protocol.rs"]
 mod fixture;
 use fixture::{Reply, Server, done};
+
+#[test]
+fn direct_wide_fetch_bounds_owned_batches_and_keeps_the_pending_row_in_order() -> Result<()> {
+    let mut replies = vec![done()];
+    for index in 0..7 {
+        let value = format!("{index}:{}", "x".repeat(8 * 1024 * 1024 - 100));
+        let mut page = json!({"columns":[{"name":"wide","type":"varchar"}],"data":[[value]]});
+        if index < 6 {
+            page["nextUri"] = json!(format!("{{origin}}/wide/{}", index + 1));
+        }
+        replies.push(Reply::page(page));
+    }
+    let server = Server::new(false, replies);
+    let mut session = server.connect();
+    session.execute_export("SELECT wide")?;
+    qrow::connector::wait_for_result(&mut *session, None)?;
+    let first = session.fetch(1000)?;
+    assert_eq!(first.rows.len(), 5);
+    let owned = first.rows.capacity() * std::mem::size_of::<qrow::model::Row>()
+        + first
+            .rows
+            .iter()
+            .map(|row| {
+                row.capacity() * std::mem::size_of::<Option<String>>()
+                    + row.iter().flatten().map(String::capacity).sum::<usize>()
+            })
+            .sum::<usize>();
+    assert!(owned <= 48 * 1024 * 1024);
+    for (index, row) in first.rows.iter().enumerate() {
+        assert!(row[0].as_deref().unwrap().starts_with(&format!("{index}:")));
+    }
+    drop(first);
+    let last = session.fetch(1000)?;
+    assert_eq!(last.rows.len(), 2);
+    assert!(last.rows[0][0].as_deref().unwrap().starts_with("5:"));
+    assert!(last.rows[1][0].as_deref().unwrap().starts_with("6:"));
+    assert!(session.fetch(1)?.rows.is_empty());
+    assert_eq!(
+        session.finish_execution()?,
+        Completion::Finished { has_results: true }
+    );
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count(),
+        2
+    );
+    session.close()
+}
+
+#[test]
+fn first_page_is_ready_before_following_the_result_cursor() -> Result<()> {
+    for direct in [false, true] {
+        let rows = (0..1000).map(|value| vec![value]).collect::<Vec<_>>();
+        let server = Server::new(
+            false,
+            vec![
+                done(),
+                Reply::page(
+                    json!({"columns":[{"name":"value","type":"bigint"}],"data":rows,"nextUri":"{origin}/later"}),
+                ),
+                Reply {
+                    status: 204,
+                    body: String::new(),
+                    headers: String::new(),
+                },
+            ],
+        );
+        let mut session = server.connect();
+        let cancel = if direct {
+            session.execute_export("SELECT streamed")?
+        } else {
+            session.execute("SELECT streamed")?
+        };
+        assert_eq!(
+            qrow::connector::wait_for_result(
+                &mut *session,
+                Some(Instant::now() + Duration::from_secs(2))
+            )?,
+            QueryState::Streaming { has_results: true }
+        );
+        let first = session.fetch(1000)?;
+        assert_eq!(first.rows.len(), 1000);
+        assert_eq!(first.rows[999][0].as_deref(), Some("999"));
+        assert_eq!(
+            server.requests().len(),
+            2,
+            "the first page must not fetch the next cursor"
+        );
+        cancel.cancel()?;
+        session.close_operation()?;
+        assert!(server.requests()[2].starts_with("DELETE /later "));
+        assert_eq!(server.requests().len(), 3);
+        session.close()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn direct_decimal_text_empty_rowsets_and_update_commands_are_distinct() -> Result<()> {
+    let server = Server::new(false, vec![done(), Reply { status: 200, body: r#"{"columns":[{"name":"amount","type":"decimal(25,5)"}],"data":[[12345678901234567890.12345],[1.23000]]}"#.into(), headers: String::new() }, Reply::page(json!({"columns":[{"name":"empty","type":"bigint"}],"data":[]})), Reply::page(json!({"updateType":"CREATE TABLE","updateCount":0,"columns":[{"name":"rows","type":"bigint"}],"data":[[0]]}))]);
+    let mut session = server.connect();
+    session.execute_export("SELECT exact")?;
+    qrow::connector::wait_for_result(&mut *session, None)?;
+    assert_eq!(session.columns()?[0].data_type, "decimal(25,5)");
+    assert_eq!(
+        session.fetch(2)?.rows,
+        vec![
+            vec![Some("12345678901234567890.12345".into())],
+            vec![Some("1.23000".into())]
+        ]
+    );
+    assert!(session.fetch(1)?.rows.is_empty());
+    assert_eq!(
+        session.finish_execution()?,
+        Completion::Finished { has_results: true }
+    );
+    session.close_operation()?;
+    session.execute_export("SELECT empty")?;
+    assert_eq!(
+        qrow::connector::wait_for_result(&mut *session, None)?,
+        QueryState::Streaming { has_results: true }
+    );
+    assert!(session.fetch(1)?.rows.is_empty());
+    session.close_operation()?;
+    session.execute_export("CREATE TABLE synthetic")?;
+    assert_eq!(
+        qrow::connector::wait_for_result(&mut *session, None)?,
+        QueryState::Finished { has_results: false }
+    );
+    assert!(session.columns()?.is_empty());
+    session.close_operation()?;
+    assert_eq!(server.requests().len(), 4);
+    session.close()
+}
+
+#[test]
+fn normal_preview_drains_the_tail_and_keeps_only_its_row_limit() -> Result<()> {
+    let mut replies = vec![done()];
+    for start in (0..100001).step_by(1000) {
+        let end = (start + 1000).min(100001);
+        let mut page = json!({"columns":[{"name":"value","type":"bigint"}],"data":(start..end).map(|value|vec![value]).collect::<Vec<_>>()});
+        if end < 100001 {
+            page["nextUri"] = json!(format!("{{origin}}/page/{end}"));
+        }
+        replies.push(Reply::page(page));
+    }
+    let server = Server::new(false, replies);
+    let mut session = server.connect();
+    session.execute("SELECT bounded")?;
+    assert_eq!(
+        qrow::connector::wait_for_result(&mut *session, None)?,
+        QueryState::Streaming { has_results: true }
+    );
+    assert_eq!(session.fetch(1000)?.rows.len(), 1000);
+    assert_eq!(server.requests().len(), 2);
+    assert_eq!(
+        session.finish_execution()?,
+        Completion::Finished { has_results: true }
+    );
+    let mut count = 1000;
+    loop {
+        let batch = session.fetch(1000)?;
+        if batch.rows.is_empty() {
+            break;
+        }
+        for row in batch.rows {
+            assert_eq!(row[0].as_deref(), Some(count.to_string().as_str()));
+            count += 1;
+        }
+    }
+    assert_eq!(count, 100000);
+    assert!(session.result_limited());
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.starts_with("POST "))
+            .count(),
+        2
+    );
+    assert_eq!(
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.starts_with("GET "))
+            .count(),
+        100
+    );
+    session.close()
+}
+
+#[test]
+fn terminal_sql_errors_apply_session_updates_before_same_session_retry() -> Result<()> {
+    for get_error in [false, true] {
+        let failure = Reply::page(
+            json!({"error":{"errorName":"SYNTHETIC_ERROR","message":"original SQL failure"}}),
+        )
+        .header("X-Trino-Clear-Transaction-Id", "true");
+        let mut replies = vec![
+            done(),
+            Reply::page(json!({}))
+                .header("X-Trino-Started-Transaction-Id", "synthetic-transaction"),
+        ];
+        if get_error {
+            replies.push(Reply::page(json!({"nextUri":"{origin}/failure"})));
+        }
+        replies.extend([failure, done()]);
+        let server = Server::new(false, replies);
+        let mut session = server.connect();
+        complete(&mut *session, "START TRANSACTION")?;
+        let error = complete(&mut *session, "SELECT bad").unwrap_err();
+        assert!(error.is::<QueryError>());
+        assert!(error.to_string().contains("original SQL failure"));
+        session.close_operation()?;
+        complete(&mut *session, "SELECT 1")?;
+        let requests = server.requests();
+        assert!(
+            requests
+                .last()
+                .unwrap()
+                .to_lowercase()
+                .contains("x-trino-transaction-id: none\r\n")
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.contains("SELECT bad"))
+                .count(),
+            1
+        );
+        session.close()?;
+    }
+    Ok(())
+}
 #[test]
 fn pages_use_the_latest_cursor_and_preserve_values_and_session_headers() -> Result<()> {
     let server = Server::new(

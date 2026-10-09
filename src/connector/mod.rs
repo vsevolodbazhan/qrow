@@ -142,6 +142,10 @@ pub trait Session: Send {
     fn export_context(&self) -> crate::export::Context {
         crate::export::Context::default()
     }
+    /// The server's query progress, when the current response provides it.
+    fn progress_percentage(&self) -> Option<f64> {
+        None
+    }
     /// Whether the connector stopped retaining rows at a result limit.
     fn result_limited(&self) -> bool {
         false
