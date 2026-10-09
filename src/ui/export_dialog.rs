@@ -343,19 +343,13 @@ impl ExportDialog {
             table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
             let mut out = export::LimitedWriter::new(8192);
             let truncated = export::write(&mut out, &table, &settings, &cancel).is_err();
-            let mut preview = String::from_utf8_lossy(&out.into_bytes())
-                .trim_start_matches('\u{feff}')
-                .to_owned();
-            if truncated {
-                preview.push_str("\n…");
-            }
-            preview
+            out.into_preview(truncated)
         });
         self.preview_task = Some(cx.spawn(async move |weak, cx| {
             let preview = task.await;
             let _ = weak.update(cx, |this, cx| {
                 if this.preview_generation == generation {
-                    this.preview = preview;
+                    this.preview = preview.into_string();
                     this.preview_pending = false;
                     cx.notify();
                 }
@@ -445,12 +439,7 @@ impl ExportDialog {
                     } else {
                         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
                         let count = export::write(&mut out, &table, &options, &cancel)?;
-                        Ok((
-                            count,
-                            Some(
-                                String::from_utf8(out.into_bytes()).expect("Text export is UTF-8"),
-                            ),
-                        ))
+                        Ok((count, Some(out.into_text()?)))
                     }
                 })
                 .await;
@@ -462,7 +451,7 @@ impl ExportDialog {
     }
     fn complete(
         &mut self,
-        result: std::io::Result<(usize, Option<String>)>,
+        result: std::io::Result<(usize, Option<export::Text>)>,
         path: Option<PathBuf>,
         request: Option<CopyRequest>,
         window: &mut Window,
@@ -493,7 +482,7 @@ impl ExportDialog {
                         cx.notify();
                         return;
                     }
-                    copy_text(text, cx);
+                    copy_text(text.into_string(), cx);
                 }
                 if let Some(path) = &path {
                     self.settings.directory = path.parent().map(PathBuf::from);
@@ -738,7 +727,7 @@ pub(super) fn copy_format(
         let _guard = guard;
         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
         export::write(&mut out, &source.table(range), &options, &cancel)?;
-        Ok::<_, std::io::Error>(String::from_utf8(out.into_bytes()).expect("Text export is UTF-8"))
+        out.into_text()
     });
     let window = window.window_handle();
     cx.spawn(async move |cx| {
@@ -779,7 +768,7 @@ pub(super) fn copy_format(
                             )
                     });
                 } else {
-                    copy_text(text, cx);
+                    copy_text(text.into_string(), cx);
                 }
             }
             Ok(_) => {}
@@ -790,13 +779,13 @@ pub(super) fn copy_format(
 }
 
 fn confirm_markdown_copy(
-    pending: &std::cell::RefCell<Option<(CopyRequest, String)>>,
+    pending: &std::cell::RefCell<Option<(CopyRequest, export::Text)>>,
     window: &mut Window,
     cx: &mut App,
 ) {
     if let Some((request, text)) = pending.borrow_mut().take() {
         if request.is_current(cx) {
-            copy_text(text, cx);
+            copy_text(text.into_string(), cx);
         } else {
             window.push_notification("The clipboard changed. Choose Copy to try again.", cx);
         }

@@ -5,13 +5,18 @@ use std::{io, ops::Index, sync::Arc};
 /// appending a batch never copies a batch held by an export.
 #[derive(Clone, Default)]
 pub struct Rows {
-    batches: Vec<Arc<Batch>>,
+    batches: Vec<Chunk>,
     len: usize,
     context: Arc<super::Context>,
 }
 
-struct Batch {
+#[derive(Clone)]
+struct Chunk {
     start: usize,
+    batch: Arc<Batch>,
+}
+
+struct Batch {
     rows: Vec<Row>,
     bytes: usize,
     _allocation: Option<super::budget::Allocation>,
@@ -47,12 +52,14 @@ impl Rows {
                 .sum::<usize>();
         let start = self.len;
         self.len += rows.len();
-        self.batches.push(Arc::new(Batch {
+        self.batches.push(Chunk {
             start,
-            rows,
-            bytes,
-            _allocation: None,
-        }));
+            batch: Arc::new(Batch {
+                rows,
+                bytes,
+                _allocation: None,
+            }),
+        });
     }
 
     pub(super) fn accounted(
@@ -62,10 +69,39 @@ impl Rows {
     ) -> Self {
         let mut store = Self::from(rows);
         if let Some(batch) = store.batches.first_mut() {
-            Arc::get_mut(batch).unwrap()._allocation = Some(allocation);
+            Arc::get_mut(&mut batch.batch).unwrap()._allocation = Some(allocation);
         }
         store.set_context(context);
         store
+    }
+
+    pub(super) fn append_shared(&mut self, other: &Self) {
+        if self.is_empty() {
+            self.context = other.context.clone();
+        }
+        let start = self.len;
+        self.batches.extend(other.batches.iter().map(|chunk| Chunk {
+            start: start + chunk.start,
+            batch: chunk.batch.clone(),
+        }));
+        self.len += other.len;
+    }
+
+    pub(super) fn retained_bytes(&self) -> usize {
+        self.batches.iter().map(|chunk| chunk.batch.bytes).sum()
+    }
+
+    pub(super) fn accounted_bytes(&self) -> usize {
+        self.batches
+            .iter()
+            .map(|chunk| {
+                chunk
+                    .batch
+                    ._allocation
+                    .as_ref()
+                    .map_or(0, super::budget::Allocation::bytes)
+            })
+            .sum()
     }
 
     pub fn get(&self, row: usize) -> Option<&Row> {
@@ -74,11 +110,11 @@ impl Rows {
             .partition_point(|batch| batch.start <= row)
             .checked_sub(1)?;
         let batch = &self.batches[batch];
-        batch.rows.get(row - batch.start)
+        batch.batch.rows.get(row - batch.start)
     }
 
     pub(super) fn metadata_bytes(&self) -> usize {
-        self.batches.len() * std::mem::size_of::<Arc<Batch>>()
+        self.batches.len() * std::mem::size_of::<Chunk>()
     }
 
     pub(super) fn retain_for_export(&self) -> io::Result<Lease> {
@@ -110,7 +146,7 @@ impl Index<usize> for Rows {
 /// Keep allocation identities alive until the shared accounting guard drops.
 pub(super) struct Lease {
     _shared: super::budget::Shared,
-    _batches: Vec<Arc<Batch>>,
+    _batches: Vec<Chunk>,
     _metadata: super::budget::Allocation,
 }
 
@@ -121,8 +157,8 @@ impl Lease {
         let batches: Vec<_> = rows
             .batches
             .iter()
-            .filter(|batch| batch._allocation.is_none())
-            .map(|batch| (Arc::as_ptr(batch) as usize, batch.bytes))
+            .filter(|batch| batch.batch._allocation.is_none())
+            .map(|batch| (Arc::as_ptr(&batch.batch) as usize, batch.batch.bytes))
             .collect();
         let shared = budget.share(&batches)?;
         drop(batches);
@@ -152,9 +188,28 @@ mod tests {
     }
 
     #[test]
+    fn combining_shared_batches_keeps_indices_and_allocation_identity() {
+        let first = Rows::from(vec![
+            vec![Some("first".into())],
+            vec![Some("second".into())],
+        ]);
+        let second = Rows::from(vec![vec![Some("third".into())]]);
+        let mut combined = Rows::default();
+        combined.append_shared(&first);
+        combined.append_shared(&second);
+        assert_eq!(combined.len(), 3);
+        assert!(std::ptr::eq(&combined[0], &first[0]));
+        assert!(std::ptr::eq(&combined[2], &second[0]));
+        drop(first);
+        drop(second);
+        assert_eq!(combined[1][0].as_deref(), Some("second"));
+        assert_eq!(combined[2][0].as_deref(), Some("third"));
+    }
+
+    #[test]
     fn a_shared_batch_counts_once_and_a_failed_lease_reserves_nothing() {
         let rows = Rows::from(vec![vec![Some("value".into())]]);
-        let bytes = rows.batches[0].bytes;
+        let bytes = rows.batches[0].batch.bytes;
         let budget = super::super::budget::Budget::new(bytes + 1300);
         let first = Lease::acquire(&rows, budget.clone()).unwrap();
         let second = Lease::acquire(&rows, budget.clone()).unwrap();

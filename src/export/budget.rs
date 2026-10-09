@@ -9,7 +9,7 @@ pub(crate) const MIB: usize = 1024 * 1024;
 pub(crate) const MAX_CELL_BYTES: usize = 8 * MIB;
 pub(crate) const MAX_ROW_BYTES: usize = 16 * MIB;
 pub(crate) const MAX_RECORD_BYTES: usize = 32 * MIB;
-pub(crate) static GLOBAL: LazyLock<Arc<Budget>> = LazyLock::new(|| Budget::new(512 * MIB));
+pub(crate) static GLOBAL: LazyLock<Arc<Budget>> = LazyLock::new(|| Budget::new(1024 * MIB));
 
 pub(crate) struct Budget {
     limit: usize,
@@ -150,6 +150,12 @@ impl Drop for Allocation {
         } else {
             self.global.state.lock().unwrap().used -= self.bytes;
         }
+    }
+}
+
+impl Allocation {
+    pub(super) fn bytes(&self) -> usize {
+        self.bytes
     }
 }
 

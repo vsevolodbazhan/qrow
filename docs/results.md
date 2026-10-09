@@ -133,6 +133,7 @@ names the affected volume and leaves the destination unchanged.
 Export stops if a cell exceeds 8 MiB or a row exceeds 16 MiB. These limits
 apply to each format. They do not limit a server message before Qrow receives
 the message.
+Export also stops if the selected column headers exceed 16 MiB.
 
 ### CSV values and limits
 
@@ -155,7 +156,7 @@ Numeric and Boolean values keep their server text. CSV does not change
 decimal values to floating-point numbers.
 
 Exports share immutable preview batches. Concurrent exports can retain up
-to 512 MiB across retained sources and reserved spool working memory.
+to 1 GiB across retained sources and reserved writer and spool working memory.
 Shared batches count once. Encoding writes
 cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
@@ -231,8 +232,9 @@ uses a non-ISO DateStyle, dates and timestamps remain text. The export form
 shows this condition.
 
 The writer uses Parquet 1.0 data pages, dictionaries, and statistics. It
-limits each row group to approximately 64 MiB of source values. One larger
-row can exceed this target. The writer prepares one column at a time. Row-group metadata stays in memory
+limits each row group to approximately 64 MiB of source values. A group can
+close earlier to stay within the writer memory allowance. The writer prepares
+one column at a time. Row-group metadata stays in memory
 until the file closes and grows with the number of row groups. These
 limits do not cap total application memory. File metadata contains the
 application version and no query text. A failed or cancelled save preserves

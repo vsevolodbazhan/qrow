@@ -263,6 +263,24 @@ impl Producer {
             }
             Err(error) => return Err(error),
         };
+        let decoded = rows
+            .len()
+            .saturating_mul(
+                std::mem::size_of::<Row>()
+                    + self.spool.columns.len() * std::mem::size_of::<Option<String>>(),
+            )
+            .saturating_add(length + 1024)
+            .saturating_add(self.spool.context.postgres.as_ref().map_or(0, |context| {
+                context.date_style.len() + context.interval_style.len() + context.time_zone.len()
+            }));
+        if decoded > budget::MAX_RECORD_BYTES {
+            if rows.len() > 1 {
+                let middle = rows.len() / 2;
+                self.append_bounded(&rows[..middle], cancel)?;
+                return self.append_bounded(&rows[middle..], cancel);
+            }
+            return Err(invalid("Spool decoded batch exceeds 32 MiB."));
+        }
         let _encoded = self.memory.acquire(length)?;
         let mut bytes = vec![0; length];
         postcard::to_slice(&record, &mut bytes).map_err(codec)?;
@@ -395,6 +413,9 @@ impl Reader {
                         )
                     })
                     .ok_or_else(|| invalid("Spool batch allocation overflow."))?;
+                if allocation > budget::MAX_RECORD_BYTES {
+                    return Err(invalid("Spool decoded batch exceeds 32 MiB."));
+                }
                 let memory = self.memory.acquire(allocation)?;
                 let mut rows = Vec::with_capacity(count);
                 for _ in 0..count {
@@ -601,7 +622,7 @@ mod tests {
     use std::{sync::mpsc, thread, time::Duration};
 
     fn new_spool(columns: &[Column], context: &Context) -> io::Result<(Arc<Spool>, Producer)> {
-        Spool::new_in(columns, context, budget::Budget::new(512 * budget::MIB))
+        Spool::new_in(columns, context, budget::Budget::new(1024 * budget::MIB))
     }
 
     fn schema() -> Vec<Column> {
