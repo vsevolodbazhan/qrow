@@ -432,3 +432,69 @@ fn context_copy_as_markdown_and_json_include_column_names(cx: &mut TestAppContex
         }
     }
 }
+
+#[gpui_kit::test]
+fn context_large_markdown_confirms_with_enter_and_cancel_preserves_clipboard(
+    cx: &mut TestAppContext,
+) {
+    let app = demo(cx);
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Left, Modifiers::default(), cx);
+    });
+    app.press(cx, "cmd-a");
+    for confirm in [false, true] {
+        app.update(cx, |window, cx| {
+            let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
+            pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+        });
+        app.settle(cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+        app.choose_in_submenu(cx, "Copy as", "Markdown");
+        app.wait_for(cx, "markdown-copy-anyway");
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("preserved")
+        );
+        if confirm {
+            app.press(cx, "enter");
+        } else {
+            app.click(cx, "markdown-copy-cancel");
+        }
+        app.wait_gone(cx, "markdown-copy-anyway");
+        let text = cx.read_from_clipboard().unwrap().text().unwrap();
+        if confirm {
+            assert!(text.starts_with("| route | carrier |"));
+            assert_eq!(text.lines().count(), 1002);
+            assert!(text.chars().count() > 40_000);
+        } else {
+            assert_eq!(text, "preserved");
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn export_preview_follows_the_latest_format_after_rapid_changes(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    for format in ["JSON array", "Markdown", "JSON Lines"] {
+        app.select(cx, "export-format", format);
+    }
+    app.wait_until(
+        cx,
+        "the current JSON Lines preview",
+        Duration::from_secs(5),
+        |window, _| {
+            label(window, "export-preview").is_some_and(|text| text.starts_with("{\"route\":"))
+        },
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "export-format").as_deref(),
+            Some("JSON Lines")
+        );
+        assert!(!label(window, "export-preview").unwrap().starts_with('['));
+    });
+    app.click(cx, "export-cancel");
+}

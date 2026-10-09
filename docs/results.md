@@ -100,7 +100,8 @@ If the preview is incomplete, the dialog shows a message.
 
 For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
 column names, quoting, byte-order mark, and formula escaping. A change to
-these options selects **Custom**. The preview shows up to five rows.
+these options selects **Custom**. The preview shows up to five rows. During a preview update, the dialog shows
+**Preparing preview…**.
 
 | Preset | Separator | Line ending | UTF-8 byte-order mark | Formula escaping |
 | --- | --- | --- | --- | --- |

@@ -48,7 +48,7 @@ pub enum Value<'a> {
     Decimal(&'a str),
     Text(&'a str),
     Bytes(Vec<u8>),
-    Nested(serde_json::Value),
+    Nested(&'a serde_json::value::RawValue),
 }
 
 pub fn normalize<'a>(kind: Kind, text: Option<&'a str>) -> io::Result<Value<'a>> {
@@ -73,7 +73,7 @@ pub fn normalize<'a>(kind: Kind, text: Option<&'a str>) -> io::Result<Value<'a>>
         Kind::Binary => Value::Bytes(STANDARD.decode(text).map_err(|_| invalid())?),
         Kind::HexBinary => Value::Bytes(hex(text.strip_prefix("0x").ok_or_else(invalid)?)?),
         Kind::Bytea => Value::Bytes(bytea(text)?),
-        Kind::Nested => match serde_json::from_str(text) {
+        Kind::Nested => match serde_json::from_str::<&serde_json::value::RawValue>(text) {
             Ok(value) => Value::Nested(value),
             Err(_) => Value::Text(text),
         },
@@ -184,5 +184,24 @@ mod tests {
             column_names(["id", "id", "id_2", "id"].into_iter()),
             ["id", "id_3", "id_2", "id_4"]
         );
+    }
+
+    #[test]
+    fn nested_json_borrows_wide_values_without_allocating_a_tree() {
+        let text = format!(
+            "[{}]",
+            "[true,null,12345678901234567890],"
+                .repeat(100_000)
+                .trim_end_matches(',')
+        );
+        let Value::Nested(value) = normalize(Kind::Nested, Some(&text)).unwrap() else {
+            panic!("valid nested JSON");
+        };
+        assert!(std::ptr::eq(value.get().as_ptr(), text.as_ptr()));
+        assert_eq!(value.get(), text);
+        assert!(matches!(
+            normalize(Kind::Nested, Some("{broken}")).unwrap(),
+            Value::Text("{broken}")
+        ));
     }
 }

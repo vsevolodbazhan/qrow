@@ -4,10 +4,6 @@ use super::{
     value::{self, Kind, Value},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::{
-    Serialize,
-    ser::{SerializeMap, SerializeSeq},
-};
 use std::{
     io::{self, Write},
     sync::atomic::AtomicBool,
@@ -51,119 +47,130 @@ pub fn write(
         .clone()
         .map(|i| Kind::of(&table.columns[i].data_type))
         .collect();
-    if lines {
-        for row in table.row_indices.clone() {
-            check_cancelled(cancel)?;
-            serde_json::to_writer(
-                &mut *out,
-                &Object {
-                    table,
-                    row,
-                    names: &names,
-                    kinds: &kinds,
-                    options,
-                },
-            )?;
+    let pretty = options.pretty && !lines;
+    if !lines {
+        out.write_all(b"[")?;
+    }
+    for (index, row) in table.row_indices.clone().enumerate() {
+        check_cancelled(cancel)?;
+        if !lines {
+            if index > 0 {
+                out.write_all(b",")?;
+            }
+            if pretty {
+                out.write_all(b"\n  ")?;
+            }
+        }
+        out.write_all(b"{")?;
+        for (column, text) in table.values(row).enumerate() {
+            if column > 0 {
+                out.write_all(b",")?;
+            }
+            if pretty {
+                out.write_all(b"\n    ")?;
+            }
+            serde_json::to_writer(&mut *out, &names[column])?;
+            out.write_all(if pretty { b": " } else { b":" })?;
+            let result = write_value(out, kinds[column], text, options, pretty, cancel);
+            result.map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "Column {}, row {}, value {:?}: {error}",
+                        names[column],
+                        row + 1,
+                        text.map(|text| text.chars().take(100).collect::<String>())
+                    ),
+                )
+            })?;
+        }
+        if pretty {
+            out.write_all(b"\n  ")?;
+        }
+        out.write_all(b"}")?;
+        if lines {
             out.write_all(b"\n")?;
         }
-    } else {
-        let array = Array {
-            table,
-            names: &names,
-            kinds: &kinds,
-            options,
-            cancel,
-        };
-        if options.pretty {
-            serde_json::to_writer_pretty(&mut *out, &array)?;
-        } else {
-            serde_json::to_writer(&mut *out, &array)?;
+    }
+    if !lines {
+        if pretty && table.row_count() > 0 {
+            out.write_all(b"\n")?;
         }
-        out.write_all(b"\n")?;
+        out.write_all(b"]\n")?;
     }
     out.flush()?;
     check_cancelled(cancel)?;
     Ok(table.row_count())
 }
-struct Array<'a> {
-    table: &'a Table<'a>,
-    names: &'a [String],
-    kinds: &'a [Kind],
-    options: &'a Options,
-    cancel: &'a AtomicBool,
-}
-impl Serialize for Array<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = serializer.serialize_seq(Some(self.table.row_count()))?;
-        for row in self.table.row_indices.clone() {
-            check_cancelled(self.cancel).map_err(serde::ser::Error::custom)?;
-            seq.serialize_element(&Object {
-                table: self.table,
-                row,
-                names: self.names,
-                kinds: self.kinds,
-                options: self.options,
-            })?;
-        }
-        seq.end()
+
+fn write_value(
+    out: &mut impl Write,
+    kind: Kind,
+    text: Option<&str>,
+    options: &Options,
+    pretty: bool,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    if !options.typed {
+        serde_json::to_writer(out, &text)?;
+        return Ok(());
     }
-}
-struct Object<'a> {
-    table: &'a Table<'a>,
-    row: usize,
-    names: &'a [String],
-    kinds: &'a [Kind],
-    options: &'a Options,
-}
-impl Serialize for Object<'_> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(self.names.len()))?;
-        for (index, text) in self.table.values(self.row).enumerate() {
-            let result = if self.options.typed {
-                let value = value::normalize(self.kinds[index], text).map_err(|error| {
-                    serde::ser::Error::custom(format!(
-                        "Column {}, row {}, value {:?}: {error}",
-                        self.names[index],
-                        self.row + 1,
-                        text.map(|text| text.chars().take(100).collect::<String>())
-                    ))
-                })?;
-                match value {
-                    Value::Null => map.serialize_entry(&self.names[index], &Option::<bool>::None),
-                    Value::Boolean(value) => map.serialize_entry(&self.names[index], &value),
-                    Value::Integer(value) => map.serialize_entry(&self.names[index], &value),
-                    Value::Float(value) if value.is_finite() => {
-                        map.serialize_entry(&self.names[index], &value)
-                    }
-                    Value::Float(_) => map.serialize_entry(&self.names[index], &text),
-                    Value::Decimal(value)
-                        if self.options.decimals_as_numbers && !special(value) =>
-                    {
-                        let number: serde_json::Number =
-                            value.parse().map_err(serde::ser::Error::custom)?;
-                        map.serialize_entry(&self.names[index], &number)
-                    }
-                    Value::Decimal(value) | Value::Text(value) => {
-                        map.serialize_entry(&self.names[index], &value)
-                    }
-                    Value::Bytes(value) => {
-                        map.serialize_entry(&self.names[index], &STANDARD.encode(value))
-                    }
-                    Value::Nested(value) => map.serialize_entry(&self.names[index], &value),
-                }
-            } else {
-                map.serialize_entry(&self.names[index], &text)
-            };
-            result.map_err(|error| {
-                serde::ser::Error::custom(format!(
-                    "Column {}, row {}: {error}",
-                    self.names[index],
-                    self.row + 1
-                ))
-            })?;
+    match value::normalize(kind, text)? {
+        Value::Null => serde_json::to_writer(out, &Option::<bool>::None)?,
+        Value::Boolean(value) => serde_json::to_writer(out, &value)?,
+        Value::Integer(value) => serde_json::to_writer(out, &value)?,
+        Value::Float(value) if value.is_finite() => serde_json::to_writer(out, &value)?,
+        Value::Float(_) => serde_json::to_writer(out, &text)?,
+        Value::Decimal(value) if options.decimals_as_numbers && !special(value) => {
+            let number: serde_json::Number = value
+                .parse()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            serde_json::to_writer(out, &number)?;
         }
-        map.end()
+        Value::Decimal(value) | Value::Text(value) => serde_json::to_writer(out, &value)?,
+        Value::Bytes(value) => serde_json::to_writer(out, &STANDARD.encode(value))?,
+        Value::Nested(value) => write_nested(out, value.get(), pretty, cancel)?,
     }
+    Ok(())
+}
+
+/// The fragment is already validated by RawValue. Copy spans directly, removing
+/// only insignificant ASCII whitespace. This keeps JSON Lines on one line and
+/// avoids an owned tree or another whole-cell buffer.
+fn write_nested(
+    out: &mut impl Write,
+    text: &str,
+    pretty: bool,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    if pretty {
+        return out.write_all(text.as_bytes());
+    }
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut start = 0;
+    for (index, byte) in text.bytes().enumerate() {
+        if index.is_multiple_of(4096) {
+            check_cancelled(cancel)?;
+            out.write_all(&text.as_bytes()[start..index])?;
+            start = index;
+        }
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else if byte == b'"' {
+            quoted = true;
+        } else if matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
+            out.write_all(&text.as_bytes()[start..index])?;
+            start = index + 1;
+        }
+    }
+    out.write_all(&text.as_bytes()[start..])
 }
 fn special(value: &str) -> bool {
     matches!(
@@ -295,6 +302,50 @@ mod tests {
             assert_eq!(json[0]["trino"], "AFz/");
         }
     }
+    #[test]
+    fn nested_json_whitespace_cannot_split_json_lines() {
+        let columns = vec![Column {
+            name: "nested".into(),
+            data_type: "json".into(),
+        }];
+        let nested = "[\r\n 1,\n {\"value\":\"space \\n newline and \\\"quote\\\"\"}\r\n]";
+        let rows: Rows = vec![
+            vec![Some(nested.into())],
+            vec![Some(" { \"a\" : [ true, null ] } ".into())],
+        ]
+        .into();
+        for lines in [false, true] {
+            let mut out = Vec::new();
+            write(
+                &mut out,
+                &table(&columns, &rows),
+                &Options {
+                    pretty: false,
+                    ..Options::default()
+                },
+                lines,
+                &AtomicBool::new(false),
+            )
+            .unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert_eq!(text.lines().count(), if lines { 2 } else { 1 });
+            let first: serde_json::Value = if lines {
+                serde_json::from_str(text.lines().next().unwrap()).unwrap()
+            } else {
+                serde_json::from_str::<serde_json::Value>(&text).unwrap()[0].clone()
+            };
+            assert_eq!(
+                first["nested"],
+                serde_json::from_str::<serde_json::Value>(nested).unwrap()
+            );
+            if lines {
+                for line in text.lines() {
+                    serde_json::from_str::<serde_json::Value>(line).unwrap();
+                }
+            }
+        }
+    }
+
     #[test]
     fn empty_results_lines_newlines_and_cancelled_output_are_valid() {
         let columns = vec![Column {
