@@ -318,7 +318,7 @@ impl Worker {
             cancel,
             Some(Arc::new(move || {
                 if let Some(download) = callback_download.upgrade() {
-                    thread::spawn(move || download.cancel());
+                    download.cancel_in_background();
                 }
             })),
         );

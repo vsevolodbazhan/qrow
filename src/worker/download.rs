@@ -92,22 +92,36 @@ impl Download {
 
     /// The terminal spool record and cancellation routing have one handoff.
     pub(super) fn complete(&self, producer: Producer) -> io::Result<()> {
-        let mut state = self.state.lock().unwrap();
-        export::check_cancelled(&self.cancel)?;
-        if !matches!(state.route, Route::Downloading(_)) || state.aborted {
-            return Err(io::Error::other("The download stopped before completion."));
-        }
-        producer.finish(&self.cancel)?;
-        state.route = Route::Downloaded;
-        state.guard = None;
-        self.changed.notify_all();
-        Ok(())
+        producer.finish_with(&self.cancel, || {
+            let mut state = self.state.lock().unwrap();
+            export::check_cancelled(&self.cancel)?;
+            if !matches!(state.route, Route::Downloading(_)) || state.aborted {
+                return Err(io::Error::other("The download stopped before completion."));
+            }
+            state.route = Route::Downloaded;
+            state.guard = None;
+            self.changed.notify_all();
+            Ok(())
+        })
     }
 
     pub fn cancel(self: &Arc<Self>) {
         self.cancel.store(true, Ordering::SeqCst);
         self.spool.cancel();
         self.cancel_operation();
+    }
+
+    pub fn cancel_in_background(self: &Arc<Self>) {
+        self.cancel.store(true, Ordering::SeqCst);
+        self.spool.cancel();
+        let download = self.clone();
+        if std::thread::Builder::new()
+            .name("qrow-export-stop".into())
+            .spawn(move || download.cancel_operation())
+            .is_err()
+        {
+            self.abort_operation();
+        }
     }
 
     pub fn fail(self: &Arc<Self>, message: String) {
@@ -117,7 +131,38 @@ impl Download {
         self.cancel_operation();
     }
 
+    /// Resource failure stops the owned transport without creating a thread.
+    /// The routing lock protects only the handoff and never waits on disk I/O.
+    pub fn abort(&self, message: String) {
+        self.spool.fail(message);
+        self.cancel.store(true, Ordering::SeqCst);
+        self.abort_operation();
+    }
+
+    fn abort_operation(&self) {
+        let mut state = self.state.lock().unwrap();
+        if let Route::Downloading(target) = &state.route {
+            target.abort_transport();
+            state.aborted = true;
+            state.cancellation_done = true;
+            state.cancellation_failed = true;
+            state.guard = None;
+            self.changed.notify_all();
+        }
+    }
+
     fn cancel_operation(self: &Arc<Self>) {
+        self.cancel_operation_with(|work| {
+            std::thread::Builder::new()
+                .name("qrow-export-cancel".into())
+                .spawn(work)
+        });
+    }
+
+    fn cancel_operation_with(
+        self: &Arc<Self>,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> io::Result<std::thread::JoinHandle<()>>,
+    ) {
         let (target, guard) = {
             let mut state = self.state.lock().unwrap();
             let Route::Downloading(target) = &state.route else {
@@ -132,30 +177,40 @@ impl Download {
         };
         let download = self.clone();
         let deadline = Instant::now() + CLEANUP_TIMEOUT;
-        std::thread::spawn(move || {
+        if spawn(Box::new(move || {
             let _guard = guard;
             let watchdog = download.clone();
             let abort = target.clone();
-            std::thread::spawn(move || {
-                let mut state = watchdog.state.lock().unwrap();
-                while matches!(state.route, Route::Downloading(_)) {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if remaining.is_zero() {
-                        // Hold the routing lock so this can never abort a reused session.
-                        state.aborted = true;
-                        abort.abort_transport();
-                        watchdog.changed.notify_all();
-                        break;
+            if std::thread::Builder::new()
+                .name("qrow-export-deadline".into())
+                .spawn(move || {
+                    let mut state = watchdog.state.lock().unwrap();
+                    while matches!(state.route, Route::Downloading(_)) {
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() {
+                            // Hold the routing lock so this can never abort a reused session.
+                            state.aborted = true;
+                            abort.abort_transport();
+                            watchdog.changed.notify_all();
+                            break;
+                        }
+                        state = watchdog.changed.wait_timeout(state, remaining).unwrap().0;
                     }
-                    state = watchdog.changed.wait_timeout(state, remaining).unwrap().0;
-                }
-            });
+                })
+                .is_err()
+            {
+                download.abort_operation();
+            }
             let failed = target.cancel_with_deadline(deadline).is_err();
             let mut state = download.state.lock().unwrap();
             state.cancellation_done = true;
             state.cancellation_failed = failed;
             download.changed.notify_all();
-        });
+        }))
+        .is_err()
+        {
+            self.abort_operation();
+        }
     }
 
     /// Wait for the captured cancel before the session can accept another query.
@@ -257,6 +312,58 @@ mod tests {
         assert_eq!(download.spool().status(), Status::Complete { rows: 0 });
         assert_eq!(target.calls.load(Ordering::SeqCst), 0);
         assert!(!target.aborted.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn failed_cancel_thread_creation_aborts_the_owned_operation_without_retry() {
+        let (download, producer, target) = fixture(false);
+        download.spool.cancel();
+        download.cancel.store(true, Ordering::SeqCst);
+        download.cancel_operation_with(|_| Err(io::Error::other("No thread resources")));
+        assert!(!download.stopped());
+        assert!(target.aborted.load(Ordering::SeqCst));
+        assert_eq!(target.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(download.spool.status(), Status::Cancelled);
+        assert!(producer.finish(&AtomicBool::new(false)).is_err());
+    }
+
+    #[test]
+    fn thread_failure_waits_for_routing_contention_and_applies_the_abort() {
+        let (download, _producer, target) = fixture(false);
+        download.spool.cancel();
+        download.cancel.store(true, Ordering::SeqCst);
+        let pending = download.clone();
+        let (waiting, started) = std::sync::mpsc::channel();
+        let (proceed, allowed) = std::sync::mpsc::channel();
+        let (finished, done) = std::sync::mpsc::channel();
+        let cleanup = std::thread::spawn(move || {
+            pending.cancel_operation_with(|_| {
+                waiting.send(()).unwrap();
+                allowed.recv().unwrap();
+                Err(io::Error::other("No thread resources"))
+            });
+            finished.send(()).unwrap();
+        });
+        started.recv().unwrap();
+        let state = download.state.lock().unwrap();
+        proceed.send(()).unwrap();
+        assert!(done.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(!target.aborted.load(Ordering::SeqCst));
+        drop(state);
+        cleanup.join().unwrap();
+        assert!(target.aborted.load(Ordering::SeqCst));
+        assert!(!download.stopped());
+        assert_eq!(target.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn emergency_writer_failure_keeps_the_complete_spool_and_detaches_the_session() {
+        let (download, producer, target) = fixture(false);
+        download.complete(producer).unwrap();
+        download.abort("writer stopped".into());
+        assert_eq!(download.spool.status(), Status::Complete { rows: 0 });
+        assert!(!target.aborted.load(Ordering::SeqCst));
+        assert_eq!(target.calls.load(Ordering::SeqCst), 0);
     }
 
     #[test]

@@ -43,16 +43,29 @@ impl Jobs {
         cancel: Arc<AtomicBool>,
         on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Writer {
+        let mut registry = self.inner.lock().unwrap();
+        registry
+            .jobs
+            .retain(|job| *job.remaining.lock().unwrap() > 0);
+        // The producer registers its captured cancellation callback first.
+        // A writer with that same job flag is another stage, not another job.
+        if on_cancel.is_none() {
+            for job in &registry.jobs {
+                if Arc::ptr_eq(&job.cancel, &cancel) {
+                    let mut remaining = job.remaining.lock().unwrap();
+                    if *remaining > 0 {
+                        *remaining += 1;
+                        return Writer { state: job.clone() };
+                    }
+                }
+            }
+        }
         let state = Arc::new(State {
             cancel,
             on_cancel,
             remaining: Mutex::new(1),
             changed: Condvar::new(),
         });
-        let mut registry = self.inner.lock().unwrap();
-        registry
-            .jobs
-            .retain(|job| *job.remaining.lock().unwrap() > 0);
         let stopping = registry.stopping;
         registry.jobs.push(state.clone());
         drop(registry);
@@ -152,6 +165,31 @@ mod tests {
         drop(cancellation);
         assert!(jobs.cancel_and_wait(Duration::ZERO));
         assert_eq!(jobs.active_count(), 0);
+    }
+
+    #[test]
+    fn registering_a_writer_reuses_its_producer_job_and_cancellation() {
+        use std::sync::atomic::AtomicUsize;
+        let jobs = Jobs::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let callback_calls = calls.clone();
+        let producer = jobs.register_with_cancel(
+            cancel.clone(),
+            Some(Arc::new(move || {
+                callback_calls.fetch_add(1, Ordering::Relaxed);
+            })),
+        );
+        let writer = jobs.register(cancel.clone());
+        assert_eq!(jobs.active_count(), 1);
+        jobs.cancel();
+        assert!(cancel.load(Ordering::Relaxed));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        drop(producer);
+        assert_eq!(jobs.active_count(), 1);
+        assert!(!jobs.cancel_and_wait(Duration::ZERO));
+        drop(writer);
+        assert!(jobs.cancel_and_wait(Duration::ZERO));
     }
 
     #[test]

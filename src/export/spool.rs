@@ -34,6 +34,7 @@ pub enum Status {
 
 struct Commit {
     offset: u64,
+    rows: u64,
     status: Status,
 }
 
@@ -143,6 +144,7 @@ impl Spool {
             first_record,
             commit: Mutex::new(Commit {
                 offset: first_record,
+                rows: 0,
                 status: Status::Downloading,
             }),
             changed: Condvar::new(),
@@ -170,6 +172,9 @@ impl Spool {
     }
     pub fn bytes(&self) -> u64 {
         self.commit.lock().unwrap().offset
+    }
+    pub fn row_count(&self) -> u64 {
+        self.commit.lock().unwrap().rows
     }
 
     pub fn cancel(&self) {
@@ -288,19 +293,29 @@ impl Producer {
         let _encoded = self.memory.acquire(length)?;
         let mut bytes = vec![0; length];
         postcard::to_slice(&record, &mut bytes).map_err(codec)?;
-        self.write_record(&bytes, None, cancel)?;
         self.rows = self
             .rows
             .checked_add(rows.len() as u64)
             .ok_or_else(|| invalid("Spool row count overflow."))?;
+        self.write_record(&bytes, None, cancel)?;
         Ok(())
     }
 
-    pub fn finish(mut self, cancel: &AtomicBool) -> io::Result<()> {
+    pub fn finish(self, cancel: &AtomicBool) -> io::Result<()> {
+        self.finish_with(cancel, || Ok(()))
+    }
+
+    /// Hand off operation ownership with publication of the terminal record.
+    /// Disk writes finish before this callback runs under the commit lock.
+    pub(crate) fn finish_with(
+        mut self,
+        cancel: &AtomicBool,
+        before_commit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
         let mut bytes = [0; 16];
         let record = Record::End(self.rows);
         let bytes = postcard::to_slice(&record, &mut bytes).map_err(codec)?;
-        let result = self.write_record(bytes, Some(self.rows), cancel);
+        let result = self.write_record_with(bytes, Some(self.rows), cancel, before_commit);
         self.record_failure(&result, cancel);
         result
     }
@@ -321,6 +336,16 @@ impl Producer {
         complete: Option<u64>,
         cancel: &AtomicBool,
     ) -> io::Result<()> {
+        self.write_record_with(bytes, complete, cancel, || Ok(()))
+    }
+
+    fn write_record_with(
+        &mut self,
+        bytes: &[u8],
+        complete: Option<u64>,
+        cancel: &AtomicBool,
+        before_commit: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
         check_cancelled(cancel)?;
         ensure_downloading(&self.spool.commit.lock().unwrap().status)?;
         self.out.write_all(&(bytes.len() as u32).to_le_bytes())?;
@@ -329,10 +354,13 @@ impl Producer {
         let mut commit = self.spool.commit.lock().unwrap();
         check_cancelled(cancel)?;
         ensure_downloading(&commit.status)?;
-        commit.offset = commit
+        let offset = commit
             .offset
             .checked_add(4 + bytes.len() as u64)
             .ok_or_else(|| invalid("Spool offset overflow."))?;
+        before_commit()?;
+        commit.offset = offset;
+        commit.rows = self.rows;
         if let Some(rows) = complete {
             commit.status = Status::Complete { rows };
         }

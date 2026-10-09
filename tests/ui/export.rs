@@ -161,6 +161,12 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_until(
+        cx,
+        "published All rows file",
+        Duration::from_secs(10),
+        |_, _| path.exists(),
+    );
     let text = std::fs::read(&path).unwrap();
     assert_eq!(
         csv::Reader::from_reader(text.as_slice()).records().count(),
