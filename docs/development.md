@@ -163,6 +163,11 @@ Finder shows the app icon, an Applications shortcut, and an arrow between
 them. The background is light because Finder draws the icon labels in black on
 a background picture, also in the dark appearance. The background has a 1x and
 a 2x version, so it stays sharp on Retina displays.
+During packaging, the writable image uses a temporary mount that Finder does
+not show. The script ejects the image before it creates the compressed DMG.
+If macOS reports that the image is busy, the script makes at most 10 eject
+attempts. After three attempts, it uses forced ejection. A persistent error
+fails packaging.
 The publish job creates the release
 tag, and then the GitHub Release with both DMGs as its assets. It also
 keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
