@@ -124,6 +124,8 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   disconnect. Wire tests cancel before SASL, the operation handle, and the
   schema arrive, and while a previous session closes. UI tests check that
   cancelling the save panel submits no SQL and reads no credentials.
+  Export tests wait for the preview update after the file appears. File
+  completion and window updates can arrive at different times.
   Wire tests check that completed queries close without another status request.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
