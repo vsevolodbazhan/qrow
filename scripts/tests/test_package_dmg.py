@@ -1,10 +1,12 @@
 """Check that the installer image gets a light branded window and a drag hint."""
 import importlib.util
+import plistlib
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import call, patch
 
 from PIL import Image
 
@@ -191,6 +193,69 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual(self.records[(".", "icvl")], b"icnv")
 
 
+class AttachmentTests(unittest.TestCase):
+    def test_attach_returns_the_backing_device_not_the_apfs_volume(self):
+        mount = Path("/private/tmp/qrow-dmg-fixture/mount")
+        # hdiutil does not guarantee that the partition map comes first.
+        entities = [
+            {"dev-entry": "/dev/disk2s1", "content-hint": "Apple_APFS"},
+            {"dev-entry": "/dev/disk2", "content-hint": "GUID_partition_scheme"},
+            {"dev-entry": "/dev/disk3s1", "mount-point": str(mount)},
+            {"dev-entry": "/dev/disk3", "content-hint": "EF57347C-0000-11AA-AA11-00306543ECAC"},
+        ]
+        result = subprocess.CompletedProcess(
+            [], 0, plistlib.dumps({"system-entities": entities}).decode(), ""
+        )
+        with patch.object(dmg, "run", return_value=result) as run:
+            self.assertEqual(dmg.attach(Path("installer.dmg"), mount), ("/dev/disk2", mount))
+        command = run.call_args.args[0]
+        self.assertIn("-nobrowse", command)
+        self.assertEqual(command[command.index("-mountpoint") + 1], str(mount))
+
+    def test_attach_rejects_an_image_with_no_mounted_volume(self):
+        result = subprocess.CompletedProcess(
+            [], 0, plistlib.dumps({"system-entities": []}).decode(), ""
+        )
+        with patch.object(dmg, "run", return_value=result), self.assertRaisesRegex(SystemExit, "did not mount"):
+            dmg.attach(Path("installer.dmg"), Path("mount"))
+
+    def test_detach_stops_after_the_first_success(self):
+        with patch.object(dmg.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run, \
+                patch.object(dmg.time, "sleep") as sleep:
+            dmg.detach("/dev/disk2")
+        run.assert_called_once_with(["hdiutil", "detach", "/dev/disk2"], capture_output=True, text=True)
+        sleep.assert_not_called()
+
+    def test_detach_waits_for_busy_forced_ejection(self):
+        busy = subprocess.CompletedProcess([], 16, "", 'hdiutil: could not eject "disk2" - Resource busy')
+        success = subprocess.CompletedProcess([], 0, "", "")
+        with patch.object(dmg.subprocess, "run", side_effect=[busy] * 4 + [success]) as run, \
+                patch.object(dmg.time, "sleep") as sleep:
+            dmg.detach("/dev/disk2")
+        normal = call(["hdiutil", "detach", "/dev/disk2"], capture_output=True, text=True)
+        forced = call(["hdiutil", "detach", "-force", "/dev/disk2"], capture_output=True, text=True)
+        self.assertEqual(run.call_args_list, [normal] * 3 + [forced] * 2)
+        self.assertEqual(sleep.call_count, 4)
+
+    def test_persistent_busy_errors_fail_with_the_last_diagnostic(self):
+        busy = subprocess.CompletedProcess([], 16, "", "Resource busy")
+        with patch.object(dmg.subprocess, "run", return_value=busy) as run, \
+                patch.object(dmg.time, "sleep") as sleep, \
+                self.assertRaisesRegex(SystemExit, r"Cannot detach /dev/disk2: Resource busy"):
+            dmg.detach("/dev/disk2")
+        self.assertEqual(run.call_count, dmg.DETACH_ATTEMPTS)
+        self.assertEqual(sleep.call_count, dmg.DETACH_ATTEMPTS - 1)
+
+    def test_other_errors_fail_without_retrying(self):
+        error = subprocess.CompletedProcess([], 6, "No such file or directory", "")
+        with patch.object(dmg.subprocess, "run", return_value=error) as run, \
+                patch.object(dmg.time, "sleep") as sleep, \
+                self.assertRaisesRegex(SystemExit, "No such file or directory"):
+            dmg.detach("/dev/disk2")
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()
+
+
 @unittest.skipUnless(sys.platform == "darwin", "ditto and hdiutil run on macOS")
 class ImageTests(unittest.TestCase):
     def setUp(self):
@@ -236,6 +301,27 @@ class ImageTests(unittest.TestCase):
             self.assertEqual(found[(dmg.APPLICATIONS, "Iloc")], dmg.APPLICATIONS_POSITION)
         finally:
             dmg.detach(str(mount))
+
+
+    def test_writable_image_uses_a_private_mount_and_releases_the_backing_device(self):
+        image = self.folder / "writable.dmg"
+        dmg.run([
+            "hdiutil", "create", "-volname", "Qrow attach test", "-srcfolder", str(self.app),
+            "-format", "UDRW", str(image),
+        ])
+        mount = self.folder / "private-mount"
+        mount.mkdir()
+        device, mounted = dmg.attach(image, mount)
+        try:
+            self.assertEqual(mounted.resolve(), mount.resolve())
+            info = plistlib.loads(dmg.run(["diskutil", "info", "-plist", device]).stdout.encode())
+            self.assertTrue(info["WholeDisk"])
+            self.assertEqual(info["BusProtocol"], "Disk Image")
+            self.assertTrue((mounted / self.app.name / "Contents" / "Info.plist").is_file())
+        finally:
+            dmg.detach(device)
+        attached = plistlib.loads(dmg.run(["hdiutil", "info", "-plist"]).stdout.encode())
+        self.assertNotIn(str(image.resolve()), [entry["image-path"] for entry in attached["images"]])
 
 
 if __name__ == "__main__":
