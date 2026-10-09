@@ -3,7 +3,7 @@
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
 The preview does not change the SQL sent to the server. Postgres can show the
 first page while SQL runs. The tab stays busy until the server finishes.
-Trino reads the result stream before the first page.
+Trino shows the first page while it reads the result stream.
 See [Postgres limits](connections.md#postgres-limits) and
 [Trino limits](connections.md#trino-limits).
 
@@ -268,10 +268,11 @@ before the session can accept another query. Cleanup has a 2-second deadline.
 If cleanup fails or times out, the transport is interrupted and the session
 is discarded. The deadline starts when protocol cancellation begins.
 It does not limit credential lookup, token refresh, DNS lookup, or a TCP
-connection that has not yet returned a socket. Export jobs stay active until
-that work returns. A stopped drain consumes its cursor. To get all rows after
-that, run the query again. All-row exports from limited Postgres and Trino
-previews are not available yet.
+connection that has not yet returned a socket on every connector. See the
+[connection limits](connections.md) for each connector. Export jobs stay active
+until the producer and writer return. A stopped drain consumes its cursor. To
+get all rows after that, run the query again. All-row exports from a limited
+Trino preview are not available yet.
 
 After download completion, writer cancellation and errors affect only that
 file. They cannot cancel a later query. A writer error stays in the results

@@ -84,27 +84,116 @@ fn profile(peer: SocketAddr, tls: bool) -> Profile {
 }
 
 fn operation(http: Arc<Http>) -> Result<super::Operation> {
-    Ok(super::Operation {
-        cancel: Arc::new(super::Cancel {
-            requests: http.begin_requests(),
-            http,
-            next: std::sync::Mutex::new(super::Cursor::default()),
-            requested: std::sync::atomic::AtomicBool::new(false),
-            active: std::sync::Mutex::new(true),
-            cleanup: std::sync::Mutex::default(),
-            changed: std::sync::Condvar::new(),
-        }),
-        columns: Vec::new(),
-        writer: Some(std::io::BufWriter::new(tempfile::tempfile()?)),
-        reader: None,
-        rows: 0,
-        bytes: 0,
-        remaining: 0,
-        exhausted: false,
-        limited: false,
-        finished: false,
-        cancelled: false,
-    })
+    let cancel = Arc::new(super::Cancel {
+        heartbeat: super::heartbeat::Heartbeat::new(http.clone())?,
+        requests: http.begin_requests(),
+        http,
+        next: std::sync::Mutex::new(super::Cursor::default()),
+        requested: std::sync::atomic::AtomicBool::new(false),
+        active: std::sync::Mutex::new(true),
+        cleanup: std::sync::Mutex::default(),
+        changed: std::sync::Condvar::new(),
+    });
+    super::Operation::new(cancel, false)
+}
+
+#[test]
+fn heartbeat_runs_across_a_primary_body_stall_and_stops_its_own_socket() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let http = Arc::new(Http::new(
+        &profile(listener.local_addr()?, false),
+        Secret::password(""),
+        &Trust::default(),
+    )?);
+    let head_count = Arc::new(AtomicUsize::new(0));
+    let observed = head_count.clone();
+    let (primary_tx, primary_rx) = mpsc::channel();
+    let (head_tx, head_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let peer = thread::spawn(move || -> Result<()> {
+        let mut probe = accept(&listener)?;
+        assert!(headers(&mut probe)?.starts_with("GET "));
+        probe.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}")?;
+        drop(probe);
+        let mut primary = accept(&listener)?;
+        assert!(headers(&mut primary)?.starts_with("GET /primary "));
+        primary.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{")?;
+        primary_tx.send(())?;
+        let mut first = accept(&listener)?;
+        let request = headers(&mut first)?;
+        assert!(request.starts_with("HEAD /v1/statement/executing/synthetic/1 "));
+        assert!(request.to_lowercase().contains("x-trino-schema: tiny\r\n"));
+        observed.fetch_add(1, Ordering::SeqCst);
+        first.write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nX-Trino-Set-Schema: ignored\r\nContent-Length: 0\r\n\r\n")?;
+        drop(first);
+        let mut stalled = accept(&listener)?;
+        let request = headers(&mut stalled)?;
+        assert!(request.starts_with("HEAD "));
+        assert!(request.to_lowercase().contains("x-trino-schema: tiny\r\n"));
+        observed.fetch_add(1, Ordering::SeqCst);
+        head_tx.send(())?;
+        eof(&mut stalled)?;
+        release_rx.recv_timeout(Duration::from_secs(4))?;
+        primary.write_all(b"}")?;
+        drop(primary);
+        let mut successor = accept(&listener)?;
+        assert!(headers(&mut successor)?.starts_with("GET /successor "));
+        successor
+            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\n{}")?;
+        Ok(())
+    });
+    let session = super::protocol::SessionHeaders::new(&crate::model::Profile {
+        database: "tpch".into(),
+        trino_schema: "tiny".into(),
+        ..Profile::default()
+    })?;
+    http.page(Method::GET, &http.statement, None, &session)?;
+    let heartbeat = super::heartbeat::Heartbeat::new(http.clone())?;
+    let owner = http.clone();
+    let captured = session.clone();
+    let primary = thread::spawn(move || {
+        owner.page(
+            Method::GET,
+            &owner.statement.join("/primary").unwrap(),
+            None,
+            &captured,
+        )
+    });
+    primary_rx.recv_timeout(Duration::from_secs(4))?;
+    thread::sleep(Duration::from_millis(1100));
+    assert_eq!(
+        head_count.load(Ordering::SeqCst),
+        0,
+        "no route was published"
+    );
+    heartbeat.update(
+        http.statement.join("/v1/statement/executing/synthetic/1")?,
+        &session,
+    );
+    head_rx.recv_timeout(Duration::from_secs(4))?;
+    assert_eq!(head_count.load(Ordering::SeqCst), 2);
+    assert!(
+        !primary.is_finished(),
+        "HEAD must not wait for the primary body"
+    );
+    let start = Instant::now();
+    heartbeat.stop();
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(!http.transport.is_closed());
+    assert!(
+        !primary.is_finished(),
+        "stopping HEAD must preserve the primary socket"
+    );
+    release_tx.send(())?;
+    primary.join().unwrap()?;
+    http.page(
+        Method::GET,
+        &http.statement.join("/successor")?,
+        None,
+        &session,
+    )?;
+    peer.join().unwrap()?;
+    Ok(())
 }
 
 #[test]
@@ -424,6 +513,7 @@ fn successful_delete_still_bounds_a_stalled_primary_body() -> Result<()> {
     )?);
     let requests = http.begin_requests();
     let cancel = super::Cancel {
+        heartbeat: super::heartbeat::Heartbeat::new(http.clone())?,
         http: http.clone(),
         next: std::sync::Mutex::new(super::Cursor {
             next: Some(http.statement.clone()),

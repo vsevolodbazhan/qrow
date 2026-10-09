@@ -149,13 +149,27 @@ transport can close while the primary transport stays open.
 The tests also check a stalled primary body after a successful cancel response,
 cancellation before GET admission, and old cancellation after session handoff.
 Repeated cancellation sends one `DELETE` and uses the first cleanup result.
+Raw JSON tests check exact decimal text, row and schema limits, and decoding
+on demand. Session tests reject cumulative header limits without partial
+updates. Preview tests check positional reads while the prefix writer stays
+open.
+Wire tests also check the heartbeat timer while a primary response body
+stops. A stalled HEAD request can stop without closing the primary socket.
+Wide-row tests check the fetch byte limit and the order of a pending row.
+SQL error tests check transaction-header updates before the next statement.
 
 Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
 the real window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. It checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
-and result limits. It then runs the same disposable coordinator with OAuth2
+and result limits.
+The fixture sets the client timeout to five seconds. A direct-export test
+commits a spool batch, stops result reads for 12 seconds, then continues the
+download. It checks repeated HEAD requests in the fixture request log and
+session reuse after cancellation. Other direct tests exceed both preview
+limits and check settings, prepared statements, transactions, and empty results.
+The suite then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
 coordinator and provider redirects over verified HTTPS. Tests check that connection selection does not start
 sign-in. A query starts sign-in when necessary. Tests also check browser
