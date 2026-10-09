@@ -113,10 +113,11 @@ impl TranscriptEntry {
     }
 }
 
-/// A fingerprint of the saved content of the entries. The reveal step and
+/// A fingerprint of the saved content of a transcript. The reveal step and
 /// the expanded state of cards are not saved, so they do not count.
-fn fingerprint(entries: &[TranscriptEntry]) -> u64 {
+fn fingerprint(entries: &[TranscriptEntry], older_cursor: Option<&String>) -> u64 {
     let mut hasher = DefaultHasher::new();
+    older_cursor.hash(&mut hasher);
     entries.len().hash(&mut hasher);
     for entry in entries {
         entry.id.hash(&mut hasher);
@@ -179,7 +180,8 @@ impl Qrow {
         let state = match result {
             // A file without entries does not hide the harness history.
             Ok(Some(stored)) if !stored.entries.is_empty() => {
-                if let Some(cursor) = stored.older_cursor
+                let stored_cursor = stored.older_cursor.clone();
+                if let Some(cursor) = stored.older_cursor.clone()
                     && !self.assistant_state.loaded_cursors.contains_key(thread_id)
                 {
                     self.assistant_state
@@ -204,7 +206,7 @@ impl Qrow {
                     .drain(..)
                     .filter(|entry| !known.contains(&entry.id))
                     .collect();
-                let saved = fingerprint(&stored);
+                let saved = fingerprint(&stored, stored_cursor.as_ref());
                 entries.extend(stored);
                 let unsaved = !newer.is_empty();
                 entries.extend(newer);
@@ -318,7 +320,7 @@ impl Qrow {
             let Some(entries) = self.assistant_state.transcripts.get(thread) else {
                 continue;
             };
-            let current = fingerprint(entries);
+            let current = fingerprint(entries, cursors.get(thread));
             if current == *saved {
                 continue;
             }
@@ -384,7 +386,9 @@ mod tests {
             .iter()
             .map(|entry| TranscriptEntry::from_stored(entry.stored()))
             .collect();
-        assert_eq!(fingerprint(&live), fingerprint(&loaded));
+        assert_eq!(fingerprint(&live, None), fingerprint(&loaded, None));
+        let cursor = "cursor-1".to_owned();
+        assert_ne!(fingerprint(&live, None), fingerprint(&live, Some(&cursor)));
         for (live, loaded) in live.iter().zip(&loaded) {
             assert_eq!(live.id, loaded.id);
             assert_eq!(live.label(), loaded.label());

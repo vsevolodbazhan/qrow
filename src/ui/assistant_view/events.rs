@@ -132,14 +132,22 @@ impl Qrow {
             }
             AssistantServiceEvent::History(history) => {
                 let thread = history.conversation.id;
-                if let Some(cursor) = history.older_cursor {
-                    if !self.assistant_state.loaded_cursors.contains_key(&thread) {
-                        self.assistant_state
-                            .older_cursors
-                            .insert(thread.clone(), cursor);
+                // A conversation that shows from its saved transcript keeps
+                // the boundary of the history that it has. A later read of
+                // the latest page does not move it.
+                if !self.local_transcript_shows(&thread) {
+                    match history.older_cursor {
+                        Some(cursor) => {
+                            if !self.assistant_state.loaded_cursors.contains_key(&thread) {
+                                self.assistant_state
+                                    .older_cursors
+                                    .insert(thread.clone(), cursor);
+                            }
+                        }
+                        None => {
+                            self.assistant_state.older_cursors.remove(&thread);
+                        }
                     }
-                } else {
-                    self.assistant_state.older_cursors.remove(&thread);
                 }
                 let selected = self.displayed_thread().as_deref() == Some(thread.as_str());
                 let thread_id = thread.clone();
