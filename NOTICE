@@ -25,6 +25,8 @@ is a personal prototype, not a prepared public distribution.
 The Postgres icon in assets/connection-type-icons/postgres.svg is from Devicon:
 https://github.com/devicons/devicon/blob/d98a72cb9a6d8e543ddbddc32bac231572349e96/icons/postgresql/postgresql-plain.svg
 Its fill color is changed to black. The interface applies the theme icon color.
+For the 16 px icon size, the thin outer outline is removed and the gaps between
+the ears and the head are wider.
 
 The MIT License (MIT)
 
@@ -51,3 +53,5 @@ The Trino icon in assets/connection-type-icons/trino.svg is from Simple Icons:
 https://github.com/simple-icons/simple-icons/blob/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/trino.svg
 Simple Icons distributes the icon under CC0 1.0 Universal.
 https://creativecommons.org/publicdomain/zero/1.0/
+For the 16 px icon size, only the outline, eyes, nose, and mouth of the bunny
+are kept.
