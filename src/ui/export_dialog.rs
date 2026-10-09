@@ -37,6 +37,10 @@ struct ExportDialog {
     cell_width: Entity<InputState>,
     large_copy: bool,
     preview: String,
+    preview_pending: bool,
+    preview_generation: u64,
+    preview_cancel: Arc<AtomicBool>,
+    preview_task: Option<Task<()>>,
     error: Option<String>,
     running: bool,
     cancel: Arc<AtomicBool>,
@@ -48,6 +52,7 @@ struct ExportDialog {
 impl Drop for ExportDialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.preview_cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -267,6 +272,10 @@ impl ExportDialog {
             cell_width,
             large_copy: false,
             preview: String::new(),
+            preview_pending: false,
+            preview_generation: 0,
+            preview_cancel: Arc::new(AtomicBool::new(false)),
+            preview_task: None,
             error: None,
             running: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -274,7 +283,7 @@ impl ExportDialog {
             dialog: None,
             _subscriptions: subscriptions,
         };
-        this.update_preview();
+        this.update_preview(cx);
         this
     }
 
@@ -286,23 +295,47 @@ impl ExportDialog {
         }
     }
 
-    fn update_preview(&mut self) {
+    fn update_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_cancel.store(true, Ordering::Relaxed);
+        self.preview_task = None;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.preview.clear();
+        self.preview_pending = false;
         if let Err(error) = self.settings.validate() {
             self.error = Some(error.to_string());
             self.preview.clear();
             return;
         }
-        let mut table = self.source.table(self.range());
-        table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
-        let mut out = export::LimitedWriter::new(8192);
-        let truncated =
-            export::write(&mut out, &table, &self.settings, &AtomicBool::new(false)).is_err();
-        self.preview = String::from_utf8_lossy(&out.into_bytes())
-            .trim_start_matches('\u{feff}')
-            .to_owned();
-        if truncated {
-            self.preview.push_str("\n…");
-        }
+        self.preview_cancel = Arc::new(AtomicBool::new(false));
+        self.preview_pending = true;
+        let cancel = self.preview_cancel.clone();
+        let source = self.source.clone();
+        let range = self.range();
+        let settings = self.settings.clone();
+        let generation = self.preview_generation;
+        let task = cx.background_executor().spawn(async move {
+            let mut table = source.table(range);
+            table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
+            let mut out = export::LimitedWriter::new(8192);
+            let truncated = export::write(&mut out, &table, &settings, &cancel).is_err();
+            let mut preview = String::from_utf8_lossy(&out.into_bytes())
+                .trim_start_matches('\u{feff}')
+                .to_owned();
+            if truncated {
+                preview.push_str("\n…");
+            }
+            preview
+        });
+        self.preview_task = Some(cx.spawn(async move |weak, cx| {
+            let preview = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.preview_generation == generation {
+                    this.preview = preview;
+                    this.preview_pending = false;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -318,7 +351,7 @@ impl ExportDialog {
             });
         }
         self.error = None;
-        self.update_preview();
+        self.update_preview(cx);
         cx.notify();
     }
 
@@ -582,6 +615,11 @@ impl Render for ExportDialog {
             && self.source.table(self.range()).column_indices.count() == 1
             && options.null.as_str().is_empty();
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
+        let preview = if self.preview_pending {
+            "Preparing preview…".to_owned()
+        } else {
+            self.preview.clone()
+        };
         v_flex().id("export-form").gap_4().w_full()
             .child(v_form().columns(2).children([5,0,1,2,3,4,6].into_iter()
                 .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6)
@@ -623,9 +661,9 @@ impl Render for ExportDialog {
                 .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
                 .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
             .child(v_flex().gap_2().child("Preview")
-                .child(div().id("export-preview").test_support().role(Role::Label).aria_label(self.preview.clone())
+                .child(div().id("export-preview").test_support().role(Role::Label).aria_label(preview.clone())
                     .w_full().max_h_32().overflow_hidden().p_2().rounded(cx.theme().radius)
-                    .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(self.preview.clone())))
+                    .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(preview)))
             .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
                 .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
             .child(h_flex().gap_2().child(div().flex_1())
@@ -666,26 +704,59 @@ pub(super) fn copy_format(
                 if format == Format::Markdown && text.chars().count() > 40_000 {
                     let pending = std::rc::Rc::new(std::cell::RefCell::new(Some((request, text))));
                     window.open_alert_dialog(cx, move |alert, _, _| {
-                        let pending = pending.clone();
-                        alert.title("Large Markdown")
-                            .description("Markdown exceeds 40,000 characters. It can exceed message limits.")
-                            .footer(DialogFooter::new().justify_end()
-                                .child(Button::new("markdown-copy-cancel").label("Cancel").on_click(|_,window,cx| window.close_dialog(cx)))
-                                .child(Button::new("markdown-copy-anyway").label("Copy anyway").primary().on_click(move |_,window,cx| {
-                                    if let Some((request,text)) = pending.borrow_mut().take() {
-                                        if request.is_current(cx) { copy_text(text,cx); }
-                                        else { window.push_notification("The clipboard changed. Choose Copy to try again.",cx); }
-                                    }
-                                    window.close_dialog(cx);
-                                })))
+                        let button_pending = pending.clone();
+                        let enter_pending = pending.clone();
+                        alert
+                            .title("Large Markdown")
+                            .description(
+                                "Markdown exceeds 40,000 characters. It can exceed message limits.",
+                            )
+                            .on_ok(move |_, window, cx| {
+                                confirm_markdown_copy(&enter_pending, window, cx);
+                                true
+                            })
+                            .footer(
+                                DialogFooter::new()
+                                    .justify_end()
+                                    .child(
+                                        Button::new("markdown-copy-cancel")
+                                            .label("Cancel")
+                                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                                    )
+                                    .child(
+                                        Button::new("markdown-copy-anyway")
+                                            .label("Copy anyway")
+                                            .primary()
+                                            .on_click(move |_, window, cx| {
+                                                confirm_markdown_copy(&button_pending, window, cx);
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            )
                     });
-                } else { copy_text(text,cx); }
+                } else {
+                    copy_text(text, cx);
+                }
             }
             Ok(_) => {}
             Err(error) => window.push_notification(error.to_string(), cx),
         });
     })
     .detach();
+}
+
+fn confirm_markdown_copy(
+    pending: &std::cell::RefCell<Option<(CopyRequest, String)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some((request, text)) = pending.borrow_mut().take() {
+        if request.is_current(cx) {
+            copy_text(text, cx);
+        } else {
+            window.push_notification("The clipboard changed. Choose Copy to try again.", cx);
+        }
+    }
 }
 
 #[derive(Default)]
