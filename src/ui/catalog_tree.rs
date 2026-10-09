@@ -173,7 +173,6 @@ impl Node {
 pub(super) enum Tone {
     Muted,
     Loading,
-    Error,
 }
 
 /// The catalog of one connection, or of the connections that share it, as
@@ -399,14 +398,7 @@ impl Builder<'_> {
         refresh: Option<Scope>,
     ) -> TreeItem {
         let text = text.into();
-        // A row can show an error and a state notice, so each tone has an ID.
-        let id = child_id(
-            parent,
-            match tone {
-                Tone::Error => "error",
-                Tone::Muted | Tone::Loading => "notice",
-            },
-        );
+        let id = child_id(parent, "notice");
         self.add(
             id,
             text.clone(),
@@ -576,16 +568,13 @@ impl Builder<'_> {
             (None, _) if loading => {
                 children.push(self.notice(id, profile, "Loading relations…", Tone::Loading, None))
             }
-            (None, Some(error)) => {
-                children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))
-            }
+            // The status dot opens Activity; keep failures out of the child list.
+            (None, Some(_)) => {}
             (None, None) => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             (Some(relations), error) => {
-                if let Some(error) = error {
-                    children.push(self.notice(id, profile, error, Tone::Error, Some(scope)));
-                } else if relations.is_empty() {
+                if relations.is_empty() && error.is_none() {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
@@ -642,9 +631,6 @@ impl Builder<'_> {
             || status.includes(&Scope::Connection);
         let mut children = vec![];
         let error = node.error_for(profile);
-        if let Some(error) = error {
-            children.push(self.notice(id, profile, error, Tone::Error, Some(scope.clone())));
-        }
         match &node.columns {
             None if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
@@ -2508,7 +2494,6 @@ fn notice_row(
     scale: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    let tooltip = (tone == Tone::Error).then(|| error_summary(text));
     h_flex()
         .id(id.clone())
         .w_full()
@@ -2517,10 +2502,7 @@ fn notice_row(
         .pr(px(scale * STATUS_SLOT_WIDTH / 2.))
         .gap(px(scale * ROW_GAP))
         .text_sm()
-        .text_color(match tone {
-            Tone::Error => cx.theme().danger,
-            Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
-        })
+        .text_color(cx.theme().muted_foreground)
         // A notice explains its parent rather than adding a tree level.
         // Its spinner and label use the parent's icon and label lanes.
         .child(
@@ -2558,9 +2540,6 @@ fn notice_row(
                             weak.update(cx, |this, cx| this.refresh_catalog(profile, scope, cx));
                     }),
             )
-        })
-        .when_some(tooltip, |el, tooltip| {
-            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
 }
 

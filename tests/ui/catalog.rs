@@ -350,6 +350,14 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                         })
                     );
                 });
+                app.update(cx, |window, cx| window.hover(status.clone(), cx));
+                cx.executor().advance_clock(Duration::from_millis(800));
+                app.settle(cx);
+                app.update(cx, |window, _| {
+                    let tooltip = label(window, "catalog-tooltip").unwrap();
+                    assert!(tooltip.starts_with(if depth == 1 { "finance\n" } else { "daily\n" }));
+                    assert!(tooltip.lines().count() >= 2, "{tooltip}");
+                });
                 app.click(cx, status.clone());
                 app.wait_for(cx, "activity");
                 let activity = app.copy_activity(cx);
@@ -370,8 +378,13 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                 app.update(cx, |window, _| {
                     assert!(
                         window
-                            .find(format!("{parent}\u{1f}error\u{1f}label"))
-                            .visible()
+                            .try_find(format!("{parent}\u{1f}error\u{1f}label"))
+                            .is_none()
+                    );
+                    assert!(
+                        window
+                            .try_find(format!("{parent}\u{1f}notice\u{1f}label"))
+                            .is_none()
                     );
                 });
             }

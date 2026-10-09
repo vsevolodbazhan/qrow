@@ -32,15 +32,28 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         let directory = tempfile::tempdir().unwrap();
         let mut catalog = Catalog::new(&profile);
         catalog.apply_schemas(vec!["finance".into()], &CatalogSettings::default(), 1);
+        catalog.apply_relations(
+            "finance",
+            None,
+            vec![RelationEntry {
+                name: "daily".into(),
+                kind: RelationKind::Table,
+                comment: None,
+            }],
+            1,
+        );
         if relation {
-            catalog.apply_relations(
+            catalog.apply_columns(
                 "finance",
-                None,
-                vec![RelationEntry {
-                    name: "daily".into(),
-                    kind: RelationKind::Table,
-                    comment: None,
-                }],
+                Some("daily"),
+                std::collections::BTreeMap::from([(
+                    "daily".into(),
+                    vec![CatalogColumn {
+                        name: "cached_id".into(),
+                        data_type: "BIGINT".into(),
+                        comment: None,
+                    }],
+                )]),
                 1,
             );
         }
@@ -63,9 +76,8 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             app.wait_for(cx, format!("{parent}\u{1f}label"));
             app.click(cx, format!("{parent}\u{1f}label"));
         }
-        let refresh = format!("{parent}\u{1f}notice\u{1f}refresh");
-        app.wait_for(cx, refresh.clone());
-        app.click(cx, refresh);
+        app.context_menu(cx, parent.clone());
+        app.choose(cx, "popup-menu", "Refresh");
         let status = format!("{parent}\u{1f}error-icon");
         app.wait_for(cx, status.clone());
         app.update(cx, |window, cx| {
@@ -90,9 +102,53 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             assert!(
                 window
                     .try_find(format!("{parent}\u{1f}error\u{1f}refresh"))
-                    .is_some()
+                    .is_none()
             );
+            assert!(
+                window
+                    .try_find(format!("{parent}\u{1f}notice\u{1f}label"))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .find(format!(
+                        "r\u{1f}{}\u{1f}finance\u{1f}daily\u{1f}label",
+                        profile.id
+                    ))
+                    .visible()
+            );
+            if relation {
+                assert!(
+                    window
+                        .find(format!("{parent}\u{1f}0\u{1f}cached_id\u{1f}label"))
+                        .visible()
+                );
+            }
         });
+        // Failed scopes remain refreshable from the parent's menu.
+        app.context_menu(cx, parent.clone());
+        app.choose(cx, "popup-menu", "Refresh");
+        app.wait_until(
+            cx,
+            "the second refresh attempt",
+            QUERY_TIMEOUT,
+            |window, _| {
+                app.credentials.reads() == 2
+                    && crate::support::label(window, "toggle-activity").as_deref()
+                        == Some("Activity, 1 unseen error")
+            },
+        );
+        let activity = app.activity(cx, profile.id);
+        assert_eq!(
+            activity.matches("Started a schema refresh").count(),
+            2,
+            "{activity}"
+        );
+        assert_eq!(
+            activity.matches("Schema refresh failed").count(),
+            2,
+            "{activity}"
+        );
         app.update(cx, |window, _| window.remove_window());
         cx.run_until_parked();
     }

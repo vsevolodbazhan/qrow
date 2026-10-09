@@ -737,8 +737,9 @@ had before the refresh. The error shows on the row of the refreshed part:
   Select **Refresh** from the connection menu to try again.
 - A schema, a table, or a view: the row shows a red status dot. Point to
   the dot to read the first line of the error. Click it to open Activity for
-  that connection. The dot stays until a refresh succeeds. The first row
-  under the expanded row shows the error with **Refresh**.
+  that connection. The dot stays until a refresh succeeds. The expanded row
+  keeps its cached data and has no error row. Select **Refresh** from the
+  schema, table, or view menu to try again.
 
 [Activity](activity.md) shows the full error. Click the status dot or select
 **Show activity** from the connection menu to open it. The connection row uses
