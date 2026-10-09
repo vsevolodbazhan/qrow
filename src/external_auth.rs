@@ -36,6 +36,16 @@ impl Control {
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.as_ref().is_some_and(|check| check())
     }
+    /// Add an independent cancellation condition while preserving progress.
+    pub fn with_cancel(self, cancelled: Arc<dyn Fn() -> bool + Send + Sync>) -> Self {
+        let previous = self.cancelled;
+        Self {
+            cancelled: Some(Arc::new(move || {
+                cancelled() || previous.as_ref().is_some_and(|check| check())
+            })),
+            progress: self.progress,
+        }
+    }
     fn progress(&self, waiting: bool) {
         if let Some(notify) = &self.progress {
             notify(waiting);

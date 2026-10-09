@@ -1,4 +1,7 @@
-use super::{Page, external};
+use super::{
+    Page, external,
+    transport::{Runtime, Transport},
+};
 use crate::{connector::Secret, model::Profile, tls::Trust};
 use anyhow::{Context, Result};
 use reqwest::{
@@ -7,11 +10,12 @@ use reqwest::{
 };
 use std::{
     collections::BTreeMap,
+    net::SocketAddr,
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use url::Url;
 
@@ -19,7 +23,10 @@ const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Http {
     client: Client,
-    runtime: tokio::runtime::Runtime,
+    runtime: Runtime,
+    pub transport: Arc<Transport>,
+    requests: Mutex<Arc<Transport>>,
+    peer: Mutex<Option<SocketAddr>>,
     pub statement: Url,
     pub timeout: Duration,
     username: String,
@@ -50,7 +57,11 @@ impl Http {
             .map_err(|()| anyhow::anyhow!("Invalid Trino port"))?;
         statement.set_path("/v1/statement");
         let timeout = Duration::from_secs(profile.lifecycle.response_timeout_seconds);
+        let transport = Transport::new();
+        let sockets = transport.clone();
         let mut builder = Client::builder()
+            .tcp_connection_control(move |socket| sockets.register(socket))
+            .http1_max_buf_size(1024 * 1024)
             .timeout(timeout)
             .connect_timeout(timeout)
             .redirect(reqwest::redirect::Policy::none())
@@ -58,11 +69,23 @@ impl Http {
         if profile.tls {
             builder = builder.use_preconfigured_tls((*trust.client_config()?).clone());
         }
+        let secret = match secret {
+            Secret::External(source) => {
+                let sockets = transport.clone();
+                let control = source
+                    .control()
+                    .clone()
+                    .with_cancel(Arc::new(move || sockets.is_closed()));
+                Secret::External(source.with_control(control))
+            }
+            secret => secret,
+        };
         let http = Self {
             client: builder.build()?,
-            runtime: tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()?,
+            runtime: Runtime::new()?,
+            requests: Mutex::new(transport.child()),
+            transport,
+            peer: Mutex::default(),
             statement,
             timeout,
             username: profile.username.clone(),
@@ -85,6 +108,17 @@ impl Http {
         self.allow_authentication.store(false, Ordering::SeqCst);
     }
 
+    pub fn begin_requests(&self) -> Arc<Transport> {
+        let scope = self.transport.child();
+        *self.requests.lock().unwrap() = scope.clone();
+        scope
+    }
+
+    #[cfg(test)]
+    pub fn has_peer(&self) -> bool {
+        self.peer.lock().unwrap().is_some()
+    }
+
     pub fn cursor(&self, text: &str) -> Result<Url> {
         let cursor = Url::parse(text).context("Trino returned an invalid result URL")?;
         anyhow::ensure!(
@@ -104,8 +138,10 @@ impl Http {
         sql: Option<&str>,
         headers: &SessionHeaders,
         authenticate: bool,
+        scope: &Transport,
     ) -> Result<reqwest::Response> {
         self.cursor(url.as_str())?;
+        anyhow::ensure!(!self.transport.is_closed(), crate::export::Cancelled);
         let authenticate = authenticate && self.allow_authentication.load(Ordering::SeqCst);
         let mut request = self
             .client
@@ -120,7 +156,19 @@ impl Http {
                 request = request.basic_auth(&self.username, Some(password.as_str()));
             }
             Secret::Token(_) => {
-                request = request.bearer_auth(self.secret.value()?.as_str());
+                let token = if authenticate {
+                    self.secret.value()?
+                } else {
+                    self.cleanup_token
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|token| zeroize::Zeroizing::new(token.as_str().to_owned()))
+                        .context("No cached Trino authentication token for cleanup")?
+                };
+                *self.cleanup_token.lock().unwrap() =
+                    Some(zeroize::Zeroizing::new(token.as_str().to_owned()));
+                request = request.bearer_auth(token.as_str());
             }
             _ => {}
         }
@@ -157,12 +205,12 @@ impl Http {
             if let Some(token) = &token {
                 current = current.bearer_auth(token.as_str());
             }
-            let response = self
-                .runtime
-                .block_on(async { current.send().await })
-                .map_err(|error| {
+            let response = self.runtime.block_on(scope.run(async {
+                current.send().await.map_err(|error| {
                     anyhow::Error::new(error.without_url()).context("Trino request failed")
-                })?;
+                })
+            }))?;
+            *self.peer.lock().unwrap() = response.remote_addr();
             if response.status() != reqwest::StatusCode::UNAUTHORIZED || !authenticate {
                 return Ok(response);
             }
@@ -176,7 +224,11 @@ impl Http {
             source.reject(token.as_deref().map(String::as_str));
             let challenge = external::challenge(response.headers(), &self.statement)?;
             // A separate pool keeps poll dispatchers on the authentication runtime.
+            let authentication = Transport::new();
+            let sockets = authentication.clone();
             let client = Client::builder()
+                .tcp_connection_control(move |socket| sockets.register(socket))
+                .http1_max_buf_size(1024 * 1024)
                 .redirect(reqwest::redirect::Policy::none())
                 .no_proxy()
                 .use_preconfigured_tls((*self.trust.client_config()?).clone())
@@ -188,7 +240,15 @@ impl Http {
                 token.as_deref().map(String::as_str),
                 timeout,
                 move |cancel| {
-                    external::authenticate(client, coordinator, challenge, browser, cancel, timeout)
+                    external::authenticate(
+                        client,
+                        coordinator,
+                        challenge,
+                        browser,
+                        cancel,
+                        timeout,
+                        authentication,
+                    )
                 },
             )?);
         }
@@ -202,7 +262,9 @@ impl Http {
         sql: Option<&str>,
         headers: &SessionHeaders,
     ) -> Result<(Page, HeaderMap)> {
-        let mut response = self.request(method, url, sql, headers, true)?;
+        let scope = self.requests.lock().unwrap().clone();
+        let _activity = scope.activity()?;
+        let mut response = self.request(method, url, sql, headers, true, &scope)?;
         anyhow::ensure!(
             response.status().as_u16() == 200,
             "Trino returned HTTP {}",
@@ -215,7 +277,7 @@ impl Http {
                 "Trino response exceeds 16 MiB"
             );
         }
-        let bytes = self.runtime.block_on(async {
+        let bytes = self.runtime.block_on(scope.run(async {
             let mut bytes = Vec::new();
             while let Some(chunk) = response
                 .chunk()
@@ -229,16 +291,22 @@ impl Http {
                 bytes.extend_from_slice(&chunk);
             }
             Ok::<_, anyhow::Error>(bytes)
-        })?;
+        }))?;
         Ok((
             serde_json::from_slice(&bytes).context("Invalid Trino result response")?,
             headers,
         ))
     }
 
-    pub fn delete(&self, url: &Url) -> Result<()> {
-        let response =
-            self.request(Method::DELETE, url, None, &SessionHeaders::default(), false)?;
+    /// Cleanup uses the established coordinator peer and cached credentials.
+    pub fn delete(&self, url: &Url, deadline: Instant) -> Result<()> {
+        let response = self.auxiliary(
+            Method::DELETE,
+            url,
+            &SessionHeaders::default(),
+            deadline,
+            &self.transport.child(),
+        )?;
         anyhow::ensure!(
             response.status().is_success()
                 || response.status().as_u16() == 404
@@ -247,6 +315,63 @@ impl Http {
             response.status().as_u16()
         );
         Ok(())
+    }
+
+    pub fn auxiliary(
+        &self,
+        method: Method,
+        url: &Url,
+        headers: &SessionHeaders,
+        deadline: Instant,
+        transport: &Arc<Transport>,
+    ) -> Result<reqwest::Response> {
+        self.cursor(url.as_str())?;
+        let peer = self
+            .peer
+            .lock()
+            .unwrap()
+            .context("No established Trino coordinator peer for cleanup")?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        anyhow::ensure!(!remaining.is_zero(), "Trino cleanup deadline expired");
+        let sockets = transport.clone();
+        let mut builder = Client::builder()
+            .tcp_connection_control(move |socket| sockets.register(socket))
+            .http1_max_buf_size(1024 * 1024)
+            .timeout(remaining)
+            .connect_timeout(remaining)
+            .resolve_to_addrs(self.statement.host_str().context("No Trino host")?, &[peer])
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy();
+        if self.statement.scheme() == "https" {
+            builder = builder.use_preconfigured_tls((*self.trust.client_config()?).clone());
+        }
+        let client = builder.build()?;
+        let runtime = Runtime::new()?;
+        let mut request = client
+            .request(method, url.clone())
+            .headers(headers.request()?)
+            .header("X-Trino-Source", "Qrow")
+            .header("X-Trino-User", &self.username)
+            .header("X-Trino-Client-Capabilities", "PARAMETRIC_DATETIME");
+        if let Secret::Password(password) = &self.secret {
+            if !password.is_empty() {
+                request = request.basic_auth(&self.username, Some(password.as_str()));
+            }
+        } else if let Some(token) = self.cleanup_token.lock().unwrap().as_ref() {
+            request = request.bearer_auth(token.as_str());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        anyhow::ensure!(!remaining.is_zero(), "Trino cleanup deadline expired");
+        let request = request.timeout(remaining);
+        runtime.block_on(transport.run(async {
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
+                request.send().await.map_err(|error| {
+                    anyhow::Error::new(error.without_url()).context("Trino cleanup request failed")
+                })
+            })
+            .await
+            .context("Trino cleanup deadline expired")?
+        }))
     }
 }
 
@@ -364,6 +489,12 @@ impl SessionHeaders {
         }
         self.request()?;
         Ok(())
+    }
+}
+
+impl Drop for Http {
+    fn drop(&mut self) {
+        self.transport.close_all();
     }
 }
 

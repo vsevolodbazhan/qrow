@@ -100,11 +100,6 @@ fn cancellation_deletes_the_current_query_and_old_handles_do_not_target_new_work
                 body: String::new(),
                 headers: String::new(),
             },
-            Reply {
-                status: 204,
-                body: String::new(),
-                headers: String::new(),
-            },
             done(),
         ],
     );
@@ -117,8 +112,14 @@ fn cancellation_deletes_the_current_query_and_old_handles_do_not_target_new_work
     assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some("1"));
     let requests = server.requests();
     assert!(requests[3].starts_with("DELETE /query/two "));
-    assert!(requests[4].starts_with("DELETE /query/two "));
-    assert!(requests[5].starts_with("POST /v1/statement "));
+    assert!(requests[4].starts_with("POST /v1/statement "));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.starts_with("DELETE "))
+            .count(),
+        1
+    );
     session.close()
 }
 

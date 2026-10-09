@@ -82,6 +82,8 @@ path = "tests/native/tooltip_layout.rs"
 required-features = ["ui"]
 
 [patch.crates-io]
+# Pinned TCP ownership hook before TLS, plus a bounded HTTP/1 read buffer.
+reqwest = { path = "vendor/reqwest" }
 # Bounded metadata and ordered buffer reset for streaming exports.
 # See vendor/tokio-postgres/QROW-PATCH.md.
 tokio-postgres = { path = "vendor/tokio-postgres" }

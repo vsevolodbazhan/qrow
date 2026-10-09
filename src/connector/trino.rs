@@ -1,8 +1,14 @@
 //! Trino's HTTP statement protocol and per-tab session state.
 mod external;
 mod protocol;
+mod transport;
+#[cfg(test)]
+mod transport_tests;
 
-use super::{Cancellation, Connector, MetadataRequest, QueryError, QueryState, Secret, Session};
+use super::{
+    Cancellation, ConnectionControl, Connector, MetadataRequest, QueryError, QueryState, Secret,
+    Session,
+};
 use crate::{
     model::{Batch, Column, DatabaseType, MAX_RESULT_BYTES, MAX_RESULT_ROWS, Profile, Row},
     tls::Trust,
@@ -10,11 +16,12 @@ use crate::{
 use anyhow::{Context, Result};
 use protocol::{Http, SessionHeaders};
 use serde::Deserialize;
+use std::time::{Duration, Instant};
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, Write},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -54,24 +61,106 @@ struct TrinoError {
     error_name: String,
 }
 
+#[derive(Default)]
+struct Cursor {
+    next: Option<Url>,
+    terminal: bool,
+}
+
 struct Cancel {
     http: Arc<Http>,
-    next: Mutex<Option<Url>>,
+    next: Mutex<Cursor>,
     requested: AtomicBool,
+    active: Mutex<bool>,
+    requests: Arc<transport::Transport>,
+    cleanup: Mutex<Cleanup>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Cleanup {
+    deadline: Option<Instant>,
+    done: Option<std::result::Result<(), String>>,
 }
 
 impl Cancellation for Cancel {
     fn cancel(&self) -> Result<()> {
+        self.cancel_with_deadline(Instant::now() + Duration::from_secs(2))
+    }
+
+    fn cancel_with_deadline(&self, deadline: Instant) -> Result<()> {
+        if !*self.active.lock().unwrap() {
+            return Ok(());
+        }
         self.requested.store(true, Ordering::SeqCst);
-        self.delete()
+        self.requests.seal();
+        let mut cleanup = self.cleanup.lock().unwrap();
+        if let Some(original) = cleanup.deadline {
+            while cleanup.done.is_none() {
+                let remaining = original
+                    .min(deadline)
+                    .saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    drop(cleanup);
+                    self.abort_transport();
+                    anyhow::bail!("Trino cleanup deadline expired");
+                }
+                cleanup = self.changed.wait_timeout(cleanup, remaining).unwrap().0;
+            }
+            return cleanup
+                .done
+                .as_ref()
+                .unwrap()
+                .clone()
+                .map_err(anyhow::Error::msg);
+        }
+        cleanup.deadline = Some(deadline);
+        drop(cleanup);
+        let result = self
+            .delete_before(deadline)
+            .and_then(|()| self.requests.wait_idle(deadline))
+            .and_then(|()| {
+                anyhow::ensure!(
+                    !self.http.transport.is_closed(),
+                    "Trino cleanup closed the session; reconnect"
+                );
+                Ok(())
+            });
+        if result.is_err() {
+            self.abort_transport();
+        }
+        self.cleanup.lock().unwrap().done = Some(
+            result
+                .as_ref()
+                .copied()
+                .map_err(|error| format!("{error:#}")),
+        );
+        self.changed.notify_all();
+        result
+    }
+
+    fn abort_transport(&self) {
+        let active = self.active.lock().unwrap();
+        if *active {
+            self.http.transport.close_all();
+        }
     }
 }
 
 impl Cancel {
-    fn delete(&self) -> Result<()> {
-        let next = self.next.lock().unwrap().clone();
+    fn delete_before(&self, deadline: Instant) -> Result<()> {
+        if !*self.active.lock().unwrap() {
+            return Ok(());
+        }
+        let (next, terminal) = {
+            let cursor = self.next.lock().unwrap();
+            (cursor.next.clone(), cursor.terminal)
+        };
         if let Some(next) = next {
-            self.http.delete(&next)?;
+            self.http.delete(&next, deadline)?;
+        } else if !terminal {
+            self.abort_transport();
+            anyhow::bail!("Trino submission ended before a cancellation URL arrived; reconnect");
         }
         Ok(())
     }
@@ -92,6 +181,26 @@ struct Operation {
 }
 
 impl Operation {
+    fn read_page(
+        &self,
+        next: &Url,
+        headers: &SessionHeaders,
+    ) -> Result<Option<(Page, reqwest::header::HeaderMap)>> {
+        match self
+            .cancel
+            .http
+            .page(reqwest::Method::GET, next, None, headers)
+        {
+            Err(error)
+                if error.is::<crate::export::Cancelled>()
+                    && self.cancel.requested.load(Ordering::SeqCst) =>
+            {
+                Ok(None)
+            }
+            result => result.map(Some),
+        }
+    }
+
     fn page(&mut self, page: Page) -> Result<()> {
         // Publish the new cursor before inspecting the result, so every failure
         // and a cancellation racing the request can still close the server query.
@@ -100,9 +209,9 @@ impl Operation {
             .as_deref()
             .map(|next| self.cancel.http.cursor(next))
             .transpose()?;
-        *self.cancel.next.lock().unwrap() = next;
+        let terminal = next.is_none();
+        *self.cancel.next.lock().unwrap() = Cursor { next, terminal };
         if self.cancel.requested.load(Ordering::SeqCst) {
-            self.cancel.delete()?;
             self.cancelled = true;
             return Ok(());
         }
@@ -127,6 +236,10 @@ impl Operation {
             .as_mut()
             .context("Trino results are already complete")?;
         for values in page.data.unwrap_or_default() {
+            if self.cancel.requested.load(Ordering::SeqCst) {
+                self.cancelled = true;
+                return Ok(());
+            }
             anyhow::ensure!(
                 values.len() == self.columns.len(),
                 "Trino returned a row with the wrong number of columns"
@@ -161,7 +274,7 @@ impl Operation {
                 self.bytes += bytes;
             }
         }
-        if self.cancel.next.lock().unwrap().is_none() {
+        if self.cancel.next.lock().unwrap().next.is_none() {
             let mut file = self
                 .writer
                 .take()
@@ -171,6 +284,7 @@ impl Operation {
             file.rewind()?;
             self.reader = Some(BufReader::new(file));
             self.finished = true;
+            *self.cancel.active.lock().unwrap() = false;
             self.remaining = self.rows;
         }
         Ok(())
@@ -186,12 +300,13 @@ impl Operation {
                 .next
                 .lock()
                 .unwrap()
+                .next
                 .clone()
                 .context("Trino query has no result cursor")?;
-            let (page, response) =
-                self.cancel
-                    .http
-                    .page(reqwest::Method::GET, &next, None, headers)?;
+            let Some((page, response)) = self.read_page(&next, headers)? else {
+                self.cancelled = true;
+                return Ok(QueryState::Cancelled);
+            };
             headers.apply(&response)?;
             self.page(page)?;
         }
@@ -244,8 +359,19 @@ struct TrinoSession {
 
 impl Connector for TrinoConnector {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
+        self.connect_controlled(profile, secret, &ConnectionControl::default())
+    }
+
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        control.check()?;
         profile.validate()?;
         let http = Arc::new(Http::new(profile, secret, &self.trust)?);
+        control.register(http.transport.clone())?;
         let mut session = TrinoSession {
             http,
             headers: SessionHeaders::new(profile)?,
@@ -264,6 +390,7 @@ impl Connector for TrinoConnector {
             ),
         )?;
         session.close_operation()?;
+        control.check()?;
         Ok(Box::new(session))
     }
 }
@@ -279,8 +406,12 @@ impl TrinoSession {
         let sql = sql.strip_suffix(';').unwrap_or(sql);
         let cancel = Arc::new(Cancel {
             http: self.http.clone(),
-            next: Mutex::new(None),
+            next: Mutex::new(Cursor::default()),
             requested: AtomicBool::new(false),
+            active: Mutex::new(true),
+            requests: self.http.begin_requests(),
+            cleanup: Mutex::default(),
+            changed: Condvar::new(),
         });
         let mut operation = Operation {
             cancel,
@@ -295,17 +426,25 @@ impl TrinoSession {
             finished: false,
             cancelled: false,
         };
-        let (page, response) = self.http.page(
+        let (page, response) = match self.http.page(
             reqwest::Method::POST,
             &self.http.statement,
             Some(sql),
             &self.headers,
-        )?;
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                operation.cancel.abort_transport();
+                *operation.cancel.active.lock().unwrap() = false;
+                return Err(error);
+            }
+        };
         let result = operation
             .page(page)
             .and_then(|()| self.headers.apply(&response));
         if result.is_err() {
-            let _ = operation.cancel.delete();
+            let _ = operation.cancel.cancel();
+            *operation.cancel.active.lock().unwrap() = false;
         }
         result?;
         Ok(operation)
@@ -313,7 +452,9 @@ impl TrinoSession {
 
     fn stop(operation: &mut Option<Operation>) -> Result<()> {
         if let Some(operation) = operation.take() {
-            operation.cancel.cancel()?;
+            let result = operation.cancel.cancel();
+            *operation.cancel.active.lock().unwrap() = false;
+            result?;
         }
         Ok(())
     }
@@ -321,6 +462,11 @@ impl TrinoSession {
 
 impl Session for TrinoSession {
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        anyhow::ensure!(
+            !self.http.transport.is_closed(),
+            "Trino session is closed; reconnect"
+        );
+        self.close_keep_alive()?;
         self.close_operation()?;
         let operation = self.start(sql)?;
         let cancel = operation.cancel.clone();
@@ -351,6 +497,9 @@ impl Session for TrinoSession {
             .context("No Trino operation")?
             .fetch(count)
     }
+    fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
+        Some(self.http.transport.clone())
+    }
     fn result_limited(&self) -> bool {
         self.operation
             .as_ref()
@@ -360,6 +509,12 @@ impl Session for TrinoSession {
         Self::stop(&mut self.operation)
     }
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        anyhow::ensure!(
+            self.operation
+                .as_ref()
+                .is_none_or(|operation| operation.finished),
+            "Trino cannot run keepalive during a user statement"
+        );
         self.close_keep_alive()?;
         let operation = self.start(sql)?;
         let cancel = operation.cancel.clone();
@@ -370,15 +525,22 @@ impl Session for TrinoSession {
         Self::stop(&mut self.keep_alive)
     }
     fn close(&mut self) -> Result<()> {
-        self.http.disable_authentication();
-        self.close_keep_alive()?;
-        self.close_operation()?;
-        if self.headers.in_transaction() {
-            self.execute_keep_alive("ROLLBACK")?;
-            super::wait_for_completion(self, Some(std::time::Instant::now() + self.http.timeout))?;
+        let result = (|| -> Result<()> {
+            self.http.disable_authentication();
             self.close_keep_alive()?;
-        }
-        Ok(())
+            self.close_operation()?;
+            if self.headers.in_transaction() {
+                self.execute_keep_alive("ROLLBACK")?;
+                super::wait_for_completion(
+                    self,
+                    Some(std::time::Instant::now() + self.http.timeout),
+                )?;
+                self.close_keep_alive()?;
+            }
+            Ok(())
+        })();
+        self.http.transport.close_all();
+        result
     }
 }
 
@@ -433,9 +595,13 @@ mod tests {
         )?);
         let mut operation = Operation {
             cancel: Arc::new(Cancel {
+                requests: http.begin_requests(),
                 http,
-                next: Mutex::new(None),
+                next: Mutex::new(Cursor::default()),
                 requested: AtomicBool::new(false),
+                active: Mutex::new(true),
+                cleanup: Mutex::default(),
+                changed: Condvar::new(),
             }),
             columns: Vec::new(),
             writer: Some(BufWriter::new(tempfile::tempfile()?)),
