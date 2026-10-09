@@ -52,6 +52,9 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
         app.click(cx, "export-results");
         app.select(cx, "export-format", format);
         let text = copy_query(cx, app);
+        if format == "JSON Lines" {
+            assert_eq!(text.lines().count(), 1, "{text}");
+        }
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         let row = if format == "JSON array" {
             &json[0]
