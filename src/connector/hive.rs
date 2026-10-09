@@ -7,7 +7,11 @@ use crate::{
     tls::Trust,
 };
 use anyhow::{Context, Result, ensure};
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use zeroize::Zeroizing;
 
 /// Opens HiveServer2 sessions. `trust` verifies the servers of TLS connections.
 #[derive(Clone, Debug, Default)]
@@ -103,12 +107,17 @@ struct Credentials {
     profile: Profile,
     secret: Secret,
     trust: Trust,
+    authenticated_secret: Mutex<Option<Arc<Zeroizing<String>>>>,
 }
 
 impl Credentials {
     /// Authenticates a new transport. A sign-in supplies a token that is
     /// valid now, for the identity that opened the session.
     fn connect(&self) -> Result<sasl::Client> {
+        self.connect_controlled().map(|(client, _)| client)
+    }
+
+    fn connect_controlled(&self) -> Result<(sasl::Client, Arc<sasl::Abort>)> {
         let profile = &self.profile;
         let token = matches!(profile.authentication, Authentication::Oidc { .. });
         ensure!(
@@ -122,7 +131,9 @@ impl Credentials {
             tls: profile.tls.then_some(&self.trust),
             read_timeout: profile.lifecycle.response_timeout(),
         };
-        sasl::connect(&endpoint, &profile.username, &secret).map_err(|error| {
+        sasl::connect_controlled(&endpoint, &profile.username, &secret).inspect(|_| {
+            *self.authenticated_secret.lock().unwrap() = Some(Arc::new(secret.clone()));
+        }).map_err(|error| {
             if error.downcast_ref::<sasl::Rejected>().is_none() {
                 return error;
             }
@@ -142,9 +153,56 @@ impl Credentials {
 struct Cancel {
     credentials: Arc<Credentials>,
     handle: TOperationHandle,
+    abort: Arc<sasl::Abort>,
+    secret: Arc<Zeroizing<String>>,
+    transport: Mutex<CancelTransport>,
+}
+
+#[derive(Default)]
+struct CancelTransport {
+    aborted: bool,
+    socket: Option<Arc<sasl::Abort>>,
 }
 
 impl Cancellation for Cancel {
+    fn abort_transport(&self) {
+        self.abort.shutdown();
+        let mut transport = self.transport.lock().unwrap();
+        transport.aborted = true;
+        if let Some(socket) = &transport.socket {
+            socket.shutdown();
+        }
+    }
+    fn cancel_with_deadline(&self, deadline: Instant) -> Result<()> {
+        let _memory = crate::export::budget::GLOBAL.acquire(crate::export::budget::MIB)?;
+        let profile = &self.credentials.profile;
+        let endpoint = sasl::Endpoint {
+            host: &profile.host,
+            port: profile.port,
+            tls: profile.tls.then_some(&self.credentials.trust),
+            read_timeout: deadline.saturating_duration_since(Instant::now()),
+        };
+        // Use the session's authenticated credential within the cleanup deadline.
+        // An expired token can fail cancellation; the worker then discards the session.
+        let mut client = sasl::connect_deadline(
+            &endpoint,
+            &profile.username,
+            &self.secret,
+            self.abort.peer()?,
+            deadline,
+            |socket| {
+                let mut transport = self.transport.lock().unwrap();
+                ensure!(!transport.aborted, "Cancellation cleanup deadline passed");
+                transport.socket = Some(socket);
+                Ok(())
+            },
+        )?;
+        check(
+            client
+                .cancel_operation(TCancelOperationReq::new(self.handle.clone()))?
+                .status,
+        )
+    }
     fn cancel(&self) -> Result<()> {
         // A separate authenticated transport keeps CancelOperation independent of blocked fetching/polling.
         let mut client = self.credentials.connect()?;
@@ -163,6 +221,7 @@ pub struct HiveSession {
     operation: Option<TOperationHandle>,
     preview_operation: Option<TOperationHandle>,
     column_count: usize,
+    abort: Arc<sasl::Abort>,
 }
 
 impl Connector for HiveConnector {
@@ -172,9 +231,10 @@ impl Connector for HiveConnector {
             profile: profile.clone(),
             secret,
             trust: self.trust.clone(),
+            authenticated_secret: Mutex::new(None),
         });
         let timeout = profile.lifecycle.response_timeout();
-        let mut client = credentials.connect()?;
+        let (mut client, abort) = credentials.connect_controlled()?;
         let opened = (|| -> Result<_> {
             let opened = client.open_session(TOpenSessionReq::new(
                 TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
@@ -196,6 +256,7 @@ impl Connector for HiveConnector {
             operation: None,
             preview_operation: None,
             column_count: 0,
+            abort,
         };
         let setup = (|| -> Result<()> {
             ensure!(
@@ -512,6 +573,16 @@ impl HiveSession {
         Ok(Arc::new(Cancel {
             credentials: self.credentials.clone(),
             handle: operation,
+            abort: self.abort.clone(),
+            secret: self
+                .credentials
+                .authenticated_secret
+                .lock()
+                .unwrap()
+                .as_ref()
+                .context("No authenticated session credential")?
+                .clone(),
+            transport: Mutex::new(CancelTransport::default()),
         }))
     }
 }

@@ -23,6 +23,10 @@ struct Batch {
 }
 
 impl Rows {
+    pub(super) fn batches(&self) -> impl Iterator<Item = &[Row]> {
+        self.batches.iter().map(|chunk| chunk.batch.rows.as_slice())
+    }
+
     pub fn context(&self) -> &super::Context {
         &self.context
     }

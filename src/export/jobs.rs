@@ -22,7 +22,8 @@ struct Registry {
 
 struct State {
     cancel: Arc<AtomicBool>,
-    done: Mutex<bool>,
+    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    remaining: Mutex<usize>,
     changed: Condvar,
 }
 
@@ -34,34 +35,52 @@ pub struct Writer {
 
 impl Jobs {
     pub fn register(&self, cancel: Arc<AtomicBool>) -> Writer {
+        self.register_with_cancel(cancel, None)
+    }
+
+    pub fn register_with_cancel(
+        &self,
+        cancel: Arc<AtomicBool>,
+        on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Writer {
         let state = Arc::new(State {
             cancel,
-            done: Mutex::new(false),
+            on_cancel,
+            remaining: Mutex::new(1),
             changed: Condvar::new(),
         });
         let mut registry = self.inner.lock().unwrap();
-        registry.jobs.retain(|job| !*job.done.lock().unwrap());
-        if registry.stopping {
-            state.cancel.store(true, Ordering::Relaxed);
-        }
+        registry
+            .jobs
+            .retain(|job| *job.remaining.lock().unwrap() > 0);
+        let stopping = registry.stopping;
         registry.jobs.push(state.clone());
+        drop(registry);
+        if stopping {
+            state.cancel.store(true, Ordering::Relaxed);
+            if let Some(callback) = &state.on_cancel {
+                callback();
+            }
+        }
         Writer { state }
     }
 
     pub fn active_count(&self) -> usize {
-        self.inner
-            .lock()
-            .unwrap()
+        let mut registry = self.inner.lock().unwrap();
+        registry
             .jobs
-            .iter()
-            .filter(|job| !*job.done.lock().unwrap())
-            .count()
+            .retain(|job| *job.remaining.lock().unwrap() > 0);
+        registry.jobs.len()
     }
 
     /// Cancel the current writers without preventing later work if quit fails.
     pub fn cancel(&self) {
-        for job in &self.inner.lock().unwrap().jobs {
+        let jobs = self.inner.lock().unwrap().jobs.clone();
+        for job in &jobs {
             job.cancel.store(true, Ordering::Relaxed);
+            if let Some(callback) = &job.on_cancel {
+                callback();
+            }
         }
     }
 
@@ -76,16 +95,24 @@ impl Jobs {
             }
             registry.jobs.clone()
         };
+        for job in &jobs {
+            if let Some(callback) = &job.on_cancel {
+                callback();
+            }
+        }
         let deadline = Instant::now() + timeout;
         for job in jobs {
-            let mut done = job.done.lock().unwrap();
-            while !*done {
+            let mut remaining_tasks = job.remaining.lock().unwrap();
+            while *remaining_tasks > 0 {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
                     return false;
                 }
-                let (next, _) = job.changed.wait_timeout(done, remaining).unwrap();
-                done = next;
+                let (next, _) = job
+                    .changed
+                    .wait_timeout(remaining_tasks, remaining)
+                    .unwrap();
+                remaining_tasks = next;
             }
         }
         true
@@ -94,8 +121,18 @@ impl Jobs {
 
 impl Drop for Writer {
     fn drop(&mut self) {
-        *self.state.done.lock().unwrap() = true;
+        *self.state.remaining.lock().unwrap() -= 1;
         self.state.changed.notify_all();
+    }
+}
+
+impl Writer {
+    /// Register another stage of this job before the current stage ends.
+    pub(crate) fn fork(&self) -> Self {
+        *self.state.remaining.lock().unwrap() += 1;
+        Self {
+            state: self.state.clone(),
+        }
     }
 }
 
@@ -103,6 +140,19 @@ impl Drop for Writer {
 mod tests {
     use super::*;
     use std::{io::Write, sync::mpsc};
+
+    #[test]
+    fn shutdown_waits_for_all_stages_of_one_job() {
+        let jobs = Jobs::default();
+        let producer = jobs.register(Arc::new(AtomicBool::new(false)));
+        let cancellation = producer.fork();
+        assert_eq!(jobs.active_count(), 1);
+        drop(producer);
+        assert!(!jobs.cancel_and_wait(Duration::ZERO));
+        drop(cancellation);
+        assert!(jobs.cancel_and_wait(Duration::ZERO));
+        assert_eq!(jobs.active_count(), 0);
+    }
 
     #[test]
     fn shutdown_waits_for_cancelled_output_cleanup_without_a_ui_callback() {
