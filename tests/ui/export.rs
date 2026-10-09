@@ -145,6 +145,31 @@ fn export_save_uses_the_native_prompt_and_remembers_the_directory(cx: &mut TestA
 }
 
 #[gpui_kit::test]
+fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    let before = app.logs(cx).matches("Submitted query:").count();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("all.csv");
+    open(&app, cx);
+    app.select(cx, "export-rows", "All rows");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+    app.click(cx, "export-copy");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserved")
+    );
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_gone(cx, "export-save");
+    let text = std::fs::read(&path).unwrap();
+    assert_eq!(
+        csv::Reader::from_reader(text.as_slice()).records().count(),
+        2250
+    );
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), before);
+}
+
+#[gpui_kit::test]
 fn cancelled_save_prompt_keeps_options_and_escape_restores_table_focus(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);

@@ -206,6 +206,10 @@ impl Spool {
 }
 
 impl Producer {
+    pub(crate) fn reserve_fetch(&self) -> io::Result<Allocation> {
+        self.memory.acquire(64 * budget::MIB)
+    }
+
     pub fn append(&mut self, rows: &[Row], cancel: &AtomicBool) -> io::Result<()> {
         let result = self.append_rows(rows, cancel);
         self.record_failure(&result, cancel);

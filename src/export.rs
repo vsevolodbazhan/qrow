@@ -1,7 +1,7 @@
 //! Export of result rows to text formats and files. The core library owns the
 //! formats and the file handling, so they work without the UI.
 
-mod budget;
+pub(crate) mod budget;
 mod context;
 pub mod csv;
 mod decimal;
@@ -225,6 +225,10 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    pub(crate) fn batches(&self) -> impl Iterator<Item = &[crate::model::Row]> {
+        self.rows.batches()
+    }
+
     pub fn new(columns: &[Column], rows: &Rows) -> io::Result<Self> {
         let metadata = columns
             .len()

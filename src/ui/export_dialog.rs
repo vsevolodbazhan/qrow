@@ -22,12 +22,33 @@ use std::{
 type RangeSelection = (Range<usize>, RangeInclusive<usize>);
 type Choice = Entity<SelectState<SearchableVec<String>>>;
 
+#[derive(Clone)]
+struct ExportResult {
+    tab: Uuid,
+    execution: Option<ExecutionId>,
+    cursor: crate::worker::Cursor,
+    replay: Option<Arc<export::spool::Spool>>,
+}
+
+#[derive(Clone, Copy)]
+enum Scope {
+    Downloaded,
+    Selection,
+    All,
+    Replay,
+}
+
 impl Global for export::Jobs {}
 
 struct ExportDialog {
     source: Arc<Snapshot>,
     selection: Option<RangeSelection>,
     selected: bool,
+    scope: Scope,
+    scopes: Vec<Scope>,
+    result: ExportResult,
+    retained: Option<Arc<export::spool::Spool>>,
+    download: Option<Arc<crate::worker::Download>>,
     settings: export::Settings,
     filename: String,
     incomplete: bool,
@@ -53,6 +74,7 @@ impl Drop for ExportDialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
         self.preview_cancel.store(true, Ordering::Relaxed);
+        self.cancel_download();
     }
 }
 
@@ -78,11 +100,17 @@ impl Qrow {
         });
         let settings = self.settings.export.clone();
         let filename = tab.saved.title.clone();
-        let incomplete = tab.more || tab.status != "Complete";
+        let incomplete = !tab.preview_complete;
+        let result = ExportResult {
+            tab: tab.saved.id,
+            execution: tab.current_execution,
+            cursor: tab.cursor,
+            replay: tab.replay.clone(),
+        };
         let owner = cx.weak_entity();
         let view = cx.new(|cx| {
             ExportDialog::new(
-                source, selection, settings, filename, incomplete, owner, window, cx,
+                source, selection, settings, filename, incomplete, result, owner, window, cx,
             )
         });
         ExportDialog::open(&view, window, cx);
@@ -104,8 +132,10 @@ impl ExportDialog {
         let cancel = view.read(cx).cancel.clone();
         let dialog_view = view.clone();
         let view = view.clone();
+        let close_view = view.downgrade();
         window.open_dialog(cx, move |dialog, window, _| {
             let cancel = cancel.clone();
+            let close_view = close_view.clone();
             let submit = view.downgrade();
             dialog
                 .title("Export Results")
@@ -116,8 +146,9 @@ impl ExportDialog {
                     let _ = submit.update(cx, |this, cx| this.start(true, window, cx));
                     false
                 })
-                .on_close(move |_, _, _| {
+                .on_close(move |_, _, cx| {
                     cancel.store(true, Ordering::Relaxed);
+                    let _ = close_view.update(cx, |this, _| this.cancel_download());
                 })
         });
         dialog_view.update(cx, |view, cx| {
@@ -131,17 +162,33 @@ impl ExportDialog {
         settings: export::Settings,
         filename: String,
         incomplete: bool,
+        result: ExportResult,
         owner: WeakEntity<Qrow>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut scopes = vec![format!("Downloaded rows ({})", source.row_count())];
+        let mut row_scopes = vec![Scope::Downloaded];
         if let Some((rows, columns)) = &selection {
             scopes.push(format!(
                 "Selection ({} rows, {} columns)",
                 rows.len(),
                 columns.clone().count()
             ));
+            row_scopes.push(Scope::Selection);
+        }
+        scopes.push("All rows".into());
+        row_scopes.push(Scope::All);
+        if let Some(spool) = &result.replay {
+            let count = match spool.status() {
+                export::spool::Status::Complete { rows } => rows,
+                _ => 0,
+            };
+            scopes.push(format!(
+                "Export again as… ({count} rows, {:.1} MiB)",
+                spool.bytes() as f64 / (1024. * 1024.)
+            ));
+            row_scopes.push(Scope::Replay);
         }
         let choices = vec![
             scopes,
@@ -217,7 +264,10 @@ impl ExportDialog {
                         return;
                     };
                     match index {
-                        0 => this.selected = choice == 1,
+                        0 => {
+                            this.scope = this.scopes[choice];
+                            this.selected = matches!(this.scope, Scope::Selection);
+                        }
                         1 => {
                             if let Some(preset) = Preset::ALL.get(choice) {
                                 this.settings.csv = preset.options();
@@ -284,6 +334,15 @@ impl ExportDialog {
             source,
             selection,
             selected,
+            scope: if selected {
+                Scope::Selection
+            } else {
+                Scope::Downloaded
+            },
+            scopes: row_scopes,
+            result,
+            retained: None,
+            download: None,
             settings,
             filename,
             incomplete,
@@ -358,7 +417,12 @@ impl ExportDialog {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let indices = option_indices(self.selected, &self.settings);
+        let mut indices = option_indices(self.selected, &self.settings);
+        indices[0] = self
+            .scopes
+            .iter()
+            .position(|scope| std::mem::discriminant(scope) == std::mem::discriminant(&self.scope))
+            .unwrap();
         self.large_copy = false;
         for (control, index) in self.controls.iter().zip(indices) {
             control.update(cx, |select, cx| {
@@ -375,7 +439,11 @@ impl ExportDialog {
     }
 
     fn start(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.running || !save && self.settings.format == Format::Parquet {
+        if self.running
+            || !save
+                && (self.settings.format == Format::Parquet
+                    || matches!(self.scope, Scope::All | Scope::Replay))
+        {
             return;
         }
         if let Err(error) = self.settings.validate() {
@@ -424,6 +492,24 @@ impl ExportDialog {
             } else {
                 None
             };
+            let all_source = match weak.update_in(cx, |this, _, cx| this.all_source(&jobs, cx)) {
+                Ok(Ok(source)) => source,
+                result => {
+                    let _ = weak.update_in(cx, |this, _, cx| {
+                        this.running = false;
+                        this.error = Some(match result {
+                            Ok(Err(error)) => error.to_string(),
+                            _ => "The export dialog closed.".into(),
+                        });
+                        cx.notify();
+                    });
+                    return;
+                }
+            };
+            let download = weak
+                .update(cx, |this, _| this.download.clone())
+                .ok()
+                .flatten();
             let output_path = path.clone();
             let guard = jobs.register(cancel.clone());
             let result = cx
@@ -431,16 +517,27 @@ impl ExportDialog {
                 .spawn(async move {
                     let _guard = guard;
                     let table = source.table(range);
-                    if let Some(path) = output_path {
-                        export::save(&path, &cancel, |out| {
-                            export::write(out, &table, &options, &cancel)
-                        })
-                        .map(|count| (count, None))
-                    } else {
-                        let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-                        let count = export::write(&mut out, &table, &options, &cancel)?;
-                        Ok((count, Some(out.into_text()?)))
+                    let result: std::io::Result<(usize, Option<export::Text>)> =
+                        if let Some(path) = output_path {
+                            export::save(&path, &cancel, |out| {
+                                if let Some(spool) = &all_source {
+                                    export::stream::write(out, spool, &options, &cancel)
+                                } else {
+                                    export::write(out, &table, &options, &cancel)
+                                }
+                            })
+                            .map(|count| (count, None))
+                        } else {
+                            let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
+                            export::write(&mut out, &table, &options, &cancel)
+                                .and_then(|count| out.into_text().map(|text| (count, Some(text))))
+                        };
+                    if let Err(error) = &result
+                        && let Some(download) = &download
+                    {
+                        download.fail(error.to_string());
                     }
+                    result
                 })
                 .await;
             let _ = weak.update_in(cx, |this, window, cx| {
@@ -449,16 +546,100 @@ impl ExportDialog {
         })
         .detach();
     }
+
+    fn cancel_download(&self) {
+        if let Some(download) = &self.download {
+            let download = download.clone();
+            std::thread::spawn(move || download.cancel());
+        }
+    }
+
+    fn all_source(
+        &mut self,
+        jobs: &export::Jobs,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<Option<Arc<export::spool::Spool>>> {
+        if !matches!(self.scope, Scope::All | Scope::Replay) {
+            return Ok(None);
+        }
+        export::check_cancelled(&self.cancel)?;
+        if let Some(spool) = self
+            .retained
+            .as_ref()
+            .filter(|spool| matches!(spool.status(), export::spool::Status::Complete { .. }))
+            .or(self.result.replay.as_ref())
+        {
+            return Ok(Some(spool.clone()));
+        }
+        if self.result.cursor == crate::worker::Cursor::Complete || !self.incomplete {
+            return Ok(None);
+        }
+        let result = self.result.clone();
+        let source = self.source.clone();
+        let cancel = self.cancel.clone();
+        let download = self
+            .owner
+            .update(cx, |owner, cx| -> std::io::Result<_> {
+                let tab = owner
+                    .tabs
+                    .iter_mut()
+                    .find(|tab| tab.saved.id == result.tab)
+                    .ok_or_else(|| std::io::Error::other("The result tab closed."))?;
+                if tab.busy
+                    || tab.current_execution != result.execution
+                    || tab.cursor != crate::worker::Cursor::Available
+                {
+                    return Err(std::io::Error::other(
+                        "The result cursor is unavailable. Run the query again to export all rows.",
+                    ));
+                }
+                let execution = result
+                    .execution
+                    .ok_or_else(|| std::io::Error::other("No result execution is available."))?;
+                let download = tab
+                    .worker
+                    .as_ref()
+                    .ok_or_else(|| std::io::Error::other("The query worker stopped."))?
+                    .drain(execution, source, jobs, cancel)?;
+                tab.download = Some(download.clone());
+                tab.busy = true;
+                tab.cancelling = false;
+                tab.set_status("Downloading export…");
+                cx.notify();
+                Ok(download)
+            })
+            .map_err(|_| std::io::Error::other("The result window closed."))??;
+        self.retained = Some(download.spool().clone());
+        self.download = Some(download.clone());
+        Ok(Some(download.spool().clone()))
+    }
     fn complete(
         &mut self,
-        result: std::io::Result<(usize, Option<export::Text>)>,
+        mut result: std::io::Result<(usize, Option<export::Text>)>,
         path: Option<PathBuf>,
         request: Option<CopyRequest>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.running = false;
-        if self.cancel.load(Ordering::Relaxed) {
+        // A producer failure also stops format work. Preserve its cause when
+        // the writer observes the stop flag before the failed spool record.
+        if result.as_ref().err().is_some_and(|error| {
+            error
+                .get_ref()
+                .is_some_and(|inner| inner.is::<export::Cancelled>())
+        }) && let Some(spool) = &self.retained
+            && let export::spool::Status::Failed(message) = spool.status()
+        {
+            result = Err(std::io::Error::other(message));
+        }
+        if self.cancel.load(Ordering::Relaxed)
+            && result.as_ref().err().is_some_and(|error| {
+                error
+                    .get_ref()
+                    .is_some_and(|inner| inner.is::<export::Cancelled>())
+            })
+        {
             cx.notify();
             return;
         }
@@ -654,7 +835,7 @@ impl Render for ExportDialog {
                 .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6 || format == Format::Parquet && (7..=9).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
-                        .disabled(busy || index == 0 && self.selection.is_none() || index == 9 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
+                        .disabled(busy || index == 9 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
@@ -686,8 +867,9 @@ impl Render for ExportDialog {
             .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.incomplete, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+            .when(self.incomplete && !matches!(self.scope, Scope::All | Scope::Replay), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("Only the downloaded rows are included. More rows may be available.")))
+            .when(matches!(self.scope, Scope::All | Scope::Replay), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("Preview shows the first downloaded rows.")))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
                 .child("Empty null rows can be skipped by CSV readers. Choose a non-empty null marker.")))
             .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
@@ -704,9 +886,9 @@ impl Render for ExportDialog {
                 .child(Button::new("export-cancel").label("Cancel").on_click(cx.listener(|this,_,window,cx| {
                     this.cancel.store(true,Ordering::Relaxed); window.close_dialog(cx);
                 })))
-                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet)
+                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet || matches!(self.scope, Scope::All | Scope::Replay))
                     .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
-                .child(Button::new("export-save").label("Save…").primary().disabled(busy || invalid)
+                .child(Button::new("export-save").label(if self.error.is_some() && self.retained.as_ref().is_some_and(|spool| matches!(spool.status(), export::spool::Status::Complete { .. })) { "Retry…" } else { "Save…" }).primary().disabled(busy || invalid)
                     .on_click(cx.listener(|this,_,window,cx| this.start(true,window,cx)))))
     }
 }
@@ -858,6 +1040,111 @@ mod tests {
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
 
     #[gpui_kit::test]
+    fn writer_failure_keeps_retry_and_disconnect_preserves_a_complete_preview(
+        cx: &mut TestAppContext,
+    ) {
+        use super::*;
+        use gpui_kit::test::TestWindowExt;
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            let (source, result, incomplete) = owner
+                .update(cx, |owner, cx| {
+                    Qrow::apply_worker_event(
+                        &mut owner.tabs[0],
+                        Event::Disconnected,
+                        true,
+                        &[],
+                        2048 * 1024 * 1024,
+                        cx,
+                    );
+                    let tab = &owner.tabs[0];
+                    assert!(tab.preview_complete);
+                    let data = tab.table.read(cx).delegate();
+                    (
+                        Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
+                        ExportResult {
+                            tab: tab.saved.id,
+                            execution: tab.current_execution,
+                            cursor: tab.cursor,
+                            replay: None,
+                        },
+                        !tab.preview_complete,
+                    )
+                })
+                .unwrap();
+            let dialog = cx.new(|cx| {
+                ExportDialog::new(
+                    source,
+                    None,
+                    export::Settings::default(),
+                    "test".into(),
+                    incomplete,
+                    result,
+                    owner.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let jobs = cx.global::<export::Jobs>().clone();
+            dialog.update(cx, |dialog, cx| {
+                dialog.scope = Scope::All;
+                assert!(dialog.all_source(&jobs, cx).unwrap().is_none());
+            });
+            let columns = [crate::model::Column {
+                name: "n".into(),
+                data_type: "INT".into(),
+            }];
+            let (spool, producer) =
+                export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+            producer.finish(&AtomicBool::new(false)).unwrap();
+            ExportDialog::open(&dialog, window, cx);
+            dialog.update(cx, |dialog, cx| {
+                dialog.retained = Some(spool);
+                // Failure propagation stops the download with this flag. It is
+                // distinct from the user dismissing a cancelled operation.
+                dialog.cancel.store(true, Ordering::Relaxed);
+                dialog.complete(
+                    Err(std::io::Error::other("Output volume is full")),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
+                assert_eq!(dialog.error.as_deref(), Some("Output volume is full"));
+                assert!(!dialog.running);
+            });
+            window.render_frame(cx);
+            assert_eq!(
+                window.try_find("export-save").unwrap().label(),
+                Some("Retry…")
+            );
+            let (failed, _producer) =
+                export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+            failed.fail("Spool volume is full");
+            dialog.update(cx, |dialog, cx| {
+                dialog.retained = Some(failed);
+                dialog.complete(
+                    Err(std::io::Error::other(export::Cancelled)),
+                    None,
+                    None,
+                    window,
+                    cx,
+                );
+                assert_eq!(dialog.error.as_deref(), Some("Spool volume is full"));
+            });
+            window.close_dialog(cx);
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn completed_export_preserves_an_unanswered_quit_warning(cx: &mut TestAppContext) {
         use super::*;
         use gpui_kit::test::TestWindowExt;
@@ -892,6 +1179,12 @@ mod tests {
                         export::Settings::default(),
                         "test".into(),
                         false,
+                        ExportResult {
+                            tab: Uuid::nil(),
+                            execution: None,
+                            cursor: crate::worker::Cursor::Complete,
+                            replay: None,
+                        },
                         owner.clone(),
                         window,
                         cx,

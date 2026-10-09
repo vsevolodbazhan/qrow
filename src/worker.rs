@@ -16,12 +16,29 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+mod download;
 mod lifecycle;
+pub use download::{Cursor, Download};
 
-pub enum Command {
+struct Drain {
+    execution: ExecutionId,
+    source: Arc<crate::export::Snapshot>,
+    producer: crate::export::spool::Producer,
+    download: Arc<Download>,
+    _guard: crate::export::Writer,
+    _transport: Arc<crate::export::budget::Allowance>,
+}
+
+struct Pending {
+    rows: Vec<Row>,
+    _memory: crate::export::budget::Allocation,
+}
+
+enum Command {
     Run(Box<Profile>, String, ExecutionId),
     UpdateProfile(Box<Profile>),
     More,
+    Drain(Box<Drain>),
     Disconnect,
     Shutdown,
 }
@@ -32,6 +49,26 @@ pub enum Event {
     Running,
     Columns(Vec<Column>),
     ExportContext(crate::export::Context),
+    Cursor {
+        execution: ExecutionId,
+        state: Cursor,
+    },
+    DownloadProgress {
+        execution: ExecutionId,
+        rows: usize,
+        bytes: u64,
+        elapsed: Duration,
+    },
+    Downloaded {
+        execution: ExecutionId,
+        spool: Arc<crate::export::spool::Spool>,
+    },
+    DownloadFailed {
+        execution: ExecutionId,
+        message: String,
+        consumed: bool,
+        disconnected: bool,
+    },
     Rows(Vec<Row>),
     Ready {
         more: bool,
@@ -71,6 +108,7 @@ pub struct Worker {
     stopped: Arc<AtomicBool>,
     done: mpsc::Receiver<()>,
     idle_guard: Arc<Mutex<Option<IdleGuard>>>,
+    download: Arc<Mutex<Option<Arc<Download>>>>,
 }
 
 impl Worker {
@@ -88,6 +126,7 @@ impl Worker {
         let (done_tx, done) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
         let idle_guard = Arc::new(Mutex::new(None));
+        let download = Arc::new(Mutex::new(None));
         let mut runner = Runner {
             session: None,
             profile: None,
@@ -104,6 +143,9 @@ impl Worker {
             stopped: stopped.clone(),
             execution: None,
             idle_guard: idle_guard.clone(),
+            download: download.clone(),
+            cursor: Cursor::Unavailable,
+            pending: None,
         };
         thread::spawn(move || {
             let mut idle_started = Instant::now();
@@ -145,6 +187,10 @@ impl Worker {
                         Ok(())
                     }
                     Command::More => runner.fetch_preview(),
+                    Command::Drain(drain) => {
+                        runner.drain(*drain);
+                        Ok(())
+                    }
                     Command::Disconnect => {
                         runner.disconnect();
                         runner.log(
@@ -228,6 +274,7 @@ impl Worker {
             stopped,
             done,
             idle_guard,
+            download,
         }
     }
 
@@ -253,6 +300,40 @@ impl Worker {
         self.cancelled.store(false, Ordering::SeqCst);
         let _ = self.tx.send(Command::More);
     }
+    /// Append this exact result's delivered prefix and remaining worker-owned cursor.
+    pub fn drain(
+        &self,
+        execution: ExecutionId,
+        source: Arc<crate::export::Snapshot>,
+        jobs: &crate::export::Jobs,
+        cancel: Arc<AtomicBool>,
+    ) -> std::io::Result<Arc<Download>> {
+        let table = source.table(None);
+        let transport = crate::export::budget::GLOBAL.allowance(64 * crate::export::budget::MIB)?;
+        let (spool, producer) =
+            crate::export::spool::Spool::new(table.columns, table.rows.context())?;
+        let download = Download::new(spool, cancel.clone());
+        let callback_download = Arc::downgrade(&download);
+        let guard = jobs.register_with_cancel(
+            cancel,
+            Some(Arc::new(move || {
+                if let Some(download) = callback_download.upgrade() {
+                    thread::spawn(move || download.cancel());
+                }
+            })),
+        );
+        self.tx
+            .send(Command::Drain(Box::new(Drain {
+                execution,
+                source,
+                producer,
+                download: download.clone(),
+                _guard: guard,
+                _transport: transport,
+            })))
+            .map_err(|_| std::io::Error::other("The query worker stopped."))?;
+        Ok(download)
+    }
     pub fn update_profile(&self, profile: Profile) -> Result<()> {
         profile.lifecycle.validate()?;
         let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
@@ -277,6 +358,10 @@ impl Worker {
         let _ = self.done.recv_timeout(timeout);
     }
     pub fn cancel(&self) {
+        if let Some(download) = self.download.lock().unwrap().clone() {
+            download.cancel();
+            return;
+        }
         self.cancelled.store(true, Ordering::SeqCst);
         let cancellation = self.target.lock().unwrap().clone();
         if let Some(cancellation) = cancellation {
@@ -320,6 +405,9 @@ struct Runner {
     wake: Arc<dyn Fn() + Send + Sync>,
     connector: Arc<dyn Connector>,
     credentials: CredentialProvider,
+    download: Arc<Mutex<Option<Arc<Download>>>>,
+    cursor: Cursor,
+    pending: Option<Pending>,
 }
 
 struct ExecutionTiming {
@@ -390,6 +478,8 @@ impl Runner {
         );
     }
     fn disconnect(&mut self) {
+        self.cursor = Cursor::Unavailable;
+        self.pending = None;
         *self.target.lock().unwrap() = None;
         if let Some(mut session) = self.session.take() {
             let _ = session.close();
@@ -407,6 +497,8 @@ impl Runner {
         }
     }
     fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
+        self.cursor = Cursor::Unavailable;
+        self.pending = None;
         self.current_execution = Some(execution_id);
         self.execution = None;
         profile.lifecycle.validate()?;
@@ -534,6 +626,14 @@ impl Runner {
     }
 
     fn fetch_preview(&mut self) -> Result<()> {
+        if self.pending.is_some() {
+            self.set_cursor(Cursor::Available);
+            self.emit(Event::Ready {
+                more: false,
+                limited: true,
+            });
+            return Ok(());
+        }
         let execution_id = self.execution_id();
         let fetch_started = Instant::now();
         let page = self
@@ -557,6 +657,13 @@ impl Runner {
             if self.finish_cancelled_fetch()? {
                 return Ok(());
             }
+            let live_cursor = self
+                .profile
+                .as_ref()
+                .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi);
+            let fetch_memory = live_cursor
+                .then(|| crate::export::budget::GLOBAL.acquire(128 * crate::export::budget::MIB))
+                .transpose()?;
             let batch = self
                 .session
                 .as_mut()
@@ -583,8 +690,25 @@ impl Runner {
                 || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
-                self.session.as_mut().unwrap().close_operation()?;
-                *self.target.lock().unwrap() = None;
+                if limited
+                    && count > 0
+                    && live_cursor
+                    && !self.session.as_ref().unwrap().result_limited()
+                {
+                    self.pending = Some(Pending {
+                        rows: batch.rows,
+                        _memory: fetch_memory.unwrap(),
+                    });
+                    self.set_cursor(Cursor::Available);
+                } else {
+                    self.session.as_mut().unwrap().close_operation()?;
+                    *self.target.lock().unwrap() = None;
+                    self.set_cursor(if limited {
+                        Cursor::Unavailable
+                    } else {
+                        Cursor::Complete
+                    });
+                }
                 self.fetch_completed(FetchSummary {
                     execution_id,
                     started: fetch_started,
@@ -614,11 +738,153 @@ impl Runner {
             more: true,
             limited: false,
         });
+        self.set_cursor(
+            if self
+                .profile
+                .as_ref()
+                .is_some_and(|profile| profile.database_type == crate::model::DatabaseType::Kyuubi)
+            {
+                Cursor::Available
+            } else {
+                Cursor::Unavailable
+            },
+        );
         self.emit(Event::Ready {
             more: true,
             limited: false,
         });
         Ok(())
+    }
+
+    fn set_cursor(&mut self, state: Cursor) {
+        self.cursor = state;
+        if let Some(execution) = self.current_execution {
+            self.emit(Event::Cursor { execution, state });
+        }
+    }
+
+    fn drain(&mut self, drain: Drain) {
+        let Drain {
+            execution,
+            source,
+            mut producer,
+            download,
+            _guard,
+            _transport,
+        } = drain;
+        // More can have been queued while the dialog's snapshot was open.
+        // Refuse a stale prefix before advancing or cancelling any cursor.
+        if self.current_execution != Some(execution)
+            || self.cursor != Cursor::Available
+            || source.row_count() != self.rows
+        {
+            let message =
+                "The result changed. Reopen Export to use the current downloaded rows.".to_owned();
+            download.spool().fail(message.clone());
+            self.emit(Event::DownloadFailed {
+                execution,
+                message,
+                consumed: false,
+                disconnected: false,
+            });
+            return;
+        }
+        let target = self.target.lock().unwrap().clone();
+        let Some(target) = target else {
+            let message = "The result cursor is no longer available.".to_owned();
+            download.spool().fail(message.clone());
+            self.emit(Event::DownloadFailed {
+                execution,
+                message,
+                consumed: false,
+                disconnected: false,
+            });
+            return;
+        };
+        if let Err(error) = download.bind(target, _guard.fork()) {
+            download.spool().cancel();
+            self.emit(Event::DownloadFailed {
+                execution,
+                message: error.to_string(),
+                consumed: false,
+                disconnected: false,
+            });
+            return;
+        }
+        *self.download.lock().unwrap() = Some(download.clone());
+        self.set_cursor(Cursor::Draining);
+        let started = Instant::now();
+        let mut count = 0usize;
+        let result = (|| -> Result<()> {
+            for batch in source.batches() {
+                producer.append(batch, download.cancelled())?;
+                count += batch.len();
+            }
+            if let Some(pending) = self.pending.take() {
+                producer.append(&pending.rows, download.cancelled())?;
+                count += pending.rows.len();
+            }
+            loop {
+                crate::export::check_cancelled(download.cancelled())?;
+                let _fetch_memory = producer.reserve_fetch()?;
+                let batch = self
+                    .session
+                    .as_mut()
+                    .context("Session is disconnected")?
+                    .fetch(PREVIEW_ROWS)?;
+                crate::export::check_cancelled(download.cancelled())?;
+                anyhow::ensure!(
+                    batch.rows.len() <= PREVIEW_ROWS,
+                    "Connector returned more rows than requested"
+                );
+                if batch.rows.is_empty() {
+                    break;
+                }
+                producer.append(&batch.rows, download.cancelled())?;
+                count += batch.rows.len();
+                self.emit(Event::DownloadProgress {
+                    execution,
+                    rows: count,
+                    bytes: download.spool().bytes(),
+                    elapsed: started.elapsed(),
+                });
+            }
+            self.session.as_mut().unwrap().close_operation()?;
+            download.complete(producer)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                *self.target.lock().unwrap() = None;
+                *self.download.lock().unwrap() = None;
+                self.set_cursor(Cursor::Downloaded);
+                self.emit(Event::Downloaded {
+                    execution,
+                    spool: download.spool().clone(),
+                });
+            }
+            Err(error) => {
+                let message = crate::connector::error_message(&error);
+                download.fail(message.clone());
+                let close = self
+                    .session
+                    .as_mut()
+                    .is_none_or(|session| session.close_operation().is_err());
+                let disconnected = !download.stopped() || close;
+                *self.target.lock().unwrap() = None;
+                *self.download.lock().unwrap() = None;
+                if disconnected {
+                    self.disconnect();
+                }
+                self.set_cursor(Cursor::Consumed);
+                self.emit(Event::DownloadFailed {
+                    execution,
+                    message,
+                    consumed: true,
+                    disconnected,
+                });
+            }
+        }
     }
 
     fn fetch_completed(&self, summary: FetchSummary) {
@@ -659,6 +925,8 @@ impl Runner {
             .context("Session is disconnected")?
             .close_operation()?;
         *self.target.lock().unwrap() = None;
+        self.pending = None;
+        self.cursor = Cursor::Consumed;
         self.log(
             self.execution_id(),
             Severity::Info,
