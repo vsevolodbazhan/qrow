@@ -2,7 +2,9 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable as _, TitleBar, h_flex,
+    Icon, Selectable as _, TitleBar,
+    button::DropdownButton,
+    h_flex,
     input::Editor,
     shimmer::ShimmerText,
     status_bar::StatusBar,
@@ -248,25 +250,37 @@ impl Qrow {
             .border_b_1()
             .border_color(cx.theme().border)
             .when(!tab.busy && !authenticating, |el| {
-                el.child(
-                    Button::new("run")
-                        .primary()
+                let button = Button::new("run")
+                    .primary()
+                    .small()
+                    .icon(IconName::ArrowRight)
+                    .label("Run")
+                    .map(|mut button| {
+                        button.interactivity().tooltip(
+                            StatusTooltip::new("Run query", "")
+                                .detail("Run the selected SQL or the statement at the cursor.")
+                                .for_action(&RunQuery, None),
+                        );
+                        button
+                    })
+                    .disabled(active.is_none() && !self.demo)
+                    .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
+                let button = if self.tab_database_type(active) == crate::model::DatabaseType::Kyuubi
+                {
+                    let action_context = self.focus.clone();
+                    DropdownButton::new("run-options")
+                        .button(button)
                         .small()
-                        .icon(IconName::ArrowRight)
-                        .label("Run")
-                        .map(|mut button| {
-                            button.interactivity().tooltip(
-                                StatusTooltip::new("Run query", "")
-                                    .detail("Run the selected SQL or the statement at the cursor.")
-                                    .for_action(&RunQuery, None),
-                            );
-                            button
-                        })
                         .disabled(active.is_none() && !self.demo)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
-                        ),
-                )
+                        .dropdown_menu(move |menu, _, _| {
+                            menu.action_context(action_context.clone())
+                                .menu("Run and export…", Box::new(RunAndExport))
+                        })
+                        .into_any_element()
+                } else {
+                    button.into_any_element()
+                };
+                el.child(button)
             })
             .when(tab.busy || authenticating, |el| {
                 el.child(
@@ -766,6 +780,9 @@ impl Qrow {
             .text_color(cx.theme().foreground)
             .text_sm()
             .on_action(cx.listener(Self::run))
+            .on_action(
+                cx.listener(|this, _: &RunAndExport, window, cx| this.open_run_export(window, cx)),
+            )
             .on_action(cx.listener(Self::new_tab))
             .on_action(
                 cx.listener(|this, _: &CloseTab, window, cx| {

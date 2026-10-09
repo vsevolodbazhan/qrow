@@ -52,6 +52,72 @@ fn change_sign_in(app: &TestApp, cx: &mut TestAppContext, id: uuid::Uuid, name: 
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn run_export_waits_for_browser_sign_in_before_submitting_its_captured_sql(
+    cx: &mut TestAppContext,
+) {
+    let fixture = FixtureProvider::get();
+    let sign_in = fixture.sign_in("Export sign-in");
+    let mut profile = Kyuubi::get().profile("Export connection");
+    profile.port = fixture.tls_port;
+    profile.tls = true;
+    profile.authentication = Authentication::Oidc {
+        sign_in: sign_in.id,
+    };
+    let mut tab = SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 753 AS value".into();
+    let opened = Arc::new(AtomicBool::new(false));
+    let observed = opened.clone();
+    let (release, wait) = std::sync::mpsc::channel();
+    let wait = Mutex::new(wait);
+    let finish = fixture.browser("alice", &[]);
+    let browser = move |url: &str| {
+        observed.store(true, Ordering::SeqCst);
+        wait.lock().unwrap().recv_timeout(Duration::from_secs(30))?;
+        finish(url)
+    };
+    let app = TestApp::launch_with_sign_ins(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            sign_ins: vec![sign_in],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+        MemoryCredentials::default(),
+        SignIns::new(fixture.trust.clone(), Some(Arc::new(browser))),
+    );
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("signed-in.csv");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_until(
+        cx,
+        "the pending export sign-in",
+        Duration::from_secs(20),
+        |_, cx| {
+            opened.load(Ordering::SeqCst) && cx.global::<qrow::export::Jobs>().active_count() == 1
+        },
+    );
+    assert_eq!(app.update(cx, |_, cx| app.status(cx)), "Not connected");
+    assert!(!output.exists());
+    assert_eq!(app.credentials.reads(), 0);
+    release.send(()).unwrap();
+    app.wait_gone(cx, "export-save");
+    app.wait_until(
+        cx,
+        "the signed-in export",
+        Duration::from_secs(30),
+        |_, _| output.exists(),
+    );
+    assert_eq!(std::fs::read_to_string(output).unwrap(), "value\r\n753\r\n");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn editing_an_oidc_connection_host_immediately_uses_the_saved_authorization(
     cx: &mut TestAppContext,
 ) {

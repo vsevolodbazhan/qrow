@@ -286,6 +286,43 @@ anonymous spool disappears when its last handle closes, including after a
 crash. Disconnecting keeps a completed replay spool but releases a live
 cursor.
 
+## Run and export
+
+For Kyuubi, open the menu beside **Run**, then choose **Run and export…**. Select a format and
+destination. The form captures the selected SQL or the statement at the
+cursor, and its connection, before the save panel opens. It shows that SQL
+and connection for review. Cancelling the save panel submits no SQL.
+
+The export runs in the tab's session. Session settings, temporary views,
+and an open transaction still apply. A new execution replaces the result.
+The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
+and file receive all rows from the same fetch sequence. The preview is
+complete only when the whole result fits in it.
+
+For an incomplete Kyuubi result, choose **Run again and export (all rows)**
+in the Rows list to submit its original SQL. Edited editor text does not
+change this choice. This is also the way to replace a consumed or closed
+cursor. A completed spool can still be saved without a new execution.
+
+If the original session ended or its connection changed, the form explains
+that its settings, temporary tables, and open transaction are gone. Review
+the SQL before the rerun. The form checks the session again after the save
+panel and browser sign-in. A change during that time stops submission and
+requires another explicit **Run again and export…** choice.
+
+The tab stays busy until the download ends. **Cancel** stops the download;
+**Cancel export** also stops its file writer. Cancellation can interrupt
+an established socket before the operation handle or schema arrives.
+If SQL reached the server before its handle arrived, the server can still
+continue that statement after the socket closes. Qrow does not submit it
+again automatically. See [cleanup limits](#export-all-rows-and-reuse-a-download).
+
+A result with columns and no rows produces a valid empty file. A successful
+statement with no result set shows a message and writes no file. It is not
+submitted again to obtain columns. A failed download requires an explicit
+rerun. A failed file write with a complete spool uses **Retry…** without SQL.
+Direct execution export for Postgres and Trino is not available yet.
+
 ## Value representation
 
 | Value | Display |

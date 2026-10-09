@@ -183,6 +183,12 @@ impl ExportDialog {
                     .await;
                 if !weak
                     .update(cx, |job, cx| {
+                        if let Some(spool) =
+                            job.download.as_ref().and_then(|download| download.spool())
+                        {
+                            job.retained = Some(spool);
+                        }
+                        job.refresh_preview_source(cx);
                         cx.notify();
                         job.running
                     })
@@ -221,6 +227,9 @@ impl ExportDialog {
         let elapsed = self
             .started
             .map_or(0., |start| start.elapsed().as_secs_f64());
+        if self.download.is_some() && self.retained.is_none() {
+            return format!("{filename}: Preparing export, {elapsed:.0}s");
+        }
         if let Some(spool) = &self.retained
             && matches!(spool.status(), export::spool::Status::Downloading)
         {

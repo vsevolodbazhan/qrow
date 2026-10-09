@@ -59,6 +59,97 @@ fn export_is_disabled_before_a_result_has_columns(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
+    cx: &mut TestAppContext,
+) {
+    let profile = crate::support::offline_profile("Captured export");
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 'selected 😀';\nSELECT must_not_run;".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("export-captured-sql").label(),
+            Some("SELECT 'selected 😀';")
+        );
+        assert_eq!(
+            window.find("export-captured-connection").label(),
+            Some("Captured export")
+        );
+    });
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.click(cx, "export-copy");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().unwrap(),
+        "unchanged"
+    );
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| None);
+    app.settle(cx);
+    app.click(cx, "export-cancel");
+    app.wait_gone(cx, "export-save");
+    assert!(!app.logs(cx).contains("Submitted query:"));
+    assert_eq!(app.credentials.reads(), 0);
+}
+
+#[gpui_kit::test]
+fn run_export_menu_handles_a_window_without_editor_focus(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, cx| window.blur(cx));
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("export-captured-connection").label(),
+            Some("rivendell-s")
+        );
+        assert!(
+            window
+                .find("export-captured-sql")
+                .label()
+                .unwrap()
+                .contains("FROM avia.flight_events")
+        );
+    });
+    app.click(cx, "export-cancel");
+    app.wait_gone(cx, "export-save");
+}
+
+#[gpui_kit::test]
+fn run_export_rejects_multiple_selected_statements_without_starting_work(cx: &mut TestAppContext) {
+    let profile = crate::support::offline_profile("Captured export");
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1; SELECT 2;".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.run_export(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-save").is_none())
+    });
+    assert_eq!(app.credentials.reads(), 0);
+    assert!(!app.logs(cx).contains("Submitted query:"));
+}
+
+#[gpui_kit::test]
 fn export_selection_presets_copy_and_saved_options(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);

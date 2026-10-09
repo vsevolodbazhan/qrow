@@ -1,5 +1,6 @@
 use super::*;
 pub(super) mod background;
+mod run;
 use crate::export::{
     self, Format, Snapshot,
     csv::{CsvOptions, LineEnding, NullMarker, Preset, Separator},
@@ -10,6 +11,7 @@ use gpui_kit::component::{
     form::{field, v_form},
     h_flex,
     notification::Notification,
+    scroll::ScrollableElement,
     select::{Select, SelectState},
     v_flex,
 };
@@ -37,6 +39,30 @@ enum Scope {
     Selection,
     All,
     Replay,
+    Run,
+    RunAgain,
+}
+
+impl Scope {
+    fn file_only(self) -> bool {
+        matches!(self, Self::All | Self::Replay | Self::Run | Self::RunAgain)
+    }
+    fn executes(self) -> bool {
+        matches!(self, Self::Run | Self::RunAgain)
+    }
+}
+
+enum FileSource {
+    Ready(Arc<export::spool::Spool>),
+    Pending(Arc<crate::worker::Download>),
+}
+impl FileSource {
+    fn spool(&self) -> std::io::Result<Arc<export::spool::Spool>> {
+        match self {
+            Self::Ready(spool) => Ok(spool.clone()),
+            Self::Pending(download) => download.wait_spool(),
+        }
+    }
 }
 
 impl Global for export::Jobs {}
@@ -50,6 +76,7 @@ struct ExportDialog {
     result: ExportResult,
     retained: Option<Arc<export::spool::Spool>>,
     download: Option<Arc<crate::worker::Download>>,
+    run: Option<run::Intent>,
     settings: export::Settings,
     filename: String,
     incomplete: bool,
@@ -118,10 +145,20 @@ impl Qrow {
                 .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
         };
         let owner = cx.weak_entity();
+        let intent = self.export_result_intent(tab);
         let view = cx.new(|cx| {
-            ExportDialog::new(
+            let mut view = ExportDialog::new(
                 source, selection, settings, filename, incomplete, result, owner, window, cx,
-            )
+            );
+            if incomplete && let Some(intent) = intent {
+                view.run = Some(intent);
+                view.scopes.push(Scope::RunAgain);
+                view.choices[0].push("Run again and export (all rows)".into());
+                view.controls[0].update(cx, |control, cx| {
+                    control.set_items(SearchableVec::new(view.choices[0].clone()), window, cx)
+                });
+            }
+            view
         });
         ExportDialog::open(&view, window, cx);
     }
@@ -355,6 +392,7 @@ impl ExportDialog {
             result,
             retained: None,
             download: None,
+            run: None,
             settings,
             filename,
             incomplete,
@@ -399,6 +437,10 @@ impl ExportDialog {
         self.preview_generation = self.preview_generation.wrapping_add(1);
         self.preview.clear();
         self.preview_pending = false;
+        if matches!(self.scope, Scope::Run) || self.source.column_count() == 0 {
+            self.preview = "The preview is available after the statement runs.".into();
+            return;
+        }
         if let Err(error) = self.settings.validate() {
             self.error = Some(error.to_string());
             self.preview.clear();
@@ -468,9 +510,7 @@ impl ExportDialog {
         cx: &mut Context<Self>,
     ) {
         if self.running
-            || !save
-                && (self.settings.format == Format::Parquet
-                    || matches!(self.scope, Scope::All | Scope::Replay))
+            || !save && (self.settings.format == Format::Parquet || self.scope.file_only())
         {
             return;
         }
@@ -520,6 +560,33 @@ impl ExportDialog {
             } else {
                 None
             };
+            let authentication = weak.update_in(cx, |this, _, cx| this.authenticate_run(cx));
+            let authentication = match authentication {
+                Ok(Ok(authentication)) => authentication,
+                error => {
+                    let _ = weak.update_in(cx, |this, window, cx| {
+                        let error = match error { Ok(Err(error)) => error, _ => std::io::Error::other("The export form closed.") };
+                        this.complete(Err(error), path, request, window, cx);
+                    });
+                    return;
+                }
+            };
+            if let Some(id) = authentication {
+                let _guard = jobs.register(cancel.clone());
+                loop {
+                    match weak.update_in(cx, |this, _, cx| this.sign_in_ready(id, cx)) {
+                        Ok(Ok(true)) => break,
+                        Ok(Ok(false)) => cx.background_executor().timer(Duration::from_millis(100)).await,
+                        error => {
+                            let _ = weak.update_in(cx, |this, window, cx| {
+                                let error = match error { Ok(Err(error)) => error, _ => std::io::Error::other("The export form closed.") };
+                                this.complete(Err(error), path, request, window, cx);
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
             let writer = match writer() {
                 Ok(writer) => writer,
                 Err(error) => {
@@ -534,6 +601,9 @@ impl ExportDialog {
                 result => {
                     let _ = weak.update_in(cx, |this, _, cx| {
                         this.running = false;
+                        if matches!(&result, Ok(Err(error)) if error.get_ref().is_some_and(|cause| cause.is::<crate::worker::SessionChanged>())) {
+                            this.refresh_session_review(cx);
+                        }
                         this.error = Some(match result {
                             Ok(Err(error)) => error.to_string(),
                             _ => "The export dialog closed.".into(),
@@ -553,7 +623,7 @@ impl ExportDialog {
                     this.output_bytes.store(0, Ordering::Relaxed);
                     this.started = Some(Instant::now());
                     this.output_path = path.clone();
-                    if path.is_some() && matches!(this.scope, Scope::All | Scope::Replay) {
+                    if path.is_some() && this.scope.file_only() {
                         this.start_background(window, cx);
                     }
                     this.output_bytes.clone()
@@ -571,7 +641,7 @@ impl ExportDialog {
                             export::save(&path, &cancel, |out| {
                                 let mut out = background::Output { out, bytes: &bytes };
                                 if let Some(spool) = &all_source {
-                                    export::stream::write(&mut out, spool, &options, &cancel)
+                                    export::stream::write(&mut out, &spool.spool()?, &options, &cancel)
                                 } else {
                                     export::write(&mut out, &table, &options, &cancel)
                                 }
@@ -629,11 +699,23 @@ impl ExportDialog {
         &mut self,
         jobs: &export::Jobs,
         cx: &mut Context<Self>,
-    ) -> std::io::Result<Option<Arc<export::spool::Spool>>> {
-        if !matches!(self.scope, Scope::All | Scope::Replay) {
+    ) -> std::io::Result<Option<FileSource>> {
+        if !self.scope.file_only() {
             return Ok(None);
         }
         export::check_cancelled(&self.cancel)?;
+        if self.scope.executes() {
+            if self
+                .owner
+                .upgrade()
+                .is_some_and(|owner| owner.read(cx).demo)
+            {
+                return Ok(None);
+            }
+            return self
+                .run_source(jobs, cx)
+                .map(|download| Some(FileSource::Pending(download)));
+        }
         let replay = self
             .retained
             .as_ref()
@@ -652,7 +734,7 @@ impl ExportDialog {
             });
         if let Some(spool) = replay {
             self.retained = Some(spool.clone());
-            return Ok(Some(spool));
+            return Ok(Some(FileSource::Ready(spool)));
         }
         if self.result.cursor == crate::worker::Cursor::Complete || !self.incomplete {
             return Ok(None);
@@ -697,7 +779,7 @@ impl ExportDialog {
             .ok_or_else(|| std::io::Error::other("The cursor drain has no result spool."))?;
         self.retained = Some(spool.clone());
         self.download = Some(download);
-        Ok(Some(spool))
+        Ok(Some(FileSource::Ready(spool)))
     }
     fn complete(
         &mut self,
@@ -709,6 +791,52 @@ impl ExportDialog {
     ) {
         self.running = false;
         self.progress_task = None;
+        self.refresh_preview_source(cx);
+        if let Some(spool) = self.download.as_ref().and_then(|download| download.spool()) {
+            self.retained = Some(spool);
+        }
+        if self.download.is_some() && self.scope.executes() {
+            self.selection = None;
+            self.selected = false;
+            if let Some(spool) = &self.retained
+                && let export::spool::Status::Complete { rows } = spool.status()
+            {
+                self.scopes = vec![Scope::Downloaded, Scope::Replay, Scope::RunAgain];
+                self.choices[0] = vec![
+                    format!("Downloaded rows ({})", self.source.row_count()),
+                    format!(
+                        "Export again as… ({rows} rows, {:.1} MiB)",
+                        spool.bytes() as f64 / (1024. * 1024.)
+                    ),
+                    "Run again and export (all rows)".into(),
+                ];
+                self.scope = Scope::Replay;
+                self.incomplete = rows != self.source.row_count() as u64;
+            } else {
+                self.scopes = vec![Scope::RunAgain];
+                self.choices[0] = vec!["Run again and export (all rows)".into()];
+                self.scope = Scope::RunAgain;
+            }
+            self.controls[0].update(cx, |control, cx| {
+                control.set_items(SearchableVec::new(self.choices[0].clone()), window, cx)
+            });
+            self.sync(window, cx);
+        }
+        if self.download.is_some()
+            && let Some(intent) = &mut self.run
+        {
+            let _ = self.owner.update(cx, |owner, _| {
+                if let Some(tab) = owner
+                    .tabs
+                    .iter()
+                    .find(|tab| tab.saved.id == self.result.tab)
+                    && tab.current_execution == self.result.execution
+                    && tab.result_session.is_some()
+                {
+                    intent.expected = tab.result_session;
+                }
+            });
+        }
         // A producer failure also stops format work. Preserve its cause when
         // the writer observes the stop flag before the failed spool record.
         if result.as_ref().err().is_some_and(|error| {
@@ -781,7 +909,15 @@ impl ExportDialog {
                 }
                 self.remove_background(cx);
             }
-            Err(error) => self.error = Some(error.to_string()),
+            Err(error) => {
+                if error
+                    .get_ref()
+                    .is_some_and(|cause| cause.is::<crate::worker::SessionChanged>())
+                {
+                    self.refresh_session_review(cx);
+                }
+                self.error = Some(error.to_string());
+            }
         }
         cx.notify();
     }
@@ -966,9 +1102,17 @@ impl Render for ExportDialog {
             .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(self.incomplete && !matches!(self.scope, Scope::All | Scope::Replay), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
+            .when(self.incomplete && !self.scope.file_only(), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("Only the downloaded rows are included. More rows may be available.")))
-            .when(matches!(self.scope, Scope::All | Scope::Replay), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("Preview shows the first downloaded rows.")))
+            .when(matches!(self.scope, Scope::All | Scope::Replay | Scope::RunAgain), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("Preview shows the first downloaded rows.")))
+            .when(self.scope.executes(), |view| view
+                .when_some(self.run.as_ref(), |view, intent| view
+                    .child(div().id("export-captured-connection").test_support().role(Role::Label).aria_label(intent.profile.name.clone()).text_sm().child(format!("Connection: {}", intent.profile.name)))
+                    .child(div().id("export-captured-sql").test_support().role(Role::Label).aria_label(intent.sql.clone())
+                        .child(div().h_16().overflow_y_scrollbar().p_2().bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(intent.sql.clone())))
+                    .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
+                        .aria_label("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")
+                        .text_sm().text_color(cx.theme().warning).child("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")))))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
                 .child("Empty null rows can be skipped by CSV readers. Choose a non-empty null marker.")))
             .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
@@ -988,9 +1132,9 @@ impl Render for ExportDialog {
                     this.remove_background(cx);
                     window.close_dialog(cx);
                 })))
-                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet || matches!(self.scope, Scope::All | Scope::Replay))
+                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet || self.scope.file_only())
                     .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
-                .child(Button::new("export-save").label(if self.error.is_some() && self.retained.as_ref().is_some_and(|spool| matches!(spool.status(), export::spool::Status::Complete { .. })) { "Retry…" } else { "Save…" }).primary().disabled(busy || invalid)
+                .child(Button::new("export-save").label(if self.error.is_some() && self.retained.as_ref().is_some_and(|spool| matches!(spool.status(), export::spool::Status::Complete { .. })) { "Retry…" } else if matches!(self.scope, Scope::Run) { "Run and export…" } else if matches!(self.scope, Scope::RunAgain) { "Run again and export…" } else { "Save…" }).primary().disabled(busy || invalid)
                     .on_click(cx.listener(|this,_,window,cx| this.start(true,window,cx)))))
     }
 }
@@ -1293,7 +1437,13 @@ mod tests {
                 dialog.result.replay = Some(spool);
                 let jobs = cx.global::<export::Jobs>().clone();
                 assert_eq!(
-                    dialog.all_source(&jobs, cx).unwrap().unwrap().row_count(),
+                    dialog
+                        .all_source(&jobs, cx)
+                        .unwrap()
+                        .unwrap()
+                        .spool()
+                        .unwrap()
+                        .row_count(),
                     3
                 );
                 dialog.start_background(window, cx);

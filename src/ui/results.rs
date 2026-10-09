@@ -120,6 +120,8 @@ impl Results {
                 Some("Statement completed without a result set")
             }
             Event::Ready { .. } => Some("Query returned no rows"),
+            Event::Downloaded { .. } => Some("Query returned no rows"),
+            Event::DownloadFailed { .. } => Some("Export download stopped before any rows arrived"),
             Event::Cancelled => Some("Query cancelled before any rows arrived"),
             Event::Error { .. } => Some("Query failed before any rows arrived"),
             _ => None,

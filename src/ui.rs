@@ -68,6 +68,7 @@ actions!(
     qrow,
     [
         RunQuery,
+        RunAndExport,
         SendAssistantMessage,
         NewTab,
         CloseTab,
@@ -249,6 +250,7 @@ struct Tab {
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
     result_session: Option<Uuid>,
+    result_profile: Option<Profile>,
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
@@ -936,6 +938,7 @@ impl Qrow {
             output_scroll: ScrollHandle::new(),
             current_execution: None,
             result_session: None,
+            result_profile: None,
             submitted_sql: None,
             cursor: crate::worker::Cursor::Unavailable,
             replay: None,
@@ -1428,6 +1431,8 @@ impl Qrow {
                     tab.more = false;
                     tab.download = None;
                     tab.cursor = crate::worker::Cursor::Downloaded;
+                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    tab.panel.success(active);
                     tab.set_status_detail("Preview", "Export download complete");
                     tab.replay =
                         (replay_limit > 0 && spool.bytes() <= replay_limit).then_some(spool);
@@ -1450,6 +1455,8 @@ impl Qrow {
                     if disconnected {
                         tab.connected = false;
                     }
+                    tab.elapsed = tab.started.take().map(|started| started.elapsed());
+                    Self::record_failure(tab, active);
                     tab.set_status_detail("Export download stopped", message);
                 }
             }
@@ -1979,22 +1986,8 @@ impl Qrow {
         if self.demo {
             return self.run_tab_sql(index, String::new(), false, cx);
         }
+        let query = self.selected_tab_sql(index, window, cx);
         let tab = &mut self.tabs[index];
-        let query = tab.input.update(cx, |s, cx| {
-            let selected = s
-                .selected_text_range(false, window, cx)
-                .filter(|s| !s.range.is_empty());
-            selected
-                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    let text = s.value();
-                    sql::statement_range_at(&text, s.selected_range().start)
-                        .map(|range| text[range].to_string())
-                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
-                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
-                })
-        });
         let query = match query {
             Ok(query) => query,
             Err(message) => {
@@ -2010,6 +2003,29 @@ impl Qrow {
             }
         };
         self.run_tab_sql(index, query, false, cx)
+    }
+
+    fn selected_tab_sql(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<String, &'static str> {
+        self.tabs[index].input.update(cx, |s, cx| {
+            let selected = s
+                .selected_text_range(false, window, cx)
+                .filter(|s| !s.range.is_empty());
+            selected
+                .and_then(|r| s.text_for_range(r.range, &mut None, window, cx))
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    let text = s.value();
+                    sql::statement_range_at(&text, s.selected_range().start)
+                        .map(|range| text[range].to_string())
+                        .or_else(|| sql::statement_ranges(&text).is_empty().then(String::new))
+                        .ok_or("Move the cursor into a SQL statement or select SQL to run.")
+                })
+        })
     }
     fn tab_database_type(&self, profile: Option<Uuid>) -> crate::model::DatabaseType {
         self.profiles
@@ -2092,6 +2108,8 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.signed_in_for_run = after_sign_in;
         tab.submitted_sql = Some(query.clone());
+        tab.result_profile = Some(profile.clone());
+        tab.result_session = None;
         // A session that a sign-out or another account released while the
         // tab was busy closes now, so the query opens a new one.
         if tab.release_pending {

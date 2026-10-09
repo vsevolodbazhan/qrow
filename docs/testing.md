@@ -108,6 +108,11 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   The cancellation test pauses server responses before the Cancel click, then
   releases them for protocol cleanup. The copy-limit test uses cells below
   8 MiB whose combined CSV output exceeds 10 MiB.
+  Direct export tests check first-page retention, original-session temporary
+  views, original result SQL after editor changes, and warnings after
+  disconnect. Wire tests cancel before SASL, the operation handle, and the
+  schema arrive, and while a previous session closes. UI tests check that
+  cancelling the save panel submits no SQL and reads no credentials.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`
