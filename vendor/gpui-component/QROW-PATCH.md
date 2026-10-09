@@ -23,6 +23,10 @@ Qrow changes these files:
   or closes. Before, a shortcut that closed a dialog under the pointer, for
   example ⌘Enter on a hovered Save button, left the tooltip of the button on
   the screen. The trigger was gone, so it did not get a hover-out.
+- `src/root.rs`: an asynchronous owner can identify and close its dialog
+  without closing a newer modal. Removing a dialog below another modal keeps
+  the focus on that modal and repairs its focus restoration. Export completion
+  uses this API to preserve an unanswered quit confirmation.
 - `src/tab/tab_bar.rs`: the first tab of a tab bar without a prefix has no
   left border. Before, the tab bar always assumed a prefix, so the border of
   the first tab and the divider of a sidebar beside the bar made a double line.
