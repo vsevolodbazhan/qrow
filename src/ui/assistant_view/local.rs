@@ -2,7 +2,8 @@
 //! from its file, so that browsing does not start or wake the harness.
 use super::*;
 use crate::assistant::transcripts::{
-    self, StoredEntry, StoredSpeaker, StoredTool, StoredToolState, TranscriptStore,
+    self, StoredEntry, StoredSpeaker, StoredTool, StoredToolState, StoredTranscript,
+    TranscriptStore,
 };
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -168,7 +169,7 @@ impl Qrow {
     fn local_transcript_read(
         &mut self,
         thread_id: &str,
-        result: std::io::Result<Option<Vec<StoredEntry>>>,
+        result: std::io::Result<Option<StoredTranscript>>,
         cx: &mut Context<Self>,
     ) {
         // A delete during the read removed the conversation.
@@ -176,8 +177,18 @@ impl Qrow {
             return;
         }
         let state = match result {
-            Ok(Some(stored)) => {
+            // A file without entries does not hide the harness history.
+            Ok(Some(stored)) if !stored.entries.is_empty() => {
+                if let Some(cursor) = stored.older_cursor
+                    && !self.assistant_state.loaded_cursors.contains_key(thread_id)
+                {
+                    self.assistant_state
+                        .older_cursors
+                        .entry(thread_id.to_owned())
+                        .or_insert(cursor);
+                }
                 let stored: Vec<_> = stored
+                    .entries
                     .into_iter()
                     .map(TranscriptEntry::from_stored)
                     .collect();
@@ -205,7 +216,7 @@ impl Qrow {
                     saved: if unsaved { 0 } else { saved },
                 }
             }
-            Ok(None) => LocalTranscript::Missing,
+            Ok(_) => LocalTranscript::Missing,
             Err(error) => {
                 eprintln!("Could not read an assistant transcript: {error}");
                 LocalTranscript::Unavailable
@@ -283,7 +294,16 @@ impl Qrow {
         let Some(store) = self.assistant_state.store.as_ref() else {
             return;
         };
+        // A failed save tries again with the current transcript.
+        for thread in store.take_failed() {
+            if let Some(LocalTranscript::Loaded { saved }) =
+                self.assistant_state.local.get_mut(&thread)
+            {
+                *saved = 0;
+            }
+        }
         let conversations = &self.assistant;
+        let cursors = &self.assistant_state.older_cursors;
         for (thread, state) in &mut self.assistant_state.local {
             if thread_id.is_some_and(|id| id != thread) {
                 continue;
@@ -302,7 +322,10 @@ impl Qrow {
             if current == *saved {
                 continue;
             }
-            let stored: Vec<_> = entries.iter().map(TranscriptEntry::stored).collect();
+            let stored = StoredTranscript {
+                entries: entries.iter().map(TranscriptEntry::stored).collect(),
+                older_cursor: cursors.get(thread).cloned(),
+            };
             store.save(thread, transcripts::encode(&stored));
             *saved = current;
         }

@@ -57,13 +57,14 @@ impl Qrow {
         if self
             .settings
             .assistant
+            .choice()
             .model
             .as_ref()
             .is_some_and(|id| !models.iter().any(|model| model.id() == id))
         {
-            self.settings.assistant.model = None;
-            self.settings.assistant.reasoning_effort = None;
-            self.settings.assistant.service_tier = None;
+            self.settings.assistant.choice_mut().model = None;
+            self.settings.assistant.choice_mut().reasoning_effort = None;
+            self.settings.assistant.choice_mut().service_tier = None;
             self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved model is unavailable. Codex default model selected.",
             ));
@@ -73,15 +74,16 @@ impl Qrow {
             .iter()
             .find(|model| model.is_default())
             .or_else(|| models.first());
-        if self.settings.assistant.model.is_none()
+        if self.settings.assistant.choice().model.is_none()
             && let Some(model) = default_model
         {
-            self.settings.assistant.model = Some(model.id().to_owned());
+            self.settings.assistant.choice_mut().model = Some(model.id().to_owned());
             self.changed(cx);
         }
         let model = self
             .settings
             .assistant
+            .choice()
             .model
             .as_deref()
             .and_then(|id| models.iter().find(|model| model.id() == id))
@@ -90,11 +92,12 @@ impl Qrow {
         if self
             .settings
             .assistant
+            .choice()
             .reasoning_effort
             .as_ref()
             .is_some_and(|id| !efforts.iter().any(|effort| effort.id() == id))
         {
-            self.settings.assistant.reasoning_effort = None;
+            self.settings.assistant.choice_mut().reasoning_effort = None;
             self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved reasoning level is unavailable. Codex default is in use.",
             ));
@@ -104,11 +107,12 @@ impl Qrow {
         if self
             .settings
             .assistant
+            .choice()
             .service_tier
             .as_ref()
             .is_some_and(|id| !tiers.iter().any(|tier| tier.id() == id))
         {
-            self.settings.assistant.service_tier = None;
+            self.settings.assistant.choice_mut().service_tier = None;
             self.assistant_state.notice = Some(AssistantNotice::info(
                 "Saved service tier is unavailable. Codex default is in use.",
             ));
@@ -131,20 +135,21 @@ impl Qrow {
         else {
             return;
         };
-        self.settings.assistant.model = Some(model_id);
-        self.settings.assistant.reasoning_effort = None;
-        self.settings.assistant.service_tier = None;
+        self.settings.assistant.choice_mut().model = Some(model_id);
+        self.settings.assistant.choice_mut().reasoning_effort = None;
+        self.settings.assistant.choice_mut().service_tier = None;
         self.changed(cx);
     }
 
     pub(super) fn select_assistant_reasoning(&mut self, label: &str, cx: &mut Context<Self>) {
-        self.settings.assistant.reasoning_effort = self
+        self.settings.assistant.choice_mut().reasoning_effort = self
             .assistant_state
             .snapshot
             .as_ref()
             .and_then(|snapshot| {
                 self.settings
                     .assistant
+                    .choice()
                     .model
                     .as_deref()
                     .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
@@ -169,6 +174,7 @@ impl Qrow {
                 let model = self
                     .settings
                     .assistant
+                    .choice()
                     .model
                     .as_deref()
                     .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
@@ -184,7 +190,7 @@ impl Qrow {
             };
             Some(tier)
         };
-        self.settings.assistant.service_tier = tier;
+        self.settings.assistant.choice_mut().service_tier = tier;
         self.changed(cx);
     }
 

@@ -226,7 +226,7 @@ fn populated_assistant_state_round_trips_through_workspace_json() {
     workspace.settings.assistant.data_sharing_notice_version =
         ASSISTANT_DATA_SHARING_NOTICE_VERSION;
     workspace.settings.assistant.default_execution_mode = AssistantExecutionMode::RunAutomatically;
-    workspace.settings.assistant.model = Some("gpt-test".into());
+    workspace.settings.assistant.codex.model = Some("gpt-test".into());
     let mut conversation =
         AssistantConversation::new("thread-1", AssistantExecutionMode::RunAutomatically);
     conversation.title = "Revenue review".into();

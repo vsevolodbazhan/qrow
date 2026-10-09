@@ -305,6 +305,11 @@ impl Qrow {
         }) {
             return;
         }
+        // A conversation that shows from its saved transcript loads in the
+        // harness first.
+        if !self.resume_assistant_thread(&thread_id, cx) {
+            return;
+        }
         if self.assistant_command(
             AssistantCommand::ReadOlder {
                 thread_id: thread_id.clone(),
@@ -647,6 +652,7 @@ impl Qrow {
         let model = self.assistant_state.snapshot.as_ref().and_then(|snapshot| {
             self.settings
                 .assistant
+                .choice()
                 .model
                 .as_deref()
                 .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
@@ -665,7 +671,7 @@ impl Qrow {
             AssistantCommand::GenerateTitle(TitleRequest {
                 thread_id: thread_id.to_owned(),
                 messages,
-                model: self.settings.assistant.model.clone(),
+                model: self.settings.assistant.choice().model.clone(),
                 reasoning_effort,
             }),
             cx,

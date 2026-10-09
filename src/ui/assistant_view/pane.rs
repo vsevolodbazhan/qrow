@@ -293,6 +293,7 @@ impl AssistantPane {
         let model = qrow.assistant_state.snapshot.as_ref().and_then(|snapshot| {
             qrow.settings
                 .assistant
+                .choice()
                 .model
                 .as_deref()
                 .and_then(|id| snapshot.models().iter().find(|model| model.id() == id))
@@ -308,6 +309,7 @@ impl AssistantPane {
                 let find = |id: &str| efforts.iter().find(|effort| effort.id() == id);
                 qrow.settings
                     .assistant
+                    .choice()
                     .reasoning_effort
                     .as_deref()
                     .and_then(find)
@@ -320,6 +322,7 @@ impl AssistantPane {
             .map(|model| {
                 qrow.settings
                     .assistant
+                    .choice()
                     .service_tier
                     .as_deref()
                     .and_then(|id| model.service_tiers().iter().find(|tier| tier.id() == id))
@@ -350,7 +353,8 @@ impl AssistantPane {
                     .map(|candidate| {
                         (
                             candidate.display_name().to_owned(),
-                            qrow.settings.assistant.model.as_deref() == Some(candidate.id()),
+                            qrow.settings.assistant.choice().model.as_deref()
+                                == Some(candidate.id()),
                         )
                     })
                     .collect::<Vec<_>>()
@@ -373,12 +377,12 @@ impl AssistantPane {
             .map(|model| {
                 let mut options = vec![(
                     "Default".to_owned(),
-                    qrow.settings.assistant.service_tier.is_none(),
+                    qrow.settings.assistant.choice().service_tier.is_none(),
                 )];
                 options.extend(model.service_tiers().iter().map(|tier| {
                     (
                         tier.name().to_owned(),
-                        qrow.settings.assistant.service_tier.as_deref() == Some(tier.id()),
+                        qrow.settings.assistant.choice().service_tier.as_deref() == Some(tier.id()),
                     )
                 }));
                 options

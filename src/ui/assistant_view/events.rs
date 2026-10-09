@@ -337,7 +337,7 @@ impl Qrow {
                         tab_to_name = conversation.tab_id;
                     }
                     conversation.title = title.clone();
-                    conversation.title_source = AssistantTitleSource::Codex;
+                    conversation.title_source = AssistantTitleSource::Generated;
                     if let Some(tab_id) = tab_to_name {
                         self.name_assistant_tab(tab_id, &title);
                     }

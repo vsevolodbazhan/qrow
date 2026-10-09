@@ -8,9 +8,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::VecDeque,
+    borrow::Cow,
+    collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
-    sync::mpsc,
+    sync::{Arc, Mutex, PoisonError, mpsc},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -19,6 +20,10 @@ use uuid::Uuid;
 pub const TRANSCRIPT_VERSION: u32 = 1;
 /// A larger transcript loses its oldest entries when Qrow saves it.
 pub const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
+/// A larger entry keeps the start of its text and detail, so that one
+/// entry cannot push all others out of the file.
+pub const MAX_ENTRY_BYTES: usize = 1024 * 1024;
+const TRUNCATION_NOTE: &str = "\n\n[Qrow saved only the start of this text.]";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -74,9 +79,19 @@ pub struct StoredEntry {
     pub detail: Option<String>,
 }
 
+/// A saved conversation: its entries, oldest first, and the harness cursor
+/// of the history before the first entry.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StoredTranscript {
+    pub entries: Vec<StoredEntry>,
+    pub older_cursor: Option<String>,
+}
+
 #[derive(Deserialize, Serialize)]
 struct Header {
     version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    older_cursor: Option<String>,
 }
 
 /// The transcript file of `thread_id` in `directory`. An identifier that is
@@ -91,22 +106,50 @@ pub fn transcript_path(directory: &Path, thread_id: &str) -> Option<PathBuf> {
     safe.then(|| directory.join(format!("{thread_id}.jsonl")))
 }
 
-/// Encodes the entries. When they are larger than `MAX_TRANSCRIPT_BYTES`,
-/// the oldest entries do not go in the file.
-pub fn encode(entries: &[StoredEntry]) -> Vec<u8> {
-    encode_with_limit(entries, MAX_TRANSCRIPT_BYTES)
+/// Encodes a transcript. When it is larger than `MAX_TRANSCRIPT_BYTES`,
+/// the oldest entries do not go in the file, and the file has no older
+/// cursor, because the entries no longer follow it.
+pub fn encode(transcript: &StoredTranscript) -> Vec<u8> {
+    encode_with_limit(transcript, MAX_TRANSCRIPT_BYTES)
 }
 
-fn encode_with_limit(entries: &[StoredEntry], limit: usize) -> Vec<u8> {
-    let mut header = serde_json::to_vec(&Header {
-        version: TRANSCRIPT_VERSION,
-    })
-    .expect("transcript header encodes");
-    header.push(b'\n');
+/// The entry with at most `MAX_ENTRY_BYTES` of text and detail.
+fn bounded(entry: &StoredEntry) -> Cow<'_, StoredEntry> {
+    let size = entry.text.len() + entry.detail.as_ref().map_or(0, String::len);
+    if size <= MAX_ENTRY_BYTES {
+        return Cow::Borrowed(entry);
+    }
+    let cut = |text: &str| {
+        let mut end = MAX_ENTRY_BYTES / 2;
+        if text.len() <= end {
+            return text.to_owned();
+        }
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}{TRUNCATION_NOTE}", &text[..end])
+    };
+    let mut entry = entry.clone();
+    entry.text = cut(&entry.text);
+    entry.detail = entry.detail.as_deref().map(cut);
+    Cow::Owned(entry)
+}
+
+fn encode_with_limit(transcript: &StoredTranscript, limit: usize) -> Vec<u8> {
+    let header = |older_cursor: Option<String>| {
+        let mut header = serde_json::to_vec(&Header {
+            version: TRANSCRIPT_VERSION,
+            older_cursor,
+        })
+        .expect("transcript header encodes");
+        header.push(b'\n');
+        header
+    };
+    let full_header = header(transcript.older_cursor.clone());
     let mut lines = VecDeque::new();
-    let mut size = header.len();
-    for entry in entries.iter().rev() {
-        let Ok(mut line) = serde_json::to_vec(entry) else {
+    let mut size = full_header.len();
+    for entry in transcript.entries.iter().rev() {
+        let Ok(mut line) = serde_json::to_vec(&bounded(entry)) else {
             continue;
         };
         line.push(b'\n');
@@ -116,7 +159,12 @@ fn encode_with_limit(entries: &[StoredEntry], limit: usize) -> Vec<u8> {
         size += line.len();
         lines.push_front(line);
     }
-    let mut bytes = Vec::with_capacity(size);
+    let header = if lines.len() == transcript.entries.len() {
+        full_header
+    } else {
+        header(None)
+    };
+    let mut bytes = Vec::with_capacity(header.len() + size);
     bytes.extend_from_slice(&header);
     for line in lines {
         bytes.extend_from_slice(&line);
@@ -126,20 +174,21 @@ fn encode_with_limit(entries: &[StoredEntry], limit: usize) -> Vec<u8> {
 
 /// Decodes a transcript file. Returns `None` for a file of another version.
 /// A damaged line does not stop the other entries.
-pub fn decode(bytes: &[u8]) -> Option<Vec<StoredEntry>> {
+pub fn decode(bytes: &[u8]) -> Option<StoredTranscript> {
     let mut lines = bytes.split(|byte| *byte == b'\n');
     let header: Header = serde_json::from_slice(lines.next()?).ok()?;
-    (header.version == TRANSCRIPT_VERSION).then(|| {
-        lines
+    (header.version == TRANSCRIPT_VERSION).then(|| StoredTranscript {
+        entries: lines
             .filter(|line| !line.is_empty())
             .filter_map(|line| serde_json::from_slice(line).ok())
-            .collect()
+            .collect(),
+        older_cursor: header.older_cursor,
     })
 }
 
 /// Reads the transcript of `thread_id`. `Ok(None)` means that Qrow has no
 /// transcript of the conversation. Run it on a background thread.
-pub fn load(directory: &Path, thread_id: &str) -> std::io::Result<Option<Vec<StoredEntry>>> {
+pub fn load(directory: &Path, thread_id: &str) -> std::io::Result<Option<StoredTranscript>> {
     let Some(path) = transcript_path(directory, thread_id) else {
         return Ok(None);
     };
@@ -151,10 +200,13 @@ pub fn load(directory: &Path, thread_id: &str) -> std::io::Result<Option<Vec<Sto
 }
 
 enum Job {
-    Save(PathBuf, Vec<u8>),
-    Delete(PathBuf),
+    Save(String, PathBuf, Vec<u8>),
+    Delete(String, PathBuf),
     Flush(mpsc::Sender<()>),
 }
+
+/// The conversations whose last save failed.
+type Failed = Arc<Mutex<BTreeSet<String>>>;
 
 /// Saves and deletes transcript files on a writer thread, in order. The
 /// window thread does not wait for the disk.
@@ -162,19 +214,23 @@ pub struct TranscriptStore {
     directory: PathBuf,
     jobs: Option<mpsc::Sender<Job>>,
     writer: Option<JoinHandle<()>>,
+    failed: Failed,
 }
 
 impl TranscriptStore {
     pub fn new(directory: PathBuf) -> std::io::Result<Self> {
         let (jobs, receiver) = mpsc::channel();
         let writer_directory = directory.clone();
+        let failed = Failed::default();
+        let writer_failed = Arc::clone(&failed);
         let writer = thread::Builder::new()
             .name("qrow-transcripts".into())
-            .spawn(move || write_jobs(&writer_directory, &receiver))?;
+            .spawn(move || write_jobs(&writer_directory, &receiver, &writer_failed))?;
         Ok(Self {
             directory,
             jobs: Some(jobs),
             writer: Some(writer),
+            failed,
         })
     }
 
@@ -184,14 +240,22 @@ impl TranscriptStore {
 
     pub fn save(&self, thread_id: &str, bytes: Vec<u8>) {
         if let Some(path) = transcript_path(&self.directory, thread_id) {
-            self.send(Job::Save(path, bytes));
+            self.send(Job::Save(thread_id.to_owned(), path, bytes));
         }
     }
 
     pub fn delete(&self, thread_id: &str) {
         if let Some(path) = transcript_path(&self.directory, thread_id) {
-            self.send(Job::Delete(path));
+            self.send(Job::Delete(thread_id.to_owned(), path));
         }
+    }
+
+    /// The conversations whose last save failed since the previous call.
+    /// Save them again.
+    pub fn take_failed(&self) -> Vec<String> {
+        std::mem::take(&mut *self.failed.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_iter()
+            .collect()
     }
 
     /// Waits at most `timeout` until the writer has done the earlier jobs.
@@ -217,39 +281,44 @@ impl Drop for TranscriptStore {
     }
 }
 
-fn write_jobs(directory: &Path, receiver: &mpsc::Receiver<Job>) {
+fn write_jobs(directory: &Path, receiver: &mpsc::Receiver<Job>, failed: &Failed) {
     while let Ok(job) = receiver.recv() {
         // Only the last job for a file counts. A burst of saves writes once.
         let mut batch = vec![job];
         batch.extend(receiver.try_iter());
         let mut flushes = Vec::new();
-        let mut last: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::new();
+        let mut last: Vec<(String, PathBuf, Option<Vec<u8>>)> = Vec::new();
         for job in batch {
-            let (path, bytes) = match job {
-                Job::Save(path, bytes) => (path, Some(bytes)),
-                Job::Delete(path) => (path, None),
+            let (thread, path, bytes) = match job {
+                Job::Save(thread, path, bytes) => (thread, path, Some(bytes)),
+                Job::Delete(thread, path) => (thread, path, None),
                 Job::Flush(done) => {
                     flushes.push(done);
                     continue;
                 }
             };
-            last.retain(|(earlier, _)| *earlier != path);
-            last.push((path, bytes));
+            last.retain(|(_, earlier, _)| *earlier != path);
+            last.push((thread, path, bytes));
         }
-        for (path, bytes) in last {
-            match bytes {
-                Some(bytes) => {
-                    if std::fs::create_dir_all(directory).is_ok()
-                        && let Err(error) = crate::storage::write_atomically(&path, &bytes)
-                    {
-                        eprintln!("Could not save an assistant transcript: {error:#}");
-                    }
-                }
+        for (thread, path, bytes) in last {
+            let result = match bytes {
+                Some(bytes) => std::fs::create_dir_all(directory)
+                    .map_err(anyhow::Error::from)
+                    .and_then(|()| crate::storage::write_atomically(&path, &bytes)),
                 None => match std::fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => eprintln!("Could not delete an assistant transcript: {error}"),
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error.into()),
+                    _ => Ok(()),
                 },
+            };
+            let mut failed = failed.lock().unwrap_or_else(PoisonError::into_inner);
+            match result {
+                Ok(()) => {
+                    failed.remove(&thread);
+                }
+                Err(error) => {
+                    eprintln!("Could not save an assistant transcript: {error:#}");
+                    failed.insert(thread);
+                }
             }
         }
         for done in flushes {
@@ -317,31 +386,62 @@ mod tests {
         ]
     }
 
+    fn transcript(entries: &[StoredEntry]) -> StoredTranscript {
+        StoredTranscript {
+            entries: entries.to_vec(),
+            older_cursor: None,
+        }
+    }
+
     #[test]
     fn every_entry_kind_round_trips() {
-        let entries = every_kind();
-        assert_eq!(decode(&encode(&entries)), Some(entries));
+        let saved = StoredTranscript {
+            entries: every_kind(),
+            older_cursor: Some("cursor-1".into()),
+        };
+        assert_eq!(decode(&encode(&saved)), Some(saved));
     }
 
     #[test]
     fn damaged_lines_skip_and_other_versions_do_not_load() {
         let entries = every_kind();
-        let mut bytes = encode(&entries);
+        let mut bytes = encode(&transcript(&entries));
         bytes.extend_from_slice(b"{\"id\":\n");
         bytes.extend_from_slice(b"not json\n");
-        assert_eq!(decode(&bytes), Some(entries));
+        assert_eq!(decode(&bytes), Some(transcript(&entries)));
         assert_eq!(decode(b"{\"version\":99}\n"), None);
         assert_eq!(decode(b""), None);
     }
 
     #[test]
-    fn a_large_transcript_keeps_its_newest_entries() {
+    fn a_large_transcript_keeps_its_newest_entries_without_a_cursor() {
         let entries: Vec<_> = (0..10)
             .map(|index| entry(StoredSpeaker::User, &format!("{index:0>100}")))
             .collect();
         let line = serde_json::to_vec(&entries[0]).unwrap().len() + 1;
-        let bytes = encode_with_limit(&entries, 20 + 3 * line);
-        assert_eq!(decode(&bytes).unwrap(), entries[7..]);
+        let saved = StoredTranscript {
+            entries: entries.clone(),
+            older_cursor: Some("cursor-1".into()),
+        };
+        let bytes = encode_with_limit(&saved, 40 + 3 * line);
+        // The cursor does not follow the oldest saved entry any more.
+        assert_eq!(decode(&bytes), Some(transcript(&entries[7..])));
+    }
+
+    #[test]
+    fn a_huge_entry_keeps_its_start_and_the_other_entries() {
+        let mut entries = every_kind();
+        let huge = "é".repeat(MAX_TRANSCRIPT_BYTES);
+        entries.push(StoredEntry {
+            detail: Some(huge.clone()),
+            ..entry(StoredSpeaker::Assistant, &huge)
+        });
+        let loaded = decode(&encode(&transcript(&entries))).unwrap().entries;
+        assert_eq!(loaded.len(), entries.len());
+        assert_eq!(loaded[..entries.len() - 1], entries[..entries.len() - 1]);
+        let last = loaded.last().unwrap();
+        assert!(last.text.starts_with("éé") && last.text.ends_with(TRUNCATION_NOTE));
+        assert!(last.text.len() + last.detail.as_ref().unwrap().len() <= MAX_ENTRY_BYTES + 200);
     }
 
     #[test]
@@ -362,12 +462,16 @@ mod tests {
         let folder = directory.path().join("transcripts");
         let store = TranscriptStore::new(folder.clone()).unwrap();
         let entries = every_kind();
-        store.save("thread-1", encode(&entries[..1]));
-        store.save("thread-1", encode(&entries));
-        store.save("thread-2", encode(&entries[..2]));
+        store.save("thread-1", encode(&transcript(&entries[..1])));
+        store.save("thread-1", encode(&transcript(&entries)));
+        store.save("thread-2", encode(&transcript(&entries[..2])));
         assert!(store.flush(Duration::from_secs(5)));
-        assert_eq!(load(&folder, "thread-1").unwrap(), Some(entries));
-        assert_eq!(load(&folder, "thread-2").unwrap().unwrap().len(), 2);
+        assert_eq!(
+            load(&folder, "thread-1").unwrap(),
+            Some(transcript(&entries))
+        );
+        assert_eq!(load(&folder, "thread-2").unwrap().unwrap().entries.len(), 2);
+        assert!(store.take_failed().is_empty());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -382,5 +486,24 @@ mod tests {
         drop(store);
         assert_eq!(load(&folder, "thread-1").unwrap(), None);
         assert!(load(&folder, "thread-2").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_failed_save_is_reported_until_a_save_succeeds() {
+        let directory = tempfile::tempdir().unwrap();
+        // A file in place of the folder makes each save fail.
+        let folder = directory.path().join("transcripts");
+        std::fs::write(&folder, "").unwrap();
+        let store = TranscriptStore::new(folder.clone()).unwrap();
+        store.save("thread-1", encode(&transcript(&every_kind())));
+        assert!(store.flush(Duration::from_secs(5)));
+        assert_eq!(store.take_failed(), ["thread-1"]);
+        assert!(store.take_failed().is_empty());
+
+        std::fs::remove_file(&folder).unwrap();
+        store.save("thread-1", encode(&transcript(&every_kind())));
+        assert!(store.flush(Duration::from_secs(5)));
+        assert!(store.take_failed().is_empty());
+        assert!(load(&folder, "thread-1").unwrap().is_some());
     }
 }

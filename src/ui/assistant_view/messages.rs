@@ -147,9 +147,9 @@ impl Qrow {
                 thread_id: thread_id.to_owned(),
                 text: text.clone(),
                 context,
-                model: self.settings.assistant.model.clone(),
-                reasoning_effort: self.settings.assistant.reasoning_effort.clone(),
-                service_tier: self.settings.assistant.service_tier.clone(),
+                model: self.settings.assistant.choice().model.clone(),
+                reasoning_effort: self.settings.assistant.choice().reasoning_effort.clone(),
+                service_tier: self.settings.assistant.choice().service_tier.clone(),
             })
         };
         if !self.assistant_command(command, cx) {

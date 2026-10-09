@@ -8,7 +8,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::{
-    AssistantTitleSource::{Codex, Temporary},
+    AssistantTitleSource::{Generated, Temporary},
     SavedTab, Workspace,
 };
 use qrow::ui::ToggleSidebar;
@@ -391,7 +391,7 @@ fn new_conversation_tabs_take_generated_titles(cx: &mut TestAppContext) {
         names.contains(TITLE)
             && names.contains(&format!("{TITLE} (Copy)"))
             && titled.len() == 2
-            && titled.iter().all(|c| c.title_source == Codex)
+            && titled.iter().all(|c| c.title_source == Generated)
     });
     app.click(cx, "assistant-conversation-menu");
     app.choose(cx, "popup-menu", "Rename…");
@@ -434,8 +434,9 @@ fn new_conversation_tabs_take_generated_titles(cx: &mut TestAppContext) {
     app.click(cx, "toggle-assistant");
     app.send(cx, "Continue the report");
     app.wait_until(cx, "the user tab name", REPLY_TIMEOUT, |_, _| {
-        conversation_of(&app, "My SQL")
-            .is_some_and(|c| c.title == "Title: Fail title generation" && c.title_source == Codex)
+        conversation_of(&app, "My SQL").is_some_and(|c| {
+            c.title == "Title: Fail title generation" && c.title_source == Generated
+        })
     });
 }
 
@@ -450,7 +451,7 @@ fn a_conversation_outlives_its_tab_and_moves_with_its_next_tab(cx: &mut TestAppC
     app.send(cx, "Report the tab SQL");
     app.wait_reply(cx, "Tab SQL: SELECT 5;");
     app.wait_idle(cx);
-    app.wait_conversations(cx, &[("Title: Report the tab", Codex)]);
+    app.wait_conversations(cx, &[("Title: Report the tab", Generated)]);
     let first = tab_of(&app, alpha).unwrap().id;
     assert_eq!(app.saved().assistant.conversations[0].tab_id, Some(first));
 

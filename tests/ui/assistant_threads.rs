@@ -7,7 +7,7 @@ use crate::support::{
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::model::{
-    AssistantTitleSource::{Codex, User},
+    AssistantTitleSource::{Generated, User},
     Workspace,
 };
 use qrow::ui::{OpenAbout, OpenSettings, Quit, ToggleAssistant, ToggleSidebar};
@@ -99,7 +99,7 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     app.open_assistant(cx);
     app.send(cx, "Count sandbox schemas now");
     app.wait_reply(cx, "I can help with this query");
-    app.wait_conversations(cx, &[(GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated)]);
 
     app.click(cx, "assistant-conversation-menu");
     open_rename(&app, cx);
@@ -114,18 +114,18 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     app.click(cx, "rename-conversation");
     app.settle(cx);
     app.wait_for(cx, "rename-conversation-name");
-    assert_eq!(app.conversations(), [(GENERATED.to_owned(), Codex)]);
+    assert_eq!(app.conversations(), [(GENERATED.to_owned(), Generated)]);
     rename_to(&app, cx, "Custom title");
     app.wait_conversations(cx, &[("Custom title", User)]);
     app.click(cx, "assistant-conversation-menu");
     app.choose(cx, "popup-menu", "Regenerate title");
-    app.wait_conversations(cx, &[(GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated)]);
 
     // A second conversation with the same title.
     app.click(cx, "assistant-new");
     app.send(cx, "Count sandbox schemas again");
     app.wait_reply(cx, "I can help with this query");
-    app.wait_conversations(cx, &[(GENERATED, Codex), (GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated), (GENERATED, Generated)]);
     app.show_threads(cx);
     app.wait_until(cx, "two rows", REPLY_TIMEOUT, |window, _| {
         labelled_starting(window, &row(GENERATED)).len() == 2
@@ -162,7 +162,7 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     app.wait_for(cx, "popup-menu");
     open_rename(&app, cx);
     rename_to(&app, cx, "Listed title");
-    app.wait_conversations(cx, &[(GENERATED, Codex), ("Listed title", User)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated), ("Listed title", User)]);
     // The search ignores case. An empty search shows every conversation.
     app.fill_labelled(cx, "Search conversations", "LISTED");
     app.wait_until(cx, "one matching row", REPLY_TIMEOUT, |window, _| {
@@ -176,7 +176,7 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     });
     app.context_menu_starting(cx, &row("Listed title"));
     app.choose(cx, "popup-menu", "Regenerate title");
-    app.wait_conversations(cx, &[(GENERATED, Codex), (GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated), (GENERATED, Generated)]);
     app.wait_until(cx, "the regenerated row", REPLY_TIMEOUT, |window, _| {
         labelled_starting(window, &row("Listed title")).is_empty()
     });
@@ -187,7 +187,7 @@ fn conversation_menus_rename_regenerate_and_delete(cx: &mut TestAppContext) {
     app.wait_for(cx, "popup-menu");
     app.choose(cx, "popup-menu", "Delete…");
     app.click(cx, "confirm-delete-assistant-conversation");
-    app.wait_conversations(cx, &[(GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated)]);
 }
 
 fn delete_dialog_keeps_application_commands(cx: &mut TestAppContext, from_list: bool) {
@@ -273,7 +273,7 @@ fn a_wide_pane_keeps_the_thread_list_open_after_a_selection(cx: &mut TestAppCont
         app.send(cx, message);
         app.wait_idle(cx);
     }
-    app.wait_conversations(cx, &[(GENERATED, Codex), (GENERATED, Codex)]);
+    app.wait_conversations(cx, &[(GENERATED, Generated), (GENERATED, Generated)]);
     app.click(cx, "assistant-toggle-threads");
     app.wait_gone(cx, "assistant-thread-list");
     app.click(cx, "assistant-toggle-threads");

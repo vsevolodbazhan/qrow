@@ -60,6 +60,30 @@ fn older_messages_load_above_the_conversation(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui_kit::test]
+fn a_saved_partial_history_still_loads_older_messages(cx: &mut TestAppContext) {
+    let (directory, codex) = FakeCodex::new();
+    let workspace = with_history(&codex);
+    let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
+    app.open_assistant(cx);
+    app.wait_reply(cx, "History reply 6");
+    app.wait_for(cx, "assistant-load-older");
+
+    // After a restart the saved copy shows the latest page, and the older
+    // pages still come from Codex.
+    let app = app.relaunch(cx);
+    app.open_assistant(cx);
+    app.wait_for(cx, "assistant-load-older");
+    app.update(cx, |window, _| {
+        assert_eq!(transcript(window), history(5..=6))
+    });
+    app.click(cx, "assistant-load-older");
+    app.wait_reply(cx, "History reply 4");
+    app.update(cx, |window, _| {
+        assert_eq!(transcript(window), history(3..=6))
+    });
+}
+
 /// Draws a frame without a full refresh, so that a view that did not change
 /// shows its last frame again.
 fn draw(window: &mut Window, cx: &mut gpui_kit::App) {
