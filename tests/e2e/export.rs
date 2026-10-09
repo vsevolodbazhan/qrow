@@ -303,8 +303,8 @@ fn kyuubi_run_export_keeps_session_state_and_only_the_first_page(cx: &mut TestAp
     for (expected, row) in records.iter().enumerate() {
         assert_eq!(&row[0], expected.to_string());
     }
-    app.update(cx, |window, _| {
-        assert_eq!(window.find("result-loaded").label(), Some("1000 loaded"))
+    app.wait_until(cx, "the export preview", QUERY_TIMEOUT, |window, _| {
+        window.find("result-loaded").label() == Some("1000 loaded")
     });
     app.wait_cell(cx, 0, 1, "0");
     app.wait_status(cx, "Preview: Export download complete");
@@ -355,8 +355,8 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
             expected
         );
     }
-    app.update(cx, |window, _| {
-        assert_eq!(window.find("result-loaded").label(), Some("1000 loaded"))
+    app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
+        window.find("result-loaded").label() == Some("1000 loaded")
     });
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     assert!(!app.logs(cx).contains("987654"));
