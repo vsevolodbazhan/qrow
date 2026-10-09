@@ -125,7 +125,30 @@ pub(in crate::ui) struct ThreadRun {
     /// Messages that wait for the running turn to end, oldest first. A
     /// harness that cannot add a message to a running turn gets each one as
     /// a new turn. The transcript already shows them.
-    pub queued_messages: VecDeque<String>,
+    pub queued_messages: VecDeque<QueuedMessage>,
+    /// The transcript entry of the queued message whose turn starts next.
+    pub starting_entry: Option<Uuid>,
+    /// The reply message that streams into the last reply entry. A turn of
+    /// Claude Code can have several reply messages in one entry.
+    pub reply_message: Option<ReplyMessage>,
+}
+
+/// A message that waits for the end of the running turn, with the
+/// transcript entry that shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::ui) struct QueuedMessage {
+    pub entry: Uuid,
+    pub text: String,
+}
+
+/// Where a reply message starts in its transcript entry.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui) struct ReplyMessage {
+    pub entry: Uuid,
+    /// The byte offset of the message in the text of the entry.
+    pub start: usize,
+    /// Whether the harness sent the full text of the message.
+    pub completed: bool,
 }
 
 /// The conversation state that the thread list and the assistant toggle show.

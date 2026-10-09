@@ -268,15 +268,17 @@ impl Qrow {
             AssistantServiceEvent::TurnStarted { thread_id, turn } => {
                 self.thread_run_mut(&thread_id).sent_messages.pop_front();
                 self.acknowledge_notes(&thread_id, true, cx);
-                if let Some(entry) =
-                    self.assistant_state
-                        .transcripts
-                        .get_mut(&thread_id)
-                        .and_then(|entries| {
-                            entries.iter_mut().rev().find(|entry| {
-                                entry.speaker == Speaker::User && entry.turn_id.is_none()
-                            })
+                let starting = self.thread_run_mut(&thread_id).starting_entry.take();
+                if let Some(entry) = self
+                    .assistant_state
+                    .transcripts
+                    .get_mut(&thread_id)
+                    .and_then(|entries| {
+                        entries.iter_mut().rev().find(|entry| match starting {
+                            Some(id) => entry.id == id,
+                            None => entry.speaker == Speaker::User && entry.turn_id.is_none(),
                         })
+                    })
                 {
                     entry.turn_id = Some(turn.id.clone());
                 }
@@ -298,25 +300,43 @@ impl Qrow {
                 if !text.is_empty() {
                     self.thread_run_mut(&thread_id).pending_reply = false;
                 }
+                let reply = self
+                    .thread_run(&thread_id)
+                    .and_then(|run| run.reply_message);
                 let entries = self
                     .assistant_state
                     .transcripts
-                    .entry(thread_id)
+                    .entry(thread_id.clone())
                     .or_default();
-                let new_message = if let Some(last) = entries.last_mut().filter(|entry| {
+                let (new_message, reply) = if let Some(last) = entries.last_mut().filter(|entry| {
                     entry.speaker == Speaker::Assistant
                         && entry.turn_id.as_deref() == Some(&turn_id)
                 }) {
+                    // The next reply message of the turn is a new paragraph.
+                    let reply = match reply {
+                        Some(reply) if reply.entry == last.id && reply.completed => {
+                            last.push_text("\n\n");
+                            Some(ReplyMessage {
+                                entry: last.id,
+                                start: last.text().len(),
+                                completed: false,
+                            })
+                        }
+                        reply => reply,
+                    };
                     last.push_text(&text);
-                    false
+                    (false, reply)
                 } else {
-                    entries.push(TranscriptEntry::streamed(
-                        Speaker::Assistant,
-                        &text,
-                        Some(turn_id),
-                    ));
-                    true
+                    let entry = TranscriptEntry::streamed(Speaker::Assistant, &text, Some(turn_id));
+                    let reply = ReplyMessage {
+                        entry: entry.id,
+                        start: 0,
+                        completed: false,
+                    };
+                    entries.push(entry);
+                    (true, Some(reply))
                 };
+                self.thread_run_mut(&thread_id).reply_message = reply;
                 self.reveal_assistant_replies(cx);
                 // The transcript follows a growing reply while you stay at its end.
                 if selected && new_message {
@@ -395,26 +415,59 @@ impl Qrow {
                 turn_id,
                 text,
             }) => {
+                let reply = self
+                    .thread_run(&thread_id)
+                    .and_then(|run| run.reply_message);
                 let entries = self
                     .assistant_state
                     .transcripts
                     .entry(thread_id.clone())
                     .or_default();
                 // Streamed parts can be lost under load. The full text
-                // replaces the reply that they built.
-                match entries.last_mut().filter(|entry| {
+                // replaces the part of the entry that its parts built. The
+                // earlier messages of the turn in the entry stay.
+                let reply = match entries.last_mut().filter(|entry| {
                     entry.speaker == Speaker::Assistant
                         && entry.turn_id.as_deref() == Some(turn_id.as_str())
                 }) {
-                    Some(entry) if *entry.text() != text => entry.set_text(text),
-                    Some(_) => {}
-                    None => entries.push(TranscriptEntry::streamed(
-                        Speaker::Assistant,
-                        &text,
-                        Some(turn_id),
-                    )),
-                }
-                self.thread_run_mut(&thread_id).pending_reply = false;
+                    Some(entry) => {
+                        let start = match reply {
+                            Some(reply) if reply.entry == entry.id && !reply.completed => {
+                                reply.start.min(entry.text().len())
+                            }
+                            // No part of this message arrived.
+                            Some(reply) if reply.entry == entry.id => entry.text().len() + 2,
+                            _ => 0,
+                        };
+                        let earlier = entry
+                            .text()
+                            .get(..start)
+                            .map_or_else(|| format!("{}\n\n", entry.text()), str::to_owned);
+                        let full = format!("{earlier}{text}");
+                        if *entry.text() != full {
+                            entry.set_text(full);
+                        }
+                        ReplyMessage {
+                            entry: entry.id,
+                            start: earlier.len(),
+                            completed: true,
+                        }
+                    }
+                    None => {
+                        let entry =
+                            TranscriptEntry::streamed(Speaker::Assistant, &text, Some(turn_id));
+                        let reply = ReplyMessage {
+                            entry: entry.id,
+                            start: 0,
+                            completed: true,
+                        };
+                        entries.push(entry);
+                        reply
+                    }
+                };
+                let run = self.thread_run_mut(&thread_id);
+                run.reply_message = Some(reply);
+                run.pending_reply = false;
                 self.reveal_assistant_replies(cx);
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {

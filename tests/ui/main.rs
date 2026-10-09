@@ -3,6 +3,7 @@
 mod support;
 
 mod assistant_chat;
+mod assistant_harness;
 mod assistant_idle;
 mod assistant_layout;
 mod assistant_notes;

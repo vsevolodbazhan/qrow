@@ -452,3 +452,32 @@ fn idle_conversation_processes_stop_beyond_the_limit() {
     harness.stop_idle_sessions(MAX_LIVE_SESSIONS, Instant::now());
     assert!(harness.sessions.is_empty());
 }
+
+#[test]
+fn the_output_reader_waits_for_room_until_its_process_closes() {
+    let (_commands, mut inbox) = Inbox::channel(1);
+    inbox.set_process_capacity(1);
+    let sender = inbox.process_sender(1);
+    let closing = Arc::new(AtomicBool::new(false));
+    let reader_closing = Arc::clone(&closing);
+    let reader = thread::spawn(move || {
+        read_lines(
+            std::io::Cursor::new(b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n".to_vec()),
+            &sender,
+            &reader_closing,
+        )
+    });
+    // One message fits in the inbox; the reader waits for room for the next.
+    assert!(matches!(inbox.next(None), Some(Message::Output(1, Ok(message))) if message["n"] == 1));
+    assert!(matches!(inbox.next(None), Some(Message::Output(1, Ok(message))) if message["n"] == 2));
+    thread::sleep(Duration::from_millis(50));
+    assert!(!reader.is_finished());
+    // A process that stops does not wait for the worker to read.
+    closing.store(true, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !reader.is_finished() {
+        assert!(Instant::now() < deadline, "The reader still waits");
+        thread::sleep(Duration::from_millis(10));
+    }
+    reader.join().unwrap();
+}

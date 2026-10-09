@@ -708,6 +708,20 @@ impl Qrow {
                 state.set_selected_value(&keyword_case.to_owned(), window, cx)
             });
         }
+        // A switch that waits for confirmation, or that the user cancels,
+        // keeps the harness that runs.
+        let harness = self.settings.assistant.harness.name();
+        if form
+            .assistant_harness
+            .read(cx)
+            .selected_value()
+            .map(String::as_str)
+            != Some(harness)
+        {
+            form.assistant_harness.update(cx, |state, cx| {
+                state.set_selected_value(&harness.to_owned(), window, cx)
+            });
+        }
         // Match the gap the dialog leaves above the footer, which the dialog
         // adds to the smaller gap below the title.
         div()

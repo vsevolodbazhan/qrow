@@ -32,6 +32,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
@@ -78,6 +79,8 @@ struct Process {
     stdout_thread: Option<JoinHandle<()>>,
     stderr_thread: Option<JoinHandle<()>>,
     stderr_tail: Arc<Mutex<VecDeque<u8>>>,
+    /// Tells the output reader to stop waiting for room in a full inbox.
+    closing: Arc<AtomicBool>,
     next_request: u64,
 }
 
@@ -220,9 +223,11 @@ impl ClaudeHarness {
         let source = self.next_source;
         self.next_source += 1;
         let sender = self.inbox.process_sender(source);
+        let closing = Arc::new(AtomicBool::new(false));
+        let reader_closing = Arc::clone(&closing);
         let stdout_thread = thread::Builder::new()
             .name("qrow-claude-stdout".into())
-            .spawn(move || read_lines(BufReader::new(stdout), &sender))
+            .spawn(move || read_lines(BufReader::new(stdout), &sender, &reader_closing))
             .context("Could not start Claude Code output reader")?;
         let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_STDERR_BYTES)));
         let stderr_thread = {
@@ -245,6 +250,7 @@ impl ClaudeHarness {
             stdout_thread: Some(stdout_thread),
             stderr_thread: Some(stderr_thread),
             stderr_tail,
+            closing,
             next_request: 1,
         })
     }
@@ -736,6 +742,9 @@ impl ClaudeHarness {
     /// stays registered until its threads end, so that a stop can still end
     /// the group.
     fn finish_process(&mut self, process: &mut Process) {
+        // The worker joins the reader here and does not read the inbox, so
+        // the reader must not wait for room in it.
+        process.closing.store(true, Ordering::Release);
         let _ = kill_process_tree(&mut process.child);
         let _ = process.child.wait();
         for thread in [
@@ -1207,7 +1216,7 @@ impl Drop for ClaudeHarness {
 
 /// Reads one JSON message from each line. A line longer than the limit is
 /// skipped, and Qrow keeps the process.
-fn read_lines(mut stdout: impl BufRead, sender: &ProcessSender) {
+fn read_lines(mut stdout: impl BufRead, sender: &ProcessSender, closing: &AtomicBool) {
     loop {
         let mut bytes = Vec::new();
         let read = stdout
@@ -1242,10 +1251,12 @@ fn read_lines(mut stdout: impl BufRead, sender: &ProcessSender) {
         };
         // A full inbox waits for the worker, so Claude Code waits too. No
         // message is lost: the full text of a reply comes from its parts.
+        // The output of a process that stops is not necessary.
         let mut message = Ok(message);
         loop {
             match sender.send(message) {
                 Ok(()) => break,
+                Err((SendError::Full, _)) if closing.load(Ordering::Acquire) => return,
                 Err((SendError::Full, pending)) => {
                     message = pending;
                     thread::sleep(Duration::from_millis(10));

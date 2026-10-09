@@ -126,14 +126,18 @@ impl Qrow {
             .is_some_and(|run| run.active_turn.is_some())
             && !self.harness_features().steer
         {
+            let entry = TranscriptEntry::new(Speaker::User, text.clone(), None);
             let run = self.thread_run_mut(thread_id);
-            run.queued_messages.push_back(text.clone());
+            run.queued_messages.push_back(QueuedMessage {
+                entry: entry.id,
+                text,
+            });
             run.unread = None;
             self.assistant_state
                 .transcripts
                 .entry(thread_id.to_owned())
                 .or_default()
-                .push(TranscriptEntry::new(Speaker::User, text, None));
+                .push(entry);
             self.schedule_transcript_save(cx);
             return true;
         }
@@ -148,12 +152,21 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(text) = self.thread_run_mut(thread_id).queued_messages.pop_front() else {
+        let run = self.thread_run_mut(thread_id);
+        let Some(message) = run.queued_messages.pop_front() else {
             return;
         };
-        if !self.start_assistant_message(thread_id, text.clone(), false, cx) {
-            self.remove_queued_entry(thread_id, &text);
-            self.restore_draft(self.conversation_target(thread_id), text, window, cx);
+        // The turn that starts belongs to this entry, not to a newer queued one.
+        run.starting_entry = Some(message.entry);
+        if !self.start_assistant_message(thread_id, message.text.clone(), false, cx) {
+            self.thread_run_mut(thread_id).starting_entry = None;
+            self.remove_queued_entry(thread_id, message.entry);
+            self.restore_draft(
+                self.conversation_target(thread_id),
+                message.text,
+                window,
+                cx,
+            );
         }
     }
 
@@ -169,20 +182,20 @@ impl Qrow {
         if queued.is_empty() {
             return;
         }
-        for text in &queued {
-            self.remove_queued_entry(thread_id, text);
+        for message in &queued {
+            self.remove_queued_entry(thread_id, message.entry);
         }
-        let text = queued.into_iter().collect::<Vec<_>>().join("\n");
+        let text = queued
+            .into_iter()
+            .map(|message| message.text)
+            .collect::<Vec<_>>()
+            .join("\n");
         self.restore_draft(self.conversation_target(thread_id), text, window, cx);
     }
 
-    fn remove_queued_entry(&mut self, thread_id: &str, text: &str) {
-        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id)
-            && let Some(position) = entries.iter().rposition(|entry| {
-                entry.speaker == Speaker::User && entry.turn_id.is_none() && *entry.text() == text
-            })
-        {
-            entries.remove(position);
+    fn remove_queued_entry(&mut self, thread_id: &str, id: Uuid) {
+        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id) {
+            entries.retain(|entry| entry.id != id);
         }
     }
 
