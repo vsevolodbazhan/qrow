@@ -142,3 +142,66 @@ fn startup_rejects_a_large_advertised_backend_frame_without_reading_its_body() {
     assert!(format!("{error:#}").contains("transport limit"));
     server.join().unwrap();
 }
+
+#[test]
+fn startup_metadata_replacements_are_bounded_and_empty_notices_cannot_bypass_the_count() {
+    for case in 0..3 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let profile = profile(&listener, false);
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut length = [0; 4];
+            socket.read_exact(&mut length).unwrap();
+            socket
+                .read_exact(&mut vec![0; u32::from_be_bytes(length) as usize - 4])
+                .unwrap();
+            socket.write_all(b"R\0\0\0\x08\0\0\0\0").unwrap();
+            let count = if case == 2 { 257 } else { 4097 };
+            for index in 0..count {
+                let (tag, body) = if case == 2 {
+                    (b'N', vec![0])
+                } else {
+                    let key = if case == 0 {
+                        "replacement".into()
+                    } else {
+                        format!("key{index}")
+                    };
+                    let value = if case == 0 {
+                        "x".repeat(1024)
+                    } else {
+                        "v".into()
+                    };
+                    (b'S', format!("{key}\0{value}\0").into_bytes())
+                };
+                socket.write_all(&[tag]).unwrap();
+                socket
+                    .write_all(&((body.len() + 4) as u32).to_be_bytes())
+                    .unwrap();
+                socket.write_all(&body).unwrap();
+            }
+            if case == 0 {
+                socket.write_all(b"Z\0\0\0\x05I").unwrap();
+            }
+            assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+        });
+        let result =
+            PostgresConnector::default().connect(&profile, Secret::password("synthetic-password"));
+        if case == 0 {
+            result.unwrap().close().unwrap();
+        } else {
+            let error = format!("{:#}", result.err().unwrap());
+            assert!(
+                error.contains(if case == 1 {
+                    "session metadata exceeds its limit"
+                } else {
+                    "startup notices exceed their metadata limit"
+                }),
+                "{error}"
+            );
+        }
+        server.join().unwrap();
+    }
+}

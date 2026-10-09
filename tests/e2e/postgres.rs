@@ -1,5 +1,5 @@
 use crate::support::{MemoryCredentials, TestApp, cell, connection_row, header};
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 use qrow::{
     model::{DatabaseType, PostgresSslMode, Profile, SavedTab, Workspace},
     storage::Credentials,
@@ -115,6 +115,43 @@ fn cancel_a_query_and_reuse_its_tab(cx: &mut TestAppContext) {
     app.wait_status(cx, "Cancelled");
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn the_first_page_is_visible_while_the_server_tail_is_blocked(cx: &mut TestAppContext) {
+    use qrow::connector::{Connector, Secret, postgres::PostgresConnector, wait_for_completion};
+    let key = (uuid::Uuid::new_v4().as_u128() as u64) & i64::MAX as u64;
+    let sql =
+        format!("SELECT i AS value, pg_temp.export_tail(i, {key}) FROM generate_series(1, 1001) i");
+    let (workspace, credentials) = workspace(&sql);
+    let mut observer = PostgresConnector::default()
+        .connect(
+            &workspace.profiles[0],
+            Secret::password("qrow-test-password"),
+        )
+        .unwrap();
+    observer
+        .execute(&format!("SELECT pg_advisory_lock({key})"))
+        .unwrap();
+    wait_for_completion(&mut *observer, None).unwrap();
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.run_complete(cx, "CREATE FUNCTION pg_temp.export_tail(i int, key bigint) RETURNS bool LANGUAGE plpgsql AS $$ BEGIN IF i = 1001 THEN RAISE NOTICE 'flush first page'; PERFORM pg_advisory_lock(key); END IF; RETURN true; END $$");
+    app.run_sql(cx, &sql);
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("cancel").is_some());
+        assert!(window.try_find("run").is_none());
+    });
+    observer
+        .execute(&format!("SELECT pg_advisory_unlock({key})"))
+        .unwrap();
+    wait_for_completion(&mut *observer, None).unwrap();
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "1001");
+    app.wait_status(cx, "Complete");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
 }
 
 #[gpui_kit::test]

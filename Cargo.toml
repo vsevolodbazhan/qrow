@@ -82,6 +82,9 @@ path = "tests/native/tooltip_layout.rs"
 required-features = ["ui"]
 
 [patch.crates-io]
+# Bounded metadata and ordered buffer reset for streaming exports.
+# See vendor/tokio-postgres/QROW-PATCH.md.
+tokio-postgres = { path = "vendor/tokio-postgres" }
 # GPUI Base 0.6.6 with Qrow fixes to the editor and Markdown text.
 # vendor/gpui-base/QROW-PATCH.md lists them. Remove this patch when a GPUI Kit
 # release includes all fixes.

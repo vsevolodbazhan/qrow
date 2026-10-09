@@ -1,5 +1,9 @@
 //! Postgres sessions. Values use the server's text representation.
 mod cancellation;
+#[cfg(test)]
+mod driver_tests;
+mod results;
+mod schema;
 mod tls;
 mod transport;
 #[cfg(test)]
@@ -20,7 +24,7 @@ use anyhow::{Context, Result};
 use futures_util::{StreamExt, pin_mut};
 use std::{
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read, Seek, Write},
+    io::{BufWriter, Write},
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -182,19 +186,14 @@ impl Cancellation for Cancel {
     }
 }
 
-struct Results {
-    columns: Vec<Column>,
-    limited: bool,
-    exhausted: bool,
-    rows: BufReader<File>,
-    context: crate::export::Context,
-}
+use results::{Mode, Output, Progress, Results};
 
 struct Operation {
     cancel: Arc<Cancel>,
     task: tokio::task::JoinHandle<()>,
     receiver: mpsc::Receiver<Result<Results>>,
     results: Option<Results>,
+    progress: Arc<Progress>,
     cancelled: bool,
 }
 
@@ -240,6 +239,7 @@ async fn connect_client<
                     transport::GuardedTls {
                         tls,
                         limit: transport.limit.clone(),
+                        boundary: transport.boundary.clone(),
                     },
                 )
                 .await?;
@@ -253,7 +253,14 @@ async fn connect_client<
         }
         None => {
             let (client, connection) = config
-                .connect_raw(transport::Wire::new(socket, transport.limit.clone()), NoTls)
+                .connect_raw(
+                    transport::Wire::controlled(
+                        socket,
+                        transport.limit.clone(),
+                        transport.boundary.clone(),
+                    ),
+                    NoTls,
+                )
                 .await?;
             Ok((
                 client,
@@ -472,7 +479,48 @@ impl PostgresSession {
         );
         Ok(())
     }
-    fn start(&self, sql: &str) -> Result<Operation> {
+    fn execute_mode(&mut self, sql: &str, mode: Mode) -> Result<Arc<dyn Cancellation>> {
+        crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
+        if mode == Mode::Export {
+            anyhow::ensure!(
+                sql.len() <= schema::MAX_SQL_BYTES,
+                "Postgres export SQL exceeds the 1 MiB limit"
+            );
+        }
+        self.close_operation()?;
+        self.close_keep_alive()?;
+        self.cancel.transport.limit.store(
+            if mode == Mode::Export {
+                transport::EXPORT_FRAME_BYTES
+            } else {
+                transport::PREVIEW_FRAME_BYTES
+            },
+            Ordering::SeqCst,
+        );
+        if mode == Mode::Export {
+            self.client.clear_type_cache();
+            let result = self.runtime.block_on(async {
+                tokio::time::timeout(
+                    self.cancel.timeout,
+                    self.client
+                        .reset_buffers_when_idle(self.cancel.transport.boundary.clone()),
+                )
+                .await
+                .context("Postgres did not reach the export buffer boundary in time")?
+                .context("Could not reset Postgres export buffers")
+            });
+            if result.is_err() {
+                self.cancel.abort_transport();
+            }
+            result?;
+        }
+        let operation = self.start(sql, mode)?;
+        let cancel = operation.cancel.clone();
+        self.operation = Some(operation);
+        Ok(cancel)
+    }
+
+    fn start(&self, sql: &str, mode: Mode) -> Result<Operation> {
         anyhow::ensure!(
             !self.cancel.closed.load(Ordering::SeqCst),
             "Postgres session is closed"
@@ -496,35 +544,36 @@ impl PostgresSession {
             completion: (Mutex::new(false), Condvar::new()),
         });
         let requested = cancel.clone();
+        let progress = Arc::new(Progress::default());
+        let task_progress = progress.clone();
+        let (mut output, rows) = results::source(mode)?;
         let task = self.runtime.spawn(async move {
+            let mut source = Some(rows);
             let mut protocol_started = false;
             let result = async {
-                let mut writer = BufWriter::new(tempfile::tempfile()?);
                 requested.check()?;
                 protocol_started = true;
-                let statement = requested.until(client.prepare(&sql)).await?;
-                let types: Vec<_> = statement
-                    .columns()
-                    .iter()
-                    .map(|column| export_type(column.type_().name(), column.type_modifier()))
-                    .collect();
-                let context = if statement.columns().is_empty() {
+                let statement = requested.until(client.prepare_bounded(&sql)).await?;
+                let types = schema::types(&client, &requested, &statement).await?;
+                let has_results = !statement.columns().is_empty();
+                drop(statement);
+                let context = if !has_results {
                     crate::export::Context::default()
                 } else {
-                    let settings = requested.until(client.query_one(
-                        "SELECT current_setting('DateStyle'), current_setting('IntervalStyle'), current_setting('TimeZone')", &[]
+                    let description = requested.until(client.prepare_bounded(
+                        "SELECT pg_catalog.current_setting('DateStyle'), pg_catalog.current_setting('IntervalStyle'), pg_catalog.current_setting('TimeZone')"
                     )).await?;
+                    let settings = requested.until(client.query_one(&description, &[])).await?;
+                    let values: [&str; 3] = [settings.try_get(0)?, settings.try_get(1)?, settings.try_get(2)?];
+                    anyhow::ensure!(values.iter().all(|value| value.len() <= 64 * 1024), "Postgres export settings exceed their metadata limit");
                     crate::export::Context { postgres: Some(crate::export::PostgresContext {
-                        date_style: settings.get(0), interval_style: settings.get(1), time_zone: settings.get(2),
+                        date_style: values[0].into(), interval_style: values[1].into(), time_zone: values[2].into(),
                     }) }
                 };
                 requested.check()?;
                 let stream = requested.until(client.simple_query_raw(&sql)).await?;
                 pin_mut!(stream);
-                let mut columns = Vec::new();
-                let mut rows = 0;
-                let mut bytes: usize = 0;
-                let mut limited = false;
+                let mut width = 0;
                 let mut cancellation_tick = tokio::time::interval(Duration::from_millis(100));
                 loop {
                     let message = tokio::select! {
@@ -537,7 +586,15 @@ impl PostgresSession {
                     let Some(message) = message else { break; };
                     match message.map_err(query_error)? {
                         SimpleQueryMessage::RowDescription(description) => {
-                            columns = description
+                            if mode == Mode::Export {
+                                anyhow::ensure!(description.len() <= 4096, "Postgres export schema exceeds 4,096 columns");
+                                let bytes = description.len().saturating_mul(std::mem::size_of::<Column>())
+                                    .saturating_add(description.iter().map(|column| column.name().len()).sum::<usize>())
+                                    .saturating_add(types.iter().map(String::len).sum::<usize>());
+                                anyhow::ensure!(bytes <= crate::export::budget::MAX_ROW_BYTES, "Postgres export schema exceeds 16 MiB");
+                            }
+                            width = description.len();
+                            let columns = description
                                 .iter()
                                 .enumerate()
                                 .map(|(index, column)| Column {
@@ -548,59 +605,77 @@ impl PostgresSession {
                                         .unwrap_or_else(|| "text".into()),
                                 })
                                 .collect();
+                            let rows = source.take().context("Postgres returned more than one result set")?;
+                            sender.send(Ok(Results { columns, exhausted: false, rows, context: context.clone() }))
+                                .map_err(|_| anyhow::anyhow!("Postgres result consumer closed"))?;
                         }
                         SimpleQueryMessage::Row(row) => {
-                            let row_bytes = row.len().saturating_mul(std::mem::size_of::<Option<String>>())
-                                .saturating_add((0..row.len()).filter_map(|i| row.get(i)).map(str::len).sum::<usize>());
-                            if rows >= MAX_RESULT_ROWS || bytes.saturating_add(row_bytes) > MAX_RESULT_BYTES {
-                                limited = true;
-                            }
-                            // Inspect borrowed values before retaining them. Binary lengths
-                            // keep JSON escaping from expanding the temporary file.
-                            if !limited {
-                                writer.write_all(&(row.len() as u64).to_le_bytes())?;
-                                for index in 0..row.len() {
-                                    match row.get(index) {
-                                        None => writer.write_all(&u64::MAX.to_le_bytes())?,
-                                        Some(value) => {
-                                            writer.write_all(&(value.len() as u64).to_le_bytes())?;
-                                            writer.write_all(value.as_bytes())?;
+                            anyhow::ensure!(row.len() == width, "Postgres returned a row with the wrong width");
+                            match &mut output {
+                                Output::Prefix(prefix) => prefix.append(&row, &task_progress)?,
+                                Output::Direct(sender) => {
+                                    crate::export::budget::selected_row_bytes((0..row.len()).map(|index| row.get(index)))?;
+                                    let owned: Row = (0..row.len()).map(|index| row.get(index).map(str::to_owned)).collect();
+                                    let send = sender.send(owned);
+                                    pin_mut!(send);
+                                    loop {
+                                        tokio::select! {
+                                            sent = &mut send => {
+                                                sent.map_err(|_| anyhow::anyhow!("Postgres export consumer closed"))?;
+                                                break;
+                                            }
+                                            _ = cancellation_tick.tick() => {
+                                                if requested.requested.load(Ordering::SeqCst) {
+                                                    requested.send().await?;
+                                                    requested.check()?;
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                bytes += row_bytes;
-                                rows += 1;
                             }
                         }
                         _ => {}
                     }
                 }
-                writer.flush()?;
-                let mut file = writer.into_inner()?;
-                file.rewind()?;
-                Ok::<_, anyhow::Error>(Results {
-                    columns,
-                    limited,
-                    exhausted: false,
-                    rows: BufReader::new(file),
-                    context,
-                })
+                if let Output::Prefix(prefix) = &mut output { prefix.commit(&task_progress)?; }
+                Ok::<_, anyhow::Error>(())
             }
             .await;
+            if let Err(error) = &result {
+                // Wake consumers before server cleanup. Cancel retains ownership
+                // until cancellation and the protocol barrier finish.
+                task_progress.fail(error);
+            }
+            drop(output);
             let result = if result.is_err() && protocol_started && !requested.closed.load(Ordering::SeqCst) {
+                // A local sink/limit failure can leave SQL running. Stop it before
+                // the Sync barrier; a server SQL error has already stopped it.
+                if result.as_ref().err().is_some_and(|error| !error.is::<QueryError>()) {
+                    let _ = requested.cancel();
+                    let _ = requested.send().await;
+                }
                 match tokio::time::timeout(requested.timeout, client.check_connection()).await {
                     Ok(Ok(())) => result,
                     _ => { requested.abort_transport(); result }
                 }
             } else { result };
             requested.finish();
-            let _ = sender.send(result);
+            task_progress.finish(&result);
+            if let Some(rows) = source {
+                let result = result.map(|()| Results {
+                    columns: Vec::new(), exhausted: false, rows,
+                    context: crate::export::Context::default(),
+                });
+                let _ = sender.send(result);
+            }
         });
         Ok(Operation {
             cancel,
             task,
             receiver,
             results: None,
+            progress,
             cancelled: false,
         })
     }
@@ -611,16 +686,11 @@ impl Session for PostgresSession {
         Some(self.cancel.transport.clone())
     }
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
-        anyhow::ensure!(
-            !self.cancel.closed.load(Ordering::SeqCst),
-            "Postgres session is closed"
-        );
-        self.close_operation()?;
-        crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql)?;
-        let cancel = operation.cancel.clone();
-        self.operation = Some(operation);
-        Ok(cancel)
+        self.execute_mode(sql, Mode::Preview)
+    }
+
+    fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute_mode(sql, Mode::Export)
     }
 
     fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
@@ -636,6 +706,22 @@ impl Session for PostgresSession {
         if operation.cancelled {
             return Ok(QueryState::Cancelled);
         }
+        let completed = match operation.progress.completed() {
+            Ok(completed) => completed,
+            Err(error) => {
+                if error
+                    .downcast_ref::<QueryError>()
+                    .is_some_and(|error| error.0.starts_with("57014:"))
+                {
+                    if !operation.cancel.finished.load(Ordering::SeqCst) {
+                        return Ok(QueryState::Running);
+                    }
+                    operation.cancelled = true;
+                    return Ok(QueryState::Cancelled);
+                }
+                return Err(error);
+            }
+        };
         if operation.results.is_none() {
             match operation.receiver.try_recv() {
                 Ok(Ok(results)) => operation.results = Some(results),
@@ -654,8 +740,11 @@ impl Session for PostgresSession {
                 }
             }
         }
-        Ok(QueryState::Finished {
-            has_results: !operation.results.as_ref().unwrap().columns.is_empty(),
+        let has_results = !operation.results.as_ref().unwrap().columns.is_empty();
+        Ok(if completed {
+            QueryState::Finished { has_results }
+        } else {
+            QueryState::Streaming { has_results }
         })
     }
 
@@ -678,42 +767,25 @@ impl Session for PostgresSession {
     }
 
     fn fetch(&mut self, count: usize) -> Result<Batch> {
-        let results = self
+        let operation = self
             .operation
             .as_mut()
-            .and_then(|operation| operation.results.as_mut())
             .context("Postgres query has no result")?;
-        let mut rows = Vec::new();
-        for _ in 0..count {
-            if results.rows.fill_buf()?.is_empty() {
-                results.exhausted = rows.is_empty();
-                break;
-            }
-            let mut length = [0; 8];
-            results.rows.read_exact(&mut length)?;
-            let count = u64::from_le_bytes(length) as usize;
-            let mut row: Row = Vec::with_capacity(count);
-            for _ in 0..count {
-                results.rows.read_exact(&mut length)?;
-                let length = u64::from_le_bytes(length);
-                if length == u64::MAX {
-                    row.push(None);
-                } else {
-                    let mut bytes = vec![0; length as usize];
-                    results.rows.read_exact(&mut bytes)?;
-                    row.push(Some(String::from_utf8(bytes)?));
-                }
-            }
-            rows.push(row);
-        }
-        Ok(Batch { rows })
+        let results = operation
+            .results
+            .as_mut()
+            .context("Postgres query has no result")?;
+        results.fetch(count, &operation.progress, &self.runtime)
     }
 
     fn result_limited(&self) -> bool {
-        self.operation
-            .as_ref()
-            .and_then(|operation| operation.results.as_ref())
-            .is_some_and(|results| results.limited && results.exhausted)
+        self.operation.as_ref().is_some_and(|operation| {
+            operation.progress.limited()
+                && operation
+                    .results
+                    .as_ref()
+                    .is_some_and(|results| results.exhausted)
+        })
     }
 
     fn close_operation(&mut self) -> Result<()> {
@@ -729,8 +801,18 @@ impl Session for PostgresSession {
             "Postgres session is closed"
         );
         self.close_keep_alive()?;
+        anyhow::ensure!(
+            self.operation
+                .as_ref()
+                .is_none_or(|operation| operation.cancel.finished.load(Ordering::SeqCst)),
+            "Postgres query is still running"
+        );
         crate::sql::validate_single_for(sql, crate::model::DatabaseType::Postgres)?;
-        let operation = self.start(sql)?;
+        self.cancel
+            .transport
+            .limit
+            .store(transport::PREVIEW_FRAME_BYTES, Ordering::SeqCst);
+        let operation = self.start(sql, Mode::Preview)?;
         let cancel = operation.cancel.clone();
         self.keep_alive = Some(operation);
         Ok(cancel)
@@ -813,13 +895,14 @@ mod tests {
         assert_eq!(export_type("date", -1), "date");
     }
 
-    fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
+    pub(super) fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
         let (client, server) = tokio::io::duplex(1024);
+        let transport = transport::Abort::synthetic();
         let mut config = Config::new();
         // NoTls keeps the primary fixture plain. Prefer allows a secondary
         // TLS connector to exercise its SSL negotiation with this token.
@@ -843,10 +926,14 @@ mod tests {
                     .unwrap();
                 server
             };
-            let (connection, server) = tokio::join!(config.connect_raw(client, NoTls), handshake);
+            let wire = transport::Wire::controlled(
+                client,
+                transport.limit.clone(),
+                transport.boundary.clone(),
+            );
+            let (connection, server) = tokio::join!(config.connect_raw(wire, NoTls), handshake);
             (connection.unwrap(), server)
         });
-        let transport = transport::Abort::synthetic();
         let cancel = Arc::new(Cancel {
             requested: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -1135,7 +1222,13 @@ mod tests {
                 .finished
                 .load(Ordering::SeqCst)
         );
-        assert_eq!(session.poll().unwrap(), QueryState::Running);
+        assert!(
+            session
+                .poll()
+                .unwrap_err()
+                .to_string()
+                .contains("42703: synthetic missing column")
+        );
         session.runtime.block_on(async {
             server.write_all(b"Z\0\0\0\x05IZ\0\0\0\x05I").await.unwrap();
             tokio::time::timeout(Duration::from_secs(2), async {

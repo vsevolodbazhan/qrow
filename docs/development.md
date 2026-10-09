@@ -224,10 +224,12 @@ Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
 
-`vendor/` contains patched copies of some GPUI crates, and
+`vendor/` contains patched copies of some GPUI crates and tokio-postgres, and
 [Cargo.toml](../Cargo.toml) uses them in place of the crates.io releases. The
-`QROW-PATCH.md` file of each crate lists the changes. When you upgrade GPUI Kit,
-apply the changes to the new release again, or remove a patch when the release
+`QROW-PATCH.md` file of each crate lists the changes. The
+[Postgres patch](../vendor/tokio-postgres/QROW-PATCH.md) adds bounded schema
+metadata and an ordered buffer reset. When you upgrade a patched dependency,
+apply its changes to the new release again, or remove the patch when the release
 includes its fix.
 
 ## Build identity
