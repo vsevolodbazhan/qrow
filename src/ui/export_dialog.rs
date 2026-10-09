@@ -39,6 +39,7 @@ struct ExportDialog {
     running: bool,
     cancel: Arc<AtomicBool>,
     owner: WeakEntity<Qrow>,
+    dialog: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,7 +78,25 @@ impl Qrow {
                 source, selection, settings, filename, incomplete, owner, window, cx,
             )
         });
+        ExportDialog::open(&view, window, cx);
+    }
+
+    fn remember_export(&mut self, settings: export::Settings, cx: &mut Context<Self>) {
+        self.settings.export = settings;
+        for tab in &self.tabs {
+            tab.table.update(cx, |table, _| {
+                table.delegate_mut().csv = self.settings.export.csv.clone();
+            });
+        }
+        self.changed(cx);
+    }
+}
+
+impl ExportDialog {
+    fn open(view: &Entity<Self>, window: &mut Window, cx: &mut App) {
         let cancel = view.read(cx).cancel.clone();
+        let dialog_view = view.clone();
+        let view = view.clone();
         window.open_dialog(cx, move |dialog, window, _| {
             let cancel = cancel.clone();
             let submit = view.downgrade();
@@ -94,20 +113,10 @@ impl Qrow {
                     cancel.store(true, Ordering::Relaxed);
                 })
         });
+        dialog_view.update(cx, |view, cx| {
+            view.dialog = Root::read(window, cx).dialog_focus_handle().cloned();
+        });
     }
-
-    fn remember_export(&mut self, settings: export::Settings, cx: &mut Context<Self>) {
-        self.settings.export = settings;
-        for tab in &self.tabs {
-            tab.table.update(cx, |table, _| {
-                table.delegate_mut().csv = self.settings.export.csv.clone();
-            });
-        }
-        self.changed(cx);
-    }
-}
-
-impl ExportDialog {
     #[allow(clippy::too_many_arguments)]
     fn new(
         source: Arc<Snapshot>,
@@ -246,6 +255,7 @@ impl ExportDialog {
             running: false,
             cancel: Arc::new(AtomicBool::new(false)),
             owner,
+            dialog: None,
             _subscriptions: subscriptions,
         };
         this.update_preview();
@@ -389,54 +399,68 @@ impl ExportDialog {
                 })
                 .await;
             let _ = weak.update_in(cx, |this, window, cx| {
-                this.running = false;
-                if this.cancel.load(Ordering::Relaxed) {
-                    cx.notify();
-                    return;
-                }
-                match result {
-                    Ok((count, text)) => {
-                        if let Some(text) = text {
-                            if !request
-                                .as_ref()
-                                .is_some_and(|request| request.is_current(cx))
-                            {
-                                this.error =
-                                    Some("The clipboard changed. Choose Copy to try again.".into());
-                                cx.notify();
-                                return;
-                            }
-                            copy_text(text, cx);
-                        }
-                        if let Some(path) = &path {
-                            this.settings.directory = path.parent().map(PathBuf::from);
-                        }
-                        let settings = this.settings.clone();
-                        let _ = this
-                            .owner
-                            .update(cx, |owner, cx| owner.remember_export(settings, cx));
-                        window.close_dialog(cx);
-                        if let Some(path) = path {
-                            let filename = path.file_name().unwrap_or_default().to_string_lossy();
-                            window.push_notification(
-                                Notification::new()
-                                    .message(format!("Exported {count} rows to {filename}"))
-                                    .action(move |_, _, _| {
-                                        let path = path.clone();
-                                        Button::new("reveal-export")
-                                            .label("Reveal in Finder")
-                                            .on_click(move |_, _, cx| cx.reveal_path(&path))
-                                    }),
-                                cx,
-                            );
-                        }
-                    }
-                    Err(error) => this.error = Some(error.to_string()),
-                }
-                cx.notify();
+                this.complete(result, path, request, window, cx);
             });
         })
         .detach();
+    }
+    fn complete(
+        &mut self,
+        result: std::io::Result<(usize, Option<String>)>,
+        path: Option<PathBuf>,
+        request: Option<CopyRequest>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.running = false;
+        if self.cancel.load(Ordering::Relaxed) {
+            cx.notify();
+            return;
+        }
+        match result {
+            Ok((count, text)) => {
+                if let Some(text) = text {
+                    if !request
+                        .as_ref()
+                        .is_some_and(|request| request.is_current(cx))
+                    {
+                        self.error =
+                            Some("The clipboard changed. Choose Copy to try again.".into());
+                        cx.notify();
+                        return;
+                    }
+                    copy_text(text, cx);
+                }
+                if let Some(path) = &path {
+                    self.settings.directory = path.parent().map(PathBuf::from);
+                }
+                let settings = self.settings.clone();
+                let _ = self
+                    .owner
+                    .update(cx, |owner, cx| owner.remember_export(settings, cx));
+                if let Some(handle) = &self.dialog {
+                    Root::update(window, cx, |root, window, cx| {
+                        root.close_dialog_for(handle, window, cx)
+                    });
+                }
+                if let Some(path) = path {
+                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                    window.push_notification(
+                        Notification::new()
+                            .message(format!("Exported {count} rows to {filename}"))
+                            .action(move |_, _, _| {
+                                let path = path.clone();
+                                Button::new("reveal-export")
+                                    .label("Reveal in Finder")
+                                    .on_click(move |_, _, cx| cx.reveal_path(&path))
+                            }),
+                        cx,
+                    );
+                }
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+        cx.notify();
     }
 }
 
@@ -634,6 +658,121 @@ pub(super) fn copy_text(text: String, cx: &mut App) {
 mod tests {
     use super::{CopyRequest, copy_text};
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
+
+    #[gpui_kit::test]
+    fn completed_export_preserves_an_unanswered_quit_warning(cx: &mut TestAppContext) {
+        use super::*;
+        use gpui_kit::test::TestWindowExt;
+        use std::sync::mpsc;
+
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        let source = Arc::new(
+            Snapshot::new(
+                &[crate::model::Column {
+                    name: "value".into(),
+                    data_type: "STRING".into(),
+                }],
+                &vec![vec![Some("complete".into())]].into(),
+            )
+            .unwrap(),
+        );
+        let (dialog, cancel, jobs, original_focus) = cx
+            .update_window(window.into(), |_, window, cx| {
+                window.render_frame(cx);
+                let original_focus = window.focused(cx);
+                let dialog = cx.new(|cx| {
+                    ExportDialog::new(
+                        source.clone(),
+                        None,
+                        export::Settings::default(),
+                        "test".into(),
+                        false,
+                        owner.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                ExportDialog::open(&dialog, window, cx);
+                dialog.update(cx, |dialog, _| dialog.running = true);
+                (
+                    dialog.clone(),
+                    dialog.read(cx).cancel.clone(),
+                    cx.global::<export::Jobs>().clone(),
+                    original_focus,
+                )
+            })
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("result.csv");
+        let writer_path = path.clone();
+        let guard = jobs.register(cancel.clone());
+        let (started, ready) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _guard = guard;
+            export::save(&writer_path, &cancel, |out| {
+                let count =
+                    export::write_csv(out, &source.table(None), &CsvOptions::default(), &cancel)?;
+                started.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(count)
+            })
+            .map(|count| (count, None))
+        });
+        ready.recv().unwrap();
+        assert_eq!(jobs.active_count(), 1);
+        cx.update_window(window.into(), |_, window, cx| {
+            owner
+                .update(cx, |qrow, cx| qrow.request_quit(window, cx))
+                .unwrap();
+            window.render_frame(cx);
+            assert!(window.try_find("keep-working").is_some());
+        })
+        .unwrap();
+        release.send(()).unwrap();
+        let result = worker.join().unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "value\r\ncomplete\r\n"
+        );
+        assert_eq!(jobs.active_count(), 0);
+        cx.update_window(window.into(), |_, window, cx| {
+            let warning = Root::read(window, cx)
+                .dialog_focus_handle()
+                .cloned()
+                .unwrap();
+            dialog.update(cx, |dialog, cx| {
+                dialog.complete(result, Some(path), None, window, cx)
+            });
+            window.render_frame(cx);
+            assert_eq!(Root::read(window, cx).dialog_focus_handle(), Some(&warning));
+            assert!(window.try_find("keep-working").is_some());
+            assert!(window.try_find("export-save").is_none());
+            assert!(owner.upgrade().unwrap().read(cx).quit_warning_open);
+            window.click("keep-working", cx);
+            window.render_frame(cx);
+            assert!(!owner.upgrade().unwrap().read(cx).quit_warning_open);
+            assert!(Root::read(window, cx).dialog_focus_handle().is_none());
+            assert_eq!(window.focused(cx), original_focus);
+            // A new active export can still prompt after declining the first quit.
+            let guard = jobs.register(Arc::new(AtomicBool::new(false)));
+            owner
+                .update(cx, |qrow, cx| qrow.request_quit(window, cx))
+                .unwrap();
+            window.render_frame(cx);
+            assert!(window.try_find("keep-working").is_some());
+            window.click("keep-working", cx);
+            drop(guard);
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn later_copy_requests_and_external_clipboard_changes_reject_old_results(
