@@ -264,7 +264,10 @@ leaves the job running. The worker sends cancellation
 to the operation that owns the download and completes protocol cleanup
 before the session can accept another query. Cleanup has a 2-second deadline.
 If cleanup fails or times out, the transport is interrupted and the session
-is discarded. A stopped drain consumes its cursor. To get all rows after
+is discarded. The deadline starts when protocol cancellation begins.
+It does not limit credential lookup, token refresh, DNS lookup, or a TCP
+connection that has not yet returned a socket. Export jobs stay active until
+that work returns. A stopped drain consumes its cursor. To get all rows after
 that, run the query again. All-row exports from limited Postgres and Trino
 previews are not available yet.
 

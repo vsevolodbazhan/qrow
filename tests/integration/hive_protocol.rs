@@ -774,3 +774,182 @@ fn a_setup_step_without_an_answer_explains_the_engine_start() {
     done.send(()).unwrap();
     server.join().unwrap();
 }
+
+#[test]
+fn run_export_cancel_aborts_sasl_before_open_session_or_schema() {
+    use qrow::{export, logs::ExecutionId, worker::Worker};
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = profile(listener.local_addr().unwrap().port());
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        for _ in 0..2 {
+            let mut header = [0; 5];
+            socket.read_exact(&mut header).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(header[1..].try_into().unwrap()) as usize];
+            socket.read_exact(&mut payload).unwrap();
+        }
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).unwrap(), 0);
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("synthetic"))),
+    );
+    let jobs = export::Jobs::default();
+    let download = worker
+        .run_and_export(
+            profile,
+            "SELECT never_submitted".into(),
+            ExecutionId(201),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    observed.recv_timeout(Duration::from_secs(2)).unwrap();
+    let start = Instant::now();
+    worker.cancel();
+    let error = download.wait_spool().err().unwrap();
+    assert!(error.get_ref().unwrap().is::<export::Cancelled>());
+    assert!(jobs.cancel_and_wait(Duration::from_secs(2)));
+    assert!(start.elapsed() < Duration::from_secs(1));
+    server.join().unwrap();
+}
+
+#[test]
+fn run_export_cancel_stops_execute_and_schema_replies_before_releasing_the_worker() {
+    use qrow::{export, logs::ExecutionId, worker::Worker};
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    for schema in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let profile = profile(listener.local_addr().unwrap().port());
+        let (stalled, observed) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let mut peer = Peer::accept(&listener);
+            initialize(&mut peer);
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(request.statement, "SELECT blocked_reply");
+            if schema {
+                peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+                let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+                peer.reply(status(TOperationState::FINISHED_STATE, true));
+                let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+            }
+            stalled.send(()).unwrap();
+            if schema {
+                let mut cancellation = Peer::accept(&listener);
+                let _: TCancelOperationReq = cancellation.read("CancelOperation");
+                cancellation.reply(TCancelOperationResp::new(success()));
+            }
+            let mut byte = [0];
+            assert_eq!(peer.socket.read(&mut byte).unwrap(), 0);
+        });
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(HiveConnector::default()),
+            Arc::new(|_| Ok(Secret::password("test-password"))),
+        );
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                profile,
+                "SELECT blocked_reply".into(),
+                ExecutionId(202),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        observed.recv_timeout(Duration::from_secs(3)).unwrap();
+        let started = Instant::now();
+        worker.cancel();
+        assert!(
+            download
+                .wait_spool()
+                .err()
+                .unwrap()
+                .get_ref()
+                .unwrap()
+                .is::<export::Cancelled>()
+        );
+        assert!(jobs.cancel_and_wait(Duration::from_secs(3)));
+        assert!(started.elapsed() < Duration::from_secs(3));
+        server.join().unwrap();
+    }
+}
+
+#[test]
+fn run_export_cancel_interrupts_the_previous_profiles_session_close() {
+    use qrow::{
+        export,
+        logs::ExecutionId,
+        worker::{Event, Worker},
+    };
+    use std::{
+        sync::{Arc, atomic::AtomicBool, mpsc},
+        time::Instant,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let original = profile(listener.local_addr().unwrap().port());
+    let mut changed = original.clone();
+    changed.username = "different-account".into();
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let _: TExecuteStatementReq = peer.read("ExecuteStatement");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(status(TOperationState::FINISHED_STATE, false));
+        let _: TCloseOperationReq = peer.read("CloseOperation");
+        peer.reply(TCloseOperationResp::new(success()));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(peer.socket.read(&mut byte).unwrap(), 0);
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("test-password"))),
+    );
+    worker.run(original, "SET previous_session".into());
+    while !matches!(
+        worker.events.recv_timeout(Duration::from_secs(3)).unwrap(),
+        Event::Ready { .. }
+    ) {}
+    let jobs = export::Jobs::default();
+    let download = worker
+        .run_and_export(
+            changed,
+            "SELECT must_not_execute".into(),
+            ExecutionId(203),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    observed.recv_timeout(Duration::from_secs(3)).unwrap();
+    let started = Instant::now();
+    worker.cancel();
+    assert!(download.wait_spool().is_err());
+    assert!(jobs.cancel_and_wait(Duration::from_secs(2)));
+    assert!(started.elapsed() < Duration::from_secs(1));
+    server.join().unwrap();
+}
