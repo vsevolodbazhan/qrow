@@ -107,6 +107,7 @@ pub fn init(cx: &mut App) {
             "",
         ),
     );
+    cx.bind_keys(results::bindings());
     cx.bind_keys([
         KeyBinding::new("cmd-enter", RunQuery, None),
         KeyBinding::new(
@@ -896,7 +897,10 @@ impl Qrow {
         let table = cx.new(|cx| {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
-            TableState::new(results, window, cx).col_selectable(false)
+            // The results delegate owns the selection: a range of cells.
+            TableState::new(results, window, cx)
+                .col_selectable(false)
+                .row_selectable(false)
         });
         Tab {
             saved,

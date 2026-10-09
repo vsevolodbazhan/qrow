@@ -80,9 +80,9 @@ required-features = ["ui"]
 # release includes all fixes.
 gpui-base = { path = "vendor/gpui-base" }
 
-# GPUI Component 0.6.6 with one Qrow fix: the rows of a dropdown list have
-# space between them. See vendor/gpui-component/QROW-PATCH.md. Remove this
-# patch when a GPUI Kit release includes the fix.
+# GPUI Component 0.6.6 with Qrow fixes, for example the rows of a dropdown
+# list have space between them. vendor/gpui-component/QROW-PATCH.md lists
+# them. Remove this patch when a GPUI Kit release includes all fixes.
 gpui-component = { path = "vendor/gpui-component" }
 
 # GPUI's macOS platform 0.3.6 with one Qrow fix: a window stops its display

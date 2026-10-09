@@ -34,6 +34,11 @@ Qrow changes these files:
   clip their content cut the ring off. The test of each file checks the
   setting. Run them in a copy of the crate in the GPUI Kit repository, as the
   tests read files outside the crate.
+- `src/menu/context_menu.rs`: the dismiss handler of a context menu holds its
+  shared state weakly and releases the dismissed menu. Before, the state owned
+  the subscription and the subscription owned the state, so the last menu of
+  each context menu area stayed alive until the application exited. The
+  leak detector of the UI tests found this with the menu of the results table.
 - `src/tooltip.rs`: with the `test-support` feature, a tooltip is the observed
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate
