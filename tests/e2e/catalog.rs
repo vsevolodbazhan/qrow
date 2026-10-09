@@ -76,7 +76,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             app.wait_for(cx, format!("{parent}\u{1f}label"));
             app.click(cx, format!("{parent}\u{1f}label"));
         }
-        app.context_menu(cx, parent.clone());
+        app.context_menu(cx, format!("{parent}\u{1f}label"));
         app.choose(cx, "popup-menu", "Refresh");
         let status = format!("{parent}\u{1f}error-icon");
         app.wait_for(cx, status.clone());
@@ -126,7 +126,7 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
             }
         });
         // Failed scopes remain refreshable from the parent's menu.
-        app.context_menu(cx, parent.clone());
+        app.context_menu(cx, format!("{parent}\u{1f}label"));
         app.choose(cx, "popup-menu", "Refresh");
         app.wait_until(
             cx,
