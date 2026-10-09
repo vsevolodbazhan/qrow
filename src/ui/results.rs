@@ -11,7 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use std::{borrow::Cow, ops::RangeInclusive};
+use std::{borrow::Cow, ops::RangeInclusive, time::Duration};
 
 actions!(
     qrow_results,
@@ -78,6 +78,9 @@ pub struct Results {
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selection: Option<Selection>,
+    drag: Option<Point<Pixels>>,
+    drag_hitbox: Option<HitboxId>,
+    drag_task: Option<Task<()>>,
     ui_scale: f32,
 }
 impl Default for Results {
@@ -90,6 +93,9 @@ impl Default for Results {
             empty_message: None,
             headers: vec![],
             selection: None,
+            drag: None,
+            drag_hitbox: None,
+            drag_task: None,
             ui_scale: 1.,
         }
     }
@@ -157,9 +163,12 @@ impl Results {
         self.columns = columns;
     }
     pub fn clear(&mut self) {
+        // The next timer turn releases this gesture's capture after a reset.
+        let drag_task = self.drag_task.take();
         *self = Self {
             ui_scale: self.ui_scale,
             csv: self.csv,
+            drag_task,
             ..Self::default()
         };
     }
@@ -443,6 +452,11 @@ impl TableDelegate for Results {
                         data.select_rows(r, event.modifiers.shift);
                     } else {
                         data.select_cell(r, c - 1, event.modifiers.shift);
+                        data.drag = Some(event.position);
+                        if let Some(hitbox) = data.drag_hitbox {
+                            window.capture_pointer(hitbox);
+                        }
+                        start_drag(state, window, cx);
                     }
                     window.focus(&state.focus_handle(cx), cx);
                     cx.notify();
@@ -557,6 +571,7 @@ pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
         table.update(cx, |state, cx| {
             if state.delegate().selection.is_some() || state.selected_row().is_some() {
                 state.delegate_mut().selection = None;
+                state.delegate_mut().drag = None;
                 state.clear_selection(cx);
             }
         });
@@ -599,6 +614,134 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> imp
     .inset_0()
 }
 
+/// Capture moves and release even after the pointer leaves a virtualized cell.
+fn drag_selection(table: &Entity<TableState<Results>>) -> impl IntoElement {
+    let geometry = table.downgrade();
+    let events = table.downgrade();
+    canvas(
+        move |bounds, window, cx| {
+            let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+            let _ = geometry.update(cx, |state, _| {
+                state.delegate_mut().drag_hitbox = Some(hitbox.id)
+            });
+        },
+        move |_, _, window, _| {
+            let moves = events.clone();
+            window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+                if !phase.capture() {
+                    return;
+                }
+                let _ = moves.update(cx, |state, cx| {
+                    if state.delegate().drag.is_none() {
+                        return;
+                    }
+                    if event.pressed_button != Some(MouseButton::Left) {
+                        state.delegate_mut().drag = None;
+                        window.release_pointer();
+                        return;
+                    }
+                    state.delegate_mut().drag = Some(event.position);
+                    update_drag(state, event.position, cx);
+                    cx.stop_propagation();
+                });
+            });
+            let release = events;
+            window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+                if phase.capture() && event.button == MouseButton::Left {
+                    let _ = release.update(cx, |state, cx| {
+                        if state.delegate_mut().drag.take().is_some() {
+                            update_drag(state, event.position, cx);
+                            state.delegate_mut().drag_task = None;
+                            window.release_pointer();
+                        }
+                    });
+                }
+            });
+        },
+    )
+    .absolute()
+    .size_full()
+    .inset_0()
+}
+
+fn update_drag(
+    state: &mut TableState<Results>,
+    position: Point<Pixels>,
+    cx: &mut Context<TableState<Results>>,
+) {
+    if let Some((row, column)) = state.cell_at_position(position, cx) {
+        let data = state.delegate_mut();
+        let focus = (data.page().start + row, column.saturating_sub(1));
+        if let Some(selection) = data.selection.as_mut()
+            && selection.focus != focus
+        {
+            selection.focus = focus;
+            cx.notify();
+        }
+    }
+}
+
+/// Keep scrolling while a held pointer stays at an edge, even without new moves.
+fn start_drag(
+    state: &mut TableState<Results>,
+    window: &mut Window,
+    cx: &mut Context<TableState<Results>>,
+) {
+    let capture = window.captured_hitbox();
+    state.delegate_mut().drag_task = Some(cx.spawn_in(window, async move |weak, cx| {
+        loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(16))
+                .await;
+            let keep = weak.update_in(cx, |state, window, cx| {
+                let Some(position) = state.delegate().drag else {
+                    if capture.is_some() && window.captured_hitbox() == capture {
+                        window.release_pointer();
+                    }
+                    return false;
+                };
+                if window.captured_hitbox() != capture {
+                    state.delegate_mut().drag = None;
+                    return false;
+                }
+                if !state.focus_handle(cx).contains_focused(window, cx)
+                    || window.has_active_dialog(cx)
+                    || window.has_active_sheet(cx)
+                    || !window.is_window_active()
+                {
+                    state.delegate_mut().drag = None;
+                    window.release_pointer();
+                    return false;
+                }
+                let bounds = state.body_bounds();
+                // Match the table's zoom: a row-height edge band, with a bounded step.
+                let row_height = state.row_height();
+                let edge = |value: Pixels, low: Pixels, high: Pixels| {
+                    if value < low + row_height {
+                        1.
+                    } else if value > high - row_height {
+                        -1.
+                    } else {
+                        0.
+                    }
+                };
+                let delta = point(
+                    row_height * 0.5 * edge(position.x, bounds.left(), bounds.right()),
+                    row_height * 0.3 * edge(position.y, bounds.top(), bounds.bottom()),
+                );
+                if state.scroll_by(delta, cx) {
+                    update_drag(state, position, cx);
+                    cx.notify();
+                }
+                true
+            });
+            if !matches!(keep, Ok(true)) {
+                break;
+            }
+        }
+    }));
+}
+
 pub(super) fn view(
     table: &Entity<TableState<Results>>,
     modal: bool,
@@ -623,7 +766,10 @@ pub(super) fn view(
                 .bordered(false)
                 .scrollbar_visible(true, true),
         )
-        .when(!modal, |el| el.child(horizontal_scroll(table, scale)))
+        .when(!modal, |el| {
+            el.child(horizontal_scroll(table, scale))
+                .child(drag_selection(table))
+        })
         .into_any_element()
 }
 
@@ -725,6 +871,9 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
             }
             cancel.update(cx, |state, cx| {
                 if state.delegate_mut().selection.take().is_some() {
+                    state.delegate_mut().drag = None;
+                    state.delegate_mut().drag_task = None;
+                    window.release_pointer();
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -755,6 +904,7 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
         let data = state.delegate_mut();
         if data.pagination.select(page, data.rows.len()) {
             data.selection = None;
+            data.drag = None;
             state.clear_selection(cx);
             state.scroll_to_row(0, cx);
             cx.notify();

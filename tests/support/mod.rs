@@ -582,6 +582,50 @@ pub fn pointer_click_with(
     window.render_frame(cx);
 }
 
+/// Drag the left pointer between two visible elements.
+pub fn pointer_drag(
+    window: &mut Window,
+    from: &ElementSnapshot,
+    to: &ElementSnapshot,
+    cx: &mut App,
+) {
+    assert!(from.visible() && to.visible());
+    let modifiers = Modifiers::default();
+    window.dispatch_event(
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position: from.bounds().center(),
+            modifiers,
+            click_count: 1,
+            first_mouse: false,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseMoveEvent {
+            position: to.bounds().center(),
+            pressed_button: Some(MouseButton::Left),
+            modifiers,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+    window.dispatch_event(
+        MouseUpEvent {
+            button: MouseButton::Left,
+            position: to.bounds().center(),
+            modifiers,
+            click_count: 1,
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+
 /// The label of a result cell. Column 0 holds the row number.
 pub fn cell(window: &Window, row: usize, column: usize) -> Option<String> {
     find_in(window, ("row", row), ("cell", column)).and_then(|cell| cell.label().map(str::to_owned))
