@@ -98,6 +98,9 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   three compression choices and typed decimals, binary values, dates, and
   timestamps. Run them through
   `./qtest` to use the Python dependencies in `uv.lock`.
+- Export core tests check concurrent spool readers, cancellation wakeups,
+  typed record replay, malformed records, and end row counts. Disk tests
+  check reservations shared by output files and spools on one volume.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`

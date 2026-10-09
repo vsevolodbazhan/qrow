@@ -125,6 +125,15 @@ leaves the destination unchanged. Failed writes keep the dialog open.
 An application crash can leave a `.qrow-export-*.tmp` file next to the
 destination. You can delete that temporary file.
 
+Save checks free disk space before each write. Exports on the same volume
+share disk reservations. An export stops if the reserved writes would leave
+less than 1 GiB free. Other programs can still use that space. A disk error
+names the affected volume and leaves the destination unchanged.
+
+Export stops if a cell exceeds 8 MiB or a row exceeds 16 MiB. These limits
+apply to each format. They do not limit a server message before Qrow receives
+the message.
+
 ### CSV values and limits
 
 CSV uses double quotes and doubles each quote inside a quoted value.
@@ -146,7 +155,8 @@ Numeric and Boolean values keep their server text. CSV does not change
 decimal values to floating-point numbers.
 
 Exports share immutable preview batches. Concurrent exports can retain up
-to 512 MiB of source row storage. Shared batches count once. Encoding writes
+to 512 MiB across retained sources and reserved spool working memory.
+Shared batches count once. Encoding writes
 cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
 
