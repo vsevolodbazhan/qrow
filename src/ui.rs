@@ -899,7 +899,7 @@ impl Qrow {
         let table = cx.new(|cx| {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
-            results.csv = self.settings.export.csv.clone();
+            results.export = self.settings.export.clone();
             // The results delegate owns the selection: a range of cells.
             TableState::new(results, window, cx)
                 .col_selectable(false)

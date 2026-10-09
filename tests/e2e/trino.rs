@@ -61,6 +61,16 @@ fn csv_export_preserves_trino_decimal_text_and_nulls(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run trino"]
+fn markdown_json_export_normalizes_real_trino_values(cx: &mut TestAppContext) {
+    let app = launch(
+        cx,
+        "SELECT 'a|b' AS text, CAST(NULL AS VARCHAR) AS absent, '' AS empty, DECIMAL '123.45' AS amount, BIGINT '9223372036854775807' AS id, TRUE AS ok, from_hex('005cff') AS bytes, ARRAY[1,2] AS items, DATE '2026-10-09' AS day, TIMESTAMP '2026-10-09 01:02:03.123456' AS moment",
+    );
+    super::export::assert_markdown_json(cx, &app);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
 fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     let app = launch(
         cx,
