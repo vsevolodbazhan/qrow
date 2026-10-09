@@ -59,34 +59,37 @@ impl LineEnding {
 }
 
 /// How a null is written. The marker is never quoted.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NullMarker {
     #[default]
     Empty,
     Null,
     Backslash,
+    Custom(String),
 }
 
 impl NullMarker {
     pub const ALL: [Self; 3] = [Self::Empty, Self::Null, Self::Backslash];
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &str {
         match self {
             Self::Empty => "",
             Self::Null => "NULL",
             Self::Backslash => "\\N",
+            Self::Custom(value) => value,
         }
     }
-    pub fn label(self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::Empty => "Empty",
             Self::Null => "NULL",
             Self::Backslash => "\\N",
+            Self::Custom(_) => "Custom",
         }
     }
 }
 
 /// The options of a CSV export. The defaults are the Standard preset.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct CsvOptions {
@@ -162,6 +165,20 @@ impl Preset {
 }
 
 impl CsvOptions {
+    pub fn validate(&self) -> io::Result<()> {
+        if self
+            .null
+            .as_str()
+            .contains([self.separator.char(), '\"', '\r', '\n'])
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "The null marker must not contain the separator, a quote, or a line break.",
+            ));
+        }
+        Ok(())
+    }
+
     /// The preset with exactly these options.
     pub fn preset(&self) -> Option<Preset> {
         Preset::ALL
@@ -183,20 +200,21 @@ impl CsvOptions {
 /// [`row`](Self::row) for each row, then [`finish`](Self::finish).
 pub struct CsvWriter<'a, W: Write> {
     out: &'a mut W,
-    options: CsvOptions,
+    options: &'a CsvOptions,
     columns: &'a [ExportColumn],
 }
 
 impl<'a, W: Write> CsvWriter<'a, W> {
-    pub fn new(out: &'a mut W, options: &CsvOptions, columns: &'a [ExportColumn]) -> Self {
+    pub fn new(out: &'a mut W, options: &'a CsvOptions, columns: &'a [ExportColumn]) -> Self {
         Self {
             out,
-            options: *options,
+            options,
             columns,
         }
     }
 
     pub fn begin(&mut self) -> io::Result<()> {
+        self.options.validate()?;
         if self.options.byte_order_mark {
             self.out.write_all("\u{FEFF}".as_bytes())?;
         }
@@ -237,7 +255,7 @@ impl<'a, W: Write> CsvWriter<'a, W> {
             match value {
                 None => self.out.write_all(self.options.null.as_str().as_bytes())?,
                 Some(value) => {
-                    encode(self.out, value, kind, &self.options)?;
+                    encode(self.out, value, kind, self.options)?;
                 }
             }
         }
@@ -350,6 +368,52 @@ mod tests {
     }
 
     #[test]
+    fn custom_null_markers_keep_null_empty_and_literal_text_apart() {
+        for quote_all in [false, true] {
+            let options = CsvOptions {
+                null: NullMarker::Custom("未知😀".into()),
+                quote_all,
+                ..CsvOptions::default()
+            };
+            let text = write(&options, &[[None, Some("")], [Some("未知😀"), None]]);
+            assert!(text.contains("未知😀,\"\"\r\n\"未知😀\",未知😀\r\n"));
+            let restored: CsvOptions =
+                serde_json::from_str(&serde_json::to_string(&options).unwrap()).unwrap();
+            assert_eq!(restored, options);
+        }
+    }
+
+    #[test]
+    fn invalid_markers_are_rejected_before_any_output() {
+        for separator in Separator::ALL {
+            for marker in [
+                separator.char().to_string(),
+                "a\"b".into(),
+                "a\rb".into(),
+                "a\nb".into(),
+            ] {
+                let options = CsvOptions {
+                    separator,
+                    null: NullMarker::Custom(marker),
+                    ..CsvOptions::default()
+                };
+                let mut out = Vec::new();
+                assert!(
+                    CsvWriter::new(&mut out, &options, &columns())
+                        .begin()
+                        .is_err()
+                );
+                assert!(out.is_empty());
+            }
+        }
+        let mut options = Preset::Tsv.options();
+        options.null = NullMarker::Custom("a,b".into());
+        assert!(options.validate().is_ok());
+        options.separator = Separator::Comma;
+        assert!(options.validate().is_err());
+    }
+
+    #[test]
     fn quote_all_quotes_every_value_but_not_nulls() {
         let options = CsvOptions {
             quote_all: true,
@@ -414,7 +478,7 @@ mod tests {
             let options = CsvOptions {
                 separator,
                 line_ending,
-                null,
+                null: null.clone(),
                 quote_all,
                 header: true,
                 byte_order_mark: false,
