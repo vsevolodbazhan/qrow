@@ -372,8 +372,8 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                 );
                 app.press(cx, "escape");
                 app.wait_gone(cx, "activity");
-                app.update(cx, |window, cx| {
-                    assert_catalog_error_dot(window, &status, cx.theme().danger);
+                app.update(cx, |window, _| {
+                    assert!(window.try_find(status.clone()).is_none());
                 });
                 app.update(cx, |window, _| {
                     assert!(
@@ -392,6 +392,142 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
         app.update(cx, |window, _| window.remove_window());
         cx.run_until_parked();
     }
+}
+
+#[gpui_kit::test]
+fn schema_error_dots_replace_counts_until_their_activity_is_read(cx: &mut TestAppContext) {
+    for scale in [0.75, 1.5] {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let profile = Profile {
+            host: "127.0.0.1".into(),
+            port,
+            ..offline_profile("Unread errors")
+        };
+        let credentials = MemoryCredentials::default();
+        credentials
+            .set_password(profile.id, "synthetic-password")
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let relations = [table("daily", RelationKind::Table)];
+        cache(
+            &directory,
+            &profile,
+            &[("finance", Some(&relations)), ("sales", Some(&relations))],
+        );
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        expand_connection(&app, cx, &profile);
+        // A different schema's failure must not make an already-read error unread.
+        // Retrying the same failed scope must create a new unread error.
+        for name in ["finance", "sales", "finance"] {
+            let parent = format!("s\u{1f}{}\u{1f}{name}", profile.id);
+            let detail = format!("{parent}\u{1f}detail");
+            let status = format!("{parent}\u{1f}error-icon");
+            app.wait_for(cx, detail.clone());
+            let count_bounds = app.update(cx, |window, _| bounds_of(window, &detail));
+            app.context_menu(cx, format!("{parent}\u{1f}label"));
+            app.choose(cx, "popup-menu", "Refresh");
+            app.wait_for(cx, status.clone());
+            assert_status_alignment(&app, cx, &status);
+            app.update(cx, |window, cx| {
+                assert_catalog_error_dot(window, &status, cx.theme().danger);
+                assert!(window.try_find(detail.clone()).is_none());
+                let dot_bounds = bounds_of(window, &status);
+                assert!(
+                    (dot_bounds.center().x - count_bounds.center().x).abs() <= gpui_kit::px(0.5)
+                );
+                let other = if name == "finance" {
+                    "sales"
+                } else {
+                    "finance"
+                };
+                assert!(
+                    window
+                        .try_find(format!(
+                            "s\u{1f}{}\u{1f}{other}\u{1f}error-icon",
+                            profile.id
+                        ))
+                        .is_none()
+                );
+                assert!(
+                    window
+                        .find(format!("s\u{1f}{}\u{1f}{other}\u{1f}detail", profile.id))
+                        .visible()
+                );
+            });
+            app.click(cx, status.clone());
+            app.wait_for(cx, "activity");
+            app.press(cx, "escape");
+            app.wait_gone(cx, "activity");
+            app.wait_for(cx, detail.clone());
+            app.update(cx, |window, _| {
+                assert!(window.try_find(status.clone()).is_none());
+                assert_eq!(bounds_of(window, &detail), count_bounds);
+            });
+        }
+        app.update(cx, |window, _| window.remove_window());
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn a_schema_failure_is_read_when_activity_is_already_open(cx: &mut TestAppContext) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..offline_profile("Reading refresh errors")
+    };
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let relations = [table("daily", RelationKind::Table)];
+    cache(&directory, &profile, &[("finance", Some(&relations))]);
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    expand_connection(&app, cx, &profile);
+    let parent = format!("s\u{1f}{}\u{1f}finance", profile.id);
+    app.wait_for(cx, format!("{parent}\u{1f}detail"));
+    app.context_menu(cx, format!("{parent}\u{1f}label"));
+    app.choose(cx, "popup-menu", "Refresh");
+    app.wait_for(cx, format!("{parent}\u{1f}busy"));
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    drop(listener);
+    app.wait_until(
+        cx,
+        "the displayed failure",
+        Duration::from_secs(10),
+        |window, _| {
+            elements(window)
+                .iter()
+                .filter(|element| element.label() == Some("Copy error"))
+                .count()
+                == 2
+        },
+    );
+    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_for(cx, format!("{parent}\u{1f}detail"));
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .try_find(format!("{parent}\u{1f}error-icon"))
+                .is_none()
+        );
+        assert!(window.try_find(format!("{parent}\u{1f}busy")).is_none());
+        assert_eq!(
+            label(window, "toggle-activity").as_deref(),
+            Some("Activity")
+        );
+    });
 }
 
 #[gpui_kit::test]

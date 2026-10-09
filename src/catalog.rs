@@ -198,6 +198,9 @@ pub struct Schema {
     /// The member whose refresh recorded `error`.
     #[serde(skip)]
     pub error_member: Option<Uuid>,
+    /// Identifies this failure, also when a retry returns the same message.
+    #[serde(skip)]
+    pub error_id: Option<Uuid>,
     /// `None` until Qrow reads the relation list.
     pub relations: Option<BTreeMap<String, Arc<Relation>>>,
 }
@@ -214,6 +217,9 @@ pub struct Relation {
     /// The member whose refresh recorded `error`.
     #[serde(skip)]
     pub error_member: Option<Uuid>,
+    /// Identifies this failure, also when a retry returns the same message.
+    #[serde(skip)]
+    pub error_id: Option<Uuid>,
     /// `None` until Qrow reads the columns. Columns are in table order.
     pub columns: Option<Vec<CatalogColumn>>,
 }
@@ -345,6 +351,7 @@ impl Catalog {
                                 fetched_at: kept.as_ref().and_then(|kept| kept.fetched_at),
                                 error: None,
                                 error_member: None,
+                                error_id: None,
                                 columns: kept.and_then(|kept| kept.columns.clone()),
                             };
                             (entry.name, Arc::new(relation))
@@ -354,6 +361,7 @@ impl Catalog {
                 node.fetched_at = Some(at);
                 node.error = None;
                 node.error_member = None;
+                node.error_id = None;
             }
             Some(name) => {
                 // Without a relation list, one relation cannot show which others exist.
@@ -369,6 +377,7 @@ impl Catalog {
                                 fetched_at: None,
                                 error: None,
                                 error_member: None,
+                                error_id: None,
                                 columns: None,
                             })
                         });
@@ -377,6 +386,7 @@ impl Catalog {
                         relation.comment = entry.comment;
                         relation.error = None;
                         relation.error_member = None;
+                        relation.error_id = None;
                     }
                     None => {
                         relations.remove(name);
@@ -411,6 +421,7 @@ impl Catalog {
             node.fetched_at = Some(at);
             node.error = None;
             node.error_member = None;
+            node.error_id = None;
         }
     }
 
@@ -427,6 +438,7 @@ impl Catalog {
                     let node = Arc::make_mut(node);
                     node.error = Some(message);
                     node.error_member = Some(member);
+                    node.error_id = Some(Uuid::new_v4());
                 }
             }
             Scope::Relation(schema, relation) => {
@@ -439,6 +451,7 @@ impl Catalog {
                     let node = Arc::make_mut(node);
                     node.error = Some(message);
                     node.error_member = Some(member);
+                    node.error_id = Some(Uuid::new_v4());
                 }
             }
         }
@@ -870,12 +883,18 @@ mod tests {
         let orders = catalog.relation("sales", "orders").unwrap();
         assert_eq!(orders.error_for(Uuid::nil()), Some("broken"));
         assert_eq!(orders.error_for(other), None);
+        let first = sales.error_id.unwrap();
+        assert!(orders.error_id.is_some());
+        catalog.set_error(&Scope::Schema("sales".into()), "denied".into(), Uuid::nil());
+        assert_ne!(catalog.schema("sales").unwrap().error_id, Some(first));
         catalog.apply_relations("sales", None, vec![table("orders")], 2);
         let sales = catalog.schema("sales").unwrap();
+        assert!(sales.error_id.is_none());
         assert_eq!((sales.error.as_deref(), sales.error_member), (None, None));
         catalog.apply_columns("sales", None, BTreeMap::new(), 2);
         let orders = catalog.relation("sales", "orders").unwrap();
         assert_eq!((orders.error.as_deref(), orders.error_member), (None, None));
+        assert!(orders.error_id.is_none());
     }
 
     #[test]

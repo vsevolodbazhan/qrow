@@ -604,15 +604,6 @@ impl Runner {
                 } else {
                     Severity::Info
                 };
-                self.log_as(
-                    LogKind::SchemaRefreshFinished,
-                    severity,
-                    format!(
-                        "{outcome} (client measurement: {})",
-                        format_duration(duration)
-                    ),
-                    Some(duration),
-                );
                 let member = self.profile.id;
                 let close_session =
                     matches!(result, Err(Interrupt::Unavailable(_) | Interrupt::TimedOut));
@@ -650,6 +641,18 @@ impl Runner {
                     ..Status::default()
                 };
                 self.publish(true);
+                // Activity can mark the outcome read as soon as it arrives.
+                // Send the failure snapshot first so that acknowledgement
+                // also includes every error produced by this refresh.
+                self.log_as(
+                    LogKind::SchemaRefreshFinished,
+                    severity,
+                    format!(
+                        "{outcome} (client measurement: {})",
+                        format_duration(duration)
+                    ),
+                    Some(duration),
+                );
                 self.save();
                 if close_session {
                     self.close_session();

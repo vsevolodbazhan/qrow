@@ -528,6 +528,66 @@ fn refresh_completion_is_published_before_session_cleanup() {
 }
 
 #[test]
+fn completed_refresh_logs_follow_their_failure_snapshot() {
+    let server = Server::with(&[("sales", "orders", "TABLE", &["id"])]);
+    server
+        .broken_relation_lists
+        .lock()
+        .unwrap()
+        .push("sales".into());
+    let profile = profile();
+    let id = profile.id;
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let resume_rx = std::sync::Mutex::new(resume_rx);
+    let worker = CatalogWorker::with_connector(
+        CatalogConfig::private(profile),
+        None,
+        Arc::new(move || {
+            if wake_tx.send(()).is_ok() {
+                let _ = resume_rx.lock().unwrap().recv();
+            }
+        }),
+        Arc::new(Fake(server)),
+        Arc::new(|_| Ok(Secret::password("synthetic-password"))),
+        MINUTE,
+    );
+    worker.refresh(id, Scope::Connection);
+    let mut catalog = None;
+    loop {
+        wake_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Hold the worker at each UI wake. The completion log cannot rely
+        // on a snapshot that the worker will send after this wake returns.
+        let completed = worker
+            .logs
+            .try_iter()
+            .any(|(_, event)| event.kind == LogKind::SchemaRefreshFinished);
+        for event in worker.events.try_iter() {
+            if let Event::Catalog(snapshot) = event {
+                catalog = Some(snapshot);
+            }
+        }
+        let failure = catalog
+            .as_ref()
+            .and_then(|catalog| catalog.schema("sales"))
+            .and_then(|schema| schema.error_id);
+        resume_tx.send(()).unwrap();
+        if completed {
+            assert!(
+                failure.is_some(),
+                "Activity must acknowledge the failed snapshot"
+            );
+            break;
+        }
+    }
+    // Shutdown must not wait for the test's UI wake acknowledgement.
+    drop(wake_rx);
+    drop(resume_tx);
+    worker.shutdown();
+    worker.wait_for_shutdown(Duration::from_secs(10));
+}
+
+#[test]
 fn connection_refresh_reads_filtered_schemas_relations_and_columns() {
     let mut profile = profile();
     profile.catalog = CatalogSettings {

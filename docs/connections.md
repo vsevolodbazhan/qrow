@@ -694,7 +694,7 @@ A connection refresh starts with the schemas that Qrow read longest ago.
 The progress row shows the number of schemas that are done. The row is removed
 when the refresh ends, before the session closes. An expanded schema without
 a table list shows **Loading relations…** while Qrow reads its tables and
-views. A connection
+views. A schema's loading spinner replaces its relation count. A connection
 with many schemas or tables can need many minutes. To make it faster, hide
 the schemas that you do not use.
 
@@ -737,7 +737,9 @@ had before the refresh. The error shows on the row of the refreshed part:
   Select **Refresh** from the connection menu to try again.
 - A schema, a table, or a view: the row shows a red status dot. Point to
   the dot to read the first line of the error. Click it to open Activity for
-  that connection. The dot stays until a refresh succeeds. The expanded row
+  that connection. The dot replaces the schema's relation count while the
+  error is unread. When you view Activity, the dot goes away and the count
+  returns. A later failure shows a new dot. The expanded row
   keeps its cached data and has no error row. Select **Refresh** from the
   schema, table, or view menu to try again.
 

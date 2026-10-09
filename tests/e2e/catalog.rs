@@ -82,6 +82,9 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         app.wait_for(cx, status.clone());
         app.update(cx, |window, cx| {
             assert_catalog_error_dot(window, &status, cx.theme().danger);
+            if !relation {
+                assert!(window.try_find(format!("{schema}\u{1f}detail")).is_none());
+            }
         });
         app.click(cx, status.clone());
         app.wait_for(cx, "activity");
@@ -97,8 +100,9 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
         }
         app.press(cx, "escape");
         app.wait_gone(cx, "activity");
-        app.update(cx, |window, cx| {
-            assert_catalog_error_dot(window, &status, cx.theme().danger);
+        app.update(cx, |window, _| {
+            assert!(window.try_find(status.clone()).is_none());
+            assert!(window.find(format!("{schema}\u{1f}detail")).visible());
             assert!(
                 window
                     .try_find(format!("{parent}\u{1f}error\u{1f}refresh"))
@@ -138,6 +142,10 @@ fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAp
                         == Some("Activity, 1 unseen error")
             },
         );
+        app.wait_for(cx, status.clone());
+        app.update(cx, |window, cx| {
+            assert_catalog_error_dot(window, &status, cx.theme().danger)
+        });
         let activity = app.activity(cx, profile.id);
         assert_eq!(
             activity.matches("Started a schema refresh").count(),
