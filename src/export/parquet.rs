@@ -97,6 +97,50 @@ struct Field {
 }
 
 const ROW_GROUP_BYTES: usize = 64 * 1024 * 1024;
+const ENCODER_HEADROOM: usize = 40 * super::budget::MIB;
+const WRITER_MEMORY: usize = 128 * super::budget::MIB;
+
+struct Encoding<'a> {
+    row_offset: usize,
+    memory: &'a Arc<super::budget::Allowance>,
+    cancel: &'a AtomicBool,
+}
+
+fn schema_memory<'a>(
+    mut columns: impl Iterator<Item = &'a crate::model::Column>,
+) -> io::Result<usize> {
+    columns.try_fold(0usize, |bytes, column| {
+        bytes
+            .checked_add(
+                column
+                    .name
+                    .len()
+                    .saturating_mul(3)
+                    .saturating_add(column.data_type.len().saturating_mul(2))
+                    .saturating_add(256),
+            )
+            .ok_or_else(|| io::Error::other("The Parquet schema exceeds the writer memory limit."))
+    })
+}
+
+fn value_memory(field: &Field, text: Option<&str>) -> usize {
+    let (size, bytes) = match field.kind {
+        FieldKind::Boolean => (std::mem::size_of::<bool>(), 0),
+        FieldKind::Integer(bits) if bits <= 32 => (4, 0),
+        FieldKind::Integer(_) => (8, 0),
+        FieldKind::Float(single) => (if single { 4 } else { 8 }, 0),
+        FieldKind::Date => (4, 0),
+        FieldKind::Timestamp(_) => (8, 0),
+        FieldKind::Decimal(precision, _) if precision <= 18 => {
+            (if precision <= 9 { 4 } else { 8 }, 0)
+        }
+        FieldKind::Decimal(_, _) => (std::mem::size_of::<FixedLenByteArray>(), 16),
+        FieldKind::Binary(_) | FieldKind::Text => {
+            (std::mem::size_of::<ByteArray>(), text.map_or(0, str::len))
+        }
+    };
+    size + std::mem::size_of::<i16>() + bytes
+}
 
 pub fn write(
     out: &mut (impl Write + Send),
@@ -105,8 +149,80 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     super::validate_table(table)?;
+    let memory = super::budget::GLOBAL.allowance(WRITER_MEMORY)?;
+    let schema_bytes = schema_memory(
+        table
+            .column_indices
+            .clone()
+            .map(|index| &table.columns[index]),
+    )?;
+    let _schema = memory.acquire(schema_bytes)?;
     check_cancelled(cancel)?;
     let fields = fields(table, options, cancel)?;
+    let mut writer = open(out, &fields, options)?;
+    let mut start = table.row_indices.start;
+    while start < table.row_indices.end {
+        check_cancelled(cancel)?;
+        let mut end = start;
+        let mut bytes = 0usize;
+        let mut encoding = vec![0usize; fields.len()];
+        while end < table.row_indices.end {
+            let row_bytes: usize = table
+                .values(end)
+                .map(|value| value.map_or(24, |text| text.len().saturating_add(24)))
+                .sum();
+            let fits = fields.iter().enumerate().all(|(index, field)| {
+                encoding[index].saturating_add(value_memory(field, cell(table, end, field.column)))
+                    <= WRITER_MEMORY.saturating_sub(schema_bytes + ENCODER_HEADROOM)
+            });
+            if end > start && (bytes.saturating_add(row_bytes) > ROW_GROUP_BYTES || !fits) {
+                break;
+            }
+            if !fits {
+                return Err(io::Error::other(
+                    "This Parquet row exceeds the writer memory limit.",
+                ));
+            }
+            for (index, field) in fields.iter().enumerate() {
+                encoding[index] += value_memory(field, cell(table, end, field.column));
+            }
+            bytes = bytes.saturating_add(row_bytes);
+            end += 1;
+        }
+        let mut group = writer.next_row_group().map_err(error)?;
+        for field in &fields {
+            check_cancelled(cancel)?;
+            let mut column = group
+                .next_column()
+                .map_err(error)?
+                .ok_or_else(|| invalid("Missing Parquet column"))?;
+            write_column(
+                &mut column,
+                table,
+                field,
+                start..end,
+                &Encoding {
+                    row_offset: 0,
+                    memory: &memory,
+                    cancel,
+                },
+            )?;
+            column.close().map_err(error)?;
+        }
+        group.close().map_err(error)?;
+        start = end;
+    }
+    check_cancelled(cancel)?;
+    writer.close().map_err(error)?;
+    check_cancelled(cancel)?;
+    Ok(table.row_count())
+}
+
+fn open<W: Write + Send>(
+    out: W,
+    fields: &[Field],
+    options: &Options,
+) -> io::Result<SerializedFileWriter<W>> {
     let schema = Arc::new(
         Type::group_type_builder("result")
             .with_fields(fields.iter().map(field_type).collect::<io::Result<_>>()?)
@@ -120,27 +236,150 @@ pub fn write(
             .set_compression(options.compression.codec())
             .set_dictionary_enabled(true)
             .set_dictionary_page_size_limit(1024 * 1024)
+            // Limit the dictionary/page check to one cell. A wide cell cannot
+            // hide behind a batch of 1,024 similarly wide values.
+            .set_write_batch_size(1)
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .set_max_row_group_bytes(Some(ROW_GROUP_BYTES))
             .build(),
     );
-    let mut writer = SerializedFileWriter::new(out, schema, properties).map_err(error)?;
-    let mut start = table.row_indices.start;
-    while start < table.row_indices.end {
-        check_cancelled(cancel)?;
-        let mut end = start;
-        let mut bytes = 0usize;
-        while end < table.row_indices.end {
-            let row_bytes: usize = table
-                .values(end)
-                .map(|value| value.map_or(24, |text| text.len().saturating_add(24)))
-                .sum();
-            if end > start && bytes.saturating_add(row_bytes) > ROW_GROUP_BYTES {
+    SerializedFileWriter::new(out, schema, properties).map_err(error)
+}
+
+pub(crate) fn write_spool(
+    out: &mut (impl Write + Send),
+    spool: &Arc<super::spool::Spool>,
+    options: &Options,
+    cancel: &AtomicBool,
+) -> io::Result<usize> {
+    let memory = super::budget::GLOBAL.allowance(WRITER_MEMORY)?;
+    let schema_bytes = schema_memory(spool.columns().iter())?;
+    let _schema = memory.acquire(schema_bytes)?;
+    let mut stats = vec![Stats::default(); spool.columns().len()];
+    if options.column_types == ColumnTypes::Typed
+        && options.numeric == Numeric::Decimal
+        && spool
+            .columns()
+            .iter()
+            .any(|column| Kind::of(&column.data_type) == Kind::Decimal)
+    {
+        let mut reader = spool.reader()?;
+        let mut count = 0usize;
+        while let Some(batch) = reader.next(cancel)? {
+            for row in 0..batch.rows().len() {
+                check_cancelled(cancel)?;
+                for (column, definition) in spool.columns().iter().enumerate() {
+                    if Kind::of(&definition.data_type) == Kind::Decimal {
+                        let value = batch.rows()[row][column].as_deref();
+                        stats[column].observe(value).map_err(|error| {
+                            io::Error::new(
+                                error.kind(),
+                                format!(
+                                    "Column {}, row {}, value {:?}: {error}",
+                                    definition.name,
+                                    count + row + 1,
+                                    value.map(|text| text.chars().take(100).collect::<String>())
+                                ),
+                            )
+                        })?;
+                    }
+                }
+            }
+            count += batch.rows().len();
+        }
+    }
+    let names = value::column_names(spool.columns().iter().map(|column| column.name.as_str()));
+    let fields: Vec<_> = names
+        .into_iter()
+        .enumerate()
+        .map(|(column, name)| {
+            Ok(Field {
+                name,
+                column,
+                kind: if options.column_types == ColumnTypes::Text {
+                    FieldKind::Text
+                } else {
+                    kind_with_stats(
+                        &spool.columns()[column].data_type,
+                        spool.context(),
+                        options,
+                        &stats[column],
+                    )?
+                },
+            })
+        })
+        .collect::<io::Result<_>>()?;
+    let mut reader = spool.reader()?;
+    let mut writer = open(out, &fields, options)?;
+    let mut pending = None;
+    let mut count = 0usize;
+    loop {
+        let mut rows = super::Rows::default();
+        let mut encoding = vec![0usize; fields.len()];
+        loop {
+            let Some(batch) = pending
+                .take()
+                .map_or_else(|| reader.next(cancel), |batch| Ok(Some(batch)))?
+            else {
+                break;
+            };
+            let table = Table {
+                columns: spool.columns(),
+                rows: batch.rows(),
+                row_indices: 0..batch.rows().len(),
+                column_indices: 0..=spool.columns().len() - 1,
+            };
+            let additional: Vec<_> = fields
+                .iter()
+                .map(|field| {
+                    table
+                        .row_indices
+                        .clone()
+                        .map(|row| value_memory(field, cell(&table, row, field.column)))
+                        .sum::<usize>()
+                })
+                .collect();
+            let fits = additional.iter().enumerate().all(|(index, bytes)| {
+                encoding[index].saturating_add(*bytes)
+                    <= WRITER_MEMORY.saturating_sub(schema_bytes + ENCODER_HEADROOM)
+            });
+            if !rows.is_empty()
+                && (rows
+                    .retained_bytes()
+                    .saturating_add(batch.rows().retained_bytes())
+                    > ROW_GROUP_BYTES
+                    || rows
+                        .accounted_bytes()
+                        .saturating_add(batch.rows().accounted_bytes())
+                        > ROW_GROUP_BYTES
+                    || !fits)
+            {
+                pending = Some(batch);
                 break;
             }
-            bytes = bytes.saturating_add(row_bytes);
-            end += 1;
+            if !fits {
+                return Err(io::Error::other(
+                    "This Parquet batch exceeds the writer memory limit.",
+                ));
+            }
+            for (index, bytes) in additional.into_iter().enumerate() {
+                encoding[index] += bytes;
+            }
+            rows.append_shared(batch.rows());
+            if rows.retained_bytes() >= ROW_GROUP_BYTES || rows.accounted_bytes() >= ROW_GROUP_BYTES
+            {
+                break;
+            }
         }
+        if rows.is_empty() {
+            break;
+        }
+        let table = Table {
+            columns: spool.columns(),
+            row_indices: 0..rows.len(),
+            column_indices: 0..=spool.columns().len() - 1,
+            rows: &rows,
+        };
         let mut group = writer.next_row_group().map_err(error)?;
         for field in &fields {
             check_cancelled(cancel)?;
@@ -148,16 +387,26 @@ pub fn write(
                 .next_column()
                 .map_err(error)?
                 .ok_or_else(|| invalid("Missing Parquet column"))?;
-            write_column(&mut column, table, field, start..end, cancel)?;
+            write_column(
+                &mut column,
+                &table,
+                field,
+                0..rows.len(),
+                &Encoding {
+                    row_offset: count,
+                    memory: &memory,
+                    cancel,
+                },
+            )?;
             column.close().map_err(error)?;
         }
         group.close().map_err(error)?;
-        start = end;
+        count += rows.len();
     }
     check_cancelled(cancel)?;
     writer.close().map_err(error)?;
     check_cancelled(cancel)?;
-    Ok(table.row_count())
+    Ok(count)
 }
 
 fn fields(table: &Table<'_>, options: &Options, cancel: &AtomicBool) -> io::Result<Vec<Field>> {
@@ -187,9 +436,34 @@ fn kind(
     options: &Options,
     cancel: &AtomicBool,
 ) -> io::Result<FieldKind> {
-    let name = table.columns[column].data_type.trim().to_ascii_lowercase();
+    let mut stats = Stats::default();
+    if Kind::of(&table.columns[column].data_type) == Kind::Decimal
+        && options.numeric == Numeric::Decimal
+    {
+        for row in table.row_indices.clone() {
+            check_cancelled(cancel)?;
+            stats
+                .observe(cell(table, row, column))
+                .map_err(|error| cell_error(table, row, column, error))?;
+        }
+    }
+    kind_with_stats(
+        &table.columns[column].data_type,
+        table.rows.context(),
+        options,
+        &stats,
+    )
+}
+
+fn kind_with_stats(
+    type_name: &str,
+    context: &super::Context,
+    options: &Options,
+    stats: &Stats,
+) -> io::Result<FieldKind> {
+    let name = type_name.trim().to_ascii_lowercase();
     let base = name.split('(').next().unwrap_or_default().trim();
-    if table.rows.context().iso_dates() {
+    if context.iso_dates() {
         if base == "date" {
             return Ok(FieldKind::Date);
         }
@@ -210,13 +484,6 @@ fn kind(
             Numeric::Text => FieldKind::Text,
             Numeric::Double => FieldKind::Float(false),
             Numeric::Decimal => {
-                let mut stats = Stats::default();
-                for row in table.row_indices.clone() {
-                    check_cancelled(cancel)?;
-                    stats
-                        .observe(cell(table, row, column))
-                        .map_err(|error| cell_error(table, row, column, error))?;
-                }
                 if stats.special || !stats.present && base == "numeric" {
                     FieldKind::Text
                 } else {
@@ -307,22 +574,30 @@ fn write_column(
     table: &Table<'_>,
     field: &Field,
     rows: Range<usize>,
-    cancel: &AtomicBool,
+    encoding: &Encoding<'_>,
 ) -> io::Result<()> {
+    let row_offset = encoding.row_offset;
+    let cancel = encoding.cancel;
+    let bytes = rows
+        .clone()
+        .map(|row| value_memory(field, cell(table, row, field.column)))
+        .sum::<usize>();
+    let _column_memory = encoding
+        .memory
+        .acquire(bytes.saturating_add(ENCODER_HEADROOM))?;
     let mut definitions = Vec::with_capacity(rows.len());
     macro_rules! values {
         ($convert:expr) => {{
-            let mut values = Vec::new();
+            let mut values = Vec::with_capacity(rows.len());
             for row in rows.clone() {
                 check_cancelled(cancel)?;
                 match cell(table, row, field.column) {
                     None => definitions.push(0),
                     Some(text) => {
                         definitions.push(1);
-                        values.push(
-                            ($convert)(text)
-                                .map_err(|error| cell_error(table, row, field.column, error))?,
-                        );
+                        values.push(($convert)(text).map_err(|error| {
+                            cell_error_at(table, row, field.column, row_offset, error)
+                        })?);
                     }
                 }
             }
@@ -425,12 +700,21 @@ fn cell<'a>(table: &'a Table<'_>, row: usize, column: usize) -> Option<&'a str> 
     table.rows.get(row)?.get(column)?.as_deref()
 }
 fn cell_error(table: &Table<'_>, row: usize, column: usize, error: io::Error) -> io::Error {
+    cell_error_at(table, row, column, 0, error)
+}
+fn cell_error_at(
+    table: &Table<'_>,
+    row: usize,
+    column: usize,
+    offset: usize,
+    error: io::Error,
+) -> io::Error {
     io::Error::new(
         error.kind(),
         format!(
             "Column {}, row {}, value {:?}: {error}",
             table.columns[column].name,
-            row + 1,
+            offset + row + 1,
             cell(table, row, column).map(|text| text.chars().take(100).collect::<String>())
         ),
     )

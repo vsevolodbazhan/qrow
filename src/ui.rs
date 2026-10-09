@@ -238,6 +238,7 @@ struct Tab {
     cancelling: bool,
     connected: bool,
     more: bool,
+    preview_complete: bool,
     pending_page: Option<usize>,
     status: String,
     status_detail: Option<String>,
@@ -250,6 +251,9 @@ struct Tab {
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
+    cursor: crate::worker::Cursor,
+    replay: Option<Arc<crate::export::spool::Spool>>,
+    download: Option<Arc<crate::worker::Download>>,
     /// The query waits for this browser sign-in, and then runs.
     sign_in_wait: Option<sign_in_view::SignInWait>,
     cancelled_sign_in: Option<Uuid>,
@@ -515,6 +519,7 @@ pub struct Qrow {
     /// The schema catalogs that several connections share.
     shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
+    exports: Vec<export_dialog::background::Entry>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
@@ -771,6 +776,7 @@ impl Qrow {
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
+            exports: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),
@@ -918,6 +924,7 @@ impl Qrow {
             cancelling: false,
             connected: false,
             more: false,
+            preview_complete: false,
             pending_page: None,
             status: "Not connected".into(),
             status_detail: None,
@@ -928,6 +935,9 @@ impl Qrow {
             output_scroll: ScrollHandle::new(),
             current_execution: None,
             submitted_sql: None,
+            cursor: crate::worker::Cursor::Unavailable,
+            replay: None,
+            download: None,
             sign_in_wait: None,
             cancelled_sign_in: None,
             signed_in_for_run: false,
@@ -1342,6 +1352,7 @@ impl Qrow {
                     event,
                     workspace_visible && index == self.active,
                     &self.profiles,
+                    u64::from(self.settings.export_replay_limit_mib) * 1024 * 1024,
                     cx,
                 );
                 if let Some((status, detail)) = &waiting {
@@ -1369,6 +1380,7 @@ impl Qrow {
         event: Event,
         active: bool,
         profiles: &[Profile],
+        replay_limit: u64,
         cx: &mut Context<Self>,
     ) {
         if tab.started.is_some() {
@@ -1379,6 +1391,66 @@ impl Qrow {
             });
         }
         match event {
+            Event::Cursor { execution, state } => {
+                if tab.current_execution == Some(execution) {
+                    tab.cursor = state;
+                    if state == crate::worker::Cursor::Draining {
+                        tab.busy = true;
+                        tab.more = false;
+                        tab.pending_page = None;
+                        tab.set_status("Downloading export…");
+                    }
+                }
+            }
+            Event::DownloadProgress {
+                execution,
+                rows,
+                bytes,
+                elapsed,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    let mib = bytes as f64 / (1024. * 1024.);
+                    tab.set_status_detail(
+                        "Downloading export…",
+                        format!(
+                            "{rows} rows, {mib:.1} MiB, {:.1} MiB/s",
+                            mib / elapsed.as_secs_f64().max(0.001)
+                        ),
+                    );
+                }
+            }
+            Event::Downloaded { execution, spool } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.more = false;
+                    tab.download = None;
+                    tab.cursor = crate::worker::Cursor::Downloaded;
+                    tab.set_status_detail("Preview", "Export download complete");
+                    tab.replay =
+                        (replay_limit > 0 && spool.bytes() <= replay_limit).then_some(spool);
+                }
+            }
+            Event::DownloadFailed {
+                execution,
+                message,
+                consumed,
+                disconnected,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.busy = false;
+                    tab.cancelling = false;
+                    tab.download = None;
+                    if consumed {
+                        tab.cursor = crate::worker::Cursor::Consumed;
+                        tab.more = false;
+                    }
+                    if disconnected {
+                        tab.connected = false;
+                    }
+                    tab.set_status_detail("Export download stopped", message);
+                }
+            }
             Event::Connecting => {
                 tab.connected = false;
                 tab.busy = true;
@@ -1441,6 +1513,7 @@ impl Qrow {
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
                 tab.more = more;
+                tab.preview_complete = !more && !limited && !was_cancelling;
                 tab.pending_page = None;
                 tab.busy = false;
                 tab.cancelling = false;
@@ -1457,6 +1530,7 @@ impl Qrow {
                 }
             }
             Event::Cancelled => {
+                tab.cursor = crate::worker::Cursor::Consumed;
                 tab.busy = false;
                 tab.cancelling = false;
                 tab.more = false;
@@ -1496,6 +1570,7 @@ impl Qrow {
                 tab.cancelling = false;
             }
             Event::Disconnected | Event::IdleDisconnected => {
+                tab.cursor = crate::worker::Cursor::Unavailable;
                 tab.connected = false;
                 tab.more = false;
                 tab.pending_page = None;
@@ -2025,6 +2100,10 @@ impl Qrow {
         tab.more = false;
         tab.pending_page = None;
         tab.elapsed = None;
+        tab.preview_complete = false;
+        tab.cursor = crate::worker::Cursor::Unavailable;
+        tab.replay = None;
+        tab.download = None;
         tab.busy = true;
         tab.panel.execution_started();
         tab.cancelling = false;
@@ -3559,6 +3638,10 @@ impl Qrow {
             t.refresh(cx);
         });
         tab.set_status_detail("Complete", "Demo data");
+        tab.preview_complete = true;
+        tab.cursor = crate::worker::Cursor::Complete;
+        tab.replay = None;
+        tab.download = None;
         tab.elapsed = Some(Duration::from_millis(842));
         tab.panel.success(true);
     }

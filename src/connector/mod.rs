@@ -34,6 +34,12 @@ impl std::error::Error for QueryError {}
 
 pub trait Cancellation: Send + Sync {
     fn cancel(&self) -> Result<()>;
+    fn cancel_with_deadline(&self, _deadline: Instant) -> Result<()> {
+        self.cancel()
+    }
+    /// Interrupt a stuck transport when cancellation cleanup exceeds its deadline.
+    /// The owning worker must discard the session after this call.
+    fn abort_transport(&self) {}
 }
 
 /// A catalog request. The connector answers it with a result set that uses

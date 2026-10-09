@@ -159,6 +159,8 @@ pub struct Settings {
     pub assistant_line_height: f32,
     pub assistant: AssistantSettings,
     pub export: crate::export::Settings,
+    /// Maximum retained replay spool size. Zero disables replay retention.
+    pub export_replay_limit_mib: u32,
 }
 
 impl Default for Settings {
@@ -179,12 +181,14 @@ impl Default for Settings {
             assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
+            export_replay_limit_mib: 2048,
         }
     }
 }
 
 impl Settings {
     pub fn sanitize(&mut self) {
+        self.export_replay_limit_mib = self.export_replay_limit_mib.min(1024 * 1024);
         self.theme = self.theme.trim().into();
         if self.theme.is_empty() {
             self.theme = Self::default().theme;
@@ -2530,6 +2534,7 @@ mod tests {
             assistant_line_height: f32::NAN,
             assistant: AssistantSettings::default(),
             export: crate::export::Settings::default(),
+            export_replay_limit_mib: 2048,
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());

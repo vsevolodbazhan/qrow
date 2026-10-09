@@ -6,9 +6,9 @@ use crate::tls::{TlsStream, Trust};
 use anyhow::{Context, Result, ensure};
 use std::{
     io::{self, BufReader, Read, Write},
-    net::{TcpStream, ToSocketAddrs},
+    net::{Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use thrift::protocol::TBinaryOutputProtocol;
 use zeroize::Zeroizing;
@@ -101,16 +101,89 @@ pub fn connect_tcp(host: &str, port: u16) -> Result<TcpStream> {
 }
 
 pub fn connect(endpoint: &Endpoint<'_>, username: &str, password: &str) -> Result<Client> {
+    connect_controlled(endpoint, username, password).map(|(client, _)| client)
+}
+
+/// This socket handle can interrupt a read even while TLS holds its stream lock.
+pub struct Abort(TcpStream);
+impl Abort {
+    pub(crate) fn peer(&self) -> io::Result<SocketAddr> {
+        self.0.peer_addr()
+    }
+    pub fn shutdown(&self) {
+        let _ = self.0.shutdown(Shutdown::Both);
+    }
+}
+
+pub fn connect_controlled(
+    endpoint: &Endpoint<'_>,
+    username: &str,
+    password: &str,
+) -> Result<(Client, Arc<Abort>)> {
+    let stream = connect_tcp(endpoint.host, endpoint.port)?;
+    connect_socket(
+        endpoint,
+        username,
+        password,
+        stream,
+        WRITE_TIMEOUT,
+        MAX_FRAME,
+        |_| Ok(()),
+    )
+}
+
+pub(crate) fn connect_deadline(
+    endpoint: &Endpoint<'_>,
+    username: &str,
+    password: &str,
+    peer: SocketAddr,
+    deadline: Instant,
+    register: impl FnOnce(Arc<Abort>) -> Result<()>,
+) -> Result<Client> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    ensure!(!remaining.is_zero(), "Cancellation cleanup deadline passed");
+    // Reuse the established peer address; cancellation does not wait for DNS.
+    let stream = TcpStream::connect_timeout(&peer, remaining.min(CONNECT_TIMEOUT))?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    ensure!(!remaining.is_zero(), "Cancellation cleanup deadline passed");
+    let endpoint = Endpoint {
+        host: endpoint.host,
+        port: endpoint.port,
+        tls: endpoint.tls,
+        read_timeout: remaining,
+    };
+    connect_socket(
+        &endpoint,
+        username,
+        password,
+        stream,
+        remaining.min(WRITE_TIMEOUT),
+        64 * 1024,
+        register,
+    )
+    .map(|(client, _)| client)
+}
+
+fn connect_socket(
+    endpoint: &Endpoint<'_>,
+    username: &str,
+    password: &str,
+    stream: TcpStream,
+    write_timeout: Duration,
+    response_limit: usize,
+    register: impl FnOnce(Arc<Abort>) -> Result<()>,
+) -> Result<(Client, Arc<Abort>)> {
     let Endpoint {
         host,
-        port,
+        port: _,
         tls,
         read_timeout,
     } = *endpoint;
-    let stream = connect_tcp(host, port)?;
+    let abort = Arc::new(Abort(stream.try_clone()?));
+    register(abort.clone())?;
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(read_timeout))?;
-    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+    stream.set_write_timeout(Some(write_timeout))?;
     let mut stream = match tls {
         Some(trust) => Stream::Tls(Arc::new(Mutex::new(trust.connect(host, stream)?))),
         None => Stream::Plain(stream),
@@ -118,9 +191,12 @@ pub fn connect(endpoint: &Endpoint<'_>, username: &str, password: &str) -> Resul
     negotiate(&mut stream, username, password, read_timeout)?;
     let reader = FrameReader::new(stream.try_clone()?).with_timeout(read_timeout);
     let writer = FrameWriter::new(stream);
-    Ok(TCLIServiceSyncClient::new(
-        ResponseProtocol::new(reader, MAX_FRAME)?,
-        TBinaryOutputProtocol::new(writer, true),
+    Ok((
+        TCLIServiceSyncClient::new(
+            ResponseProtocol::new(reader, response_limit)?,
+            TBinaryOutputProtocol::new(writer, true),
+        ),
+        abort,
     ))
 }
 

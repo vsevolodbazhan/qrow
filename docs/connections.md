@@ -407,7 +407,11 @@ access token expires.
 
 An open session continues after its access token expires, if the server
 permits it. Cancellation opens a second transport, so it gets a new access
-token for the account that opened the session.
+token for the account that opened the session. All-row export cancellation
+has a cleanup deadline. It uses the credential that authenticated the
+session, so it does not wait for a token refresh. If that token has expired
+and cancellation fails, the worker interrupts the transport and discards
+the session. The server can continue work that it did not cancel.
 
 **Sign out** deletes the tokens from Keychain. It does not end the session at
 the provider, and it does not revoke the tokens. Sign out is disabled while a

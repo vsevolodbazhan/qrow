@@ -171,6 +171,49 @@ fn initialize(peer: &mut Peer) {
 }
 
 #[test]
+fn export_cancellation_deadline_bounds_a_stalled_separate_authentication() {
+    use std::{sync::mpsc, time::Instant};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let (stalled, observed) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let _: TExecuteStatementReq = peer.read("ExecuteStatement");
+        peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        // Consume PLAIN and credentials, then withhold authentication completion.
+        for _ in 0..2 {
+            let mut header = [0; 5];
+            socket.read_exact(&mut header).unwrap();
+            let mut payload = vec![0; u32::from_be_bytes(header[1..].try_into().unwrap()) as usize];
+            socket.read_exact(&mut payload).unwrap();
+        }
+        stalled.send(()).unwrap();
+        let mut byte = [0];
+        assert_eq!(socket.read(&mut byte).unwrap(), 0);
+    });
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .unwrap();
+    let cancel = session.execute("SELECT n").unwrap();
+    let target = cancel.clone();
+    let started = Instant::now();
+    let request =
+        thread::spawn(move || target.cancel_with_deadline(Instant::now() + Duration::from_secs(2)));
+    observed.recv_timeout(Duration::from_secs(1)).unwrap();
+    cancel.abort_transport();
+    assert!(request.join().unwrap().is_err());
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(cancel);
+    drop(session);
+    server.join().unwrap();
+}
+
+#[test]
 fn ldap_session_parameters_async_query_exact_values_and_fetch_exhaustion() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let p = profile(listener.local_addr().unwrap().port());

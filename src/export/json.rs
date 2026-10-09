@@ -36,71 +36,123 @@ pub fn write(
 ) -> io::Result<usize> {
     super::validate_table(table)?;
     check_cancelled(cancel)?;
-    let names = value::column_names(
+    let mut writer = Stream::new(
+        out,
         table
             .column_indices
             .clone()
-            .map(|i| table.columns[i].name.as_str()),
-    );
-    let kinds: Vec<_> = table
-        .column_indices
-        .clone()
-        .map(|i| Kind::of(&table.columns[i].data_type))
-        .collect();
-    let pretty = options.pretty && !lines;
-    if !lines {
-        out.write_all(b"[")?;
-    }
-    for (index, row) in table.row_indices.clone().enumerate() {
-        check_cancelled(cancel)?;
+            .map(|index| &table.columns[index]),
+        options,
+        lines,
+    )?;
+    writer.batch(table, 0, cancel)?;
+    writer.finish(cancel)
+}
+
+pub(crate) struct Stream<'a, W> {
+    out: &'a mut W,
+    names: Vec<String>,
+    kinds: Vec<Kind>,
+    options: &'a Options,
+    lines: bool,
+    count: usize,
+    _memory: std::sync::Arc<super::budget::Allowance>,
+}
+
+impl<'a, W: Write> Stream<'a, W> {
+    pub(crate) fn new<'b>(
+        out: &'a mut W,
+        columns: impl Iterator<Item = &'b crate::model::Column>,
+        options: &'a Options,
+        lines: bool,
+    ) -> io::Result<Self> {
+        let memory = super::budget::GLOBAL.allowance(64 * super::budget::MIB)?;
+        let columns: Vec<_> = columns.collect();
+        let names = value::column_names(columns.iter().map(|column| column.name.as_str()));
+        let kinds = columns
+            .iter()
+            .map(|column| Kind::of(&column.data_type))
+            .collect();
         if !lines {
-            if index > 0 {
-                out.write_all(b",")?;
+            out.write_all(b"[")?;
+        }
+        Ok(Self {
+            out,
+            names,
+            kinds,
+            options,
+            lines,
+            count: 0,
+            _memory: memory,
+        })
+    }
+
+    pub(crate) fn batch(
+        &mut self,
+        table: &Table<'_>,
+        row_offset: usize,
+        cancel: &AtomicBool,
+    ) -> io::Result<()> {
+        let out = &mut *self.out;
+        let options = self.options;
+        let lines = self.lines;
+        let pretty = options.pretty && !lines;
+        for row in table.row_indices.clone() {
+            check_cancelled(cancel)?;
+            if !lines {
+                if self.count > 0 {
+                    out.write_all(b",")?;
+                }
+                if pretty {
+                    out.write_all(b"\n  ")?;
+                }
+            }
+            out.write_all(b"{")?;
+            for (column, text) in table.values(row).enumerate() {
+                if column > 0 {
+                    out.write_all(b",")?;
+                }
+                if pretty {
+                    out.write_all(b"\n    ")?;
+                }
+                serde_json::to_writer(&mut *out, &self.names[column])?;
+                out.write_all(if pretty { b": " } else { b":" })?;
+                let result = write_value(out, self.kinds[column], text, options, pretty, cancel);
+                result.map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "Column {}, row {}, value {:?}: {error}",
+                            self.names[column],
+                            row_offset + row + 1,
+                            text.map(|text| text.chars().take(100).collect::<String>())
+                        ),
+                    )
+                })?;
             }
             if pretty {
                 out.write_all(b"\n  ")?;
             }
-        }
-        out.write_all(b"{")?;
-        for (column, text) in table.values(row).enumerate() {
-            if column > 0 {
-                out.write_all(b",")?;
+            out.write_all(b"}")?;
+            if lines {
+                out.write_all(b"\n")?;
             }
-            if pretty {
-                out.write_all(b"\n    ")?;
+            self.count += 1;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self, cancel: &AtomicBool) -> io::Result<usize> {
+        if !self.lines {
+            if self.options.pretty && self.count > 0 {
+                self.out.write_all(b"\n")?;
             }
-            serde_json::to_writer(&mut *out, &names[column])?;
-            out.write_all(if pretty { b": " } else { b":" })?;
-            let result = write_value(out, kinds[column], text, options, pretty, cancel);
-            result.map_err(|error| {
-                io::Error::new(
-                    error.kind(),
-                    format!(
-                        "Column {}, row {}, value {:?}: {error}",
-                        names[column],
-                        row + 1,
-                        text.map(|text| text.chars().take(100).collect::<String>())
-                    ),
-                )
-            })?;
+            self.out.write_all(b"]\n")?;
         }
-        if pretty {
-            out.write_all(b"\n  ")?;
-        }
-        out.write_all(b"}")?;
-        if lines {
-            out.write_all(b"\n")?;
-        }
+        self.out.flush()?;
+        check_cancelled(cancel)?;
+        Ok(self.count)
     }
-    if !lines {
-        if pretty && table.row_count() > 0 {
-            out.write_all(b"\n")?;
-        }
-        out.write_all(b"]\n")?;
-    }
-    out.flush()?;
-    check_cancelled(cancel)?;
-    Ok(table.row_count())
 }
 
 fn write_value(

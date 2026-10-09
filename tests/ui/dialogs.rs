@@ -61,6 +61,32 @@ fn left_edge(app: &TestApp, cx: &mut TestAppContext, id: &str) -> f32 {
 }
 
 #[gpui_kit::test]
+fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "replay");
+    app.wait_for(cx, "setting-export-replay-limit");
+    assert_eq!(app.stepper(cx, "setting-export-replay-limit"), "2048");
+    for expected in ["1792", "1536", "1280", "1024", "768", "512", "256", "0"] {
+        app.step(cx, "setting-export-replay-limit", "decrement", expected);
+    }
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    wait_saved(&app, cx, "disabled replay retention", |workspace| {
+        workspace.settings.export_replay_limit_mib == 0
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "replay");
+    app.wait_for(cx, "setting-export-replay-limit");
+    assert_eq!(app.stepper(cx, "setting-export-replay-limit"), "0");
+    app.step(cx, "setting-export-replay-limit", "increment", "256");
+    app.click(cx, "save-settings");
+    wait_saved(&app, cx, "replay retention", |workspace| {
+        workspace.settings.export_replay_limit_mib == 256
+    });
+}
+
+#[gpui_kit::test]
 fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut TestAppContext) {
     let app = TestApp::launch(cx, Workspace::default());
     app.dispatch(cx, OpenSettings);
