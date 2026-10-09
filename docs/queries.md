@@ -25,6 +25,11 @@ If you select text, Qrow runs that text. Each execution must contain one SQL
 statement. Qrow rejects a selection with multiple statements before it sends
 SQL to the server.
 
+For Kyuubi, **Run and export…** uses the same SQL selection and tab session.
+It writes all rows to a file and shows only the first page in the grid.
+See [Run and export](results.md#run-and-export) for the form, session checks,
+and cancellation limits.
+
 The dot of a tab shows the state of its work. Point to the dot to read the
 tab name and a short status. The tooltip has no query detail line. The bar
 above Results shows neutral tags for the visible rows, loaded rows, columns,

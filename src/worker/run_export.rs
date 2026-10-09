@@ -137,7 +137,7 @@ impl Runner {
             Err(error) => {
                 let message = crate::connector::error_message(&error);
                 if error.is::<SessionChanged>() {
-                    request.download.fail(message.clone());
+                    request.download.session_changed();
                     self.emit(Event::DownloadFailed {
                         execution,
                         message,

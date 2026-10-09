@@ -40,6 +40,7 @@ enum Source {
     Pending,
     Ready(Arc<Spool>),
     Failed(String),
+    SessionChanged,
     Cancelled,
 }
 
@@ -97,6 +98,7 @@ impl Download {
             match &state.source {
                 Source::Ready(spool) => return Ok(spool.clone()),
                 Source::Failed(message) => return Err(io::Error::other(message.clone())),
+                Source::SessionChanged => return Err(io::Error::other(super::SessionChanged)),
                 Source::Cancelled => return Err(io::Error::other(export::Cancelled)),
                 Source::Pending => state = self.changed.wait(state).unwrap(),
             }
@@ -235,6 +237,18 @@ impl Download {
     pub fn fail(self: &Arc<Self>, message: String) {
         self.terminal_source(Some(message));
         // A complete spool is replayable. Only this writer stops after the handoff.
+        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel_operation();
+    }
+
+    pub(super) fn session_changed(self: &Arc<Self>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if matches!(state.source, Source::Pending) {
+                state.source = Source::SessionChanged;
+                self.changed.notify_all();
+            }
+        }
         self.cancel.store(true, Ordering::SeqCst);
         self.cancel_operation();
     }
