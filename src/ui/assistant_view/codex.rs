@@ -202,6 +202,10 @@ impl Qrow {
             }
             self.assistant_state.idle_stop = None;
             self.start_assistant(cx);
+            // A saved transcript shows while the harness starts.
+            if let Some(thread) = self.displayed_thread() {
+                self.load_assistant_thread(&thread, cx);
+            }
             self.assistant_composer(cx)
                 .update(cx, |composer, cx| composer.focus(window, cx));
         } else {

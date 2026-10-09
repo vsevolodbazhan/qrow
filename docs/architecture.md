@@ -92,6 +92,12 @@ input, focus, or window activation. Then the caret stays visible and does not
 blink, because each blink repaints the window. There is no continuous idle
 repaint loop.
 
+A [transcript writer](../src/assistant/transcripts.rs) thread saves the
+[copies of assistant conversations](assistant.md#saved-conversations). It
+writes each file atomically, and it writes only the last version when several
+saves of one file wait. A conversation that you open reads its file on a
+background thread.
+
 The assistant worker thread owns the Codex process. Window commands and Codex
 output arrive on one channel. The worker sleeps until a command or a Codex
 message arrives, or until a title request reaches its time limit. It does not

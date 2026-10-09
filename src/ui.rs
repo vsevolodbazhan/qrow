@@ -672,7 +672,7 @@ impl Qrow {
             this.finish(cx);
             async {}
         });
-        let assistant_state = assistant_view::AssistantState::new(cx);
+        let mut assistant_state = assistant_view::AssistantState::new(cx);
         let assistant_pane = {
             let qrow = cx.entity();
             cx.new(|cx| assistant_view::AssistantPane::new(&qrow, window, cx))
@@ -746,6 +746,13 @@ impl Qrow {
             .filter(|_| saver.is_some() && !demo)
             .map(|workspace| storage::dbt_directory(workspace));
         let dbt = dbt::DbtProjects::new(dbt_directory, wake.clone());
+        // Assistant transcripts follow the same rule as the dbt indexes.
+        assistant_state.store = assistant_view::transcript_store(
+            environment
+                .workspace()
+                .filter(|_| saver.is_some() && !demo)
+                .map(|workspace| workspace.as_path()),
+        );
         let activity_events = cx.subscribe_in(&activity, window, |this, _, event, window, cx| {
             this.activity_event(event, window, cx)
         });
@@ -952,6 +959,13 @@ impl Qrow {
         }
         self.finished = true;
         self.sign_in_ui.cancel_all();
+        self.assistant_state.save_transcripts = None;
+        self.save_transcripts(None);
+        if let Some(store) = &self.assistant_state.store
+            && !store.flush(Duration::from_secs(2))
+        {
+            eprintln!("Could not save all assistant transcripts before quit");
+        }
         if self.demo {
             self.assistant_state.shutdown_demo(
                 self.assistant

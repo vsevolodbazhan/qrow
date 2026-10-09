@@ -119,10 +119,15 @@ impl Qrow {
         self.scroll_assistant_to_bottom(cx);
     }
 
-    /// Asks Codex to load a conversation that the current process has not
-    /// loaded. Codex sends a waiting tool call again when a loaded
-    /// conversation resumes, so Qrow resumes each conversation once.
+    /// Shows the transcript of a conversation. A saved transcript loads from
+    /// its file. Otherwise Qrow asks the harness to load a conversation that
+    /// the current process has not loaded. Codex sends a waiting tool call
+    /// again when a loaded conversation resumes, so Qrow resumes each
+    /// conversation once.
     pub(super) fn load_assistant_thread(&mut self, thread_id: &str, cx: &mut Context<Self>) {
+        if self.load_local_transcript(thread_id, cx) || self.local_transcript_shows(thread_id) {
+            return;
+        }
         if matches!(self.assistant_state.status, Status::Ready)
             && !self.assistant_state.loaded_threads.contains(thread_id)
             && self.assistant_command(AssistantCommand::Resume(thread_id.to_owned()), cx)
@@ -131,6 +136,26 @@ impl Qrow {
                 .loaded_threads
                 .insert(thread_id.to_owned());
         }
+    }
+
+    /// Resumes a conversation in the harness before its next message, when
+    /// the current process has not loaded it. A saved transcript shows
+    /// without this step. Returns false when the command could not go out.
+    pub(super) fn resume_assistant_thread(
+        &mut self,
+        thread_id: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.assistant_state.loaded_threads.contains(thread_id) {
+            return true;
+        }
+        if !self.assistant_command(AssistantCommand::Resume(thread_id.to_owned()), cx) {
+            return false;
+        }
+        self.assistant_state
+            .loaded_threads
+            .insert(thread_id.to_owned());
+        true
     }
 
     /// Detaches the conversation of a removed tab and drops the tab's draft.
@@ -457,6 +482,12 @@ impl Qrow {
             .is_some_and(|entries| entries.iter().any(|entry| entry.speaker == Speaker::User));
         let requested = if has_messages {
             self.send_assistant_title_request(thread_id, cx)
+        } else if self.load_local_transcript(thread_id, cx) {
+            // The title request waits for the saved messages.
+            self.assistant_state
+                .title_history_reads
+                .insert(thread_id.to_owned());
+            true
         } else {
             // Qrow loads a conversation's messages when you open it.
             self.assistant_state

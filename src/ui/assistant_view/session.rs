@@ -268,6 +268,12 @@ pub(in crate::ui) struct AssistantState {
     pub idle_since: Instant,
     /// The steps that show streamed replies run.
     pub revealing: bool,
+    /// Saves transcripts next to the workspace. `None` in the demo.
+    pub store: Option<crate::assistant::transcripts::TranscriptStore>,
+    /// What Qrow knows about the saved transcript of each conversation.
+    pub local: BTreeMap<String, LocalTranscript>,
+    /// Saves the changed transcripts after a short delay.
+    pub save_transcripts: Option<Task<()>>,
 }
 
 impl AssistantState {
@@ -301,6 +307,9 @@ impl AssistantState {
             idle_stop: None,
             idle_since: cx.background_executor().now(),
             revealing: false,
+            store: None,
+            local: BTreeMap::new(),
+            save_transcripts: None,
         }
     }
 

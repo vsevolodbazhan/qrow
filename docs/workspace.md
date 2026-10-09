@@ -61,7 +61,8 @@ names, SQL, the selected connection, the last active tab for each connection,
 and settings. Optional assistant state includes the enabled setting, panel and
 model preferences, Codex thread identifiers, conversation titles, query
 execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
-arguments, tool results, result rows, Logs history, or Codex credentials. Its
+arguments, tool results, result rows, Logs history, or Codex credentials.
+Assistant messages and tool results are in separate files, described below. Its
 default path is:
 
 ```text
@@ -87,6 +88,12 @@ descriptions, tests, and lineage of the manifest, and the positions of its SQL
 texts, but not the SQL. Qrow deletes a copy when no connection uses its
 manifest. If Qrow cannot open the workspace, it keeps the copies only in
 memory.
+
+Qrow keeps a [copy of each assistant conversation](assistant.md#saved-conversations)
+in the `assistant/transcripts` folder next to the workspace file. A copy has
+the messages, replies, errors, and tool call cards of the conversation,
+including tool arguments and results. Qrow deletes a copy when you delete its
+conversation. If Qrow cannot open the workspace, it does not save copies.
 
 Passwords and sign-in tokens remain in [macOS Keychain](connections.md#authentication-and-connection-failures).
 Passwords, tokens, and result sets are not written to the workspace file. The

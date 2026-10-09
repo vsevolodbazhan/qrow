@@ -61,6 +61,7 @@ pub(super) fn unix_now_seconds() -> u64 {
 mod codex;
 mod conversations;
 mod events;
+mod local;
 mod messages;
 mod pane;
 mod reveal;
@@ -72,12 +73,14 @@ mod transcript_view;
 
 use codex::*;
 use conversations::*;
+use local::*;
 use pane::*;
 use reveal::*;
 use session::*;
 use transcript::*;
 use transcript_view::*;
 
+pub(super) use local::transcript_store;
 pub(super) use pane::AssistantPane;
 pub use session::CODEX_IDLE_TIMEOUT;
 pub(super) use session::{

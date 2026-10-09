@@ -281,19 +281,22 @@ conversation while it works or waits for approval. Two conversations can have th
 Automatic title requests do not replace a title that you set. Select
 **Regenerate title** to ask Codex for a new title from the conversation
 messages. This title replaces a title that you set. If the conversation is not
-open, Qrow first reads its messages from Codex. If Codex cannot make a title,
+open, Qrow first reads its [saved transcript](#saved-conversations), or reads
+its messages from Codex when it has no saved transcript. If Codex cannot make a title,
 Qrow keeps the current title and shows a notice. When you
-delete a conversation, Qrow asks Codex to remove it. The tab stays open without
+delete a conversation, Qrow asks Codex to remove it and deletes its saved
+transcript. The tab stays open without
 a conversation. This action does not change SQL, sessions, Logs, or results. Qrow
 saves thread IDs and titles in the workspace. Codex stores conversation text
-in its own data directory.
+in its own data directory, and Qrow keeps a [copy](#saved-conversations).
 Codex creates a conversation when you send its first message, and Qrow saves
 it then.
 If Codex cannot find a saved conversation, Qrow keeps its entry. If you restore
 the Codex history, you can try to open it again. You can also delete the entry
 from Qrow, even when Codex has no history to delete. Qrow cannot recover missing
 conversation text from its workspace.
-Select **Load older messages** to read earlier conversation text.
+A conversation without a saved transcript loads its latest messages from
+Codex. Select **Load older messages** to read earlier conversation text.
 Codex sends each message to Qrow on one line of up to 8 MB. Qrow discards a
 larger line and continues to use Codex. Only the request that the line
 answers fails. If a page of conversation history is too large, Qrow reads
@@ -356,6 +359,29 @@ Each message tells the assistant when dbt wrote the manifest, the dbt version,
 and the numbers of models, sources, and tests. It also lists the models of the
 tables that the tab SQL names, with the first line of their description, up to
 8 KB.
+
+### Saved conversations
+
+Qrow keeps a copy of each conversation on this computer. When you open a
+conversation, Qrow shows it from this copy. It does not start or wait for
+Codex, so you can read earlier conversations while Codex starts, or while it
+is stopped. Qrow loads the conversation in Codex only when you send a message.
+
+The copy shows the conversation as it was: your messages, the replies, the
+errors, and the tool call cards with their state, row count, and duration. A
+card opens to the same query tab, arguments, and result. A card whose call did
+not end, for example because Qrow quit during the call, shows **Cancelled**.
+
+Qrow saves the copy about one second after a change, at the end of each turn,
+and at quit. Each copy is a file in the `assistant/transcripts` folder next to
+the workspace file. Only your user account can read it. A tool result in the
+copy can contain query rows. When a copy is larger than 8 MB, Qrow keeps its
+newest part. Delete a conversation to delete its copy.
+
+A conversation from before this version has no copy. The first time that you
+open it, Qrow loads its latest messages from Codex and saves them. Tool call
+cards from before this version do not come back. The demo does not save
+copies.
 
 ## Conversations and query tabs
 
@@ -440,8 +466,9 @@ stop Codex while one of these items continues:
 
 When you open the pane again, Qrow starts Codex. The pane shows the usual
 startup state, and the controls wait for Codex. The conversations and their
-messages stay in the pane. Qrow loads the history of each conversation again
-from Codex when you show it. Signed-in accounts stay signed in, because Codex
+messages stay in the pane. A conversation without a
+[saved transcript](#saved-conversations) loads its history again from Codex
+when you show it. Signed-in accounts stay signed in, because Codex
 keeps the account.
 
 Assistant notices use an alert in the pane. These notices report an unavailable

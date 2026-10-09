@@ -8,6 +8,7 @@ mod inbox;
 pub mod notes;
 pub mod service;
 pub mod tools;
+pub mod transcripts;
 
 pub use codex::CodexHarness;
 

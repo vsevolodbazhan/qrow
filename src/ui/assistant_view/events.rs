@@ -34,6 +34,7 @@ impl Qrow {
         self.tick_assistant_queries(cx);
         if changed {
             self.sync_assistant_pane(cx);
+            self.schedule_transcript_save(cx);
         }
         if workspace_changed {
             cx.notify();
@@ -99,6 +100,7 @@ impl Qrow {
                 };
                 let id = conversation.id;
                 self.assistant_state.loaded_threads.insert(id.clone());
+                self.track_local_transcript(&id);
                 self.assistant_state.unstarted_threads.insert(id.clone());
                 if !self.tabs.iter().any(|tab| tab.saved.id == first.tab_id)
                     || self.assistant.conversation_for_tab(first.tab_id).is_some()
@@ -123,7 +125,10 @@ impl Qrow {
                 self.changed(cx);
             }
             AssistantServiceEvent::Resumed(conversation) => {
-                self.assistant_command(AssistantCommand::Read(conversation.id), cx);
+                // A saved transcript already shows the conversation.
+                if !self.local_transcript_shows(&conversation.id) {
+                    self.assistant_command(AssistantCommand::Read(conversation.id), cx);
+                }
             }
             AssistantServiceEvent::History(history) => {
                 let thread = history.conversation.id;
@@ -144,6 +149,10 @@ impl Qrow {
                 if selected && entries.len() > previous_count {
                     self.scroll_assistant_to_bottom(cx);
                 }
+                // From now on Qrow keeps the transcript, also the history
+                // that the harness gave for a conversation without a file.
+                self.track_local_transcript(&thread_id);
+                self.save_transcripts(Some(&thread_id));
                 // The final text of a reply can be longer than the streamed text.
                 self.reveal_assistant_replies(cx);
                 if self.assistant_state.title_history_reads.remove(&thread_id)
@@ -307,10 +316,11 @@ impl Qrow {
                 if let Some(error) = error {
                     self.assistant_state
                         .transcripts
-                        .entry(thread_id)
+                        .entry(thread_id.clone())
                         .or_default()
                         .push(TranscriptEntry::new(Speaker::Error, error, Some(turn.id)));
                 }
+                self.save_transcripts(Some(&thread_id));
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
                 self.assistant_state.pending_titles.remove(&thread_id);
@@ -417,6 +427,7 @@ impl Qrow {
                 self.assistant_state.regenerating_titles.remove(&id);
                 self.assistant_state.pending_titles.remove(&id);
                 self.assistant_state.title_history_reads.remove(&id);
+                self.delete_local_transcript(&id);
                 // The tab stays open without a conversation.
                 self.changed(cx);
             }

@@ -130,6 +130,11 @@ impl Qrow {
         if let (Some(target), Some(turn_id)) = (&mut new_target, &active_turn) {
             target.turn_id = turn_id.clone();
         }
+        // A conversation that shows from its saved transcript loads in the
+        // harness only now.
+        if active_turn.is_none() && !self.resume_assistant_thread(thread_id, cx) {
+            return false;
+        }
         let command = if let Some(turn_id) = active_turn.clone() {
             AssistantCommand::Steer {
                 thread_id: thread_id.to_owned(),
@@ -182,6 +187,7 @@ impl Qrow {
             .or_default()
             .push(TranscriptEntry::new(Speaker::User, text, active_turn));
         self.request_assistant_title(thread_id, cx);
+        self.schedule_transcript_save(cx);
         true
     }
 
