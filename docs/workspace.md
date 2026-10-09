@@ -27,7 +27,7 @@ CM Twilight, and the themes bundled from GPUI Kit. CM Twilight is darker than
 One Dark. It uses the navy and orange colors of twilight in Chiang Mai. A
 selected theme takes effect immediately.
 
-The Assistant page has the **General** and **Codex** sections. See
+The Assistant page has the **General**, **Codex**, and **Claude Code** sections. See
 [AI assistant](assistant.md#set-up-the-assistant) for these settings.
 
 Select a page or section in the list at the left. Use the search box above the
@@ -59,9 +59,10 @@ optional [assistant pane](assistant.md) width.
 The workspace file contains connection profiles, connection-owned tabs, tab
 names, SQL, the selected connection, the last active tab for each connection,
 and settings. Optional assistant state includes the enabled setting, panel and
-model preferences, Codex thread identifiers, conversation titles, query
+the selected harness, the model preferences of each harness, thread
+identifiers, the harness of each conversation, conversation titles, query
 execution modes, and the query tab of each conversation. The workspace does not contain assistant messages, tool
-arguments, tool results, result rows, Logs history, or Codex credentials.
+arguments, tool results, result rows, Logs history, or harness credentials.
 Assistant messages and tool results are in separate files, described below. Its
 default path is:
 
