@@ -94,6 +94,7 @@ actions!(
 /// Call once before opening a Qrow window.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    cx.set_global(crate::export::Jobs::default());
     themes::init(cx);
     // Wide result sets need a persistent, discoverable horizontal scrollbar.
     Theme::set_scrollbar_mode(gpui_kit::component::scroll::ScrollbarMode::Always, cx);
@@ -898,7 +899,7 @@ impl Qrow {
         let table = cx.new(|cx| {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
-            results.csv = self.settings.export.csv;
+            results.csv = self.settings.export.csv.clone();
             // The results delegate owns the selection: a range of cells.
             TableState::new(results, window, cx)
                 .col_selectable(false)
@@ -964,6 +965,7 @@ impl Qrow {
             return;
         }
         self.finished = true;
+        cx.global::<crate::export::Jobs>().cancel();
         self.sign_in_ui.cancel_all();
         self.assistant_state.save_transcripts = None;
         self.save_transcripts(None);
@@ -1006,10 +1008,23 @@ impl Qrow {
             }
         }
         self.catalog.wait_for_shutdown(deadline);
+        if !cx
+            .global::<crate::export::Jobs>()
+            .cancel_and_wait(Duration::from_secs(2))
+        {
+            eprintln!("An export destination did not stop before the shutdown deadline");
+        }
     }
-    fn active_work_description(&self) -> Option<&'static str> {
+    fn active_work_description(&self, cx: &App) -> Option<&'static str> {
         let assistant = self.assistant_working();
         let query = self.tabs.iter().any(|tab| tab.busy);
+        if cx.global::<crate::export::Jobs>().active_count() > 0 {
+            return Some(if assistant || query {
+                "Exports and other work are still running. Quit now to stop them?"
+            } else {
+                "An export is still running. Quit now to stop it?"
+            });
+        }
         match (assistant, query) {
             (true, true) => {
                 Some("An assistant turn and a query are still running. Quit now to stop both?")
@@ -1024,7 +1039,7 @@ impl Qrow {
         if self.quit_warning_open {
             return;
         }
-        let Some(description) = self.active_work_description() else {
+        let Some(description) = self.active_work_description(cx) else {
             return;
         };
         self.quit_warning_open = true;
@@ -1069,6 +1084,7 @@ impl Qrow {
                                     let _ = quit_anyway.update(cx, |this, cx| {
                                         this.quit_warning_open = false;
                                         this.quit_work_confirmed = true;
+                                        cx.global::<crate::export::Jobs>().cancel();
                                         this.request_quit(window, cx);
                                     });
                                 }),
@@ -1088,7 +1104,7 @@ impl Qrow {
             cx.notify();
             return;
         }
-        if !self.quit_work_confirmed && self.active_work_description().is_some() {
+        if !self.quit_work_confirmed && self.active_work_description(cx).is_some() {
             self.confirm_quit_while_working(window, cx);
             return;
         }
