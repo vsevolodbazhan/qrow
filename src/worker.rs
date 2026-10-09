@@ -31,6 +31,7 @@ pub enum Event {
     Connected,
     Running,
     Columns(Vec<Column>),
+    ExportContext(crate::export::Context),
     Rows(Vec<Row>),
     Ready {
         more: bool,
@@ -524,6 +525,9 @@ impl Runner {
                 let columns = self.session.as_mut().unwrap().columns()?;
                 self.complete_execution(true);
                 self.emit(Event::Columns(columns));
+                self.emit(Event::ExportContext(
+                    self.session.as_ref().unwrap().export_context(),
+                ));
                 self.fetch_preview()
             }
         }

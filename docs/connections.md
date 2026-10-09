@@ -130,6 +130,12 @@ as the connector type in its connection context.
 For automatic relation context, the assistant uses `public` for unqualified
 names. Use qualified names when a different `search_path` applies.
 
+Result column types keep numeric precision, numeric scale, and timestamp
+precision from the server. Before a query with result columns executes,
+Qrow reads DateStyle, IntervalStyle, and TimeZone for [Parquet export](results.md#parquet).
+These read requests do not change the session settings. Commands without
+result columns do not need these requests.
+
 ### Postgres limits
 
 - Query results use the server's text format, including arrays, JSON, and dates.

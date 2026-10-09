@@ -1,12 +1,17 @@
 //! Export of result rows to text formats and files. The core library owns the
 //! formats and the file handling, so they work without the UI.
 
+mod context;
 pub mod csv;
+mod decimal;
 mod jobs;
 pub mod json;
 pub mod markdown;
+pub mod parquet;
 mod rows;
+mod temporal;
 pub(crate) mod value;
+pub use context::{Context, Postgres as PostgresContext};
 pub use jobs::{Jobs, Writer};
 pub use rows::Rows;
 
@@ -27,6 +32,7 @@ pub struct Settings {
     pub csv: csv::CsvOptions,
     pub markdown: markdown::Options,
     pub json: json::Options,
+    pub parquet: parquet::Options,
     pub directory: Option<std::path::PathBuf>,
 }
 
@@ -37,16 +43,24 @@ pub enum Format {
     Markdown,
     Json,
     JsonLines,
+    Parquet,
 }
 
 impl Format {
-    pub const ALL: [Self; 4] = [Self::Csv, Self::Markdown, Self::Json, Self::JsonLines];
+    pub const ALL: [Self; 5] = [
+        Self::Csv,
+        Self::Markdown,
+        Self::Json,
+        Self::JsonLines,
+        Self::Parquet,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Csv => "CSV / TSV",
             Self::Markdown => "Markdown",
             Self::Json => "JSON array",
             Self::JsonLines => "JSON Lines",
+            Self::Parquet => "Parquet",
         }
     }
 }
@@ -58,6 +72,7 @@ impl Settings {
             Format::Markdown => "md",
             Format::Json => "json",
             Format::JsonLines => "jsonl",
+            Format::Parquet => "parquet",
         }
     }
     pub fn validate(&self) -> io::Result<()> {
@@ -77,15 +92,16 @@ impl Settings {
     }
 }
 
-/// Write a downloaded snapshot with the selected text format.
+/// Write a downloaded snapshot with the selected format.
 pub fn write(
-    out: &mut impl Write,
+    out: &mut (impl Write + Send),
     table: &Table<'_>,
     settings: &Settings,
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     settings.validate()?;
     match settings.format {
+        Format::Parquet => parquet::write(out, table, &settings.parquet, cancel),
         Format::Csv => write_csv(out, table, &settings.csv, cancel),
         Format::Markdown => markdown::write(out, table, &settings.markdown, cancel),
         Format::Json | Format::JsonLines => json::write(

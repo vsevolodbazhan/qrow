@@ -93,7 +93,34 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     let text = copy_query(cx, app);
     assert!(text.starts_with("```\n"));
     assert!(text.ends_with("```\n"));
+    assert_parquet(cx, app);
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+fn assert_parquet(cx: &mut TestAppContext, app: &TestApp) {
+    for compression in ["Snappy", "Gzip", "None"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("result.parquet");
+        app.click(cx, "export-results");
+        app.select(cx, "export-format", "Parquet");
+        app.select(cx, "export-parquet-compression", compression);
+        app.click(cx, "export-save");
+        cx.simulate_new_path_selection(|_| Some(path.clone()));
+        app.wait_gone(cx, "export-save");
+        let status = Command::new("python")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/e2e/parquet_reader.py"
+            ))
+            .arg(&path)
+            .status()
+            .expect("Run through ./qtest for the pinned DuckDB reader");
+        assert!(
+            status.success(),
+            "DuckDB Parquet round trip failed with {compression}"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 }
 
 #[gpui_kit::test]

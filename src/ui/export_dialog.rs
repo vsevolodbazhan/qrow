@@ -168,6 +168,15 @@ impl ExportDialog {
                 .map(|format| format.label().to_owned())
                 .collect(),
             vec!["Table".into(), "Code block".into()],
+            export::parquet::Compression::ALL
+                .iter()
+                .map(|value| value.label().to_owned())
+                .collect(),
+            vec!["Typed".into(), "Text".into()],
+            export::parquet::Numeric::ALL
+                .iter()
+                .map(|value| value.label().to_owned())
+                .collect(),
         ];
         let selected = selection.is_some();
         let options = settings.csv.clone();
@@ -230,6 +239,18 @@ impl ExportDialog {
                                 export::markdown::Style::CodeBlock
                             }
                         }
+                        7 => {
+                            this.settings.parquet.compression =
+                                export::parquet::Compression::ALL[choice]
+                        }
+                        8 => {
+                            this.settings.parquet.column_types = if choice == 0 {
+                                export::parquet::ColumnTypes::Typed
+                            } else {
+                                export::parquet::ColumnTypes::Text
+                            }
+                        }
+                        9 => this.settings.parquet.numeric = export::parquet::Numeric::ALL[choice],
                         _ => unreachable!(),
                     }
                     this.sync(window, cx);
@@ -306,6 +327,10 @@ impl ExportDialog {
             self.preview.clear();
             return;
         }
+        if self.settings.format == Format::Parquet {
+            self.preview = "A Parquet file has no text preview.".into();
+            return;
+        }
         self.preview_cancel = Arc::new(AtomicBool::new(false));
         self.preview_pending = true;
         let cancel = self.preview_cancel.clone();
@@ -356,7 +381,7 @@ impl ExportDialog {
     }
 
     fn start(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.running {
+        if self.running || !save && self.settings.format == Format::Parquet {
             return;
         }
         if let Err(error) = self.settings.validate() {
@@ -503,7 +528,7 @@ impl ExportDialog {
     }
 }
 
-fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 7] {
+fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 10] {
     let options = &settings.csv;
     [
         usize::from(selected),
@@ -525,6 +550,15 @@ fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 7] {
             .position(|value| *value == settings.format)
             .unwrap(),
         usize::from(settings.markdown.style == export::markdown::Style::CodeBlock),
+        export::parquet::Compression::ALL
+            .iter()
+            .position(|value| *value == settings.parquet.compression)
+            .unwrap(),
+        usize::from(settings.parquet.column_types == export::parquet::ColumnTypes::Text),
+        export::parquet::Numeric::ALL
+            .iter()
+            .position(|value| *value == settings.parquet.numeric)
+            .unwrap(),
     ]
 }
 
@@ -569,6 +603,9 @@ impl Render for ExportDialog {
             "Null Values",
             "Format",
             "Style",
+            "Compression",
+            "Column Types",
+            "Numeric As",
         ];
         let ids = [
             "export-rows",
@@ -578,6 +615,9 @@ impl Render for ExportDialog {
             "export-null",
             "export-format",
             "export-markdown-style",
+            "export-parquet-compression",
+            "export-parquet-types",
+            "export-parquet-numeric",
         ];
         let options = &self.settings.csv;
         let flags = [
@@ -621,11 +661,11 @@ impl Render for ExportDialog {
             self.preview.clone()
         };
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children([5,0,1,2,3,4,6].into_iter()
-                .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6)
+            .child(v_form().columns(2).children([5,0,1,2,3,4,6,7,8,9].into_iter()
+                .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6 || format == Format::Parquet && (7..=9).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
-                        .disabled(busy || index == 0 && self.selection.is_none()).w_full().accessibility_label(labels[index])))))
+                        .disabled(busy || index == 0 && self.selection.is_none() || index == 9 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
@@ -653,6 +693,8 @@ impl Render for ExportDialog {
                                 2 => this.settings.json.decimals_as_numbers = *checked, _ => unreachable!()}
                             this.sync(window,cx);
                         }))))))
+            .when(format == Format::Parquet && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed && self.settings.parquet.numeric == export::parquet::Numeric::Double, |view| view.child(div().text_sm().text_color(cx.theme().warning).child("Double can change numeric values.")))
+            .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
             .when(self.incomplete, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("Only the downloaded rows are included. More rows may be available.")))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
@@ -671,7 +713,7 @@ impl Render for ExportDialog {
                 .child(Button::new("export-cancel").label("Cancel").on_click(cx.listener(|this,_,window,cx| {
                     this.cancel.store(true,Ordering::Relaxed); window.close_dialog(cx);
                 })))
-                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid)
+                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet)
                     .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
                 .child(Button::new("export-save").label("Save…").primary().disabled(busy || invalid)
                     .on_click(cx.listener(|this,_,window,cx| this.start(true,window,cx)))))

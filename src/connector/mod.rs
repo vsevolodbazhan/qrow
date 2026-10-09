@@ -69,6 +69,10 @@ pub trait Session: Send {
     fn poll(&mut self) -> Result<QueryState>;
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
+    /// Settings captured for the current result. Export must not change them.
+    fn export_context(&self) -> crate::export::Context {
+        crate::export::Context::default()
+    }
     /// Whether the connector stopped retaining rows at a result limit.
     fn result_limited(&self) -> bool {
         false

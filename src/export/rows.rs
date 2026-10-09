@@ -12,6 +12,7 @@ use std::{
 pub struct Rows {
     batches: Vec<Arc<Batch>>,
     len: usize,
+    context: Arc<super::Context>,
 }
 
 struct Batch {
@@ -21,6 +22,13 @@ struct Batch {
 }
 
 impl Rows {
+    pub fn context(&self) -> &super::Context {
+        &self.context
+    }
+
+    pub fn set_context(&mut self, context: super::Context) {
+        self.context = Arc::new(context);
+    }
     pub fn len(&self) -> usize {
         self.len
     }
