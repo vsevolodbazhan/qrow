@@ -2041,9 +2041,6 @@ impl Qrow {
         cx.notify();
     }
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        if let Some(connection) = self.active_profile() {
-            self.cancel_external_authentication(connection, cx);
-        }
         self.cancel_tab(self.active, cx);
     }
     fn cancel_tab(&mut self, index: usize, cx: &mut Context<Self>) {

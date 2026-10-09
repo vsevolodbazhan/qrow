@@ -190,8 +190,8 @@ impl Service {
             timeout: self.timeout,
         }))
     }
-    /// Check only memory; selecting a connection with a cached token needs no probe.
-    #[cfg(any(feature = "ui", test))]
+    /// Check whether memory contains a token for this connection.
+    #[cfg(test)]
     pub(crate) fn is_authenticated(&self, profile: &Profile) -> bool {
         self.shared
             .registry
