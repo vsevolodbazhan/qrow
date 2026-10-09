@@ -8,6 +8,7 @@ pub mod evidence;
 pub mod fixture;
 pub mod oidc;
 pub mod perf;
+pub mod response_gate;
 pub mod trino_protocol;
 use anyhow::Result;
 use gpui_kit::InputEvent as _;
