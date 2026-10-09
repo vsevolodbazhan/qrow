@@ -1,17 +1,21 @@
 //! Export of result rows to text formats and files. The core library owns the
 //! formats and the file handling, so they work without the UI.
 
+mod budget;
 mod context;
 pub mod csv;
 mod decimal;
+mod disk;
 mod jobs;
 pub mod json;
 pub mod markdown;
 pub mod parquet;
 mod rows;
+pub mod spool;
 mod temporal;
 pub(crate) mod value;
 pub use context::{Context, Postgres as PostgresContext};
+pub use disk::DiskWriter;
 pub use jobs::{Jobs, Writer};
 pub use rows::Rows;
 
@@ -100,6 +104,10 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     settings.validate()?;
+    validate_table(table)?;
+    for row in table.row_indices.clone() {
+        budget::selected_row_bytes(table.values(row))?;
+    }
     match settings.format {
         Format::Parquet => parquet::write(out, table, &settings.parquet, cancel),
         Format::Csv => write_csv(out, table, &settings.csv, cancel),
@@ -211,14 +219,28 @@ pub struct Snapshot {
     columns: Vec<Column>,
     rows: Rows,
     _lease: rows::Lease,
+    _metadata: budget::Allocation,
 }
 
 impl Snapshot {
     pub fn new(columns: &[Column], rows: &Rows) -> io::Result<Self> {
+        let metadata = columns
+            .len()
+            .saturating_mul(std::mem::size_of::<Column>())
+            .saturating_add(
+                columns
+                    .iter()
+                    .map(|column| column.name.len() + column.data_type.len())
+                    .sum::<usize>(),
+            )
+            .saturating_add(rows.metadata_bytes());
+        let metadata = budget::GLOBAL.acquire(metadata)?;
+        let lease = rows.retain_for_export()?;
         Ok(Self {
             columns: columns.to_vec(),
             rows: rows.clone(),
-            _lease: rows.retain_for_export()?,
+            _lease: lease,
+            _metadata: metadata,
         })
     }
 
@@ -329,7 +351,7 @@ fn validate_table(table: &Table<'_>) -> io::Result<()> {
 pub fn save<T>(
     path: &Path,
     cancel: &AtomicBool,
-    write: impl FnOnce(&mut BufWriter<File>) -> io::Result<T>,
+    write: impl FnOnce(&mut BufWriter<DiskWriter<File>>) -> io::Result<T>,
 ) -> io::Result<T> {
     check_cancelled(cancel)?;
     let directory = path
@@ -341,7 +363,8 @@ pub fn save<T>(
         .suffix(".tmp")
         .tempfile_in(directory)?;
     let (file, temporary_path) = temporary.into_parts();
-    let mut out = BufWriter::new(file);
+    let _buffer = budget::GLOBAL.acquire(8192)?;
+    let mut out = BufWriter::new(DiskWriter::new(file, directory)?);
     let result = write(&mut out)?;
     let file = out.into_inner().map_err(|error| error.into_error())?;
     file.sync_all()?;
@@ -353,6 +376,54 @@ pub fn save<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selecting_a_small_cell_does_not_inspect_an_oversized_unselected_cell() {
+        let columns = vec![
+            Column {
+                name: "small".into(),
+                data_type: "STRING".into(),
+            },
+            Column {
+                name: "large".into(),
+                data_type: "STRING".into(),
+            },
+        ];
+        let rows = Rows::from(vec![vec![
+            Some("selected".into()),
+            Some("x".repeat(budget::MAX_CELL_BYTES + 1)),
+        ]]);
+        let table = Table {
+            columns: &columns,
+            rows: &rows,
+            row_indices: 0..1,
+            column_indices: 0..=0,
+        };
+        let mut bytes = Vec::new();
+        write(
+            &mut bytes,
+            &table,
+            &Settings::default(),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(bytes, b"small\r\nselected\r\n");
+        let table = Table {
+            column_indices: 0..=1,
+            ..table
+        };
+        assert!(
+            write(
+                &mut Vec::new(),
+                &table,
+                &Settings::default(),
+                &AtomicBool::new(false)
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("cell")
+        );
+    }
 
     fn columns() -> Vec<Column> {
         [

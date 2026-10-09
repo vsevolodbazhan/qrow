@@ -2,7 +2,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{collections::HashSet, io};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kind {
     Boolean,
     Integer,
