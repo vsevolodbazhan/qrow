@@ -12,12 +12,10 @@ with tempfile.TemporaryDirectory(prefix="qrow-csv-reader-") as directory:
     path = Path(directory) / "result.csv"
     with path.open("w", encoding="utf-8", newline="") as output:
         output.write(case["csv"])
-    rows = duckdb.read_csv(
-        str(path),
-        header=True,
-        all_varchar=True,
-        nullstr=case["null"],
-        allow_quoted_nulls=False,
+    rows = duckdb.connect().execute(
+        "SELECT * FROM read_csv(?, header=true, all_varchar=true, "
+        "nullstr=?, allow_quoted_nulls=false)",
+        [str(path), case["null"]],
     ).fetchall()
     actual = [list(row) for row in rows]
     assert actual == case["rows"], (actual, case["rows"])
