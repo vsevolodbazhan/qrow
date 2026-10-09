@@ -441,6 +441,13 @@ fn a_held_drag_scrolls_back_to_the_first_row_and_column(cx: &mut TestAppContext)
     assert_eq!(text.lines().count(), 31);
     assert_eq!(text.lines().next().unwrap().split('\t').count(), 10);
     assert!(text.starts_with(&first_columns(0)));
+    app.update(cx, |window, _| {
+        let first = find_in(window, ("row", 0usize), ("cell", 1usize)).unwrap();
+        let number = find_in(window, ("row", 0usize), ("cell", 0usize)).unwrap();
+        assert!(first.visible());
+        assert!(first.bounds().left() >= number.bounds().right());
+        assert!(first.bounds().right() <= window.viewport_size().width);
+    });
 }
 
 #[gpui_kit::test]
