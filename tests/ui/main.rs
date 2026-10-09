@@ -19,5 +19,6 @@ mod dbt_manifest;
 mod dialogs;
 mod metadata;
 mod queries;
+mod results;
 mod sign_ins;
 mod tabs;
