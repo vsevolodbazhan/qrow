@@ -270,8 +270,8 @@ is discarded. The deadline starts when protocol cancellation begins.
 It does not limit credential lookup, token refresh, DNS lookup, or a TCP
 connection that has not yet returned a socket. Export jobs stay active until
 that work returns. A stopped drain consumes its cursor. To get all rows after
-that, run the query again. All-row exports from limited Postgres and Trino
-previews are not available yet.
+that, run the query again. All-row exports from a limited
+Trino preview are not available yet.
 
 After download completion, writer cancellation and errors affect only that
 file. They cannot cancel a later query. A writer error stays in the results
