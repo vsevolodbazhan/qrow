@@ -1,4 +1,5 @@
 use super::*;
+pub(super) mod background;
 use crate::export::{
     self, Format, Snapshot,
     csv::{CsvOptions, LineEnding, NullMarker, Preset, Separator},
@@ -16,7 +17,7 @@ use std::{
     hash::{Hash, Hasher},
     ops::{Range, RangeInclusive},
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 type RangeSelection = (Range<usize>, RangeInclusive<usize>);
@@ -64,6 +65,12 @@ struct ExportDialog {
     preview_task: Option<Task<()>>,
     error: Option<String>,
     running: bool,
+    id: Uuid,
+    background: bool,
+    output_bytes: Arc<AtomicU64>,
+    started: Option<Instant>,
+    output_path: Option<PathBuf>,
+    progress_task: Option<Task<()>>,
     cancel: Arc<AtomicBool>,
     owner: WeakEntity<Qrow>,
     dialog: Option<FocusHandle>,
@@ -105,7 +112,10 @@ impl Qrow {
             tab: tab.saved.id,
             execution: tab.current_execution,
             cursor: tab.cursor,
-            replay: tab.replay.clone(),
+            replay: tab
+                .replay
+                .clone()
+                .or_else(|| self.export_spool(tab.saved.id, tab.current_execution, None, cx)),
         };
         let owner = cx.weak_entity();
         let view = cx.new(|cx| {
@@ -129,12 +139,10 @@ impl Qrow {
 
 impl ExportDialog {
     fn open(view: &Entity<Self>, window: &mut Window, cx: &mut App) {
-        let cancel = view.read(cx).cancel.clone();
         let dialog_view = view.clone();
         let view = view.clone();
         let close_view = view.downgrade();
         window.open_dialog(cx, move |dialog, window, _| {
-            let cancel = cancel.clone();
             let close_view = close_view.clone();
             let submit = view.downgrade();
             dialog
@@ -147,8 +155,12 @@ impl ExportDialog {
                     false
                 })
                 .on_close(move |_, _, cx| {
-                    cancel.store(true, Ordering::Relaxed);
-                    let _ = close_view.update(cx, |this, _| this.cancel_download());
+                    let _ = close_view.update(cx, |this, _| {
+                        if !this.background {
+                            this.cancel.store(true, Ordering::Relaxed);
+                            this.cancel_download();
+                        }
+                    });
                 })
         });
         dialog_view.update(cx, |view, cx| {
@@ -358,6 +370,12 @@ impl ExportDialog {
             preview_task: None,
             error: None,
             running: false,
+            id: Uuid::new_v4(),
+            background: false,
+            output_bytes: Arc::new(AtomicU64::new(0)),
+            started: None,
+            output_path: None,
+            progress_task: None,
             cancel: Arc::new(AtomicBool::new(false)),
             owner,
             dialog: None,
@@ -439,6 +457,16 @@ impl ExportDialog {
     }
 
     fn start(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_with_writer(save, background::writer, window, cx);
+    }
+
+    fn start_with_writer(
+        &mut self,
+        save: bool,
+        writer: fn() -> std::io::Result<background::WriterSender>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.running
             || !save
                 && (self.settings.format == Format::Parquet
@@ -492,6 +520,15 @@ impl ExportDialog {
             } else {
                 None
             };
+            let writer = match writer() {
+                Ok(writer) => writer,
+                Err(error) => {
+                    let _ = weak.update_in(cx, |this, window, cx| {
+                        this.complete(Err(error), path, request, window, cx);
+                    });
+                    return;
+                }
+            };
             let all_source = match weak.update_in(cx, |this, _, cx| this.all_source(&jobs, cx)) {
                 Ok(Ok(source)) => source,
                 result => {
@@ -511,19 +548,32 @@ impl ExportDialog {
                 .ok()
                 .flatten();
             let output_path = path.clone();
+            let bytes = weak
+                .update_in(cx, |this, window, cx| {
+                    this.output_bytes.store(0, Ordering::Relaxed);
+                    this.started = Some(Instant::now());
+                    this.output_path = path.clone();
+                    if path.is_some() && matches!(this.scope, Scope::All | Scope::Replay) {
+                        this.start_background(window, cx);
+                    }
+                    this.output_bytes.clone()
+                })
+                .unwrap_or_else(|_| Arc::new(AtomicU64::new(0)));
             let guard = jobs.register(cancel.clone());
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let _guard = guard;
+            let failed_download = download.clone();
+            let (done, finished) = async_channel::bounded(1);
+            let admitted = writer.send(Box::new(move || {
+                let _guard = guard;
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let table = source.table(range);
                     let result: std::io::Result<(usize, Option<export::Text>)> =
                         if let Some(path) = output_path {
                             export::save(&path, &cancel, |out| {
+                                let mut out = background::Output { out, bytes: &bytes };
                                 if let Some(spool) = &all_source {
-                                    export::stream::write(out, spool, &options, &cancel)
+                                    export::stream::write(&mut out, spool, &options, &cancel)
                                 } else {
-                                    export::write(out, &table, &options, &cancel)
+                                    export::write(&mut out, &table, &options, &cancel)
                                 }
                             })
                             .map(|count| (count, None))
@@ -532,14 +582,29 @@ impl ExportDialog {
                             export::write(&mut out, &table, &options, &cancel)
                                 .and_then(|count| out.into_text().map(|text| (count, Some(text))))
                         };
-                    if let Err(error) = &result
-                        && let Some(download) = &download
-                    {
-                        download.fail(error.to_string());
-                    }
                     result
-                })
-                .await;
+                }))
+                .unwrap_or_else(|_| Err(std::io::Error::other("The export writer panicked.")));
+                if let Err(error) = &result
+                    && let Some(download) = &download
+                {
+                    download.fail(error.to_string());
+                }
+                let _ = done.send_blocking(result);
+            }));
+            let result = match admitted {
+                Ok(()) => match finished.recv().await {
+                    Ok(result) => result,
+                    Err(_) => writer_stopped(
+                        failed_download,
+                        std::io::Error::other("The export writer stopped unexpectedly."),
+                    ),
+                },
+                Err(_) => writer_stopped(
+                    failed_download,
+                    std::io::Error::other("The export writer stopped before receiving its work."),
+                ),
+            };
             let _ = weak.update_in(cx, |this, window, cx| {
                 this.complete(result, path, request, window, cx);
             });
@@ -549,8 +614,7 @@ impl ExportDialog {
 
     fn cancel_download(&self) {
         if let Some(download) = &self.download {
-            let download = download.clone();
-            std::thread::spawn(move || download.cancel());
+            download.cancel_in_background();
         }
     }
 
@@ -563,13 +627,25 @@ impl ExportDialog {
             return Ok(None);
         }
         export::check_cancelled(&self.cancel)?;
-        if let Some(spool) = self
+        let replay = self
             .retained
             .as_ref()
             .filter(|spool| matches!(spool.status(), export::spool::Status::Complete { .. }))
             .or(self.result.replay.as_ref())
-        {
-            return Ok(Some(spool.clone()));
+            .cloned()
+            .or_else(|| {
+                self.owner.upgrade().and_then(|owner| {
+                    owner.read(cx).export_spool(
+                        self.result.tab,
+                        self.result.execution,
+                        Some(cx.entity().entity_id()),
+                        cx,
+                    )
+                })
+            });
+        if let Some(spool) = replay {
+            self.retained = Some(spool.clone());
+            return Ok(Some(spool));
         }
         if self.result.cursor == crate::worker::Cursor::Complete || !self.incomplete {
             return Ok(None);
@@ -622,6 +698,7 @@ impl ExportDialog {
         cx: &mut Context<Self>,
     ) {
         self.running = false;
+        self.progress_task = None;
         // A producer failure also stops format work. Preserve its cause when
         // the writer observes the stop flag before the failed spool record.
         if result.as_ref().err().is_some_and(|error| {
@@ -640,6 +717,7 @@ impl ExportDialog {
                     .is_some_and(|inner| inner.is::<export::Cancelled>())
             })
         {
+            self.remove_background(cx);
             cx.notify();
             return;
         }
@@ -691,11 +769,22 @@ impl ExportDialog {
                         cx,
                     );
                 }
+                self.remove_background(cx);
             }
             Err(error) => self.error = Some(error.to_string()),
         }
         cx.notify();
     }
+}
+
+fn writer_stopped(
+    download: Option<Arc<crate::worker::Download>>,
+    error: std::io::Error,
+) -> std::io::Result<(usize, Option<export::Text>)> {
+    if let Some(download) = download {
+        download.abort(error.to_string());
+    }
+    Err(error)
 }
 
 fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 10] {
@@ -883,8 +972,11 @@ impl Render for ExportDialog {
                 .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
             .child(h_flex().gap_2().child(div().flex_1())
                 .when(busy, |row| row.child(div().text_sm().child("Exporting…")))
-                .child(Button::new("export-cancel").label("Cancel").on_click(cx.listener(|this,_,window,cx| {
-                    this.cancel.store(true,Ordering::Relaxed); window.close_dialog(cx);
+                .child(Button::new("export-cancel").label(if self.background && !busy { "Dismiss" } else if self.background { "Cancel export" } else { "Cancel" }).on_click(cx.listener(|this,_,window,cx| {
+                    this.cancel.store(true,Ordering::Relaxed);
+                    this.cancel_download();
+                    this.remove_background(cx);
+                    window.close_dialog(cx);
                 })))
                 .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet || matches!(self.scope, Scope::All | Scope::Replay))
                     .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
@@ -1038,6 +1130,229 @@ pub(super) fn copy_text(text: String, cx: &mut App) {
 mod tests {
     use super::{CopyRequest, copy_text};
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
+
+    #[gpui_kit::test]
+    fn writer_thread_failure_leaves_the_cursor_available_and_reports_the_error(
+        cx: &mut TestAppContext,
+    ) {
+        use super::*;
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("result.csv");
+        let dialog = cx
+            .update_window(window.into(), |_, window, cx| {
+                let (source, result) = owner
+                    .update(cx, |owner, cx| {
+                        let tab = &mut owner.tabs[0];
+                        tab.cursor = crate::worker::Cursor::Available;
+                        let data = tab.table.read(cx).delegate();
+                        (
+                            Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
+                            ExportResult {
+                                tab: tab.saved.id,
+                                execution: None,
+                                cursor: crate::worker::Cursor::Available,
+                                replay: None,
+                            },
+                        )
+                    })
+                    .unwrap();
+                let dialog = cx.new(|cx| {
+                    ExportDialog::new(
+                        source,
+                        None,
+                        export::Settings::default(),
+                        "thread-failure".into(),
+                        true,
+                        result,
+                        owner.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                ExportDialog::open(&dialog, window, cx);
+                dialog.update(cx, |dialog, cx| {
+                    dialog.scope = Scope::All;
+                    dialog.start_with_writer(
+                        true,
+                        || Err(std::io::Error::other("No thread resources")),
+                        window,
+                        cx,
+                    );
+                });
+                dialog
+            })
+            .unwrap();
+        assert!(cx.did_prompt_for_new_path());
+        cx.simulate_new_path_selection(|_| Some(path.clone()));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, _, cx| {
+            let dialog = dialog.read(cx);
+            assert!(!dialog.running);
+            assert_eq!(dialog.error.as_deref(), Some("No thread resources"));
+            assert!(dialog.download.is_none());
+            assert!(dialog.retained.is_none());
+            let owner = owner.upgrade().unwrap();
+            let owner = owner.read(cx);
+            assert!(!owner.tabs[0].busy);
+            assert_eq!(owner.tabs[0].cursor, crate::worker::Cursor::Available);
+            assert!(owner.tabs[0].download.is_none());
+            assert!(owner.exports.is_empty());
+            assert_eq!(cx.global::<export::Jobs>().active_count(), 0);
+        })
+        .unwrap();
+        assert!(!path.exists());
+    }
+
+    #[gpui_kit::test]
+    fn background_export_survives_tab_close_and_keeps_failure_until_dismissed(
+        cx: &mut TestAppContext,
+    ) {
+        use super::*;
+        use gpui_kit::test::TestWindowExt;
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        let mut retained = None;
+        cx.update_window(window.into(), |_, window, cx| {
+            let (source, mut result) = owner
+                .update(cx, |owner, cx| {
+                    let tab = &owner.tabs[0];
+                    let data = tab.table.read(cx).delegate();
+                    (
+                        Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
+                        ExportResult {
+                            tab: tab.saved.id,
+                            execution: None,
+                            cursor: crate::worker::Cursor::Complete,
+                            replay: None,
+                        },
+                    )
+                })
+                .unwrap();
+            let old_tab = result.tab;
+            let columns = [crate::model::Column {
+                name: "n".into(),
+                data_type: "INT".into(),
+            }];
+            let (spool, producer) =
+                export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+            let mut producer = producer;
+            producer
+                .append(
+                    &[
+                        vec![Some("1".into())],
+                        vec![Some("2".into())],
+                        vec![Some("3".into())],
+                    ],
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+            producer.finish(&AtomicBool::new(false)).unwrap();
+            retained = Some(Arc::downgrade(&spool));
+            result.replay = Some(spool.clone());
+            let dialog = cx.new(|cx| {
+                ExportDialog::new(
+                    source,
+                    None,
+                    export::Settings::default(),
+                    "background".into(),
+                    false,
+                    result,
+                    owner.clone(),
+                    window,
+                    cx,
+                )
+            });
+            ExportDialog::open(&dialog, window, cx);
+            dialog.update(cx, |dialog, cx| {
+                dialog.running = true;
+                dialog.scope = Scope::Replay;
+                dialog.result.replay = Some(spool);
+                let jobs = cx.global::<export::Jobs>().clone();
+                assert_eq!(
+                    dialog.all_source(&jobs, cx).unwrap().unwrap().row_count(),
+                    3
+                );
+                dialog.start_background(window, cx);
+            });
+            assert!(Root::read(window, cx).dialog_focus_handle().is_none());
+            assert!(!dialog.read(cx).cancel.load(Ordering::Relaxed));
+            let id = dialog.read(cx).id;
+            window.render_frame(cx);
+            assert!(
+                window
+                    .within(SharedString::from(format!("export-job-{id}")))
+                    .find("status")
+                    .label()
+                    .unwrap()
+                    .contains("Writing 3 rows")
+            );
+            owner
+                .update(cx, |owner, cx| {
+                    assert_eq!(owner.exports.len(), 1);
+                    owner.close_tab(0, window, cx);
+                    assert!(owner.tabs.iter().all(|tab| tab.saved.id != old_tab));
+                    assert_eq!(owner.exports.len(), 1);
+                })
+                .unwrap();
+            ExportDialog::open(&dialog, window, cx);
+            window.close_dialog(cx);
+            assert!(!dialog.read(cx).cancel.load(Ordering::Relaxed));
+            dialog.update(cx, |dialog, cx| {
+                dialog.complete(
+                    Err(std::io::Error::other("Output volume is full")),
+                    None,
+                    None,
+                    window,
+                    cx,
+                )
+            });
+            let id = dialog.read(cx).id;
+            window.render_frame(cx);
+            assert_eq!(
+                window
+                    .find(SharedString::from(format!("export-details-{id}")))
+                    .label(),
+                Some("Retry…")
+            );
+            assert_eq!(
+                dialog.read(cx).error.as_deref(),
+                Some("Output volume is full")
+            );
+            dialog.update(cx, |dialog, cx| {
+                dialog.settings.format = Format::JsonLines;
+                dialog.sync(window, cx);
+            });
+            window.render_frame(cx);
+            assert!(
+                window
+                    .within(SharedString::from(format!("export-job-{id}")))
+                    .find("status")
+                    .label()
+                    .unwrap()
+                    .contains("Ready to retry")
+            );
+            assert!(retained.as_ref().unwrap().upgrade().is_some());
+            window.click(SharedString::from(format!("export-stop-{id}")), cx);
+            assert!(owner.upgrade().unwrap().read(cx).exports.is_empty());
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(retained.unwrap().upgrade().is_none());
+    }
 
     #[gpui_kit::test]
     fn writer_failure_keeps_retry_and_disconnect_preserves_a_complete_preview(

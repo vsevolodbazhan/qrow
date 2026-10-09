@@ -519,6 +519,7 @@ pub struct Qrow {
     /// The schema catalogs that several connections share.
     shared_catalogs: Vec<SharedCatalog>,
     tabs: Vec<Tab>,
+    exports: Vec<export_dialog::background::Entry>,
     active: usize,
     active_tabs: BTreeMap<Uuid, Uuid>,
     /// Scrolls the query tab strip to show the active tab.
@@ -775,6 +776,7 @@ impl Qrow {
             profiles: workspace.profiles,
             shared_catalogs: workspace.shared_catalogs,
             tabs: vec![],
+            exports: vec![],
             active: workspace.active_tab,
             active_tabs: workspace.active_tabs.clone(),
             tab_scroll: ScrollHandle::new(),

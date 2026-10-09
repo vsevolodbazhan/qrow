@@ -252,12 +252,15 @@ not submit the SQL again. A page fetched after the dialog opened can make
 its snapshot stale. Reopen Export in that case.
 
 The tab is busy during the download. **Run** and **Next page** are disabled.
-The results bar shows downloaded rows, bytes, and average speed. The format
+The form closes when saving starts. The results bar shows downloaded rows,
+bytes, average speed, and elapsed time. The format
 writer reads committed spool batches. Parquet exact decimals and Markdown
-code blocks need a complete first pass. The export dialog stays open while
-the file writer finishes.
+code blocks need a complete first pass. After the download, you can run
+another query or close the tab while the file writer continues.
 
-**Cancel** stops the writer and the download. The worker sends cancellation
+**Cancel export** in the results bar stops the writer and the download.
+**Details…** opens the form without stopping the job. Closing that form
+leaves the job running. The worker sends cancellation
 to the operation that owns the download and completes protocol cleanup
 before the session can accept another query. Cleanup has a 2-second deadline.
 If cleanup fails or times out, the transport is interrupted and the session
@@ -266,14 +269,15 @@ that, run the query again. All-row exports from limited Postgres and Trino
 previews are not available yet.
 
 After download completion, writer cancellation and errors affect only that
-file. They cannot cancel a later query. A writer error keeps the completed
-spool in the error dialog. **Retry…** uses that spool and does not run SQL.
-Close the dialog to release this job's handle.
+file. They cannot cancel a later query. A writer error stays in the results
+bar and keeps the completed spool. **Retry…** opens the form and uses that
+spool without running SQL. You can change the format or destination.
+**Dismiss** releases this job's handle.
 
 **Export again as…** uses the tab's retained spool, with its row count and
 size shown in the Rows list. **Settings → Export → Replay Limit** controls
 the maximum retained size. The default is 2048 MiB. Zero disables retention.
-A larger spool remains available to its running writer and error dialog.
+A larger spool remains available to its running writer and failed job.
 A new query or tab close releases only the tab's replay handle. The
 anonymous spool disappears when its last handle closes, including after a
 crash. Disconnecting keeps a completed replay spool but releases a live
