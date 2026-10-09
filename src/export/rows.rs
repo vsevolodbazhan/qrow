@@ -66,7 +66,7 @@ impl Rows {
         });
     }
 
-    pub(super) fn accounted(
+    pub(crate) fn accounted(
         rows: Vec<Row>,
         allocation: super::budget::Allocation,
         context: super::Context,
@@ -79,7 +79,7 @@ impl Rows {
         store
     }
 
-    pub(super) fn append_shared(&mut self, other: &Self) {
+    pub(crate) fn append_shared(&mut self, other: &Self) {
         if self.is_empty() {
             self.context = other.context.clone();
         }

@@ -118,6 +118,14 @@ impl Credentials {
     }
 
     fn connect_controlled(&self) -> Result<(sasl::Client, Arc<sasl::Abort>)> {
+        self.connect_registered(&super::ConnectionControl::default())
+    }
+
+    fn connect_registered(
+        &self,
+        control: &super::ConnectionControl,
+    ) -> Result<(sasl::Client, Arc<sasl::Abort>)> {
+        control.check()?;
         let profile = &self.profile;
         let token = matches!(profile.authentication, Authentication::Oidc { .. });
         ensure!(
@@ -131,7 +139,10 @@ impl Credentials {
             tls: profile.tls.then_some(&self.trust),
             read_timeout: profile.lifecycle.response_timeout(),
         };
-        sasl::connect_controlled(&endpoint, &profile.username, &secret).inspect(|_| {
+        control.check()?;
+        sasl::connect_registered(&endpoint, &profile.username, &secret, |socket| {
+            control.register(socket)
+        }).inspect(|_| {
             *self.authenticated_secret.lock().unwrap() = Some(Arc::new(secret.clone()));
         }).map_err(|error| {
             if error.downcast_ref::<sasl::Rejected>().is_none() {
@@ -226,6 +237,16 @@ pub struct HiveSession {
 
 impl Connector for HiveConnector {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
+        self.connect_controlled(profile, secret, &super::ConnectionControl::default())
+    }
+
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &super::ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        control.check()?;
         profile.validate()?;
         let credentials = Arc::new(Credentials {
             profile: profile.clone(),
@@ -234,7 +255,7 @@ impl Connector for HiveConnector {
             authenticated_secret: Mutex::new(None),
         });
         let timeout = profile.lifecycle.response_timeout();
-        let (mut client, abort) = credentials.connect_controlled()?;
+        let (mut client, abort) = credentials.connect_registered(control)?;
         let opened = (|| -> Result<_> {
             let opened = client.open_session(TOpenSessionReq::new(
                 TProtocolVersion::HIVE_CLI_SERVICE_PROTOCOL_V6,
@@ -281,6 +302,7 @@ impl Connector for HiveConnector {
             let _ = connection.close();
             return Err(error);
         }
+        control.check()?;
         Ok(Box::new(connection))
     }
 }
@@ -383,6 +405,9 @@ fn query_failure(
 }
 
 impl Session for HiveSession {
+    fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
+        Some(self.abort.clone())
+    }
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.preview_operation = self.operation.take();
         self.execute(sql)

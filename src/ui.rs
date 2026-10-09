@@ -248,6 +248,7 @@ struct Tab {
     panel: PanelState,
     output_scroll: ScrollHandle,
     current_execution: Option<ExecutionId>,
+    result_session: Option<Uuid>,
     next_execution_id: u64,
     /// The SQL of the last Run, for a run after a browser sign-in.
     submitted_sql: Option<String>,
@@ -934,6 +935,7 @@ impl Qrow {
             panel: PanelState::default(),
             output_scroll: ScrollHandle::new(),
             current_execution: None,
+            result_session: None,
             submitted_sql: None,
             cursor: crate::worker::Cursor::Unavailable,
             replay: None,
@@ -1487,6 +1489,30 @@ impl Qrow {
                     tab.set_status_detail("Connected", "Keep-alive enabled");
                 } else {
                     tab.set_status("Connected");
+                }
+            }
+            Event::Session {
+                execution,
+                generation,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.result_session = Some(generation);
+                }
+            }
+            Event::PreviewRows { execution, rows } => {
+                if tab.current_execution == Some(execution) {
+                    tab.table.update(cx, |table, cx| {
+                        table.delegate_mut().rows.append_shared(&rows);
+                        cx.notify();
+                    });
+                }
+            }
+            Event::PreviewComplete {
+                execution,
+                complete,
+            } => {
+                if tab.current_execution == Some(execution) {
+                    tab.preview_complete = complete;
                 }
             }
             Event::Columns(columns) => {

@@ -18,7 +18,9 @@ use std::{
 
 mod download;
 mod lifecycle;
+mod run_export;
 pub use download::{Cursor, Download};
+pub use run_export::SessionChanged;
 
 struct Drain {
     execution: ExecutionId,
@@ -35,6 +37,7 @@ struct Pending {
 }
 
 enum Command {
+    RunExport(Box<run_export::Request>),
     Run(Box<Profile>, String, ExecutionId),
     UpdateProfile(Box<Profile>),
     More,
@@ -43,6 +46,18 @@ enum Command {
     Shutdown,
 }
 pub enum Event {
+    Session {
+        execution: ExecutionId,
+        generation: uuid::Uuid,
+    },
+    PreviewRows {
+        execution: ExecutionId,
+        rows: crate::export::Rows,
+    },
+    PreviewComplete {
+        execution: ExecutionId,
+        complete: bool,
+    },
     Connecting,
     Authenticating(bool),
     Connected,
@@ -88,6 +103,11 @@ pub enum Event {
     KeepAliveFinished,
 }
 
+struct SessionIdentity {
+    generation: uuid::Uuid,
+    profile: Profile,
+}
+
 type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
 /// Returns the password or the access tokens of a connection. It runs on the
 /// worker thread before each new session.
@@ -96,6 +116,7 @@ pub type CredentialProvider = Arc<dyn Fn(&Profile) -> Result<Secret> + Send + Sy
 pub type IdleGuard = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
 
 pub struct Worker {
+    session_identity: Arc<Mutex<Option<SessionIdentity>>>,
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
     pub logs: mpsc::Receiver<LogEvent>,
@@ -127,7 +148,9 @@ impl Worker {
         let stopped = Arc::new(AtomicBool::new(false));
         let idle_guard = Arc::new(Mutex::new(None));
         let download = Arc::new(Mutex::new(None));
+        let session_identity = Arc::new(Mutex::new(None));
         let mut runner = Runner {
+            session_identity: session_identity.clone(),
             session: None,
             profile: None,
             rows: 0,
@@ -179,6 +202,10 @@ impl Worker {
                     },
                 };
                 let result = match command {
+                    Command::RunExport(request) => {
+                        runner.run_export(*request);
+                        Ok(())
+                    }
                     Command::Run(profile, sql, execution_id) => {
                         runner.run(*profile, sql, execution_id)
                     }
@@ -262,6 +289,7 @@ impl Worker {
             let _ = done_tx.send(());
         });
         Self {
+            session_identity,
             tx,
             events,
             logs,
@@ -390,6 +418,7 @@ impl Drop for Worker {
 }
 
 struct Runner {
+    session_identity: Arc<Mutex<Option<SessionIdentity>>>,
     idle_guard: Arc<Mutex<Option<IdleGuard>>>,
     stopped: Arc<AtomicBool>,
     session: Option<Box<dyn Session>>,
@@ -478,6 +507,7 @@ impl Runner {
         );
     }
     fn disconnect(&mut self) {
+        *self.session_identity.lock().unwrap() = None;
         self.cursor = Cursor::Unavailable;
         self.pending = None;
         *self.target.lock().unwrap() = None;
@@ -496,24 +526,36 @@ impl Runner {
             self.profile = Some(profile);
         }
     }
-    fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
-        self.cursor = Cursor::Unavailable;
-        self.pending = None;
-        self.current_execution = Some(execution_id);
-        self.execution = None;
-        profile.lifecycle.validate()?;
-        self.rows = 0;
-        self.bytes = 0;
+    fn prepare_session(
+        &mut self,
+        profile: Profile,
+        execution_id: ExecutionId,
+        control: Option<&crate::connector::ConnectionControl>,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<()> {
         let reconnect = self.session.is_none()
             || self
                 .profile
                 .as_ref()
                 .is_none_or(|current| !current.connection_identity_eq(&profile));
         if reconnect {
+            if let Some(control) = control {
+                control.check()?;
+                if let Some(transport) = self
+                    .session
+                    .as_ref()
+                    .and_then(|session| session.transport_cancellation())
+                {
+                    control.register(transport)?;
+                }
+            }
             self.disconnect();
+            if let Some(control) = control {
+                control.check()?;
+            }
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
-            let cancelled = self.cancelled.clone();
+            let cancelled = cancel;
             let events = self.tx.clone();
             let wake = self.wake.clone();
             let secret =
@@ -524,7 +566,16 @@ impl Runner {
                         wake();
                     }),
                 ));
-            self.session = Some(self.connector.connect(&profile, secret)?);
+            self.session = Some(match control {
+                Some(control) => self
+                    .connector
+                    .connect_controlled(&profile, secret, control)?,
+                None => self.connector.connect(&profile, secret)?,
+            });
+            *self.session_identity.lock().unwrap() = Some(SessionIdentity {
+                generation: uuid::Uuid::new_v4(),
+                profile: profile.clone(),
+            });
             self.profile = Some(profile);
             self.log(
                 Some(execution_id),
@@ -541,6 +592,24 @@ impl Runner {
         } else {
             self.profile = Some(profile);
         }
+        if let Some(control) = control {
+            control.check()?;
+            if let Some(transport) = self.session.as_ref().unwrap().transport_cancellation() {
+                control.register(transport)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn run(&mut self, profile: Profile, sql: String, execution_id: ExecutionId) -> Result<()> {
+        self.cursor = Cursor::Unavailable;
+        self.pending = None;
+        self.current_execution = Some(execution_id);
+        self.execution = None;
+        profile.lifecycle.validate()?;
+        self.rows = 0;
+        self.bytes = 0;
+        self.prepare_session(profile, execution_id, None, self.cancelled.clone())?;
         if self.cancelled.load(Ordering::SeqCst) {
             self.log(
                 Some(execution_id),
@@ -562,6 +631,7 @@ impl Runner {
         *self.target.lock().unwrap() = None;
         let cancellation = self.session.as_mut().unwrap().execute(&sql)?;
         *self.target.lock().unwrap() = Some(cancellation.clone());
+        self.emit_session(execution_id);
         self.log(
             Some(execution_id),
             Severity::Info,
@@ -780,7 +850,10 @@ impl Runner {
         {
             let message =
                 "The result changed. Reopen Export to use the current downloaded rows.".to_owned();
-            download.spool().fail(message.clone());
+            download
+                .spool()
+                .expect("A cursor drain has a spool")
+                .fail(message.clone());
             self.emit(Event::DownloadFailed {
                 execution,
                 message,
@@ -792,7 +865,10 @@ impl Runner {
         let target = self.target.lock().unwrap().clone();
         let Some(target) = target else {
             let message = "The result cursor is no longer available.".to_owned();
-            download.spool().fail(message.clone());
+            download
+                .spool()
+                .expect("A cursor drain has a spool")
+                .fail(message.clone());
             self.emit(Event::DownloadFailed {
                 execution,
                 message,
@@ -802,7 +878,10 @@ impl Runner {
             return;
         };
         if let Err(error) = download.bind(target, _guard.fork()) {
-            download.spool().cancel();
+            download
+                .spool()
+                .expect("A cursor drain has a spool")
+                .cancel();
             self.emit(Event::DownloadFailed {
                 execution,
                 message: error.to_string(),
@@ -845,7 +924,10 @@ impl Runner {
                 self.emit(Event::DownloadProgress {
                     execution,
                     rows: count,
-                    bytes: download.spool().bytes(),
+                    bytes: download
+                        .spool()
+                        .expect("A cursor drain has a spool")
+                        .bytes(),
                     elapsed: started.elapsed(),
                 });
             }
@@ -860,7 +942,7 @@ impl Runner {
                 self.set_cursor(Cursor::Downloaded);
                 self.emit(Event::Downloaded {
                     execution,
-                    spool: download.spool().clone(),
+                    spool: download.spool().expect("A cursor drain has a spool"),
                 });
             }
             Err(error) => {

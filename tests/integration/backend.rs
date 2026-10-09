@@ -121,6 +121,71 @@ struct Page {
     more: bool,
     limited: bool,
 }
+
+#[test]
+#[ignore = "requires disposable LDAP/Kyuubi/Spark fixture"]
+fn run_and_export_streams_all_rows_in_the_original_session() -> Result<()> {
+    use qrow::{export, logs::ExecutionId};
+    use std::sync::atomic::AtomicBool;
+    let client = Client::new()?;
+    client.query("CREATE TEMPORARY VIEW qrow_export_session AS SELECT id FROM range(100123)")?;
+    let generation = client.worker.session_generation(&client.profile).unwrap();
+    let jobs = export::Jobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let download = client.worker.run_and_export(
+        client.profile.clone(),
+        "SELECT id FROM qrow_export_session ORDER BY id".into(),
+        ExecutionId(301),
+        Some(generation),
+        &jobs,
+        cancel.clone(),
+    )?;
+    let guard = jobs.register(cancel.clone());
+    let source = download.clone();
+    let directory = tempfile::tempdir()?;
+    let output = directory.path().join("all.csv");
+    let destination = output.clone();
+    let writer = thread::spawn(move || {
+        let _guard = guard;
+        let spool = source.wait_spool()?;
+        export::save(&destination, &cancel, |out| {
+            export::stream::write(out, &spool, &export::Settings::default(), &cancel)
+        })
+    });
+    let mut preview = 0;
+    let mut complete = None;
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        match client.event(deadline)? {
+            Event::PreviewRows { rows, .. } => preview += rows.len(),
+            Event::PreviewComplete {
+                complete: value, ..
+            } => complete = Some(value),
+            Event::Downloaded { .. } => break,
+            Event::DownloadFailed { message, .. } => anyhow::bail!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(preview, 1000);
+    assert_eq!(complete, Some(false));
+    assert_eq!(writer.join().unwrap()?, 100123);
+    for (index, row) in csv::Reader::from_path(output)?.records().enumerate() {
+        assert_eq!(&row?[0], index.to_string());
+    }
+    assert_eq!(
+        client.worker.session_generation(&client.profile),
+        Some(generation)
+    );
+    scalar(
+        &client.query("SELECT COUNT(*) FROM qrow_export_session")?,
+        "100123",
+    );
+    download.fail("Late output failure".into());
+    download.cancel();
+    scalar(&client.query("SELECT 42")?, "42");
+    assert_eq!(jobs.active_count(), 0);
+    Ok(())
+}
 fn scalar(page: &Page, expected: &str) {
     assert_eq!(page.rows, vec![vec![Some(expected.into())]]);
 }

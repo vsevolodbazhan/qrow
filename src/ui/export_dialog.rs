@@ -588,7 +588,14 @@ impl ExportDialog {
                 if let Err(error) = &result
                     && let Some(download) = &download
                 {
-                    download.fail(error.to_string());
+                    if error
+                        .get_ref()
+                        .is_some_and(|cause| cause.is::<export::Cancelled>())
+                    {
+                        download.cancel();
+                    } else {
+                        download.fail(error.to_string());
+                    }
                 }
                 let _ = done.send_blocking(result);
             }));
@@ -685,9 +692,12 @@ impl ExportDialog {
                 Ok(download)
             })
             .map_err(|_| std::io::Error::other("The result window closed."))??;
-        self.retained = Some(download.spool().clone());
-        self.download = Some(download.clone());
-        Ok(Some(download.spool().clone()))
+        let spool = download
+            .spool()
+            .ok_or_else(|| std::io::Error::other("The cursor drain has no result spool."))?;
+        self.retained = Some(spool.clone());
+        self.download = Some(download);
+        Ok(Some(spool))
     }
     fn complete(
         &mut self,
