@@ -199,22 +199,29 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut TestAppContext) {
-    let (workspace, credentials) = Kyuubi::get().workspace(
+    let (mut workspace, credentials) = Kyuubi::get().workspace(
         "SELECT id AS value FROM range(1000123) ORDER BY id",
         PASSWORD,
     );
+    let gate = response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("cancelled.csv");
     std::fs::write(&path, "original").unwrap();
+    gate.pause();
     app.click(cx, "export-results");
     app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_until(cx, "the blocked export response", QUERY_TIMEOUT, |_, _| {
+        gate.blocked()
+    });
     app.click_labelled(cx, "Cancel export");
+    gate.resume();
     app.wait_until(cx, "cancelled export cleanup", QUERY_TIMEOUT, |_, cx| {
         cx.global::<qrow::export::Jobs>().active_count() == 0
             && app.status(cx).starts_with("Export download stopped")
@@ -384,8 +391,10 @@ fn csv_export_of_real_query_preserves_null_empty_quotes_and_unicode(cx: &mut Tes
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn csv_copy_limit_keeps_the_clipboard_and_allows_save_after_an_error(cx: &mut TestAppContext) {
-    let (workspace, credentials) =
-        Kyuubi::get().workspace("SELECT repeat('x', 10485761) AS value", PASSWORD);
+    let (workspace, credentials) = Kyuubi::get().workspace(
+        "SELECT repeat('x', 5242881) AS value FROM range(2)",
+        PASSWORD,
+    );
     let app = TestApp::launch_with(cx, workspace, credentials);
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
@@ -406,7 +415,7 @@ fn csv_copy_limit_keeps_the_clipboard_and_allows_save_after_an_error(cx: &mut Te
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
     let bytes = std::fs::read(&path).unwrap();
-    assert_eq!(bytes.len(), b"value\r\n".len() + 10485761 + 2);
+    assert_eq!(bytes.len(), b"value\r\n".len() + 2 * (5242881 + 2));
     assert!(bytes.starts_with(b"value\r\nxxx"));
     assert!(bytes.ends_with(b"xxx\r\n"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
