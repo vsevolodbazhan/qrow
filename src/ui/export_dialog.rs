@@ -22,6 +22,8 @@ use std::{
 type RangeSelection = (Range<usize>, RangeInclusive<usize>);
 type Choice = Entity<SelectState<SearchableVec<String>>>;
 
+impl Global for export::Jobs {}
+
 struct ExportDialog {
     source: Arc<Snapshot>,
     selection: Option<RangeSelection>,
@@ -31,6 +33,7 @@ struct ExportDialog {
     incomplete: bool,
     controls: Vec<Choice>,
     choices: Vec<Vec<String>>,
+    null_text: Entity<InputState>,
     preview: String,
     error: Option<String>,
     running: bool,
@@ -97,7 +100,7 @@ impl Qrow {
         self.settings.export = settings;
         for tab in &self.tabs {
             tab.table.update(cx, |table, _| {
-                table.delegate_mut().csv = self.settings.export.csv;
+                table.delegate_mut().csv = self.settings.export.csv.clone();
             });
         }
         self.changed(cx);
@@ -142,13 +145,14 @@ impl ExportDialog {
             NullMarker::ALL
                 .iter()
                 .map(|s| s.label().to_owned())
+                .chain(["Custom".into()])
                 .collect(),
         ];
         let selected = selection.is_some();
-        let options = settings.csv;
+        let options = settings.csv.clone();
         let indices = [
             usize::from(selected),
-            preset_index(options),
+            preset_index(&options),
             Separator::ALL
                 .iter()
                 .position(|s| *s == options.separator)
@@ -160,7 +164,7 @@ impl ExportDialog {
             NullMarker::ALL
                 .iter()
                 .position(|s| *s == options.null)
-                .unwrap(),
+                .unwrap_or(3),
         ];
         let controls: Vec<_> = choices
             .iter()
@@ -176,7 +180,13 @@ impl ExportDialog {
                 })
             })
             .collect();
-        let subscriptions = controls
+        let null_text = cx.new(|cx| {
+            InputState::new(window, cx).default_value(match &options.null {
+                NullMarker::Custom(value) => value.clone(),
+                _ => String::new(),
+            })
+        });
+        let mut subscriptions: Vec<_> = controls
             .iter()
             .enumerate()
             .map(|(index, control)| {
@@ -197,13 +207,30 @@ impl ExportDialog {
                         }
                         2 => this.settings.csv.separator = Separator::ALL[choice],
                         3 => this.settings.csv.line_ending = LineEnding::ALL[choice],
-                        4 => this.settings.csv.null = NullMarker::ALL[choice],
+                        4 => {
+                            this.settings.csv.null =
+                                NullMarker::ALL.get(choice).cloned().unwrap_or_else(|| {
+                                    NullMarker::Custom(this.null_text.read(cx).value().to_string())
+                                })
+                        }
                         _ => unreachable!(),
                     }
                     this.sync(window, cx);
                 })
             })
             .collect();
+        subscriptions.push(cx.subscribe_in(
+            &null_text,
+            window,
+            |this, input, event, window, cx| {
+                if matches!(event, InputEvent::Change)
+                    && matches!(this.settings.csv.null, NullMarker::Custom(_))
+                {
+                    this.settings.csv.null = NullMarker::Custom(input.read(cx).value().to_string());
+                    this.sync(window, cx);
+                }
+            },
+        ));
         let mut this = Self {
             source,
             selection,
@@ -213,6 +240,7 @@ impl ExportDialog {
             incomplete,
             controls,
             choices,
+            null_text,
             preview: String::new(),
             error: None,
             running: false,
@@ -233,6 +261,11 @@ impl ExportDialog {
     }
 
     fn update_preview(&mut self) {
+        if let Err(error) = self.settings.csv.validate() {
+            self.error = Some(error.to_string());
+            self.preview.clear();
+            return;
+        }
         let mut table = self.source.table(self.range());
         table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
         let mut out = export::LimitedWriter::new(8192);
@@ -252,10 +285,10 @@ impl ExportDialog {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let options = self.settings.csv;
+        let options = self.settings.csv.clone();
         let indices = [
             usize::from(self.selected),
-            preset_index(options),
+            preset_index(&options),
             Separator::ALL
                 .iter()
                 .position(|s| *s == options.separator)
@@ -267,7 +300,7 @@ impl ExportDialog {
             NullMarker::ALL
                 .iter()
                 .position(|s| *s == options.null)
-                .unwrap(),
+                .unwrap_or(3),
         ];
         for (control, index) in self.controls.iter().zip(indices) {
             control.update(cx, |select, cx| {
@@ -287,13 +320,19 @@ impl ExportDialog {
         if self.running {
             return;
         }
+        if let Err(error) = self.settings.csv.validate() {
+            self.error = Some(error.to_string());
+            cx.notify();
+            return;
+        }
         self.running = true;
         self.error = None;
         self.cancel.store(false, Ordering::Relaxed);
         let cancel = self.cancel.clone();
         let source = self.source.clone();
         let range = self.range();
-        let options = self.settings.csv;
+        let options = self.settings.csv.clone();
+        let jobs = cx.global::<export::Jobs>().clone();
         let directory = self
             .settings
             .directory
@@ -328,9 +367,11 @@ impl ExportDialog {
                 None
             };
             let output_path = path.clone();
+            let guard = jobs.register(cancel.clone());
             let result = cx
                 .background_executor()
                 .spawn(async move {
+                    let _guard = guard;
                     let table = source.table(range);
                     if let Some(path) = output_path {
                         export::save(&path, &cancel, |out| {
@@ -399,7 +440,7 @@ impl ExportDialog {
     }
 }
 
-fn preset_index(options: CsvOptions) -> usize {
+fn preset_index(options: &CsvOptions) -> usize {
     options
         .preset()
         .and_then(|preset| Preset::ALL.iter().position(|p| *p == preset))
@@ -430,6 +471,7 @@ fn export_filename(title: &str, extension: &str) -> String {
 impl Render for ExportDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.running;
+        let invalid = self.settings.csv.validate().is_err();
         let labels = ["Rows", "Preset", "Separator", "Line Ending", "Null Values"];
         let ids = [
             "export-rows",
@@ -438,7 +480,7 @@ impl Render for ExportDialog {
             "export-line-ending",
             "export-null",
         ];
-        let options = self.settings.csv;
+        let options = self.settings.csv.clone();
         let flags = [
             ("export-header", "Include column names", options.header),
             (
@@ -454,13 +496,16 @@ impl Render for ExportDialog {
             ),
         ];
         let table = self.source.table(self.range());
-        let one_column_null =
-            table.column_indices.count() == 1 && options.null == NullMarker::Empty;
+        let one_column_null = table.column_indices.count() == 1 && options.null.as_str().is_empty();
         v_flex().id("export-form").gap_4().w_full()
             .child(v_form().columns(2).children(self.controls.iter().enumerate().map(|(index, control)| {
                 field().label(labels[index]).child(Select::new(control).id(ids[index]).focus_ring(false)
                     .disabled(busy || index == 0 && self.selection.is_none()).w_full().accessibility_label(labels[index]))
             })))
+            .when(matches!(options.null, NullMarker::Custom(_)), |view| view.child(
+                field().label("Null Marker").description("Exclude separators, quotes, and line breaks.")
+                    .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false)
+                        .disabled(busy).aria_label("Null Marker"))))
             .child(v_flex().gap_2().children(flags.into_iter().enumerate().map(|(index, (id, label, checked))| {
                 Checkbox::new(id).label(label).checked(checked).disabled(busy)
                     .on_click(cx.listener(move |this, checked, window, cx| {
@@ -489,9 +534,9 @@ impl Render for ExportDialog {
                     this.cancel.store(true, Ordering::Relaxed);
                     window.close_dialog(cx);
                 })))
-                .child(Button::new("export-copy").label("Copy").disabled(busy)
+                .child(Button::new("export-copy").label("Copy").disabled(busy || invalid)
                     .on_click(cx.listener(|this, _, window, cx| this.start(false, window, cx))))
-                .child(Button::new("export-save").label("Save…").primary().disabled(busy)
+                .child(Button::new("export-save").label("Save…").primary().disabled(busy || invalid)
                     .on_click(cx.listener(|this, _, window, cx| this.start(true, window, cx)))))
     }
 }
@@ -505,14 +550,12 @@ pub(super) fn copy_csv(
     cx: &mut App,
 ) {
     let request = CopyRequest::new(cx);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = cx.global::<export::Jobs>().register(cancel.clone());
     let task = cx.background_executor().spawn(async move {
+        let _guard = guard;
         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-        export::write_csv(
-            &mut out,
-            &source.table(range),
-            &options,
-            &AtomicBool::new(false),
-        )?;
+        export::write_csv(&mut out, &source.table(range), &options, &cancel)?;
         Ok::<_, std::io::Error>(String::from_utf8(out.into_bytes()).expect("CSV is UTF-8"))
     });
     let window = window.window_handle();

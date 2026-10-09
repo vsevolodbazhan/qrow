@@ -167,7 +167,7 @@ impl Results {
         let drag_task = self.drag_task.take();
         *self = Self {
             ui_scale: self.ui_scale,
-            csv: self.csv,
+            csv: self.csv.clone(),
             drag_task,
             ..Self::default()
         };
@@ -515,7 +515,11 @@ impl TableDelegate for Results {
                 selection.columns(),
             )
         });
-        let csv = self.csv;
+        let mut csv = self.csv.clone();
+        csv.header = true;
+        if csv.separator == crate::export::csv::Separator::Tab {
+            csv.separator = crate::export::csv::Separator::Comma;
+        }
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
                 [
@@ -530,7 +534,7 @@ impl TableDelegate for Results {
                         super::export_dialog::copy_csv(
                             source.clone(),
                             range.clone(),
-                            options,
+                            options.clone(),
                             window,
                             cx,
                         );

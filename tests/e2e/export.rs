@@ -81,18 +81,25 @@ fn csv_export_of_real_query_preserves_null_empty_quotes_and_unicode(cx: &mut Tes
     );
     app.wait_gone(cx, "export-copy");
     // Both quote modes must preserve nulls and empty strings for every marker.
-    for marker in ["Empty", "NULL", "\\N"] {
+    for marker in ["Empty", "NULL", "\\N", "Custom"] {
         for quote_all in [false, true] {
             app.click(cx, "export-results");
             app.select(cx, "export-preset", "Standard (RFC 4180)");
             app.select(cx, "export-null", marker);
+            if marker == "Custom" {
+                app.fill(cx, "export-null-text", "未知😀");
+            }
             if quote_all {
                 app.click(cx, "export-quotes");
             }
             let text = copy_query(cx, &app);
             assert_reader_rows(
                 &text,
-                if marker == "Empty" { "" } else { marker },
+                match marker {
+                    "Empty" => "",
+                    "Custom" => "未知😀",
+                    _ => marker,
+                },
                 serde_json::json!([
                     ["a,b", null, "", "最初😀", "123.45"],
                     ["say \"hi\"", "NULL", "", "line one\nline two", "-0.01"]
@@ -151,6 +158,33 @@ fn csv_copy_limit_keeps_the_clipboard_and_allows_save_after_an_error(cx: &mut Te
     assert!(bytes.ends_with(b"xxx\r\n"));
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn custom_csv_marker_round_trips_null_empty_and_literal_marker(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace(
+        "SELECT CAST(NULL AS STRING) AS value, '' AS empty UNION ALL SELECT '未知😀', ''",
+        PASSWORD,
+    );
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    for quote_all in [false, true] {
+        app.click(cx, "export-results");
+        app.select(cx, "export-preset", "Standard (RFC 4180)");
+        app.select(cx, "export-null", "Custom");
+        app.fill(cx, "export-null-text", "未知😀");
+        if quote_all {
+            app.click(cx, "export-quotes");
+        }
+        let text = copy_query(cx, &app);
+        assert_reader_rows(
+            &text,
+            "未知😀",
+            serde_json::json!([[null, ""], ["未知😀", ""]]),
+        );
+    }
 }
 
 #[gpui_kit::test]

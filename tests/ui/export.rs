@@ -210,3 +210,108 @@ fn enter_after_open_starts_save_instead_of_dismissing_the_export(cx: &mut TestAp
     app.settle(cx);
     app.click(cx, "export-cancel");
 }
+
+#[gpui_kit::test]
+fn custom_null_validation_and_saved_value_follow_the_separator(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    app.select(cx, "export-null", "Custom");
+    app.fill(cx, "export-null-text", "a,b");
+    app.settle(cx);
+    app.wait_for(cx, "export-error");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+    app.click(cx, "export-save");
+    assert!(!cx.did_prompt_for_new_path());
+    app.click(cx, "export-copy");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserved")
+    );
+    app.press(cx, "enter");
+    assert!(!cx.did_prompt_for_new_path());
+    app.select(cx, "export-separator", "Pipe");
+    let text = copy(&app, cx);
+    assert!(text.starts_with("route|carrier|departures\r\n"));
+    open(&app, cx);
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, "export-null").as_deref(), Some("Custom"));
+        assert_eq!(value(window, "export-null-text").as_deref(), Some("a,b"));
+    });
+    app.select(cx, "export-separator", "Comma");
+    app.fill(cx, "export-null-text", "未知😀");
+    app.settle(cx);
+    let text = copy(&app, cx);
+    assert!(text.starts_with("route,carrier,departures\r\n"));
+}
+
+#[gpui_kit::test]
+fn copy_as_csv_includes_headers_after_a_headerless_tsv_export(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    app.select(cx, "export-preset", "Tab-separated");
+    app.click(cx, "export-header");
+    assert!(copy(&app, cx).starts_with("LHR → JFK\t"));
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+    });
+    app.settle(cx);
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.choose_in_submenu(cx, "Copy as", "CSV");
+    app.wait_until(cx, "CSV with headers", Duration::from_secs(3), |_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .is_some_and(|text| text.starts_with("route,carrier,departures\n"))
+    });
+}
+
+#[gpui_kit::test]
+fn quit_with_an_active_export_keeps_the_writer_when_declined(cx: &mut TestAppContext) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let app = demo(cx);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = cx.update(|cx| cx.global::<qrow::export::Jobs>().register(cancel.clone()));
+    app.dispatch(cx, qrow::ui::Quit);
+    app.wait_for(cx, "keep-working");
+    app.click(cx, "keep-working");
+    app.wait_gone(cx, "keep-working");
+    assert!(!cancel.load(Ordering::Relaxed));
+    drop(guard);
+}
+
+#[gpui_kit::test]
+fn confirmed_quit_cancels_an_export_before_waiting_for_cleanup(cx: &mut TestAppContext) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let app = demo(cx);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = cx.update(|cx| cx.global::<qrow::export::Jobs>().register(cancel.clone()));
+    let worker_cancel = cancel.clone();
+    let worker = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !worker_cancel.load(Ordering::Relaxed) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Quit did not cancel the writer"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        drop(guard);
+    });
+    app.dispatch(cx, qrow::ui::Quit);
+    app.wait_for(cx, "quit-anyway");
+    app.click(cx, "quit-anyway");
+    worker.join().unwrap();
+    assert!(cancel.load(Ordering::Relaxed));
+    assert_eq!(
+        cx.update(|cx| cx.global::<qrow::export::Jobs>().active_count()),
+        0
+    );
+}
