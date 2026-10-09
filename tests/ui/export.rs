@@ -315,3 +315,120 @@ fn confirmed_quit_cancels_an_export_before_waiting_for_cleanup(cx: &mut TestAppC
         0
     );
 }
+
+#[gpui_kit::test]
+fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    app.select(cx, "export-format", "Markdown");
+    let text = copy(&app, cx);
+    assert!(text.starts_with("| route | carrier | departures |\n| --- | --- | ---: |\n"));
+    assert_eq!(text.lines().count(), 5);
+    open(&app, cx);
+    app.select(cx, "export-markdown-style", "Code block");
+    app.fill(cx, "export-cell-width", "8");
+    app.click(cx, "export-row-numbers");
+    let text = copy(&app, cx);
+    assert!(text.starts_with("```\n"));
+    assert!(text.contains("British…"));
+    assert!(text.contains("| 2 |"));
+    open(&app, cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "export-markdown-style").as_deref(),
+            Some("Code block")
+        );
+        assert_eq!(value(window, "export-cell-width").as_deref(), Some("8"));
+    });
+    app.fill(cx, "export-cell-width", "0");
+    app.wait_for(cx, "export-error");
+    app.select(cx, "export-markdown-style", "Table");
+    app.wait_gone(cx, "export-error");
+    app.click(cx, "export-cancel");
+}
+
+#[gpui_kit::test]
+fn json_array_lines_and_text_values_use_the_same_selection(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    app.select(cx, "export-format", "JSON array");
+    let text = copy(&app, cx);
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 3);
+    assert_eq!(json[0]["route"], "LHR → JFK");
+    assert_eq!(json[0]["departures"], 3820);
+    open(&app, cx);
+    app.select(cx, "export-format", "JSON Lines");
+    app.click(cx, "export-json-typed");
+    let text = copy(&app, cx);
+    assert_eq!(text.lines().count(), 3);
+    let row: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(row["departures"], "3820");
+    open(&app, cx);
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "export-format").as_deref(),
+            Some("JSON Lines")
+        )
+    });
+    app.click(cx, "export-cancel");
+}
+
+#[gpui_kit::test]
+fn large_markdown_requires_a_second_copy_and_preserves_the_clipboard_until_then(
+    cx: &mut TestAppContext,
+) {
+    let app = demo(cx);
+    open(&app, cx);
+    app.select(cx, "export-format", "Markdown");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+    app.click(cx, "export-copy");
+    app.wait_for(cx, "export-copy-warning");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserved")
+    );
+    app.click(cx, "export-copy");
+    app.wait_gone(cx, "export-copy");
+    assert!(
+        cx.read_from_clipboard()
+            .unwrap()
+            .text()
+            .unwrap()
+            .starts_with("| route | carrier |")
+    );
+}
+
+#[gpui_kit::test]
+fn context_copy_as_markdown_and_json_include_column_names(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    select(&app, cx);
+    for format in ["Markdown", "JSON"] {
+        app.update(cx, |window, cx| {
+            let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
+            pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+        });
+        app.settle(cx);
+        cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+        app.choose_in_submenu(cx, "Copy as", format);
+        app.wait_until(
+            cx,
+            "formatted context copy",
+            Duration::from_secs(5),
+            |_, cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .is_some_and(|text| text != "unchanged")
+            },
+        );
+        let text = cx.read_from_clipboard().unwrap().text().unwrap();
+        if format == "Markdown" {
+            assert!(text.starts_with("| route | carrier | departures |\n"));
+        } else {
+            let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(json[0]["departures"], 3820);
+        }
+    }
+}
