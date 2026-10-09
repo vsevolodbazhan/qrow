@@ -200,3 +200,30 @@ fn external_browser_confidential_oidc_login_cache_and_renewal() -> Result<()> {
     other.close()?;
     Ok(())
 }
+
+#[test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn variable_precision_timestamps_keep_every_server_digit() -> Result<()> {
+    let mut session = connect();
+    complete(
+        &mut *session,
+        "SELECT TIMESTAMP '2026-10-09 01:02:03.123456' AS micros, TIMESTAMP '2026-10-09 01:02:03.123456789' AS nanos, TIMESTAMP '2026-10-09 01:02:03.123456789123' AS picos",
+    )?;
+    assert_eq!(
+        session
+            .columns()?
+            .iter()
+            .map(|column| column.data_type.as_str())
+            .collect::<Vec<_>>(),
+        vec!["timestamp(6)", "timestamp(9)", "timestamp(12)"]
+    );
+    assert_eq!(
+        session.fetch(1)?.rows[0],
+        vec![
+            Some("2026-10-09 01:02:03.123456".into()),
+            Some("2026-10-09 01:02:03.123456789".into()),
+            Some("2026-10-09 01:02:03.123456789123".into())
+        ]
+    );
+    Ok(())
+}

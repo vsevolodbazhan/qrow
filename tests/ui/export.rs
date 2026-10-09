@@ -498,3 +498,54 @@ fn export_preview_follows_the_latest_format_after_rapid_changes(cx: &mut TestApp
     });
     app.click(cx, "export-cancel");
 }
+
+#[gpui_kit::test]
+fn parquet_save_disables_copy_and_remembers_format_options(cx: &mut TestAppContext) {
+    use parquet::{
+        file::reader::{FileReader, SerializedFileReader},
+        record::RowAccessor,
+    };
+    let app = demo(cx);
+    select(&app, cx);
+    open(&app, cx);
+    app.select(cx, "export-format", "Parquet");
+    app.select(cx, "export-parquet-compression", "Gzip");
+    app.select(cx, "export-parquet-numeric", "Double (approximate)");
+    app.select(cx, "export-parquet-types", "Text");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+    app.click(cx, "export-copy");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserved")
+    );
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("export-preview").label(),
+            Some("A Parquet file has no text preview.")
+        )
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("selected.parquet");
+    app.press(cx, "enter");
+    assert!(cx.did_prompt_for_new_path());
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_gone(cx, "export-save");
+    let reader = SerializedFileReader::new(std::fs::File::open(&path).unwrap()).unwrap();
+    assert_eq!(reader.metadata().file_metadata().num_rows(), 3);
+    let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
+    assert_eq!(row.get_string(0).unwrap(), "LHR → JFK");
+    assert_eq!(row.get_string(2).unwrap(), "3820");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    open(&app, cx);
+    app.update(cx, |window, _| {
+        for (id, expected) in [
+            ("export-format", "Parquet"),
+            ("export-parquet-compression", "Gzip"),
+            ("export-parquet-types", "Text"),
+            ("export-parquet-numeric", "Double (approximate)"),
+        ] {
+            assert_eq!(value(window, id).as_deref(), Some(expected));
+        }
+    });
+    app.click(cx, "export-cancel");
+}

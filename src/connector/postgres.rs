@@ -108,6 +108,7 @@ struct Results {
     limited: bool,
     exhausted: bool,
     rows: BufReader<File>,
+    context: crate::export::Context,
 }
 
 struct Operation {
@@ -277,6 +278,19 @@ impl Connector for PostgresConnector {
     }
 }
 
+fn export_type(name: &str, modifier: i32) -> String {
+    match name {
+        "numeric" if modifier >= 4 => {
+            let parameters = modifier - 4;
+            let precision = (parameters >> 16) & 0xffff;
+            let scale = ((parameters & 0x7ff) ^ 1024) - 1024;
+            format!("numeric({precision},{scale})")
+        }
+        "timestamp" | "timestamptz" if modifier >= 0 => format!("{name}({modifier})"),
+        _ => name.to_owned(),
+    }
+}
+
 impl PostgresSession {
     fn start(&self, sql: &str) -> Result<Operation> {
         anyhow::ensure!(
@@ -305,8 +319,18 @@ impl PostgresSession {
                 let types: Vec<_> = statement
                     .columns()
                     .iter()
-                    .map(|column| column.type_().name().to_owned())
+                    .map(|column| export_type(column.type_().name(), column.type_modifier()))
                     .collect();
+                let context = if statement.columns().is_empty() {
+                    crate::export::Context::default()
+                } else {
+                    let settings = requested.until(client.query_one(
+                        "SELECT current_setting('DateStyle'), current_setting('IntervalStyle'), current_setting('TimeZone')", &[]
+                    )).await?;
+                    crate::export::Context { postgres: Some(crate::export::PostgresContext {
+                        date_style: settings.get(0), interval_style: settings.get(1), time_zone: settings.get(2),
+                    }) }
+                };
                 requested.check()?;
                 let stream = requested.until(client.simple_query_raw(&sql)).await?;
                 pin_mut!(stream);
@@ -372,6 +396,7 @@ impl PostgresSession {
                     limited,
                     exhausted: false,
                     rows: BufReader::new(file),
+                    context,
                 })
             }
             .await;
@@ -436,6 +461,14 @@ impl Session for PostgresSession {
         Ok(QueryState::Finished {
             has_results: !operation.results.as_ref().unwrap().columns.is_empty(),
         })
+    }
+
+    fn export_context(&self) -> crate::export::Context {
+        self.operation
+            .as_ref()
+            .and_then(|operation| operation.results.as_ref())
+            .map(|results| results.context.clone())
+            .unwrap_or_default()
     }
 
     fn columns(&mut self) -> Result<Vec<Column>> {
@@ -580,6 +613,21 @@ fn metadata_sql(request: &MetadataRequest) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_type_keeps_exact_numeric_and_timestamp_modifiers() {
+        for (precision, scale) in [(18, 2), (3, -2), (3, 5), (38, 38)] {
+            let modifier = ((precision << 16) | (scale & 0x7ff)) + 4;
+            assert_eq!(
+                export_type("numeric", modifier),
+                format!("numeric({precision},{scale})")
+            );
+        }
+        assert_eq!(export_type("numeric", -1), "numeric");
+        assert_eq!(export_type("timestamp", 6), "timestamp(6)");
+        assert_eq!(export_type("timestamptz", 3), "timestamptz(3)");
+        assert_eq!(export_type("date", -1), "date");
+    }
 
     fn idle_session() -> (PostgresSession, tokio::io::DuplexStream) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

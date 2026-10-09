@@ -116,3 +116,40 @@ fn cancel_a_query_and_reuse_its_tab(cx: &mut TestAppContext) {
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn parquet_non_iso_dates_remain_text_and_keep_the_session_setting(cx: &mut TestAppContext) {
+    use parquet::{
+        file::reader::{FileReader, SerializedFileReader},
+        record::RowAccessor,
+    };
+    let (mut workspace, credentials) = workspace(
+        "SELECT DATE '2026-10-09' AS day, TIMESTAMP '2026-10-09 01:02:03.123456' AS moment",
+    );
+    workspace.profiles[0]
+        .parameters
+        .insert("DateStyle".into(), "SQL, DMY".into());
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, "09/10/2026");
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "Parquet");
+    app.wait_label(
+        cx,
+        "The result uses a non-ISO DateStyle. Dates and timestamps remain text.",
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("dates.parquet");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_gone(cx, "export-save");
+    let reader = SerializedFileReader::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
+    assert_eq!(row.get_string(0).unwrap(), "09/10/2026");
+    assert_eq!(row.get_string(1).unwrap(), "09/10/2026 01:02:03.123456");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+    app.run_complete(cx, "SELECT current_setting('DateStyle') AS style");
+    app.wait_cell(cx, 0, 1, "SQL, DMY");
+}

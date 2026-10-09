@@ -130,6 +130,12 @@ as the connector type in its connection context.
 For automatic relation context, the assistant uses `public` for unqualified
 names. Use qualified names when a different `search_path` applies.
 
+Result column types keep numeric precision, numeric scale, and timestamp
+precision from the server. Before a query with result columns executes,
+Qrow reads DateStyle, IntervalStyle, and TimeZone for [Parquet export](results.md#parquet).
+These read requests do not change the session settings. Commands without
+result columns do not need these requests.
+
 ### Postgres limits
 
 - Query results use the server's text format, including arrays, JSON, and dates.
@@ -181,6 +187,10 @@ prepared statements, roles, and transaction commands update that tab. A
 keep-alive does not replace its result cursor. Disconnect cancels an active
 query and sends `ROLLBACK` for an open transaction. The assistant receives
 `trino` as the connector type and the initial catalog and schema as context.
+
+Trino result text keeps the server's timestamp precision. Qrow declares
+support for variable-precision date and time types in the client protocol.
+For Parquet timestamp limits, see [Parquet](results.md#parquet).
 
 ### Trino limits
 

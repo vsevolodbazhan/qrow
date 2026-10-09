@@ -544,10 +544,26 @@ fn type_label(desc: &TTypeDesc) -> String {
                 "INTERVAL DAY TIME",
                 "TIMESTAMP LOCAL TZ",
             ];
-            names
-                .get(p.type_.0 as usize)
-                .unwrap_or(&"UNKNOWN")
-                .to_string()
+            let name = names.get(p.type_.0 as usize).unwrap_or(&"UNKNOWN");
+            if *name == "DECIMAL" {
+                let integer = |key: &str| {
+                    p.type_qualifiers
+                        .as_ref()?
+                        .qualifiers
+                        .get(key)
+                        .and_then(|value| {
+                            if let TTypeQualifierValue::I32Value(value) = value {
+                                Some(*value)
+                            } else {
+                                None
+                            }
+                        })
+                };
+                if let (Some(precision), Some(scale)) = (integer("precision"), integer("scale")) {
+                    return format!("DECIMAL({precision},{scale})");
+                }
+            }
+            (*name).to_owned()
         }
         Some(TTypeEntry::ArrayEntry(_)) => "ARRAY".into(),
         Some(TTypeEntry::MapEntry(_)) => "MAP".into(),
@@ -674,6 +690,27 @@ fn is_null(nulls: &[u8], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_schema_keeps_precision_and_scale_qualifiers() {
+        let qualifiers = TTypeQualifiers::new(
+            [
+                ("precision".into(), TTypeQualifierValue::I32Value(38)),
+                ("scale".into(), TTypeQualifierValue::I32Value(18)),
+            ]
+            .into(),
+        );
+        let primitive = TPrimitiveTypeEntry::new(TTypeId::DECIMAL_TYPE, Some(qualifiers));
+        assert_eq!(
+            type_label(&TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(primitive)])),
+            "DECIMAL(38,18)"
+        );
+        let primitive = TPrimitiveTypeEntry::new(TTypeId::DECIMAL_TYPE, None);
+        assert_eq!(
+            type_label(&TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(primitive)])),
+            "DECIMAL"
+        );
+    }
 
     #[test]
     fn reject_excess_rows_and_binary_expansion_before_building_preview() {
