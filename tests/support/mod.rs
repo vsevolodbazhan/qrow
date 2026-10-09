@@ -1229,6 +1229,14 @@ impl TestApp {
         );
     }
 
+    pub fn run_export(&self, cx: &mut TestAppContext) {
+        self.update(cx, |window, cx| {
+            window.within("run-options").click("popup", cx)
+        });
+        self.settle(cx);
+        self.choose(cx, "popup-menu", "Run and export…");
+    }
+
     /// The workspace as Qrow last saved it.
     /// The text of the Activity of `profile`, as Copy All copies it with
     /// the filter that shows. Activity opens from the connection menu and

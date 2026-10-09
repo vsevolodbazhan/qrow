@@ -10,7 +10,10 @@ pub mod t_c_l_i_service;
 use crate::model::{Batch, Column, Profile};
 use anyhow::Result;
 use std::{
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -40,6 +43,48 @@ pub trait Cancellation: Send + Sync {
     /// Interrupt a stuck transport when cancellation cleanup exceeds its deadline.
     /// The owning worker must discard the session after this call.
     fn abort_transport(&self) {}
+}
+
+type RegisterTransport = Arc<dyn Fn(Arc<dyn Cancellation>) -> Result<()> + Send + Sync>;
+
+/// Cancellation of setup before the server returns an operation handle.
+#[derive(Clone, Default)]
+pub struct ConnectionControl {
+    cancelled: Option<Arc<AtomicBool>>,
+    register: Option<RegisterTransport>,
+}
+
+impl ConnectionControl {
+    pub fn new(cancelled: Arc<AtomicBool>, register: RegisterTransport) -> Self {
+        Self {
+            cancelled: Some(cancelled),
+            register: Some(register),
+        }
+    }
+
+    pub fn check(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self
+                .cancelled
+                .as_ref()
+                .is_some_and(|flag| flag.load(Ordering::SeqCst)),
+            crate::export::Cancelled,
+        );
+        Ok(())
+    }
+
+    pub fn register(&self, transport: Arc<dyn Cancellation>) -> Result<()> {
+        let result = self.check().and_then(|()| {
+            if let Some(register) = &self.register {
+                register(transport.clone())?;
+            }
+            self.check()
+        });
+        if result.is_err() {
+            transport.abort_transport();
+        }
+        result
+    }
 }
 
 /// A catalog request. The connector answers it with a result set that uses
@@ -76,6 +121,10 @@ pub trait Session: Send {
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
     /// Settings captured for the current result. Export must not change them.
+    /// Interrupt setup or schema reads before an operation cancellation exists.
+    fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
+        None
+    }
     fn export_context(&self) -> crate::export::Context {
         crate::export::Context::default()
     }
@@ -181,6 +230,20 @@ impl std::fmt::Debug for Secret {
 
 pub trait Connector: Send + Sync {
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>>;
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        control.check()?;
+        let session = self.connect(profile, secret)?;
+        if let Some(transport) = session.transport_cancellation() {
+            control.register(transport)?;
+        }
+        control.check()?;
+        Ok(session)
+    }
 }
 
 /// Include the diagnostic that Thrift omits from its Display implementation.
@@ -217,6 +280,25 @@ impl DatabaseConnector {
 }
 
 impl Connector for DatabaseConnector {
+    fn connect_controlled(
+        &self,
+        profile: &Profile,
+        secret: Secret,
+        control: &ConnectionControl,
+    ) -> Result<Box<dyn Session>> {
+        match profile.database_type {
+            crate::model::DatabaseType::Kyuubi => {
+                self.hive.connect_controlled(profile, secret, control)
+            }
+            crate::model::DatabaseType::Postgres => {
+                self.postgres.connect_controlled(profile, secret, control)
+            }
+            crate::model::DatabaseType::Trino => {
+                self.trino.connect_controlled(profile, secret, control)
+            }
+        }
+    }
+
     fn connect(&self, profile: &Profile, secret: Secret) -> Result<Box<dyn Session>> {
         match profile.database_type {
             crate::model::DatabaseType::Kyuubi => self.hive.connect(profile, secret),

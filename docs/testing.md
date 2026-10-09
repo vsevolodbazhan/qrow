@@ -105,9 +105,16 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   bound to the captured query. UI tests check background export ownership,
   Retry, and replay settings. Kyuubi Docker tests export the live cursor and
   retry a failed save after another query without submitting the old SQL.
+  Direct export tests check first-page retention, original-session temporary
+  views, original result SQL after editor changes, and warnings after
+  disconnect. Wire tests cancel before SASL, the operation handle, and the
+  schema arrive, and while a previous session closes. UI tests check that
+  cancelling the save panel submits no SQL and reads no credentials.
   The cancellation test pauses server responses before the Cancel click, then
   releases them for protocol cleanup. The copy-limit test uses cells below
   8 MiB whose combined CSV output exceeds 10 MiB.
+  Export tests wait for the preview update after the file appears. File
+  completion and window updates can arrive at different times.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`

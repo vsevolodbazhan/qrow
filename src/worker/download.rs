@@ -30,12 +30,22 @@ pub enum Cursor {
 
 enum Route {
     Pending,
+    Transport(Arc<dyn Cancellation>),
     Downloading(Arc<dyn Cancellation>),
     Downloaded,
     Stopped,
 }
 
+enum Source {
+    Pending,
+    Ready(Arc<Spool>),
+    Failed(String),
+    SessionChanged,
+    Cancelled,
+}
+
 struct State {
+    source: Source,
     route: Route,
     cancellation_started: bool,
     cancellation_done: bool,
@@ -45,7 +55,6 @@ struct State {
 }
 
 pub struct Download {
-    spool: Arc<Spool>,
     cancel: Arc<AtomicBool>,
     state: Mutex<State>,
     changed: Condvar,
@@ -53,10 +62,18 @@ pub struct Download {
 
 impl Download {
     pub(super) fn new(spool: Arc<Spool>, cancel: Arc<AtomicBool>) -> Arc<Self> {
+        Self::with_source(Source::Ready(spool), cancel)
+    }
+
+    pub(super) fn pending(cancel: Arc<AtomicBool>) -> Arc<Self> {
+        Self::with_source(Source::Pending, cancel)
+    }
+
+    fn with_source(source: Source, cancel: Arc<AtomicBool>) -> Arc<Self> {
         Arc::new(Self {
-            spool,
             cancel,
             state: Mutex::new(State {
+                source,
                 route: Route::Pending,
                 cancellation_started: false,
                 cancellation_done: false,
@@ -68,11 +85,101 @@ impl Download {
         })
     }
 
-    pub fn spool(&self) -> &Arc<Spool> {
-        &self.spool
+    pub fn spool(&self) -> Option<Arc<Spool>> {
+        match &self.state.lock().unwrap().source {
+            Source::Ready(spool) => Some(spool.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn wait_spool(&self) -> io::Result<Arc<Spool>> {
+        let mut state = self.state.lock().unwrap();
+        loop {
+            match &state.source {
+                Source::Ready(spool) => return Ok(spool.clone()),
+                Source::Failed(message) => return Err(io::Error::other(message.clone())),
+                Source::SessionChanged => return Err(io::Error::other(super::SessionChanged)),
+                Source::Cancelled => return Err(io::Error::other(export::Cancelled)),
+                Source::Pending => state = self.changed.wait(state).unwrap(),
+            }
+        }
+    }
+
+    pub(super) fn publish_spool(&self, spool: Arc<Spool>) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        export::check_cancelled(&self.cancel)?;
+        if !matches!(state.source, Source::Pending) {
+            return Err(io::Error::other(
+                "The result source is already terminal or ready.",
+            ));
+        }
+        state.source = Source::Ready(spool);
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    pub(super) fn register_transport(&self, target: Arc<dyn Cancellation>) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if export::check_cancelled(&self.cancel).is_err()
+            || state.aborted
+            || !matches!(state.route, Route::Pending | Route::Transport(_))
+        {
+            target.abort_transport();
+            return Err(io::Error::other(export::Cancelled));
+        }
+        state.route = Route::Transport(target);
+        Ok(())
+    }
+
+    fn terminal_source(&self, failed: Option<String>) {
+        let spool = {
+            let mut state = self.state.lock().unwrap();
+            let spool = match &state.source {
+                Source::Ready(spool) => Some(spool.clone()),
+                Source::Pending => {
+                    state.source = failed.clone().map_or(Source::Cancelled, Source::Failed);
+                    None
+                }
+                _ => None,
+            };
+            self.changed.notify_all();
+            spool
+        };
+        if let Some(spool) = spool {
+            if let Some(message) = failed {
+                spool.fail(message);
+            } else {
+                spool.cancel();
+            }
+        }
     }
     pub fn cancelled(&self) -> &AtomicBool {
         &self.cancel
+    }
+
+    pub(super) fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancel.clone()
+    }
+
+    pub(super) fn release_transport(&self) {
+        let mut state = self.state.lock().unwrap();
+        if matches!(state.route, Route::Transport(_)) && !state.aborted {
+            state.route = Route::Pending;
+        }
+    }
+
+    pub(super) fn finish_without_spool(&self, message: String) -> io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        export::check_cancelled(&self.cancel)?;
+        if !matches!(state.route, Route::Downloading(_)) || !matches!(state.source, Source::Pending)
+        {
+            return Err(io::Error::other("The execution stopped before completion."));
+        }
+        state.source = Source::Failed(message);
+        state.route = Route::Downloaded;
+        state.guard = None;
+        self.changed.notify_all();
+        Ok(())
     }
 
     pub(super) fn bind(
@@ -81,8 +188,11 @@ impl Download {
         guard: export::Writer,
     ) -> io::Result<()> {
         let mut state = self.state.lock().unwrap();
-        export::check_cancelled(&self.cancel)?;
-        if !matches!(state.route, Route::Pending) {
+        if export::check_cancelled(&self.cancel).is_err() || state.aborted {
+            target.abort_transport();
+            return Err(io::Error::other(export::Cancelled));
+        }
+        if !matches!(state.route, Route::Pending | Route::Transport(_)) {
             return Err(io::Error::other("The download is already active."));
         }
         state.route = Route::Downloading(target);
@@ -106,14 +216,14 @@ impl Download {
     }
 
     pub fn cancel(self: &Arc<Self>) {
+        self.terminal_source(None);
         self.cancel.store(true, Ordering::SeqCst);
-        self.spool.cancel();
         self.cancel_operation();
     }
 
     pub fn cancel_in_background(self: &Arc<Self>) {
+        self.terminal_source(None);
         self.cancel.store(true, Ordering::SeqCst);
-        self.spool.cancel();
         let download = self.clone();
         if std::thread::Builder::new()
             .name("qrow-export-stop".into())
@@ -125,8 +235,20 @@ impl Download {
     }
 
     pub fn fail(self: &Arc<Self>, message: String) {
-        self.spool.fail(message);
+        self.terminal_source(Some(message));
         // A complete spool is replayable. Only this writer stops after the handoff.
+        self.cancel.store(true, Ordering::SeqCst);
+        self.cancel_operation();
+    }
+
+    pub(super) fn session_changed(self: &Arc<Self>) {
+        {
+            let mut state = self.state.lock().unwrap();
+            if matches!(state.source, Source::Pending) {
+                state.source = Source::SessionChanged;
+                self.changed.notify_all();
+            }
+        }
         self.cancel.store(true, Ordering::SeqCst);
         self.cancel_operation();
     }
@@ -134,14 +256,14 @@ impl Download {
     /// Resource failure stops the owned transport without creating a thread.
     /// The routing lock protects only the handoff and never waits on disk I/O.
     pub fn abort(&self, message: String) {
-        self.spool.fail(message);
+        self.terminal_source(Some(message));
         self.cancel.store(true, Ordering::SeqCst);
         self.abort_operation();
     }
 
     fn abort_operation(&self) {
         let mut state = self.state.lock().unwrap();
-        if let Route::Downloading(target) = &state.route {
+        if let Route::Downloading(target) | Route::Transport(target) = &state.route {
             target.abort_transport();
             state.aborted = true;
             state.cancellation_done = true;
@@ -165,6 +287,14 @@ impl Download {
     ) {
         let (target, guard) = {
             let mut state = self.state.lock().unwrap();
+            if let Route::Transport(target) = &state.route {
+                target.abort_transport();
+                state.aborted = true;
+                state.cancellation_done = true;
+                state.guard = None;
+                self.changed.notify_all();
+                return;
+            }
             let Route::Downloading(target) = &state.route else {
                 return;
             };
@@ -227,7 +357,7 @@ impl Download {
             state = self.changed.wait_timeout(state, remaining).unwrap().0;
         }
         let clean = !state.aborted && !state.cancellation_failed;
-        if !clean && let Route::Downloading(target) = &state.route {
+        if !clean && let Route::Downloading(target) | Route::Transport(target) = &state.route {
             target.abort_transport();
         }
         state.route = Route::Stopped;
@@ -298,9 +428,43 @@ mod tests {
         download.cancel();
         download.cancel();
         assert!(download.stopped());
-        assert_eq!(download.spool().status(), Status::Cancelled);
+        assert_eq!(download.spool().unwrap().status(), Status::Cancelled);
         assert_eq!(target.calls.load(Ordering::SeqCst), 1);
         assert!(producer.finish(&AtomicBool::new(false)).is_err());
+    }
+
+    #[test]
+    fn pending_source_wakes_all_readers_and_rejects_late_schema_and_transport() {
+        for failure in [false, true] {
+            let (ready, _producer, target) = fixture(false);
+            let pending = Download::pending(Arc::new(AtomicBool::new(false)));
+            let readers: Vec<_> = (0..3)
+                .map(|_| {
+                    let pending = pending.clone();
+                    std::thread::spawn(move || pending.wait_spool().err().unwrap())
+                })
+                .collect();
+            if failure {
+                pending.fail("First failure".into());
+                pending.cancel();
+                pending.fail("Later failure".into());
+            } else {
+                pending.cancel();
+                pending.fail("Later failure".into());
+            }
+            for reader in readers {
+                let error = reader.join().unwrap();
+                if failure {
+                    assert_eq!(error.to_string(), "First failure");
+                } else {
+                    assert!(error.get_ref().unwrap().is::<export::Cancelled>());
+                }
+            }
+            assert!(pending.publish_spool(ready.spool().unwrap()).is_err());
+            assert!(pending.register_transport(target.clone()).is_err());
+            assert!(target.aborted.load(Ordering::SeqCst));
+            assert_eq!(target.calls.load(Ordering::SeqCst), 0);
+        }
     }
 
     #[test]
@@ -309,7 +473,10 @@ mod tests {
         download.complete(producer).unwrap();
         download.fail("output failed".into());
         download.cancel();
-        assert_eq!(download.spool().status(), Status::Complete { rows: 0 });
+        assert_eq!(
+            download.spool().unwrap().status(),
+            Status::Complete { rows: 0 }
+        );
         assert_eq!(target.calls.load(Ordering::SeqCst), 0);
         assert!(!target.aborted.load(Ordering::SeqCst));
     }
@@ -317,20 +484,20 @@ mod tests {
     #[test]
     fn failed_cancel_thread_creation_aborts_the_owned_operation_without_retry() {
         let (download, producer, target) = fixture(false);
-        download.spool.cancel();
+        download.spool().unwrap().cancel();
         download.cancel.store(true, Ordering::SeqCst);
         download.cancel_operation_with(|_| Err(io::Error::other("No thread resources")));
         assert!(!download.stopped());
         assert!(target.aborted.load(Ordering::SeqCst));
         assert_eq!(target.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(download.spool.status(), Status::Cancelled);
+        assert_eq!(download.spool().unwrap().status(), Status::Cancelled);
         assert!(producer.finish(&AtomicBool::new(false)).is_err());
     }
 
     #[test]
     fn thread_failure_waits_for_routing_contention_and_applies_the_abort() {
         let (download, _producer, target) = fixture(false);
-        download.spool.cancel();
+        download.spool().unwrap().cancel();
         download.cancel.store(true, Ordering::SeqCst);
         let pending = download.clone();
         let (waiting, started) = std::sync::mpsc::channel();
@@ -361,7 +528,10 @@ mod tests {
         let (download, producer, target) = fixture(false);
         download.complete(producer).unwrap();
         download.abort("writer stopped".into());
-        assert_eq!(download.spool.status(), Status::Complete { rows: 0 });
+        assert_eq!(
+            download.spool().unwrap().status(),
+            Status::Complete { rows: 0 }
+        );
         assert!(!target.aborted.load(Ordering::SeqCst));
         assert_eq!(target.calls.load(Ordering::SeqCst), 0);
     }
@@ -374,6 +544,6 @@ mod tests {
         assert!(!download.stopped());
         assert!(started.elapsed() < Duration::from_secs(3));
         assert!(target.aborted.load(Ordering::SeqCst));
-        assert_eq!(download.spool().status(), Status::Cancelled);
+        assert_eq!(download.spool().unwrap().status(), Status::Cancelled);
     }
 }
