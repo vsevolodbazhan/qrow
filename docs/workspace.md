@@ -127,6 +127,12 @@ Direct OIDC sign-ins and their references remain unchanged. The connection
 host now determines where Qrow can send its OIDC token. The removed database
 host lists are ignored during loading and omitted from the next save.
 
+Workspace version 8 adds the assistant harness: the selected harness, the
+model choices of Claude Code, and the harness of each conversation.
+Conversations from older workspaces use Codex. Earlier versions of Qrow cannot
+open a version 8 workspace, so they cannot remove the harness of a Claude Code
+conversation.
+
 Workspace version 6 adds sign-ins, and the TLS and authentication choices of
 each connection. Earlier connections load with password authentication and
 without TLS. They keep their identifiers and stored passwords. An earlier

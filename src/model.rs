@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
-pub const WORKSPACE_VERSION: u32 = 7;
+pub const WORKSPACE_VERSION: u32 = 8;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;

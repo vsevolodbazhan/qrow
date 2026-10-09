@@ -1,7 +1,7 @@
 use qrow::{
     model::{
         ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantConversation, AssistantExecutionMode,
-        AssistantTitleSource, Profile, SavedTab, WORKSPACE_VERSION, Workspace,
+        AssistantHarness, AssistantTitleSource, Profile, SavedTab, WORKSPACE_VERSION, Workspace,
     },
     storage::{self, Saver, WorkspaceFile},
 };
@@ -243,6 +243,48 @@ fn populated_assistant_state_round_trips_through_workspace_json() {
     let restored = qrow::storage::load(&path).unwrap();
 
     assert_eq!(restored, workspace);
+}
+
+#[test]
+fn version_seven_conversations_load_as_codex_and_claude_code_ones_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.json");
+    let mut workspace = Workspace::default();
+    workspace.settings.assistant.harness = AssistantHarness::Claude;
+    let mut claude =
+        AssistantConversation::new("claude-1", AssistantExecutionMode::AskBeforeRunning);
+    claude.harness = AssistantHarness::Claude;
+    workspace.assistant.conversations.push(claude);
+    fs::write(&path, serde_json::to_vec(&workspace).unwrap()).unwrap();
+    let restored = qrow::storage::load(&path).unwrap();
+    assert_eq!(
+        restored.assistant.conversations[0].harness,
+        AssistantHarness::Claude
+    );
+    assert_eq!(
+        restored.settings.assistant.harness,
+        AssistantHarness::Claude
+    );
+
+    // A version 7 workspace has no harness. Its conversations use Codex.
+    let mut json = serde_json::to_value(&workspace).unwrap();
+    json["version"] = 7.into();
+    json["settings"]["assistant"]
+        .as_object_mut()
+        .unwrap()
+        .remove("harness");
+    json["assistant"]["conversations"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("harness");
+    fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+    let restored = qrow::storage::load(&path).unwrap();
+    assert_eq!(restored.version, WORKSPACE_VERSION);
+    assert_eq!(
+        restored.assistant.conversations[0].harness,
+        AssistantHarness::Codex
+    );
+    assert_eq!(restored.settings.assistant.harness, AssistantHarness::Codex);
 }
 
 #[test]

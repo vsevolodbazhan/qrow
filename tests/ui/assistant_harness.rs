@@ -250,3 +250,43 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
         app.saved().settings.assistant.harness == AssistantHarness::Codex
     });
 }
+
+#[gpui_kit::test]
+fn a_claude_code_conversation_stays_read_only_while_claude_code_is_signed_out(
+    cx: &mut TestAppContext,
+) {
+    let (app, claude) = launch_claude(cx, |_| {});
+    app.open_claude(cx);
+    app.send(cx, "Say hello");
+    app.wait_reply(cx, "Claude reply: Say hello");
+    app.wait_idle(cx);
+    let live = app.update(cx, |window, _| transcript(window));
+
+    // Claude Code signs out. After a restart, the pane asks for its sign-in.
+    claude.mark("signed-out");
+    let app = app.relaunch(cx);
+    app.dispatch(cx, ToggleAssistant);
+    app.wait_for(cx, "assistant-claude-sign-in-command");
+
+    // Codex runs new conversations, and the Claude Code conversation shows
+    // its saved copy without a send to Codex.
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "harness");
+    app.select(cx, "setting-assistant-harness", "Codex");
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    app.open_assistant(cx);
+    app.wait_label(cx, "This conversation uses Claude Code.");
+    app.update(cx, |window, _| assert_eq!(transcript(window), live));
+    app.type_message(cx, "Not for Codex");
+    app.click(cx, "assistant-send");
+    app.settle(cx);
+    assert_eq!(
+        app.update(cx, |window, _| composer_text(window)).as_deref(),
+        Some("Not for Codex")
+    );
+
+    // Use Claude Code leads to its sign-in.
+    app.click(cx, "assistant-use-harness");
+    app.wait_for(cx, "assistant-claude-sign-in-command");
+}
