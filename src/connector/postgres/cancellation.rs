@@ -1,14 +1,13 @@
 //! Wait for Postgres to process a cancellation before reusing the session.
+use super::transport;
 use anyhow::Result;
+use std::sync::Arc;
 use std::{
     io,
     pin::Pin,
     task::{Context, Poll, ready},
 };
-use tokio::{
-    io::{AsyncRead, AsyncWrite, ReadBuf},
-    net::TcpStream,
-};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_postgres::{CancelToken, NoTls, tls::MakeTlsConnect};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
@@ -24,20 +23,21 @@ pub(super) async fn send(
     host: &str,
     endpoint: &Endpoint,
     tls: Option<MakeRustlsConnect>,
+    register: impl Fn(Arc<transport::Abort>),
 ) -> Result<()> {
     match endpoint {
         Endpoint::Tcp(address) => {
-            send_over(token, TcpStream::connect(address).await?, host, tls).await
+            let (socket, abort) =
+                transport::Abort::tcp(*address, transport::PREVIEW_FRAME_BYTES).await?;
+            register(abort);
+            send_over(token, socket, host, tls).await
         }
         #[cfg(unix)]
         Endpoint::Unix(path) => {
-            send_over(
-                token,
-                tokio::net::UnixStream::connect(path).await?,
-                host,
-                tls,
-            )
-            .await
+            let (socket, abort) =
+                transport::Abort::unix(path, transport::PREVIEW_FRAME_BYTES).await?;
+            register(abort);
+            send_over(token, socket, host, tls).await
         }
     }
 }

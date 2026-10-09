@@ -118,10 +118,16 @@ Profiles with the old TLS checkbox enabled use **Verify certificate**.
 Each tab has a separate Postgres session. Temporary tables and transaction
 state stay with that tab until the session closes. Cancel stops a query before
 submission, or sends a Postgres cancellation request for active work. Qrow waits
-for the cancellation socket to close before it reuses the session. If that
+for the cancellation socket to close and for the server to report that it is
+ready for the next command before it reuses the session. If that
 request fails or times out, reconnect before you run another query.
 SQL errors usually keep the session connected. After an
 error in an explicit transaction, run `ROLLBACK` before other work.
+
+Each Postgres server message has a 128 MiB transport limit. Qrow checks its
+declared length before the driver reads the body. A message above this limit
+closes the session. Reconnect before you run another query. The preview limits
+in [results](results.md) still apply to rows that Qrow keeps.
 
 The schema browser shows user schemas, tables, partitioned tables, views,
 materialized views, and foreign tables. It reads column types and comments.
