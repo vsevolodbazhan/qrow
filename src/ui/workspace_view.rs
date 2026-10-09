@@ -265,8 +265,10 @@ impl Qrow {
                     })
                     .disabled(active.is_none() && !self.demo)
                     .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
-                let button = if self.tab_database_type(active) == crate::model::DatabaseType::Kyuubi
-                {
+                let button = if matches!(
+                    self.tab_database_type(active),
+                    crate::model::DatabaseType::Kyuubi | crate::model::DatabaseType::Postgres
+                ) {
                     let action_context = self.focus.clone();
                     DropdownButton::new("run-options")
                         .button(button)
