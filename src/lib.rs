@@ -6,6 +6,7 @@ pub mod build_info;
 pub mod catalog;
 pub mod connector;
 pub mod dbt;
+pub mod export;
 pub mod external_auth;
 pub mod logs;
 pub mod model;

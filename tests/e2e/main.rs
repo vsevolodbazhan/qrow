@@ -8,6 +8,7 @@ mod blocking;
 mod catalog;
 mod connections;
 mod dbt;
+mod export;
 mod logs;
 mod perf;
 mod queries;

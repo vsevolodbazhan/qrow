@@ -9,6 +9,7 @@ mod dbt;
 mod dbt_details;
 mod demo;
 mod environment;
+mod export_dialog;
 mod output;
 mod profile_view;
 mod result_toolbar;
@@ -897,6 +898,7 @@ impl Qrow {
         let table = cx.new(|cx| {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
+            results.csv = self.settings.export.csv;
             // The results delegate owns the selection: a range of cells.
             TableState::new(results, window, cx)
                 .col_selectable(false)

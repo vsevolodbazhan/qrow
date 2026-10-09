@@ -628,9 +628,33 @@ pub struct BoundedRows {
     pub truncated: bool,
 }
 
+/// Indexed result rows from a preview store or a contiguous response.
+pub trait ResultRows {
+    fn row_count(&self) -> usize;
+    fn row(&self, index: usize) -> &Vec<Option<String>>;
+}
+
+impl<T: AsRef<[Vec<Option<String>>]> + ?Sized> ResultRows for T {
+    fn row_count(&self) -> usize {
+        self.as_ref().len()
+    }
+    fn row(&self, index: usize) -> &Vec<Option<String>> {
+        &self.as_ref()[index]
+    }
+}
+
+impl ResultRows for crate::export::Rows {
+    fn row_count(&self) -> usize {
+        self.len()
+    }
+    fn row(&self, index: usize) -> &Vec<Option<String>> {
+        &self[index]
+    }
+}
+
 /// Rows from `offset` when the result metadata already uses `used_bytes`.
 pub fn bound_rows_after(
-    rows: &[Vec<Option<String>>],
+    rows: &(impl ResultRows + ?Sized),
     offset: usize,
     requested: usize,
     used_bytes: usize,
@@ -645,14 +669,18 @@ pub fn bound_rows_after(
 }
 
 /// Rows from `offset` for a query result that already uses `used_bytes` of the tool output.
-pub fn preview_rows(rows: &[Vec<Option<String>>], offset: usize, used_bytes: usize) -> BoundedRows {
+pub fn preview_rows(
+    rows: &(impl ResultRows + ?Sized),
+    offset: usize,
+    used_bytes: usize,
+) -> BoundedRows {
     let budget = MAX_PREVIEW_BYTES.min(MAX_TOOL_PAYLOAD_BYTES.saturating_sub(used_bytes));
     bound_rows_within(rows, offset, MAX_PREVIEW_ROWS, budget, false)
         .expect("the preview row count is within the tool row limit")
 }
 
 fn bound_rows_within(
-    rows: &[Vec<Option<String>>],
+    rows: &(impl ResultRows + ?Sized),
     offset: usize,
     requested: usize,
     budget: usize,
@@ -668,8 +696,8 @@ fn bound_rows_within(
     let mut omitted_row_offsets = Vec::new();
     let mut bytes = 0_usize;
     let mut consumed = 0_usize;
-    let end = offset.saturating_add(requested).min(rows.len());
-    for (index, row) in rows.get(offset..end).unwrap_or_default().iter().enumerate() {
+    let end = offset.saturating_add(requested).min(rows.row_count());
+    for (index, row) in (offset..end).map(|index| rows.row(index)).enumerate() {
         let separator = usize::from(!output.is_empty());
         let remaining = budget.saturating_sub(bytes.saturating_add(separator));
         let Some(full_row_bytes) = encoded_len_with_limit(row, MAX_TOOL_PAYLOAD_BYTES) else {
@@ -689,7 +717,7 @@ fn bound_rows_within(
         output.push(row.clone());
         consumed += 1;
     }
-    let next_offset = offset.saturating_add(consumed).min(rows.len());
+    let next_offset = offset.saturating_add(consumed).min(rows.row_count());
     Ok(BoundedRows {
         truncated: !omitted_row_offsets.is_empty() || next_offset < end,
         rows: output,
