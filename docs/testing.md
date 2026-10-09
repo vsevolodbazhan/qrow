@@ -140,6 +140,14 @@ the real macOS Keychain, so no suite runs it. Run that test with
 
 ## Trino tests
 
+Local wire tests check raw socket closure during TLS, request headers and
+response bodies. They cover POST, GET, HEAD and DELETE, pooled connection
+reuse, late connection rejection, and the cleanup deadline. A heartbeat's
+transport can close while the primary transport stays open.
+The tests also check a stalled primary body after a successful cancel response,
+cancellation before GET admission, and old cancellation after session handoff.
+Repeated cancellation sends one `DELETE` and uses the first cleanup result.
+
 Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
 the real window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
