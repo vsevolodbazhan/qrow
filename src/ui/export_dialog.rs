@@ -694,7 +694,9 @@ impl Render for ExportDialog {
                             this.sync(window,cx);
                         }))))))
             .when(format == Format::Parquet && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed && self.settings.parquet.numeric == export::parquet::Numeric::Double, |view| view.child(div().text_sm().text_color(cx.theme().warning).child("Double can change numeric values.")))
-            .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
+            .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
+                .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
+                .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
             .when(self.incomplete, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("Only the downloaded rows are included. More rows may be available.")))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)

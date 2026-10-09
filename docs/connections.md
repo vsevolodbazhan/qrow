@@ -188,6 +188,10 @@ keep-alive does not replace its result cursor. Disconnect cancels an active
 query and sends `ROLLBACK` for an open transaction. The assistant receives
 `trino` as the connector type and the initial catalog and schema as context.
 
+Trino result text keeps the server's timestamp precision. Qrow declares
+support for variable-precision date and time types in the client protocol.
+For Parquet timestamp limits, see [Parquet](results.md#parquet).
+
 ### Trino limits
 
 - The schema browser reads one catalog. It shows schemas, tables, views, and

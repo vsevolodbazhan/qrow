@@ -41,7 +41,7 @@ fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
 fn csv_export_preserves_trino_decimal_text_and_nulls(cx: &mut TestAppContext) {
     let app = launch(
         cx,
-        "SELECT 'a,b' AS value, CAST(NULL AS VARCHAR) AS absent, '' AS empty, DECIMAL '12345678901234567890.12345' AS amount UNION ALL SELECT 'NULL', 'NULL', '\\N', DECIMAL '-0.01000'",
+        "SELECT 'a,b' AS value, CAST(NULL AS VARCHAR) AS absent, '' AS empty, DECIMAL '12345678901234567890.12345' AS amount UNION ALL SELECT 'NULL', 'NULL', '\\N', DECIMAL '-0.01000' ORDER BY amount DESC",
     );
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
@@ -268,4 +268,57 @@ fn external_browser_sign_in_progress_query_and_memory_reuse(cx: &mut TestAppCont
             .unwrap()
             .contains("Bearer")
     );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn parquet_picosecond_error_preserves_the_file_and_text_retry_uses_the_result(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::test::TestWindowExt;
+    use parquet::{
+        file::reader::{FileReader, SerializedFileReader},
+        record::RowAccessor,
+    };
+    let text = "2026-10-09 01:02:03.123456789123";
+    let app = launch(
+        cx,
+        "SELECT TIMESTAMP '2026-10-09 01:02:03.123456789123' AS moment",
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 0, 1, text);
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "Parquet");
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("picoseconds.parquet");
+    std::fs::write(&path, "original").unwrap();
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_label(
+        cx,
+        "Timestamp precision above 9 is not supported. Choose Text column types.",
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+    assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-save").is_some())
+    });
+    app.select(cx, "export-parquet-types", "Text");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_gone(cx, "export-save");
+    let reader = SerializedFileReader::new(std::fs::File::open(&path).unwrap()).unwrap();
+    assert_eq!(
+        reader
+            .get_row_iter(None)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .get_string(0)
+            .unwrap(),
+        text
+    );
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
 }
