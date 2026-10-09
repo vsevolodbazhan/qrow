@@ -116,6 +116,7 @@ pub(super) enum Node {
         relations: Option<usize>,
         loading: bool,
         error: Option<String>,
+        error_id: Option<Uuid>,
     },
     Relation {
         profile: Uuid,
@@ -125,6 +126,7 @@ pub(super) enum Node {
         comment: Option<String>,
         loading: bool,
         error: Option<String>,
+        error_id: Option<Uuid>,
         /// The dbt resource that builds the relation.
         dbt: Option<super::dbt::DbtBadge>,
     },
@@ -173,7 +175,6 @@ impl Node {
 pub(super) enum Tone {
     Muted,
     Loading,
-    Error,
 }
 
 /// The catalog of one connection, or of the connections that share it, as
@@ -202,6 +203,8 @@ pub(super) struct CatalogTree {
     /// The refreshes of each connection, from the status of its catalog.
     statuses: HashMap<Uuid, Status>,
     nodes: Rc<HashMap<SharedString, Node>>,
+    /// Failures acknowledged through Activity, separately for each member.
+    seen_errors: Rc<HashMap<Uuid, HashSet<Uuid>>>,
     /// The laid-out width of each label in the last frame, to know which
     /// names the rows truncate.
     widths: Rc<RefCell<HashMap<SharedString, Pixels>>>,
@@ -225,6 +228,7 @@ impl CatalogTree {
             keys: HashMap::new(),
             statuses: HashMap::new(),
             nodes: Rc::new(HashMap::new()),
+            seen_errors: Rc::new(HashMap::new()),
             widths: Rc::new(RefCell::new(HashMap::new())),
             tips: Rc::new(RefCell::new(HashMap::new())),
             focus: cx.focus_handle(),
@@ -399,14 +403,7 @@ impl Builder<'_> {
         refresh: Option<Scope>,
     ) -> TreeItem {
         let text = text.into();
-        // A row can show an error and a state notice, so each tone has an ID.
-        let id = child_id(
-            parent,
-            match tone {
-                Tone::Error => "error",
-                Tone::Muted | Tone::Loading => "notice",
-            },
-        );
+        let id = child_id(parent, "notice");
         self.add(
             id,
             text.clone(),
@@ -488,14 +485,8 @@ impl Builder<'_> {
                 format!("Loading schemas… {}/{}", status.done, status.total)
             };
             children.push(self.notice(id, profile, text, Tone::Loading, None));
-        } else if let Some(error) = self.tree.connection_error(profile) {
-            children.push(self.notice(
-                id,
-                profile,
-                error.to_owned(),
-                Tone::Error,
-                Some(Scope::Connection),
-            ));
+        } else if self.tree.connection_error(profile).is_some() {
+            // The connection status opens Activity with the refresh error.
         } else if catalog.fetched_at.is_none() && catalog.schemas.is_empty() {
             let text = if status.includes(&Scope::Connection) {
                 "Waiting…"
@@ -540,6 +531,7 @@ impl Builder<'_> {
                     relations: schema.relations.as_ref().map(BTreeMap::len),
                     loading: status.includes(&Scope::Schema(name.clone())),
                     error: schema.error_for(profile).map(str::to_owned),
+                    error_id: schema.error_id,
                 },
             );
             // A search shows only the matching relations of a schema that
@@ -580,18 +572,15 @@ impl Builder<'_> {
         let loading = status.includes(&scope) || status.includes(&Scope::Connection);
         match (&node.relations, node.error_for(profile)) {
             (None, _) if loading => {
-                children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
+                children.push(self.notice(id, profile, "Loading relations…", Tone::Loading, None))
             }
-            (None, Some(error)) => {
-                children.push(self.notice(id, profile, error, Tone::Error, Some(scope)))
-            }
+            // The status dot opens Activity; keep failures out of the child list.
+            (None, Some(_)) => {}
             (None, None) => {
                 children.push(self.notice(id, profile, "Not loaded", Tone::Muted, Some(scope)))
             }
             (Some(relations), error) => {
-                if let Some(error) = error {
-                    children.push(self.notice(id, profile, error, Tone::Error, Some(scope)));
-                } else if relations.is_empty() {
+                if relations.is_empty() && error.is_none() {
                     children.push(self.notice(id, profile, "No relations", Tone::Muted, None));
                 }
                 for (name, relation) in relations {
@@ -617,6 +606,7 @@ impl Builder<'_> {
                             loading: status.includes(&Scope::Relation(schema.into(), name.clone()))
                                 || status.includes(&Scope::Schema(schema.into())),
                             error: relation.error_for(profile).map(str::to_owned),
+                            error_id: relation.error_id,
                             dbt: self.dbt.get(&profile).and_then(|lookup| {
                                 lookup.badge(schema, name, relation.comment.as_deref())
                             }),
@@ -648,9 +638,6 @@ impl Builder<'_> {
             || status.includes(&Scope::Connection);
         let mut children = vec![];
         let error = node.error_for(profile);
-        if let Some(error) = error {
-            children.push(self.notice(id, profile, error, Tone::Error, Some(scope.clone())));
-        }
         match &node.columns {
             None if loading => {
                 children.push(self.notice(id, profile, "Loading…", Tone::Loading, None))
@@ -764,8 +751,38 @@ impl Qrow {
         }
     }
 
+    /// Activity acknowledges the failures currently held by this member's catalog.
+    pub(super) fn mark_catalog_errors_seen(&mut self, profile: Uuid) {
+        let seen = self
+            .catalog
+            .catalog(profile)
+            .map(|catalog| {
+                catalog
+                    .schemas
+                    .values()
+                    .flat_map(|schema| {
+                        schema
+                            .error_id
+                            .filter(|_| schema.error_for(profile).is_some())
+                            .into_iter()
+                            .chain(schema.relations.iter().flat_map(|relations| {
+                                relations.values().filter_map(|relation| {
+                                    relation
+                                        .error_id
+                                        .filter(|_| relation.error_for(profile).is_some())
+                                })
+                            }))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Rc::make_mut(&mut self.catalog.seen_errors).insert(profile, seen);
+    }
+
     /// Rebuild the tree items. Keeps the selected row when it still exists.
     pub(super) fn rebuild_catalog_tree(&mut self, cx: &mut Context<Self>) {
+        Rc::make_mut(&mut self.catalog.seen_errors)
+            .retain(|profile, _| self.profiles.iter().any(|item| item.id == *profile));
         let search = self.catalog.search.read(cx).value().trim().to_lowercase();
         let dbt = self.dbt_lookups();
         let mut builder = Builder {
@@ -1044,6 +1061,7 @@ impl Qrow {
                     relations: None,
                     loading: false,
                     error: None,
+                    ..
                 } if self.catalog_warm(profile) => {
                     self.refresh_catalog(profile, Scope::Schema(name), cx);
                 }
@@ -1526,6 +1544,7 @@ impl Qrow {
         );
         let context = Rc::new(RowContext {
             nodes: self.catalog.nodes.clone(),
+            seen_errors: self.catalog.seen_errors.clone(),
             rows,
             weak: cx.weak_entity(),
             tree: self.catalog.state.clone(),
@@ -1606,6 +1625,7 @@ impl Qrow {
 /// What the rows of one frame share.
 struct RowContext {
     nodes: Rc<HashMap<SharedString, Node>>,
+    seen_errors: Rc<HashMap<Uuid, HashSet<Uuid>>>,
     rows: Rc<HashMap<Uuid, ConnectionRow>>,
     weak: WeakEntity<Qrow>,
     tree: Entity<TreeState>,
@@ -1935,6 +1955,35 @@ fn render_entry(
         }
         Node::Connection(_) => unreachable!(),
     };
+    let error_status = error.as_ref().and_then(|_| match node {
+        Node::Schema {
+            profile,
+            name,
+            error_id,
+            ..
+        }
+        | Node::Relation {
+            profile,
+            name,
+            error_id,
+            ..
+        } if !error_id.is_some_and(|id| {
+            context
+                .seen_errors
+                .get(profile)
+                .is_some_and(|seen| seen.contains(&id))
+        }) =>
+        {
+            Some((
+                *profile,
+                format!("{name}, schema refresh error, show Activity"),
+            ))
+        }
+        _ => None,
+    });
+    let menu_id = id.clone();
+    let schema_detail = matches!(node, Node::Schema { .. });
+    let detail = detail.filter(|_| !schema_detail || (!loading && error_status.is_none()));
     // Show the tooltip only when it adds text: a name that the row cuts, a
     // comment, or an error.
     let label_key = child_id(&id, "label");
@@ -1959,14 +2008,12 @@ fn render_entry(
     if let Some(text) = &tooltip {
         context.record_tip(&id, text.clone(), truncation);
     }
-    let menu_id = id.clone();
-    let schema_detail = matches!(node, Node::Schema { .. });
     let leaf = matches!(node, Node::Column { .. });
     let row = h_flex()
         .id(id.clone())
         .size_full()
         .pl(indent)
-        .when(!schema_detail && !loading && error.is_none(), |el| {
+        .when(!schema_detail && !loading && error_status.is_none(), |el| {
             el.pr_2()
         })
         .gap(ui_px(ROW_GAP))
@@ -2024,22 +2071,29 @@ fn render_entry(
                     .on_prepaint(context.record_width(detail_key)),
             )
         })
-        .when(loading, |el| {
+        .when(loading && error_status.is_none(), |el| {
             el.child(
                 status_lane(child_id(&id, "busy"), ui_px(STATUS_SLOT_WIDTH))
                     .test_support()
                     .child(Spinner::new().xsmall().color(cx.theme().muted_foreground)),
             )
         })
-        .when(error.is_some(), |el| {
+        .when_some(error_status, |el, (profile, label)| {
             el.child(
-                status_lane(child_id(&id, "error-icon"), ui_px(STATUS_SLOT_WIDTH))
-                    .test_support()
+                h_flex()
+                    .id(child_id(&id, "error-status"))
+                    .h_full()
                     .child(
-                        Icon::new(AssetIconName::TriangleAlert)
-                            .xsmall()
-                            .text_color(cx.theme().danger),
-                    ),
+                        status_slot(
+                            child_id(&id, "error-icon").to_string(),
+                            ui_px(STATUS_SLOT_WIDTH),
+                            label,
+                            show_activity(profile, weak),
+                        )
+                        .child(DotStatus::Error.dot(cx)),
+                    )
+                    .when(!*menu_open, |el| el.tooltip(context.live_tooltip(&id)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
             )
         })
         .when(selected, |el| el.child(focus_outline(cx)))
@@ -2250,7 +2304,7 @@ fn status_lane(id: SharedString, width: Pixels) -> Stateful<Div> {
         .justify_center()
 }
 
-/// A button for one status dot at the end of a connection row. The header and
+/// A button for one status dot at the end of a catalog row. The header and
 /// the list have the same side padding, so a slot as wide as the header's New
 /// Connection button at the row end has the same centerline.
 fn status_slot(
@@ -2269,7 +2323,7 @@ fn status_slot(
         .on_click(on_click)
 }
 
-/// A click on a status dot of a connection row opens the Activity of the
+/// A click on a status dot of a catalog row opens the Activity of the
 /// connection, which has the details.
 fn show_activity(
     id: Uuid,
@@ -2500,7 +2554,6 @@ fn notice_row(
     scale: f32,
     cx: &App,
 ) -> Stateful<Div> {
-    let tooltip = (tone == Tone::Error).then(|| error_summary(text));
     h_flex()
         .id(id.clone())
         .w_full()
@@ -2509,10 +2562,7 @@ fn notice_row(
         .pr(px(scale * STATUS_SLOT_WIDTH / 2.))
         .gap(px(scale * ROW_GAP))
         .text_sm()
-        .text_color(match tone {
-            Tone::Error => cx.theme().danger,
-            Tone::Muted | Tone::Loading => cx.theme().muted_foreground,
-        })
+        .text_color(cx.theme().muted_foreground)
         // A notice explains its parent rather than adding a tree level.
         // Its spinner and label use the parent's icon and label lanes.
         .child(
@@ -2550,9 +2600,6 @@ fn notice_row(
                             weak.update(cx, |this, cx| this.refresh_catalog(profile, scope, cx));
                     }),
             )
-        })
-        .when_some(tooltip, |el, tooltip| {
-            el.tooltip(move |window, cx| row_tooltip_view(&tooltip, window, cx))
         })
 }
 

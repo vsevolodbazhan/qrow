@@ -87,6 +87,8 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
     let connection = workspace.profiles[0].id;
     workspace.profiles[0].catalog.refresh = qrow::model::CatalogRefresh::Manual;
     let app = TestApp::launch_with(cx, workspace, credentials);
+    app.toggle_connection(cx, connection);
+    app.wait_label(cx, "Not loaded");
     app.context_menu(cx, connection_row(connection));
     app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(
@@ -98,6 +100,23 @@ fn refresh_errors_keep_connection_tooltips_short_and_details_in_activity(cx: &mu
                 == Some("Spark, unread error, schema refresh error")
         },
     );
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{connection}\u{1f}error\u{1f}label"))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{connection}\u{1f}notice\u{1f}label"))
+                .is_none()
+        );
+        assert!(
+            labels(window)
+                .iter()
+                .all(|text| !text.contains("Loading schemas"))
+        );
+    });
     app.update(cx, |window, cx| {
         window.hover(format!("connection-status-{connection}"), cx);
     });

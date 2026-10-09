@@ -1,8 +1,9 @@
 use crate::support::fixture::{Kyuubi, QUERY_TIMEOUT};
 use crate::support::{
-    TestApp, assert_catalog_icon, assert_connection_highlight, bounds_of, connection_row, labelled,
-    selected_tree_rows,
+    TestApp, assert_catalog_error_dot, assert_catalog_icon, assert_connection_highlight, bounds_of,
+    connection_row, labelled, selected_tree_rows,
 };
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{InputEvent as _, TestAppContext};
 use qrow::{
@@ -20,6 +21,146 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn schema_and_relation_error_dots_open_their_connection_activity(cx: &mut TestAppContext) {
+    for relation in [false, true] {
+        let (mut workspace, credentials) = Kyuubi::get().workspace("SELECT 1", "not-the-password");
+        workspace.profiles[0].catalog.refresh = CatalogRefresh::Manual;
+        let profile = workspace.profiles[0].clone();
+        let directory = tempfile::tempdir().unwrap();
+        let mut catalog = Catalog::new(&profile);
+        catalog.apply_schemas(vec!["finance".into()], &CatalogSettings::default(), 1);
+        catalog.apply_relations(
+            "finance",
+            None,
+            vec![RelationEntry {
+                name: "daily".into(),
+                kind: RelationKind::Table,
+                comment: None,
+            }],
+            1,
+        );
+        if relation {
+            catalog.apply_columns(
+                "finance",
+                Some("daily"),
+                std::collections::BTreeMap::from([(
+                    "daily".into(),
+                    vec![CatalogColumn {
+                        name: "cached_id".into(),
+                        data_type: "BIGINT".into(),
+                        comment: None,
+                    }],
+                )]),
+                1,
+            );
+        }
+        storage::save_catalog(
+            &storage::catalog_path(&directory.path().join("workspace.json"), profile.id),
+            &catalog,
+        )
+        .unwrap();
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        let schema = format!("s\u{1f}{}\u{1f}finance", profile.id);
+        let parent = if relation {
+            format!("r\u{1f}{}\u{1f}finance\u{1f}daily", profile.id)
+        } else {
+            schema.clone()
+        };
+        app.toggle_connection(cx, profile.id);
+        app.wait_for(cx, format!("{schema}\u{1f}label"));
+        app.click(cx, format!("{schema}\u{1f}label"));
+        if relation {
+            app.wait_for(cx, format!("{parent}\u{1f}label"));
+            app.click(cx, format!("{parent}\u{1f}label"));
+        }
+        app.context_menu(cx, format!("{parent}\u{1f}label"));
+        app.choose(cx, "popup-menu", "Refresh");
+        let status = format!("{parent}\u{1f}error-icon");
+        app.wait_for(cx, status.clone());
+        app.update(cx, |window, cx| {
+            assert_catalog_error_dot(window, &status, cx.theme().danger);
+            if !relation {
+                assert!(window.try_find(format!("{schema}\u{1f}detail")).is_none());
+            }
+        });
+        app.click(cx, status.clone());
+        app.wait_for(cx, "activity");
+        let activity = app.copy_activity(cx);
+        assert!(activity.contains("Schema refresh failed"), "{activity}");
+        assert!(
+            activity.contains("rejected SASL PLAIN authentication"),
+            "{activity}"
+        );
+        assert!(activity.contains("finance"), "{activity}");
+        if relation {
+            assert!(activity.contains("daily"), "{activity}");
+        }
+        app.press(cx, "escape");
+        app.wait_gone(cx, "activity");
+        app.update(cx, |window, _| {
+            assert!(window.try_find(status.clone()).is_none());
+            assert!(window.find(format!("{schema}\u{1f}detail")).visible());
+            assert!(
+                window
+                    .try_find(format!("{parent}\u{1f}error\u{1f}refresh"))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .try_find(format!("{parent}\u{1f}notice\u{1f}label"))
+                    .is_none()
+            );
+            assert!(
+                window
+                    .find(format!(
+                        "r\u{1f}{}\u{1f}finance\u{1f}daily\u{1f}label",
+                        profile.id
+                    ))
+                    .visible()
+            );
+            if relation {
+                assert!(
+                    window
+                        .find(format!("{parent}\u{1f}0\u{1f}cached_id\u{1f}label"))
+                        .visible()
+                );
+            }
+        });
+        // Failed scopes remain refreshable from the parent's menu.
+        app.context_menu(cx, format!("{parent}\u{1f}label"));
+        app.choose(cx, "popup-menu", "Refresh");
+        app.wait_until(
+            cx,
+            "the second refresh attempt",
+            QUERY_TIMEOUT,
+            |window, _| {
+                app.credentials.reads() == 2
+                    && crate::support::label(window, "toggle-activity").as_deref()
+                        == Some("Activity, 1 unseen error")
+            },
+        );
+        app.wait_for(cx, status.clone());
+        app.update(cx, |window, cx| {
+            assert_catalog_error_dot(window, &status, cx.theme().danger)
+        });
+        let activity = app.activity(cx, profile.id);
+        assert_eq!(
+            activity.matches("Started a schema refresh").count(),
+            2,
+            "{activity}"
+        );
+        assert_eq!(
+            activity.matches("Schema refresh failed").count(),
+            2,
+            "{activity}"
+        );
+        app.update(cx, |window, _| window.remove_window());
+        cx.run_until_parked();
+    }
+}
 
 /// Delay authentication of the refresh session while query sessions use the
 /// real server normally. This makes the refresh cross the tab's idle deadline.

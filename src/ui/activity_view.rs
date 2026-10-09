@@ -118,6 +118,8 @@ pub(super) enum ActivityViewEvent {
     /// Show the query tab with this ID.
     ShowTab(Uuid),
     Closed,
+    /// The connection whose currently visible errors were read.
+    Seen(Uuid),
 }
 
 impl EventEmitter<ActivityViewEvent> for ActivityView {}
@@ -205,6 +207,9 @@ impl ActivityView {
         }
         if self.open {
             self.activity.mark_seen(connection);
+            if error {
+                cx.emit(ActivityViewEvent::Seen(connection));
+            }
         }
         if removed > 0 {
             // Remove the rows of the removed entries, so the other rows keep
@@ -302,6 +307,7 @@ impl ActivityView {
     fn show(&mut self, connection: Uuid, window: &mut Window, cx: &mut Context<Self>) {
         self.shown = Some(connection);
         self.activity.mark_seen(connection);
+        cx.emit(ActivityViewEvent::Seen(connection));
         self.sync_connections(window, cx);
         self.rebuild_rows(cx);
         cx.notify();
@@ -377,6 +383,7 @@ impl ActivityView {
     fn clear(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.shown {
             self.activity.clear(id);
+            cx.emit(ActivityViewEvent::Seen(id));
             self.rebuild_rows(cx);
             cx.notify();
         }
@@ -741,6 +748,10 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         match event {
+            ActivityViewEvent::Seen(profile) => {
+                self.mark_catalog_errors_seen(*profile);
+                cx.notify();
+            }
             ActivityViewEvent::ShowTab(id) => {
                 let Some(index) = self.tabs.iter().position(|tab| tab.saved.id == *id) else {
                     return;

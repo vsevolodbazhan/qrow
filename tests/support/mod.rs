@@ -499,6 +499,14 @@ pub fn assert_connection_dot(window: &Window, profile: Uuid, expected: gpui_kit:
     assert_dot_in(window, row.bounds(), Some(expected));
 }
 
+/// A schema or relation error paints one red dot inside its Activity button.
+pub fn assert_catalog_error_dot(window: &Window, id: &str, expected: gpui_kit::Hsla) {
+    let dot = window.find(id.to_owned());
+    assert!(dot.visible(), "The catalog error dot is hidden");
+    assert_eq!(dot.role(), Some(gpui_kit::Role::Button));
+    assert_dot_in(window, dot.bounds(), Some(expected));
+}
+
 /// A sign-in row paints the shared dot in the expected theme color.
 pub fn assert_sign_in_dot(window: &Window, sign_in: Uuid, expected: gpui_kit::Hsla) {
     let dot = window.find(format!("sign-in-status-{sign_in}"));

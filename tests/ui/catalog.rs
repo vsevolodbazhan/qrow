@@ -1,10 +1,10 @@
 //! The schema tree in the Connections sidebar, with cached catalogs and
 //! connections that no test reaches.
 use crate::support::{
-    MemoryCredentials, TestApp, assert_catalog_icon, assert_connection_dot,
-    assert_connection_highlight, assert_connection_keyboard_position, assert_tooltip_header_center,
-    assert_tree_row_outline, bounds_of, connection_row, elements, label, labelled, menu_item,
-    offline_profile, press_at, selected_tree_rows, shows, value,
+    MemoryCredentials, TestApp, assert_catalog_error_dot, assert_catalog_icon,
+    assert_connection_dot, assert_connection_highlight, assert_connection_keyboard_position,
+    assert_tooltip_header_center, assert_tree_row_outline, bounds_of, connection_row, elements,
+    label, labelled, menu_item, offline_profile, press_at, selected_tree_rows, shows, value,
 };
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::test::TestWindowExt as _;
@@ -295,10 +295,10 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
                     window.try_find(refresh.clone()).is_none()
                         && labelled(
                             window,
-                            if depth == 0 {
-                                "Loading schemas…"
-                            } else {
-                                "Loading…"
+                            match depth {
+                                0 => "Loading schemas…",
+                                1 => "Loading relations…",
+                                _ => "Loading…",
                             },
                         )
                         .is_some()
@@ -316,7 +316,7 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             assert_status_alignment(&app, cx, &status);
         }
         drop(listener);
-        // Failed refreshes keep the same centerline for their dot or icon.
+        // Failed refreshes keep the same centerline for their status dots.
         for (depth, parent) in parents.iter().enumerate() {
             let status = if depth == 0 {
                 let status = format!("connection-status-{}", profiles[0].id);
@@ -338,10 +338,196 @@ fn unloaded_and_loading_notices_align_with_their_parent_at_each_depth(cx: &mut T
             };
             app.wait_for(cx, status.clone());
             assert_status_alignment(&app, cx, &status);
+            if depth > 0 {
+                app.update(cx, |window, cx| {
+                    assert_catalog_error_dot(window, &status, cx.theme().danger);
+                    assert_eq!(
+                        label(window, status.clone()).as_deref(),
+                        Some(if depth == 1 {
+                            "finance, schema refresh error, show Activity"
+                        } else {
+                            "daily, schema refresh error, show Activity"
+                        })
+                    );
+                });
+                app.update(cx, |window, cx| window.hover(status.clone(), cx));
+                cx.executor().advance_clock(Duration::from_millis(800));
+                app.settle(cx);
+                app.update(cx, |window, _| {
+                    let tooltip = label(window, "catalog-tooltip").unwrap();
+                    assert!(tooltip.starts_with(if depth == 1 { "finance\n" } else { "daily\n" }));
+                    assert!(tooltip.lines().count() >= 2, "{tooltip}");
+                });
+                app.click(cx, status.clone());
+                app.wait_for(cx, "activity");
+                let activity = app.copy_activity(cx);
+                assert!(activity.contains("Schema refresh failed"), "{activity}");
+                assert!(
+                    activity.contains(if depth == 1 {
+                        "finance"
+                    } else {
+                        "finance.daily"
+                    }),
+                    "The dot must open the Activity of its connection: {activity}"
+                );
+                app.press(cx, "escape");
+                app.wait_gone(cx, "activity");
+                app.update(cx, |window, _| {
+                    assert!(window.try_find(status.clone()).is_none());
+                });
+                app.update(cx, |window, _| {
+                    assert!(
+                        window
+                            .try_find(format!("{parent}\u{1f}error\u{1f}label"))
+                            .is_none()
+                    );
+                    assert!(
+                        window
+                            .try_find(format!("{parent}\u{1f}notice\u{1f}label"))
+                            .is_none()
+                    );
+                });
+            }
         }
         app.update(cx, |window, _| window.remove_window());
         cx.run_until_parked();
     }
+}
+
+#[gpui_kit::test]
+fn schema_error_dots_replace_counts_until_their_activity_is_read(cx: &mut TestAppContext) {
+    for scale in [0.75, 1.5] {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let profile = Profile {
+            host: "127.0.0.1".into(),
+            port,
+            ..offline_profile("Unread errors")
+        };
+        let credentials = MemoryCredentials::default();
+        credentials
+            .set_password(profile.id, "synthetic-password")
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let relations = [table("daily", RelationKind::Table)];
+        cache(
+            &directory,
+            &profile,
+            &[("finance", Some(&relations)), ("sales", Some(&relations))],
+        );
+        let mut workspace = workspace(vec![profile.clone()]);
+        workspace.settings.ui_scale = scale;
+        let app = TestApp::launch_in(cx, directory, workspace, credentials);
+        expand_connection(&app, cx, &profile);
+        // A different schema's failure must not make an already-read error unread.
+        // Retrying the same failed scope must create a new unread error.
+        for name in ["finance", "sales", "finance"] {
+            let parent = format!("s\u{1f}{}\u{1f}{name}", profile.id);
+            let detail = format!("{parent}\u{1f}detail");
+            let status = format!("{parent}\u{1f}error-icon");
+            app.wait_for(cx, detail.clone());
+            let count_bounds = app.update(cx, |window, _| bounds_of(window, &detail));
+            app.context_menu(cx, format!("{parent}\u{1f}label"));
+            app.choose(cx, "popup-menu", "Refresh");
+            app.wait_for(cx, status.clone());
+            assert_status_alignment(&app, cx, &status);
+            app.update(cx, |window, cx| {
+                assert_catalog_error_dot(window, &status, cx.theme().danger);
+                assert!(window.try_find(detail.clone()).is_none());
+                let dot_bounds = bounds_of(window, &status);
+                assert!(
+                    (dot_bounds.center().x - count_bounds.center().x).abs() <= gpui_kit::px(0.5)
+                );
+                let other = if name == "finance" {
+                    "sales"
+                } else {
+                    "finance"
+                };
+                assert!(
+                    window
+                        .try_find(format!(
+                            "s\u{1f}{}\u{1f}{other}\u{1f}error-icon",
+                            profile.id
+                        ))
+                        .is_none()
+                );
+                assert!(
+                    window
+                        .find(format!("s\u{1f}{}\u{1f}{other}\u{1f}detail", profile.id))
+                        .visible()
+                );
+            });
+            app.click(cx, status.clone());
+            app.wait_for(cx, "activity");
+            app.press(cx, "escape");
+            app.wait_gone(cx, "activity");
+            app.wait_for(cx, detail.clone());
+            app.update(cx, |window, _| {
+                assert!(window.try_find(status.clone()).is_none());
+                assert_eq!(bounds_of(window, &detail), count_bounds);
+            });
+        }
+        app.update(cx, |window, _| window.remove_window());
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn a_schema_failure_is_read_when_activity_is_already_open(cx: &mut TestAppContext) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let profile = Profile {
+        host: "127.0.0.1".into(),
+        port: listener.local_addr().unwrap().port(),
+        ..offline_profile("Reading refresh errors")
+    };
+    let credentials = MemoryCredentials::default();
+    credentials
+        .set_password(profile.id, "synthetic-password")
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let relations = [table("daily", RelationKind::Table)];
+    cache(&directory, &profile, &[("finance", Some(&relations))]);
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
+    expand_connection(&app, cx, &profile);
+    let parent = format!("s\u{1f}{}\u{1f}finance", profile.id);
+    app.wait_for(cx, format!("{parent}\u{1f}detail"));
+    app.context_menu(cx, format!("{parent}\u{1f}label"));
+    app.choose(cx, "popup-menu", "Refresh");
+    app.wait_for(cx, format!("{parent}\u{1f}busy"));
+    app.click(cx, "toggle-activity");
+    app.wait_for(cx, "activity");
+    drop(listener);
+    app.wait_until(
+        cx,
+        "the displayed failure",
+        Duration::from_secs(10),
+        |window, _| {
+            elements(window)
+                .iter()
+                .filter(|element| element.label() == Some("Copy error"))
+                .count()
+                == 2
+        },
+    );
+    assert!(app.copy_activity(cx).contains("Schema refresh failed"));
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
+    app.wait_for(cx, format!("{parent}\u{1f}detail"));
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .try_find(format!("{parent}\u{1f}error-icon"))
+                .is_none()
+        );
+        assert!(window.try_find(format!("{parent}\u{1f}busy")).is_none());
+        assert_eq!(
+            label(window, "toggle-activity").as_deref(),
+            Some("Activity")
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -804,7 +990,7 @@ fn names_go_to_the_clipboard_and_into_the_editor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
+fn a_failed_refresh_removes_progress_and_opens_its_error_in_activity(cx: &mut TestAppContext) {
     // A port that was free a moment ago refuses the connection.
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -820,19 +1006,49 @@ fn a_failed_refresh_shows_its_error_on_the_connection(cx: &mut TestAppContext) {
     credentials
         .set_password(profile.id, "synthetic-password")
         .unwrap();
-    let app = TestApp::launch_with(cx, workspace(vec![profile.clone()]), credentials);
+    let directory = tempfile::tempdir().unwrap();
+    avia(&directory, &profile);
+    let app = TestApp::launch_in(cx, directory, workspace(vec![profile.clone()]), credentials);
 
     expand_connection(&app, cx, &profile);
-    wait_shows(&app, cx, "Not loaded");
+    wait_shows(&app, cx, "finance");
     assert_eq!(app.credentials.reads(), 0);
-    app.click_labelled(cx, "Refresh");
+    app.context_menu(cx, connection_row(profile.id));
+    app.choose(cx, "popup-menu", "Refresh");
     app.wait_until(
         cx,
         "the refresh error",
         Duration::from_secs(20),
-        |window, _| shows(window, "refused"),
+        |window, _| {
+            label(window, connection_row(profile.id)).as_deref()
+                == Some("Unreachable, unread error, schema refresh error")
+        },
     );
+    app.update(cx, |window, cx| {
+        assert_connection_dot(window, profile.id, cx.theme().danger);
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{}\u{1f}error\u{1f}label", profile.id))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find(format!("c\u{1f}{}\u{1f}notice\u{1f}label", profile.id))
+                .is_none()
+        );
+        assert!(!shows(window, "refused"));
+        assert!(!shows(window, "Loading schemas"));
+        assert!(labelled(window, "avia").is_some());
+        assert!(labelled(window, "finance").is_some());
+    });
     assert_eq!(app.credentials.reads(), 1);
+    app.click(cx, format!("connection-status-{}", profile.id));
+    app.wait_for(cx, "activity");
+    let activity = app.copy_activity(cx);
+    assert!(activity.contains("Schema refresh failed"), "{activity}");
+    assert!(activity.contains("refused"), "{activity}");
+    app.press(cx, "escape");
+    app.wait_gone(cx, "activity");
     // The connection menu tries again.
     app.context_menu(cx, connection_row(profile.id));
     app.choose(cx, "popup-menu", "Refresh");
