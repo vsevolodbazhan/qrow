@@ -105,21 +105,31 @@ fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
 
 #[gpui_kit::test]
 fn run_export_menu_handles_a_window_without_editor_focus(cx: &mut TestAppContext) {
-    let app = demo(cx);
+    let profile = crate::support::offline_profile("Unfocused export");
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 'captured 😀';".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
     app.update(cx, |window, cx| window.blur(cx));
     app.run_export(cx);
     app.wait_for(cx, "export-save");
     app.update(cx, |window, _| {
         assert_eq!(
             window.find("export-captured-connection").label(),
-            Some("rivendell-s")
+            Some("Unfocused export")
         );
         assert!(
             window
                 .find("export-captured-sql")
                 .label()
                 .unwrap()
-                .contains("FROM avia.flight_events")
+                .contains("SELECT 'captured 😀';")
         );
     });
     app.click(cx, "export-cancel");
