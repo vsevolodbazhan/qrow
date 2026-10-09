@@ -49,6 +49,7 @@ gpui_kit::assets::icon_assets!(
         Plug,
         ClipboardPaste,
         FileCode,
+        Download,
     ]
 );
 

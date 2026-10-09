@@ -38,6 +38,29 @@ fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run trino"]
+fn csv_export_preserves_trino_decimal_text_and_nulls(cx: &mut TestAppContext) {
+    let app = launch(
+        cx,
+        "SELECT 'a,b' AS value, CAST(NULL AS VARCHAR) AS absent, '' AS empty, DECIMAL '12345678901234567890.12345' AS amount UNION ALL SELECT 'NULL', 'NULL', '\\N', DECIMAL '-0.01000'",
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.click(cx, "export-results");
+    app.select(cx, "export-null", "\\N");
+    let text = super::export::copy_query(cx, &app);
+    super::export::assert_reader_rows(
+        &text,
+        "\\N",
+        serde_json::json!([
+            ["a,b", null, "", "12345678901234567890.12345"],
+            ["NULL", "NULL", "\\N", "-0.01000"]
+        ]),
+    );
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
 fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     let app = launch(
         cx,

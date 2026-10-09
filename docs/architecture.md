@@ -13,6 +13,7 @@ the [end-to-end tests](testing.md#run-the-servers) belongs to the server fixture
 | [UI entry points](../src/ui.rs) | Initialize GPUI Kit, themes, the SQL language, key bindings, and menus. Wrap the root view. |
 | [UI environment](../src/ui/environment.rs) | Select the workspace file, the password and token stores, and the trusted certificate authorities of a window. |
 | [Workspace controller](../src/ui.rs) | Coordinate tabs, editor state, worker events, Logs history, and commands. |
+| [Export](../src/export.rs) | Keep shared preview snapshots, write CSV, and publish complete files. |
 | [UI modules](../src/ui/) | Present workspace layout, forms, settings, results, and Logs history. |
 | [Logs model](../src/logs.rs) | Group Logs entries, apply retention, and define panel transitions. |
 | [Activity model](../src/activity.rs) | Keep the Activity log of each connection, choose what goes to tab Logs, and count unseen errors. |

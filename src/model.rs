@@ -158,6 +158,7 @@ pub struct Settings {
     pub assistant_font_size: f32,
     pub assistant_line_height: f32,
     pub assistant: AssistantSettings,
+    pub export: crate::export::Settings,
 }
 
 impl Default for Settings {
@@ -177,6 +178,7 @@ impl Default for Settings {
             assistant_font_size: 14.,
             assistant_line_height: 1.6,
             assistant: AssistantSettings::default(),
+            export: crate::export::Settings::default(),
         }
     }
 }
@@ -2527,6 +2529,7 @@ mod tests {
             assistant_font_size: f32::NAN,
             assistant_line_height: f32::NAN,
             assistant: AssistantSettings::default(),
+            export: crate::export::Settings::default(),
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
