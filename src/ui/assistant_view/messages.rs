@@ -6,6 +6,13 @@ impl Qrow {
         if !matches!(self.assistant_state.status, Status::Ready) {
             return;
         }
+        // A conversation of another harness shows only its saved copy.
+        if self
+            .displayed_thread()
+            .is_some_and(|thread| !self.conversation_runs(&thread))
+        {
+            return;
+        }
         let text = self.assistant_composer(cx).read(cx).value().to_string();
         if text.trim().is_empty() {
             return;
@@ -106,11 +113,99 @@ impl Qrow {
     }
 
     /// Starts a turn, or steers the active turn, of a conversation that has a
-    /// query tab. Returns false when Codex did not take the message.
+    /// query tab. Returns false when the harness did not take the message.
+    /// A harness that cannot steer gets the message when the turn ends.
     pub(super) fn send_assistant_message(
         &mut self,
         thread_id: &str,
         text: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self
+            .thread_run(thread_id)
+            .is_some_and(|run| run.active_turn.is_some())
+            && !self.harness_features().steer
+        {
+            let run = self.thread_run_mut(thread_id);
+            run.queued_messages.push_back(text.clone());
+            run.unread = None;
+            self.assistant_state
+                .transcripts
+                .entry(thread_id.to_owned())
+                .or_default()
+                .push(TranscriptEntry::new(Speaker::User, text, None));
+            self.schedule_transcript_save(cx);
+            return true;
+        }
+        self.start_assistant_message(thread_id, text, true, cx)
+    }
+
+    /// Sends the oldest message that waited for the end of a turn. A message
+    /// that the harness does not take goes back to the message field.
+    pub(super) fn send_queued_message(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.thread_run_mut(thread_id).queued_messages.pop_front() else {
+            return;
+        };
+        if !self.start_assistant_message(thread_id, text.clone(), false, cx) {
+            self.remove_queued_entry(thread_id, &text);
+            self.restore_draft(self.conversation_target(thread_id), text, window, cx);
+        }
+    }
+
+    /// Puts the messages that wait for the end of a turn back in the message
+    /// field, for example after Cancel.
+    pub(in crate::ui) fn restore_queued_messages(
+        &mut self,
+        thread_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let queued = std::mem::take(&mut self.thread_run_mut(thread_id).queued_messages);
+        if queued.is_empty() {
+            return;
+        }
+        for text in &queued {
+            self.remove_queued_entry(thread_id, text);
+        }
+        let text = queued.into_iter().collect::<Vec<_>>().join("\n");
+        self.restore_draft(self.conversation_target(thread_id), text, window, cx);
+    }
+
+    fn remove_queued_entry(&mut self, thread_id: &str, text: &str) {
+        if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id)
+            && let Some(position) = entries.iter().rposition(|entry| {
+                entry.speaker == Speaker::User && entry.turn_id.is_none() && *entry.text() == text
+            })
+        {
+            entries.remove(position);
+        }
+    }
+
+    /// The message field target of a conversation: its tab, or the closed
+    /// conversation.
+    pub(super) fn conversation_target(&self, thread_id: &str) -> ComposerTarget {
+        match self
+            .assistant
+            .conversation(thread_id)
+            .and_then(|conversation| conversation.tab_id)
+        {
+            Some(tab) => ComposerTarget::Tab(tab),
+            None => ComposerTarget::Detached(thread_id.to_owned()),
+        }
+    }
+
+    /// Starts a turn or steers the active turn. `show` adds the message to
+    /// the transcript; a queued message is there already.
+    fn start_assistant_message(
+        &mut self,
+        thread_id: &str,
+        text: String,
+        show: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         // The catalog tools read the cache of the tab connection. Load it now,
@@ -181,11 +276,13 @@ impl Qrow {
             conversation.sent_notes = Some(crate::assistant::notes::unknown());
             self.changed(cx);
         }
-        self.assistant_state
-            .transcripts
-            .entry(thread_id.to_owned())
-            .or_default()
-            .push(TranscriptEntry::new(Speaker::User, text, active_turn));
+        if show {
+            self.assistant_state
+                .transcripts
+                .entry(thread_id.to_owned())
+                .or_default()
+                .push(TranscriptEntry::new(Speaker::User, text, active_turn));
+        }
         self.request_assistant_title(thread_id, cx);
         self.schedule_transcript_save(cx);
         true

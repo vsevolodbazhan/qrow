@@ -12,7 +12,7 @@ pub mod service;
 pub mod tools;
 pub mod transcripts;
 
-pub use claude::ClaudeHarness;
+pub use claude::{ClaudeHarness, DEFAULT_EFFORT as DEFAULT_REASONING_EFFORT, delete_saved_session};
 pub use codex::CodexHarness;
 
 use serde_json::Value;

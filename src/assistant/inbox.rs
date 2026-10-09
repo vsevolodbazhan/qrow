@@ -119,9 +119,24 @@ pub(crate) struct ProcessSender {
 }
 
 impl ProcessSender {
-    pub(crate) fn send(&self, output: Result<Value, String>) -> Result<(), SendError> {
-        self.bound
-            .send(&self.sender, Message::Output(self.source, output))
+    /// Returns the message with the error, so that the caller can try again.
+    pub(crate) fn send(
+        &self,
+        output: Result<Value, String>,
+    ) -> Result<(), (SendError, Result<Value, String>)> {
+        if self.bound.queued.fetch_add(1, Ordering::AcqRel) >= self.bound.capacity {
+            self.bound.release();
+            return Err((SendError::Full, output));
+        }
+        self.sender
+            .send(Message::Output(self.source, output))
+            .map_err(|error| {
+                self.bound.release();
+                let Message::Output(_, output) = error.0 else {
+                    unreachable!("the sender sent an output message")
+                };
+                (SendError::Disconnected, output)
+            })
     }
 }
 
@@ -343,7 +358,10 @@ mod tests {
         let second = inbox.process_sender(2);
         first.send(Ok(json!({}))).unwrap();
         second.send(Ok(json!({}))).unwrap();
-        assert_eq!(first.send(Ok(json!({}))), Err(SendError::Full));
+        assert!(matches!(
+            first.send(Ok(json!({}))),
+            Err((SendError::Full, Ok(_)))
+        ));
         assert!(matches!(inbox.next(None), Some(Message::Output(1, Ok(_)))));
         second.send(Ok(json!({}))).unwrap();
         drop(first);

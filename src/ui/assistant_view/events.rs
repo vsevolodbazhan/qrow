@@ -2,6 +2,60 @@
 use super::*;
 
 impl Qrow {
+    /// Gives a conversation the title that the user chose.
+    pub(super) fn apply_assistant_rename(&mut self, id: &str, title: &str, cx: &mut Context<Self>) {
+        let Some(conversation) = self
+            .assistant
+            .conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == id)
+        else {
+            return;
+        };
+        let tab_to_name = conversation
+            .title_follows_conversation
+            .then_some(conversation.tab_id)
+            .flatten();
+        conversation.title = title.to_owned();
+        conversation.title_source = AssistantTitleSource::User;
+        if let Some(tab_id) = tab_to_name {
+            self.name_assistant_tab(tab_id, title);
+        }
+        self.changed(cx);
+    }
+
+    /// Removes a deleted conversation and its saved transcript. The tab
+    /// stays open without a conversation.
+    pub(super) fn remove_assistant_conversation(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id = id.to_owned();
+        if self.assistant_state.browsed_thread.as_deref() == Some(id.as_str()) {
+            self.assistant_state.browsed_thread = None;
+            self.show_assistant_composer(self.active_tab_id().map(ComposerTarget::Tab), window, cx);
+        }
+        self.assistant_state
+            .drafts
+            .remove(&ComposerTarget::Detached(id.clone()));
+        self.assistant_state.runs.remove(&id);
+        self.assistant_state.loaded_threads.remove(&id);
+        self.assistant_state.older_cursors.remove(&id);
+        self.assistant_state.loaded_cursors.remove(&id);
+        self.assistant
+            .conversations
+            .retain(|conversation| conversation.thread_id != id);
+        self.assistant_state.transcripts.remove(&id);
+        self.assistant_state.unstarted_threads.remove(&id);
+        self.assistant_state.regenerating_titles.remove(&id);
+        self.assistant_state.pending_titles.remove(&id);
+        self.assistant_state.title_history_reads.remove(&id);
+        self.delete_local_transcript(&id);
+        self.changed(cx);
+    }
+
     pub(in crate::ui) fn tick_assistant(
         &mut self,
         window: &mut Window,
@@ -48,10 +102,7 @@ impl Qrow {
         initial: bool,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_state.status = if matches!(
-            snapshot.account().kind(),
-            AccountKind::ChatGpt { .. } | AccountKind::ApiKey
-        ) {
+        self.assistant_state.status = if snapshot.account().kind().signed_in() {
             Status::Ready
         } else {
             Status::SignInRequired
@@ -109,6 +160,10 @@ impl Qrow {
                     return;
                 }
                 let mut entry = AssistantConversation::new(id.clone(), first.mode);
+                entry.harness = self
+                    .assistant_state
+                    .harness
+                    .unwrap_or(self.settings.assistant.harness);
                 entry.last_activity = unix_now_seconds();
                 entry.tab_id = Some(first.tab_id);
                 entry.title_follows_conversation = self
@@ -126,7 +181,8 @@ impl Qrow {
             }
             AssistantServiceEvent::Resumed(conversation) => {
                 // A saved transcript already shows the conversation.
-                if !self.local_transcript_shows(&conversation.id) {
+                if !self.local_transcript_shows(&conversation.id) && self.harness_features().history
+                {
                     self.assistant_command(AssistantCommand::Read(conversation.id), cx);
                 }
             }
@@ -309,7 +365,10 @@ impl Qrow {
                         "The turn ended before the query ran.",
                     );
                 }
-                self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
+                // The final text of a reply can be longer than the streamed text.
+                if self.harness_features().history {
+                    self.assistant_command(AssistantCommand::Read(thread_id.clone()), cx);
+                }
                 if let Some(position) = self
                     .assistant
                     .conversations
@@ -329,6 +388,34 @@ impl Qrow {
                         .push(TranscriptEntry::new(Speaker::Error, error, Some(turn.id)));
                 }
                 self.save_transcripts(Some(&thread_id));
+                self.send_queued_message(&thread_id, window, cx);
+            }
+            AssistantServiceEvent::Harness(AssistantEvent::MessageCompleted {
+                thread_id,
+                turn_id,
+                text,
+            }) => {
+                let entries = self
+                    .assistant_state
+                    .transcripts
+                    .entry(thread_id.clone())
+                    .or_default();
+                // Streamed parts can be lost under load. The full text
+                // replaces the reply that they built.
+                match entries.last_mut().filter(|entry| {
+                    entry.speaker == Speaker::Assistant
+                        && entry.turn_id.as_deref() == Some(turn_id.as_str())
+                }) {
+                    Some(entry) if *entry.text() != text => entry.set_text(text),
+                    Some(_) => {}
+                    None => entries.push(TranscriptEntry::streamed(
+                        Speaker::Assistant,
+                        &text,
+                        Some(turn_id),
+                    )),
+                }
+                self.thread_run_mut(&thread_id).pending_reply = false;
+                self.reveal_assistant_replies(cx);
             }
             AssistantServiceEvent::Harness(AssistantEvent::TitleChanged { thread_id, title }) => {
                 self.assistant_state.pending_titles.remove(&thread_id);
@@ -355,9 +442,10 @@ impl Qrow {
             AssistantServiceEvent::Harness(AssistantEvent::TitleFailed { thread_id }) => {
                 self.assistant_state.pending_titles.remove(&thread_id);
                 if self.assistant_state.regenerating_titles.remove(&thread_id) {
-                    self.assistant_state.notice = Some(AssistantNotice::warning(
-                        "Codex did not return a title. Try again.",
-                    ));
+                    self.assistant_state.notice = Some(AssistantNotice::warning(format!(
+                        "{} did not return a title. Try again.",
+                        self.settings.assistant.harness.name()
+                    )));
                 }
             }
             AssistantServiceEvent::Harness(AssistantEvent::ToolCall(call)) => {
@@ -393,56 +481,18 @@ impl Qrow {
             AssistantServiceEvent::Renamed(id) => {
                 if let Some((pending_id, title)) = self.assistant_state.pending_rename.take()
                     && pending_id == id
-                    && let Some(conversation) = self
-                        .assistant
-                        .conversations
-                        .iter_mut()
-                        .find(|conversation| conversation.thread_id == id)
                 {
-                    let tab_to_name = conversation
-                        .title_follows_conversation
-                        .then_some(conversation.tab_id)
-                        .flatten();
-                    conversation.title = title.clone();
-                    conversation.title_source = AssistantTitleSource::User;
-                    if let Some(tab_id) = tab_to_name {
-                        self.name_assistant_tab(tab_id, &title);
-                    }
-                    self.changed(cx);
+                    self.apply_assistant_rename(&id, &title, cx);
                 }
             }
             AssistantServiceEvent::Deleted(id) => {
-                if self.assistant_state.browsed_thread.as_deref() == Some(id.as_str()) {
-                    self.assistant_state.browsed_thread = None;
-                    self.show_assistant_composer(
-                        self.active_tab_id().map(ComposerTarget::Tab),
-                        window,
-                        cx,
-                    );
-                }
-                self.assistant_state
-                    .drafts
-                    .remove(&ComposerTarget::Detached(id.clone()));
-                self.assistant_state.runs.remove(&id);
-                self.assistant_state.loaded_threads.remove(&id);
-                self.assistant_state.older_cursors.remove(&id);
-                self.assistant_state.loaded_cursors.remove(&id);
-                self.assistant
-                    .conversations
-                    .retain(|conversation| conversation.thread_id != id);
-                self.assistant_state.transcripts.remove(&id);
-                self.assistant_state.unstarted_threads.remove(&id);
-                self.assistant_state.regenerating_titles.remove(&id);
-                self.assistant_state.pending_titles.remove(&id);
-                self.assistant_state.title_history_reads.remove(&id);
-                self.delete_local_transcript(&id);
-                // The tab stays open without a conversation.
-                self.changed(cx);
+                self.remove_assistant_conversation(&id, window, cx)
             }
             AssistantServiceEvent::Disconnected(error) => {
                 self.assistant_state.sign_in = SignIn::Idle;
                 self.assistant_state.status = Status::Disconnected(error);
                 self.assistant_state.service = None;
+                self.assistant_state.harness = None;
                 self.assistant_state.pending_titles.clear();
                 self.reset_assistant_runs(window, cx);
             }
@@ -543,6 +593,7 @@ impl Qrow {
                 if operation == Operation::Answer {
                     self.assistant_state.status = Status::Disconnected(error);
                     self.assistant_state.service = None;
+                    self.assistant_state.harness = None;
                     self.reset_assistant_runs(window, cx);
                     return;
                 }

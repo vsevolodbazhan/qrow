@@ -1,10 +1,11 @@
-//! The Codex process: start, stop, idle stop, commands, and the model settings
-//! that Codex offers.
+//! The harness process: start, stop, idle stop, commands, and the model
+//! settings that the harness offers.
 use super::*;
 
 pub(super) fn reasoning_effort_label(id: &str) -> String {
     match id {
         "xhigh" => "Extra high".into(),
+        crate::assistant::DEFAULT_REASONING_EFFORT => "Default".into(),
         _ => id
             .split(['_', '-', ' '])
             .filter(|part| !part.is_empty())
@@ -20,30 +21,45 @@ pub(super) fn reasoning_effort_label(id: &str) -> String {
     }
 }
 
-pub(super) fn discover_codex(configured: Option<&str>) -> Result<PathBuf, String> {
+/// Finds the executable of `harness`: the configured path, or the first
+/// match on `PATH` and in the usual install folders.
+pub(super) fn discover_harness(
+    harness: AssistantHarness,
+    configured: Option<&str>,
+) -> Result<PathBuf, String> {
+    let name = harness.name();
     if let Some(path) = configured {
         let path = PathBuf::from(path);
         return path.is_file().then_some(path).ok_or_else(|| {
-            "The configured Codex executable was not found. Choose another path in Settings.".into()
+            format!(
+                "The configured {name} executable was not found. Choose another path in Settings."
+            )
         });
     }
+    let program = match harness {
+        AssistantHarness::Codex => "codex",
+        AssistantHarness::Claude => "claude",
+    };
     let mut candidates = Vec::new();
     if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join("codex")));
+        candidates.extend(std::env::split_paths(&path).map(|dir| dir.join(program)));
     }
     candidates.extend(
-        [
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex",
-            "/usr/bin/codex",
-        ]
-        .map(PathBuf::from),
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            .map(|dir| PathBuf::from(dir).join(program)),
     );
+    if harness == AssistantHarness::Claude
+        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    {
+        // The native installer of Claude Code uses these folders.
+        candidates.push(home.join(".local/bin/claude"));
+        candidates.push(home.join(".claude/local/claude"));
+    }
     candidates
         .into_iter()
         .find(|path| path.is_file())
         .ok_or_else(|| {
-            "Codex was not found. Install Codex, or select its executable in Settings.".into()
+            format!("{name} was not found. Install {name}, or select its executable in Settings.")
         })
 }
 
@@ -65,9 +81,10 @@ impl Qrow {
             self.settings.assistant.choice_mut().model = None;
             self.settings.assistant.choice_mut().reasoning_effort = None;
             self.settings.assistant.choice_mut().service_tier = None;
-            self.assistant_state.notice = Some(AssistantNotice::info(
-                "Saved model is unavailable. Codex default model selected.",
-            ));
+            self.assistant_state.notice = Some(AssistantNotice::info(format!(
+                "Saved model is unavailable. {} default model selected.",
+                self.settings.assistant.harness.name()
+            )));
             self.changed(cx);
         }
         let default_model = models
@@ -98,9 +115,10 @@ impl Qrow {
             .is_some_and(|id| !efforts.iter().any(|effort| effort.id() == id))
         {
             self.settings.assistant.choice_mut().reasoning_effort = None;
-            self.assistant_state.notice = Some(AssistantNotice::info(
-                "Saved reasoning level is unavailable. Codex default is in use.",
-            ));
+            self.assistant_state.notice = Some(AssistantNotice::info(format!(
+                "Saved reasoning level is unavailable. {} default is in use.",
+                self.settings.assistant.harness.name()
+            )));
             self.changed(cx);
         }
         let tiers = model.map(|model| model.service_tiers()).unwrap_or(&[]);
@@ -113,9 +131,10 @@ impl Qrow {
             .is_some_and(|id| !tiers.iter().any(|tier| tier.id() == id))
         {
             self.settings.assistant.choice_mut().service_tier = None;
-            self.assistant_state.notice = Some(AssistantNotice::info(
-                "Saved service tier is unavailable. Codex default is in use.",
-            ));
+            self.assistant_state.notice = Some(AssistantNotice::info(format!(
+                "Saved service tier is unavailable. {} default is in use.",
+                self.settings.assistant.harness.name()
+            )));
             self.changed(cx);
         }
     }
@@ -274,7 +293,8 @@ impl Qrow {
         if self.assistant_state.service.is_some() {
             return;
         }
-        let executable = match discover_codex(self.settings.assistant.codex_executable.as_deref()) {
+        let harness = self.settings.assistant.harness;
+        let executable = match discover_harness(harness, self.settings.assistant.executable()) {
             Ok(path) => path,
             Err(error) => {
                 self.assistant_state.status = Status::Disconnected(error);
@@ -283,14 +303,30 @@ impl Qrow {
             }
         };
         let wake = self.wake.clone();
-        match Service::launch(
-            executable,
+        // Claude Code files sessions by working folder, so its folder stays
+        // the same next to the workspace. The demo uses a temporary folder.
+        let working_directory = match harness {
+            AssistantHarness::Claude => self
+                .assistant_state
+                .store
+                .as_ref()
+                .and_then(|store| store.directory().parent())
+                .map(|assistant| assistant.join("claude")),
+            AssistantHarness::Codex => None,
+        };
+        match Service::launch_harness(
+            crate::assistant::service::Launch {
+                harness,
+                executable,
+                working_directory,
+            },
             Arc::new(move || {
                 let _ = wake.try_send(());
             }),
         ) {
             Ok(service) => {
                 self.assistant_state.service = Some(service);
+                self.assistant_state.harness = Some(harness);
                 self.assistant_state.status = Status::Starting;
                 self.assistant_state.sign_in = SignIn::Idle;
                 // A new Codex process has no title requests from the old one.
@@ -306,6 +342,73 @@ impl Qrow {
         cx.notify();
     }
 
+    /// Selects the harness of new conversations and starts it. Running turns
+    /// of the old harness stop, so Qrow asks first while one runs.
+    pub(in crate::ui) fn select_assistant_harness(
+        &mut self,
+        harness: AssistantHarness,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings.assistant.harness == harness {
+            return;
+        }
+        if !self.assistant_working() {
+            self.switch_assistant_harness(harness, window, cx);
+            return;
+        }
+        let weak = cx.weak_entity();
+        let name = harness.name();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let confirm = weak.clone();
+            alert
+                .title(format!("Switch the assistant to {name}?"))
+                .description("Running assistant turns stop. Queries that already started continue.")
+                .footer(
+                    DialogFooter::new()
+                        .justify_end()
+                        .child(
+                            Button::new("cancel-switch-harness")
+                                .label("Cancel")
+                                .on_click(|_, window, cx| window.close_dialog(cx)),
+                        )
+                        .child(
+                            Button::new("confirm-switch-harness")
+                                .primary()
+                                .label("Switch")
+                                .on_click(move |_, window, cx| {
+                                    let _ = confirm.update(cx, |this, cx| {
+                                        this.switch_assistant_harness(harness, window, cx);
+                                    });
+                                    window.close_dialog(cx);
+                                }),
+                        ),
+                )
+        });
+    }
+
+    fn switch_assistant_harness(
+        &mut self,
+        harness: AssistantHarness,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.assistant.harness = harness;
+        self.assistant_state.stop();
+        self.reset_assistant_runs(window, cx);
+        self.assistant_state.snapshot = None;
+        self.assistant_state.sign_in = SignIn::Idle;
+        self.assistant_state.notice = None;
+        self.assistant_state.status = Status::Idle;
+        if self.assistant_state.open {
+            self.start_assistant(cx);
+        }
+        if let Some(thread) = self.displayed_thread() {
+            self.load_assistant_thread(&thread, cx);
+        }
+        self.changed(cx);
+    }
+
     pub(in crate::ui) fn reconnect_assistant(
         &mut self,
         window: &mut Window,
@@ -316,10 +419,12 @@ impl Qrow {
         self.start_assistant(cx);
     }
 
-    pub(in crate::ui) fn stop_assistant(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::ui) fn stop_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(thread_id) = self.displayed_thread() else {
             return;
         };
+        // Messages that wait for the turn do not start after Cancel.
+        self.restore_queued_messages(&thread_id, window, cx);
         let Some(turn_id) = self
             .thread_run(&thread_id)
             .and_then(|run| run.active_turn.clone())

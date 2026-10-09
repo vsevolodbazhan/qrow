@@ -128,7 +128,9 @@ impl Qrow {
         if self.load_local_transcript(thread_id, cx) || self.local_transcript_shows(thread_id) {
             return;
         }
+        // A conversation of another harness has only its saved copy.
         if matches!(self.assistant_state.status, Status::Ready)
+            && self.conversation_runs(thread_id)
             && !self.assistant_state.loaded_threads.contains(thread_id)
             && self.assistant_command(AssistantCommand::Resume(thread_id.to_owned()), cx)
         {
@@ -206,6 +208,16 @@ impl Qrow {
         }
         self.assistant_state.loaded_threads.clear();
         self.assistant_state.pending_titles.clear();
+        let queued: Vec<_> = self
+            .assistant_state
+            .runs
+            .iter()
+            .filter(|(_, run)| !run.queued_messages.is_empty())
+            .map(|(thread, _)| thread.clone())
+            .collect();
+        for thread in queued {
+            self.restore_queued_messages(&thread, window, cx);
+        }
         while let Some(first) = self.assistant_state.first_messages.pop_front() {
             self.restore_first_message(first, window, cx);
         }
@@ -268,15 +280,7 @@ impl Qrow {
         {
             entries.remove(position);
         }
-        let target = match self
-            .assistant
-            .conversation(thread_id)
-            .and_then(|conversation| conversation.tab_id)
-        {
-            Some(tab) => ComposerTarget::Tab(tab),
-            None => ComposerTarget::Detached(thread_id.to_owned()),
-        };
-        self.restore_draft(target, text, window, cx);
+        self.restore_draft(self.conversation_target(thread_id), text, window, cx);
     }
 
     pub(super) fn load_older_assistant_messages(&mut self, cx: &mut Context<Self>) {
@@ -295,7 +299,7 @@ impl Qrow {
         {
             self.assistant_state.older_cursors.remove(&thread_id);
             self.assistant_state.notice = Some(AssistantNotice::warning(
-                "Codex repeated a conversation page. Older messages cannot be loaded.",
+                "The harness repeated a conversation page. Older messages cannot be loaded.",
             ));
             cx.notify();
             return;
@@ -447,6 +451,13 @@ impl Qrow {
             cx.notify();
             return;
         }
+        // A conversation of another harness keeps its title in Qrow only.
+        if !self.conversation_runs(&id) {
+            self.apply_assistant_rename(&id, &title, cx);
+            self.assistant_state.rename_form = None;
+            window.close_dialog(cx);
+            return;
+        }
         if !self.assistant_command(
             AssistantCommand::Rename {
                 thread_id: id.clone(),
@@ -455,7 +466,10 @@ impl Qrow {
             cx,
         ) {
             if let Some(form) = self.assistant_state.rename_form.as_mut() {
-                form.error = Some("Codex is not connected. Reconnect and try again.".into());
+                form.error = Some(format!(
+                    "{} is not connected. Reconnect and try again.",
+                    self.settings.assistant.harness.name()
+                ));
             }
             cx.notify();
             return;
@@ -537,16 +551,38 @@ impl Qrow {
                                 .label("Delete")
                                 .on_click(move |_, window, cx| {
                                     let _ = confirm.update(cx, |this, cx| {
-                                        this.assistant_command(
-                                            AssistantCommand::Delete(id.clone()),
-                                            cx,
-                                        );
+                                        this.delete_assistant_conversation(&id, window, cx);
                                     });
                                     window.close_dialog(cx);
                                 }),
                         ),
                 )
         });
+    }
+
+    /// Deletes a conversation in its harness. The harness that does not run
+    /// keeps a Codex conversation; Qrow deletes the files of a Claude Code
+    /// conversation itself.
+    fn delete_assistant_conversation(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.conversation_runs(id) {
+            self.assistant_command(AssistantCommand::Delete(id.to_owned()), cx);
+            return;
+        }
+        if self.conversation_harness(id) == AssistantHarness::Claude && !self.demo {
+            let session = id.to_owned();
+            cx.background_spawn(async move {
+                if let Err(error) = crate::assistant::delete_saved_session(&session) {
+                    eprintln!("Could not delete a Claude Code session: {error:#}");
+                }
+            })
+            .detach();
+        }
+        self.remove_assistant_conversation(id, window, cx);
     }
 
     /// Builds the actions of the pane header menu and the thread list context

@@ -1,7 +1,8 @@
 use super::setting_row::Rows;
 use super::*;
 use crate::model::{
-    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, MAX_TAB_SIZE, MIN_TAB_SIZE,
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, MAX_TAB_SIZE,
+    MIN_TAB_SIZE,
 };
 use crate::sql::KeywordCase;
 use crate::themes;
@@ -200,7 +201,9 @@ pub(super) struct SettingsForm {
     fonts: Vec<(FontSetting, SettingSelect, RefCell<String>)>,
     assistant_mode: SettingSelect,
     assistant_keyword_case: SettingSelect,
+    assistant_harness: SettingSelect,
     assistant_executable: Entity<InputState>,
+    claude_executable: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -377,13 +380,68 @@ impl Qrow {
                 }
             },
         ));
+        let harness = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    AssistantHarness::ALL
+                        .map(|harness| harness.name().to_owned())
+                        .to_vec(),
+                ),
+                AssistantHarness::ALL
+                    .iter()
+                    .position(|harness| *harness == self.settings.assistant.harness)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &harness,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, window, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(harness) = AssistantHarness::ALL
+                        .into_iter()
+                        .find(|harness| harness.name() == value)
+                {
+                    this.select_assistant_harness(harness, window, cx);
+                }
+            },
+        ));
+        let claude_executable = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Automatic")
+                .default_value(
+                    self.settings
+                        .assistant
+                        .claude_executable
+                        .clone()
+                        .unwrap_or_default(),
+                )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &claude_executable,
+            window,
+            |this, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                    let value = input.read(cx).value().trim().to_owned();
+                    let value = (!value.is_empty()).then_some(value);
+                    if this.settings.assistant.claude_executable != value {
+                        this.settings.assistant.claude_executable = value;
+                        this.changed(cx);
+                    }
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
             fonts,
             assistant_mode: mode,
             assistant_keyword_case: keyword_case,
+            assistant_harness: harness,
             assistant_executable: executable,
+            claude_executable,
             _subscriptions: subscriptions,
         });
     }
@@ -507,7 +565,7 @@ impl Qrow {
         window.open_alert_dialog(cx, move |alert, _, _| {
             let confirm = weak.clone();
             alert.title("Enable the assistant?")
-                .description("Qrow sends selected SQL, allowed connection and tab details, the assistant notes of connections, the cached names and comments of schemas, tables, views, and columns, and the descriptions, tests, and lineage of dbt projects to Codex. It sends them only when you send a message or when the assistant reads them with a tool. Codex is a separate installation and keeps conversation history locally. Demo threads can remain in Codex after a crash.")
+                .description("Qrow sends selected SQL, allowed connection and tab details, the assistant notes of connections, the cached names and comments of schemas, tables, views, and columns, and the descriptions, tests, and lineage of dbt projects to the harness that you select: Codex or Claude Code. It sends them only when you send a message or when the assistant reads them with a tool. Each harness is a separate installation with its own account, and it keeps conversation history locally. Qrow also keeps a copy of each conversation on this Mac. Demo threads can remain in the harness after a crash.")
                 .footer(DialogFooter::new().justify_end()
                     .child(Button::new("cancel-enable-assistant").label("Cancel").on_click(|_, window, cx| window.close_dialog(cx)))
                     .child(Button::new("confirm-enable-assistant").primary().label("Enable")
@@ -697,10 +755,17 @@ impl Qrow {
                             this.commit_number_setting(&input, setting, 0., window, cx);
                         }
                         if let Some(form) = &this.settings_form {
-                            let path = form.assistant_executable.read(cx).value().trim().to_owned();
-                            let path = (!path.is_empty()).then_some(path);
-                            if this.settings.assistant.codex_executable != path {
-                                this.settings.assistant.codex_executable = path;
+                            let read = |input: &Entity<InputState>| {
+                                let path = input.read(cx).value().trim().to_owned();
+                                (!path.is_empty()).then_some(path)
+                            };
+                            let codex = read(&form.assistant_executable);
+                            let claude = read(&form.claude_executable);
+                            if this.settings.assistant.codex_executable != codex
+                                || this.settings.assistant.claude_executable != claude
+                            {
+                                this.settings.assistant.codex_executable = codex;
+                                this.settings.assistant.claude_executable = claude;
                                 this.changed(cx);
                             }
                         }
@@ -834,6 +899,7 @@ fn appearance_page(form: &SettingsForm) -> SettingPage {
 
 fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -> SettingPage {
     let executable = form.assistant_executable.clone();
+    let claude_executable = form.claude_executable.clone();
     SettingPage::new("Assistant")
         .resettable(false)
         .group(
@@ -842,7 +908,7 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                 .item(setting_item(
                     "Enabled",
                     "Shows the assistant button and turns on ⌘J.",
-                    &["assistant", "enable", "codex", "ai"],
+                    &["assistant", "enable", "codex", "claude", "ai"],
                     move |_: &mut Window, _: &mut App| {
                         let owner = owner.clone();
                         Switch::new("enable-assistant")
@@ -854,6 +920,12 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                                 });
                             })
                     },
+                ))
+                .item(setting_item(
+                    "Harness",
+                    "Runs new conversations. A conversation keeps its harness.",
+                    &["assistant", "harness", "codex", "claude", "agent"],
+                    select_field(&form.assistant_harness, "Assistant Harness"),
                 ))
                 .item(setting_item(
                     "Query Execution",
@@ -872,6 +944,18 @@ fn assistant_page(form: &SettingsForm, owner: WeakEntity<Qrow>, enabled: bool) -
                     .id(setting_id("Codex Executable"))
                     .w_full()
                     .aria_label("Codex Executable")
+            },
+        )))
+        .group(SettingGroup::new().title("Claude Code").item(setting_item(
+            "Executable",
+            "Empty searches your PATH, Homebrew folders, and ~/.local/bin.",
+            &["assistant", "claude", "path", "binary"],
+            move |_: &mut Window, _: &mut App| {
+                Input::new(&claude_executable)
+                    .focus_ring(false)
+                    .id(setting_id("Claude Code Executable"))
+                    .w_full()
+                    .aria_label("Claude Code Executable")
             },
         )))
 }

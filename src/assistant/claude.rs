@@ -116,6 +116,8 @@ pub struct ClaudeHarness {
     next_source: u64,
     pids: ProcessIds,
     titles: Vec<TitleJob>,
+    /// Title request IDs stay unique across control processes.
+    next_title: u64,
     request_timeout: Duration,
     title_timeout: Duration,
     session_idle_timeout: Duration,
@@ -134,9 +136,7 @@ impl ClaudeHarness {
         anyhow::ensure!(cwd.is_dir(), "Claude Code working directory does not exist");
         check_version(executable)?;
         inbox.set_process_capacity(MAX_PENDING_MESSAGES);
-        let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")));
+        let config_dir = default_config_dir();
         let mut harness = Self {
             executable: executable.to_path_buf(),
             cwd: cwd.to_path_buf(),
@@ -147,6 +147,7 @@ impl ClaudeHarness {
             next_source: 1,
             pids,
             titles: Vec::new(),
+            next_title: 1,
             request_timeout: REQUEST_TIMEOUT,
             title_timeout: TITLE_TIMEOUT,
             session_idle_timeout: SESSION_IDLE_TIMEOUT,
@@ -252,6 +253,9 @@ impl ClaudeHarness {
     fn start_control(&mut self) -> Result<Value> {
         if let Some(process) = self.control.take() {
             self.stop_process(process);
+            // The title requests of the old process get no answer. Each one
+            // fails at the next input.
+            self.expire_all_titles();
         }
         let mut arguments = Self::common_arguments();
         arguments.push("--no-session-persistence".into());
@@ -473,8 +477,8 @@ impl ClaudeHarness {
             self.start_control()?;
         }
         let mut control = self.control.take().context("Claude Code is not running")?;
-        let request_id = format!("qrow-title-{}", control.next_request);
-        control.next_request += 1;
+        let request_id = format!("qrow-title-{}", self.next_title);
+        self.next_title += 1;
         let written = self.write(
             &mut control,
             &json!({
@@ -535,16 +539,19 @@ impl ClaudeHarness {
         let model = request.model.as_deref();
         let effort = request.reasoning_effort.as_deref();
         // `max` is only a launch option, so the process starts again for it.
+        // A session without a message is not saved yet, so it starts new.
+        let mut saved = true;
         if let Some(session) = self.sessions.get(&request.thread_id)
             && effort == Some("max")
             && session.effort.as_deref() != Some("max")
             && session.turn.is_none()
             && let Some(session) = self.sessions.remove(&request.thread_id)
         {
+            saved = session.started;
             self.stop_process(session.process);
         }
         if !self.sessions.contains_key(&request.thread_id) {
-            self.start_session(&request.thread_id, true, model, effort)?;
+            self.start_session(&request.thread_id, saved, model, effort)?;
         }
         let mut session = self
             .sessions
@@ -724,12 +731,13 @@ impl ClaudeHarness {
         self.finish_process(&mut process);
     }
 
+    /// Ends the process group of `process`, also when its leader already
+    /// exited, because a descendant can keep the output open. The process
+    /// stays registered until its threads end, so that a stop can still end
+    /// the group.
     fn finish_process(&mut self, process: &mut Process) {
-        if process.child.try_wait().ok().flatten().is_none() {
-            let _ = kill_process_tree(&mut process.child);
-        }
+        let _ = kill_process_tree(&mut process.child);
         let _ = process.child.wait();
-        self.pids.remove(process.child.id());
         for thread in [
             process.writer_thread.take(),
             process.stdout_thread.take(),
@@ -740,6 +748,7 @@ impl ClaudeHarness {
         {
             let _ = thread.join();
         }
+        self.pids.remove(process.child.id());
     }
 
     fn write(&self, process: &mut Process, value: &Value) -> Result<()> {
@@ -949,6 +958,16 @@ impl ClaudeHarness {
             .min()
     }
 
+    /// Makes every waiting title request expire now.
+    fn expire_all_titles(&mut self) {
+        let expired = Instant::now()
+            .checked_sub(self.title_timeout)
+            .unwrap_or_else(Instant::now);
+        for job in &mut self.titles {
+            job.started = expired;
+        }
+    }
+
     fn title_deadline(&self) -> Option<Instant> {
         self.titles
             .iter()
@@ -983,12 +1002,7 @@ impl ClaudeHarness {
             // waiting title request fails at the next input.
             let control = self.control.take()?;
             self.stop_process(control);
-            let expired = Instant::now()
-                .checked_sub(self.title_timeout)
-                .unwrap_or_else(Instant::now);
-            for job in &mut self.titles {
-                job.started = expired;
-            }
+            self.expire_all_titles();
             return self.expire_title_jobs(Instant::now());
         }
         let thread = self
@@ -1226,11 +1240,18 @@ fn read_lines(mut stdout: impl BufRead, sender: &ProcessSender) {
         let Ok(message) = serde_json::from_slice::<Value>(&bytes) else {
             continue;
         };
-        match sender.send(Ok(message)) {
-            Ok(()) => {}
-            // A streamed part can go; the completed message has all the text.
-            Err(SendError::Full) => {}
-            Err(SendError::Disconnected) => return,
+        // A full inbox waits for the worker, so Claude Code waits too. No
+        // message is lost: the full text of a reply comes from its parts.
+        let mut message = Ok(message);
+        loop {
+            match sender.send(message) {
+                Ok(()) => break,
+                Err((SendError::Full, pending)) => {
+                    message = pending;
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err((SendError::Disconnected, _)) => return,
+            }
         }
     }
 }
@@ -1419,6 +1440,23 @@ fn delete_session_files(config: &Path, id: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Deletes the saved session `id` of Claude Code without a running harness,
+/// for a Claude Code conversation while Codex runs.
+pub fn delete_saved_session(id: &str) -> Result<()> {
+    ClaudeHarness::ensure_identifier(id)?;
+    match default_config_dir() {
+        Some(config) => delete_session_files(&config, id),
+        None => Ok(()),
+    }
+}
+
+/// The configuration folder of Claude Code, where it saves sessions.
+fn default_config_dir() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
 }
 
 fn unix_now() -> i64 {

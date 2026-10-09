@@ -206,6 +206,11 @@ impl AssistantPane {
                                                         .id(SharedString::from(format!("assistant-thread-place-{id}")))
                                                         .test_support().aria_label(place.clone())
                                                         .flex_1().min_w_0().truncate().child(place))
+                                                    // A conversation of the other harness names it.
+                                                    .when(!qrow.conversation_runs(&id), |row| row.child(div()
+                                                        .id(SharedString::from(format!("assistant-thread-harness-{id}")))
+                                                        .test_support().aria_label(conversation.harness.name())
+                                                        .flex_shrink_0().child(conversation.harness.name())))
                                                     .when(closed, |row| row.child(div()
                                                         .id(SharedString::from(format!("assistant-thread-closed-{id}")))
                                                         .test_support().aria_label("Tab closed")
