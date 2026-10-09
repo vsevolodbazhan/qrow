@@ -623,6 +623,11 @@ impl Qrow {
                 if let Some(thread) = id.as_ref()
                     && matches!(operation, Operation::Start | Operation::Steer)
                 {
+                    // No turn starts, so the messages that wait for one go
+                    // back to the message field after the rejected message.
+                    if operation == Operation::Start {
+                        self.restore_queued_messages(thread, window, cx);
+                    }
                     self.restore_sent_message(thread, window, cx);
                     // The record stays unknown, so the next message sends
                     // the notes again.

@@ -189,9 +189,15 @@ fn claude_code_sign_in_happens_in_terminal(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppContext) {
     let (directory, codex) = FakeCodex::new();
-    let _claude = FakeClaude::beside(&directory);
-    let claude_executable = directory.path().join("claude");
-    let workspace = codex.workspace(with_connection());
+    let claude = FakeClaude::beside(&directory);
+    // Codex runs first. The synthetic Claude Code is configured before the
+    // switch, so the switch cannot start an installed Claude Code.
+    let mut settings = claude.select(codex.settings());
+    settings.assistant.harness = AssistantHarness::Codex;
+    let workspace = Workspace {
+        settings,
+        ..with_connection()
+    };
     let app = TestApp::launch_in(cx, directory, workspace, MemoryCredentials::default());
     app.open_assistant(cx);
     app.send(cx, "Say hello");
@@ -205,12 +211,7 @@ fn a_conversation_of_the_other_harness_shows_its_saved_copy(cx: &mut TestAppCont
 
     // Select Claude Code in Settings.
     app.dispatch(cx, OpenSettings);
-    app.fill_labelled(cx, "Search...", "claude");
-    app.fill(
-        cx,
-        "setting-claude-code-executable",
-        &claude_executable.display().to_string(),
-    );
+    app.fill_labelled(cx, "Search...", "harness");
     app.select(cx, "setting-assistant-harness", "Claude Code");
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");

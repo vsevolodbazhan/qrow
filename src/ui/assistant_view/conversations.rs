@@ -270,13 +270,17 @@ impl Qrow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(text) = self.thread_run_mut(thread_id).sent_messages.pop_front() else {
+        let run = self.thread_run_mut(thread_id);
+        // A queued message names its entry.
+        let starting = run.starting_entry.take();
+        let Some(text) = run.sent_messages.pop_front() else {
             return;
         };
         if let Some(entries) = self.assistant_state.transcripts.get_mut(thread_id)
-            && let Some(position) = entries
-                .iter()
-                .rposition(|entry| entry.speaker == Speaker::User && *entry.text() == text)
+            && let Some(position) = entries.iter().rposition(|entry| match starting {
+                Some(id) => entry.id == id,
+                None => entry.speaker == Speaker::User && *entry.text() == text,
+            })
         {
             entries.remove(position);
         }
