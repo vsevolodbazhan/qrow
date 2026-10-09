@@ -89,6 +89,11 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.
 - Worker tests check session coordination and bounded fetching.
+- Postgres transport tests use synthetic peers. They check cancellation during
+  SSL negotiation, the TLS handshake, authentication, and socket registration.
+  They check fragmented messages, rejection of a large declared message before
+  body allocation, cancellation deadlines for both sockets, and the server's
+  ReadyForQuery confirmation before session reuse after a SQL error.
 - Property tests check SQL validation with arbitrary Unicode and quoting.
   Keep the Proptest regression seeds that a fixed failure adds.
 - Export tests use the `csv` crate to check text syntax. The Kyuubi,
