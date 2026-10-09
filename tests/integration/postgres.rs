@@ -392,3 +392,54 @@ fn retained_cancellation_handles_are_safe_after_session_close_or_drop() -> Resul
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn export_captures_type_modifiers_and_settings_without_changing_the_session() -> Result<()> {
+    let mut session = connect();
+    complete(&mut *session, "SET DateStyle = 'SQL, DMY'")?;
+    complete(&mut *session, "SET IntervalStyle = 'sql_standard'")?;
+    complete(&mut *session, "SET TimeZone = 'Europe/Paris'")?;
+    complete(
+        &mut *session,
+        "SELECT 1.20::numeric(18,2), 1000::numeric(3,-2), 0.00123::numeric(3,5), TIMESTAMP(3) '2026-10-09 01:02:03.123', TIMESTAMPTZ(6) '2026-10-09 01:02:03+02', DATE '2026-10-09'",
+    )?;
+    let columns = session.columns()?;
+    assert_eq!(
+        columns
+            .iter()
+            .map(|column| column.data_type.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "numeric(18,2)",
+            "numeric(3,-2)",
+            "numeric(3,5)",
+            "timestamp(3)",
+            "timestamptz(6)",
+            "date"
+        ]
+    );
+    let context = session.export_context();
+    assert!(!context.iso_dates());
+    let settings = context.postgres.unwrap();
+    assert_eq!(settings.date_style, "SQL, DMY");
+    assert_eq!(settings.interval_style, "sql_standard");
+    assert_eq!(settings.time_zone, "Europe/Paris");
+    assert_eq!(session.fetch(1)?.rows[0][5].as_deref(), Some("09/10/2026"));
+    complete(&mut *session, "BEGIN")?;
+    assert!(complete(&mut *session, "SELECT missing_column").is_err());
+    complete(&mut *session, "ROLLBACK")?;
+    complete(
+        &mut *session,
+        "SELECT current_setting('DateStyle'), current_setting('IntervalStyle'), current_setting('TimeZone')",
+    )?;
+    assert_eq!(
+        session.fetch(1)?.rows[0],
+        vec![
+            Some("SQL, DMY".into()),
+            Some("sql_standard".into()),
+            Some("Europe/Paris".into())
+        ]
+    );
+    Ok(())
+}

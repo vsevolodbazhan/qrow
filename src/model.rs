@@ -1726,7 +1726,7 @@ impl Default for Workspace {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Column {
     pub name: String,
     pub data_type: String,

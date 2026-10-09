@@ -93,8 +93,10 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   Keep the Proptest regression seeds that a fixed failure adds.
 - Export tests use the `csv` crate to check text syntax. The Kyuubi,
   Postgres, and Trino suites also read exported text with the pinned DuckDB
-  Python package. These checks use `allow_quoted_nulls=false` to distinguish
-  nulls from empty strings and literal null markers. Run them through
+  Python package. CSV checks use `allow_quoted_nulls=false` to distinguish
+  nulls from empty strings and literal null markers. Parquet checks cover all
+  three compression choices and typed decimals, binary values, dates, and
+  timestamps. Run them through
   `./qtest` to use the Python dependencies in `uv.lock`.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.

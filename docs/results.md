@@ -147,10 +147,10 @@ decimal values to floating-point numbers.
 
 Exports share immutable preview batches. Concurrent exports can retain up
 to 512 MiB of source row storage. Shared batches count once. Encoding writes
-cell slices directly; it does not copy a wide cell into an escape buffer.
+cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
 
-Parquet and export of all server rows are not available yet.
+Export of all server rows is not available yet.
 
 ### Markdown
 
@@ -186,6 +186,47 @@ as server text strings.
 
 Repeated column names get numeric suffixes, such as `id_2`. Existing names
 keep their names. Suffixes do not overwrite an existing column.
+
+## Parquet
+
+Select **Parquet** to save a binary file. **Copy** is disabled for this format.
+Choose **Snappy**, **Gzip**, or **None** for compression. Snappy is the default.
+
+**Typed** column types preserve booleans, integers, floating-point values,
+exact decimals, dates, timestamps, and binary values. Nested values remain
+text. Repeated column names follow the JSON naming rules. **Text** column
+types keep every non-null value as server text.
+
+**Numeric As** defaults to **Decimal (exact)**. For Postgres `numeric`, the
+writer checks all downloaded values before it chooses one common precision
+and scale. For example, `9999` and `1.2345` use `DECIMAL(8,4)`.
+A numeric column remains text if its common precision exceeds 38, its scale
+is outside the declared precision, all values are null, or a special value
+such as `NaN` occurs. **Double (approximate)** can change numeric values.
+Use **Text** to keep their exact server representation.
+
+Timestamps with up to 6 fractional digits use microseconds. Timestamps with
+7 to 9 digits use nanoseconds. Wall-clock timestamps keep their local date
+and time. Timestamps with a time zone represent UTC instants. Named zones
+use their time-zone rules. Hive `TIMESTAMP LOCAL TZ` also needs an offset
+or zone in the result text. A missing or unexpected zone stops the export.
+An unresolved daylight-saving gap or overlap
+stops the export. Precision above 9, an unsupported date, or a timestamp
+outside the selected integer range also stops the export. Choose **Text**
+column types to keep such values without rounding.
+
+For Postgres results, the connector records DateStyle, IntervalStyle, and
+TimeZone before execution. It does not change those settings. When the result
+uses a non-ISO DateStyle, dates and timestamps remain text. The export form
+shows this condition.
+
+The writer uses Parquet 1.0 data pages, dictionaries, and statistics. It
+limits each row group to approximately 64 MiB of source values. One larger
+row can exceed this target. The writer prepares one column at a time. Row-group metadata stays in memory
+until the file closes and grows with the number of row groups. These
+limits do not cap total application memory. File metadata contains the
+application version and no query text. A failed or cancelled save preserves
+an existing destination file.
 
 ## Value representation
 
