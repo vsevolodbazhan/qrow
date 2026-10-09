@@ -26,7 +26,10 @@ impl Qrow {
             window.push_notification("Choose a connection before running SQL.", cx);
             return;
         };
-        if profile.database_type != DatabaseType::Kyuubi {
+        if !matches!(
+            profile.database_type,
+            DatabaseType::Kyuubi | DatabaseType::Postgres
+        ) {
             return;
         }
         let sql = match self.selected_tab_sql(index, window, cx) {
@@ -92,7 +95,10 @@ impl Qrow {
 
     pub(super) fn export_result_intent(&self, tab: &Tab) -> Option<Intent> {
         let original = tab.result_profile.as_ref()?;
-        if original.database_type != DatabaseType::Kyuubi {
+        if !matches!(
+            original.database_type,
+            DatabaseType::Kyuubi | DatabaseType::Postgres
+        ) {
             return None;
         }
         let profile = self

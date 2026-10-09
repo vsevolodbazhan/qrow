@@ -290,7 +290,7 @@ cursor.
 
 ## Run and export
 
-For Kyuubi, open the menu beside **Run**, then choose **Run and export…**. Select a format and
+For Kyuubi or Postgres, open the menu beside **Run**, then choose **Run and export…**. Select a format and
 destination. The form captures the selected SQL or the statement at the
 cursor, and its connection, before the save panel opens. It shows that SQL
 and connection for review. Cancelling the save panel submits no SQL.
@@ -301,7 +301,7 @@ The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
 and file receive all rows from the same fetch sequence. The preview is
 complete only when the whole result fits in it.
 
-For an incomplete Kyuubi result, choose **Run again and export (all rows)**
+For an incomplete Kyuubi or Postgres result, choose **Run again and export (all rows)**
 in the Rows list to submit its original SQL. Edited editor text does not
 change this choice. This is also the way to replace a consumed or closed
 cursor. A completed spool can still be saved without a new execution.
@@ -323,7 +323,10 @@ A result with columns and no rows produces a valid empty file. A successful
 statement with no result set shows a message and writes no file. It is not
 submitted again to obtain columns. A failed download requires an explicit
 rerun. A failed file write with a complete spool uses **Retry…** without SQL.
-Direct execution export for Postgres and Trino is not available yet.
+Postgres exports keep exact numeric text and the session's date settings.
+For typed Parquet, non-ISO dates and timestamps remain text. The form shows
+this rule before submission. It shows the result's DateStyle warning when
+that setting is known. Direct execution export for Trino is not available yet.
 
 ## Value representation
 
