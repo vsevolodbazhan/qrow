@@ -5429,6 +5429,8 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "tree-sitter-sequel",
+ "unicode-segmentation",
+ "unicode-width",
  "url",
  "uuid",
  "zeroize",

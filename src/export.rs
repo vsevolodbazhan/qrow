@@ -3,7 +3,10 @@
 
 pub mod csv;
 mod jobs;
+pub mod json;
+pub mod markdown;
 mod rows;
+pub(crate) mod value;
 pub use jobs::{Jobs, Writer};
 pub use rows::Rows;
 
@@ -20,8 +23,79 @@ use std::{
 #[serde(default)]
 #[non_exhaustive]
 pub struct Settings {
+    pub format: Format,
     pub csv: csv::CsvOptions,
+    pub markdown: markdown::Options,
+    pub json: json::Options,
     pub directory: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Format {
+    #[default]
+    Csv,
+    Markdown,
+    Json,
+    JsonLines,
+}
+
+impl Format {
+    pub const ALL: [Self; 4] = [Self::Csv, Self::Markdown, Self::Json, Self::JsonLines];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Csv => "CSV / TSV",
+            Self::Markdown => "Markdown",
+            Self::Json => "JSON array",
+            Self::JsonLines => "JSON Lines",
+        }
+    }
+}
+
+impl Settings {
+    pub fn extension(&self) -> &'static str {
+        match self.format {
+            Format::Csv => self.csv.extension(),
+            Format::Markdown => "md",
+            Format::Json => "json",
+            Format::JsonLines => "jsonl",
+        }
+    }
+    pub fn validate(&self) -> io::Result<()> {
+        match self.format {
+            Format::Csv => self.csv.validate(),
+            Format::Markdown
+                if self.markdown.style == markdown::Style::CodeBlock
+                    && !(1..=1000).contains(&self.markdown.max_cell_width) =>
+            {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Cell width must be between 1 and 1000.",
+                ))
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Write a downloaded snapshot with the selected text format.
+pub fn write(
+    out: &mut impl Write,
+    table: &Table<'_>,
+    settings: &Settings,
+    cancel: &AtomicBool,
+) -> io::Result<usize> {
+    settings.validate()?;
+    match settings.format {
+        Format::Csv => write_csv(out, table, &settings.csv, cancel),
+        Format::Markdown => markdown::write(out, table, &settings.markdown, cancel),
+        Format::Json | Format::JsonLines => json::write(
+            out,
+            table,
+            &settings.json,
+            settings.format == Format::JsonLines,
+            cancel,
+        ),
+    }
 }
 
 /// What a column holds, as far as a format needs to know. Each connector
@@ -204,17 +278,7 @@ pub fn write_csv(
     options: &csv::CsvOptions,
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
-    if table.columns.is_empty()
-        || table.row_indices.end > table.rows.len()
-        || table.row_indices.start > table.row_indices.end
-        || table.column_indices.is_empty()
-        || *table.column_indices.end() >= table.columns.len()
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Invalid export range",
-        ));
-    }
+    validate_table(table)?;
     check_cancelled(cancel)?;
     let columns = table.export_columns();
     let mut writer = csv::CsvWriter::new(out, options, &columns);
@@ -226,6 +290,21 @@ pub fn write_csv(
     writer.finish()?;
     check_cancelled(cancel)?;
     Ok(table.row_count())
+}
+
+fn validate_table(table: &Table<'_>) -> io::Result<()> {
+    if table.columns.is_empty()
+        || table.row_indices.end > table.rows.len()
+        || table.row_indices.start > table.row_indices.end
+        || table.column_indices.is_empty()
+        || *table.column_indices.end() >= table.columns.len()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Invalid export range",
+        ));
+    }
+    Ok(())
 }
 
 /// Writes a file through a temporary file in the same directory, so the

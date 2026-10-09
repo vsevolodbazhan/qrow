@@ -1,6 +1,6 @@
 use super::*;
 use crate::export::{
-    self, Snapshot,
+    self, Format, Snapshot,
     csv::{CsvOptions, LineEnding, NullMarker, Preset, Separator},
 };
 use gpui_kit::base::FocusableExt as _;
@@ -34,7 +34,13 @@ struct ExportDialog {
     controls: Vec<Choice>,
     choices: Vec<Vec<String>>,
     null_text: Entity<InputState>,
+    cell_width: Entity<InputState>,
+    large_copy: bool,
     preview: String,
+    preview_pending: bool,
+    preview_generation: u64,
+    preview_cancel: Arc<AtomicBool>,
+    preview_task: Option<Task<()>>,
     error: Option<String>,
     running: bool,
     cancel: Arc<AtomicBool>,
@@ -46,6 +52,7 @@ struct ExportDialog {
 impl Drop for ExportDialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.preview_cancel.store(true, Ordering::Relaxed);
     }
 }
 
@@ -85,7 +92,7 @@ impl Qrow {
         self.settings.export = settings;
         for tab in &self.tabs {
             tab.table.update(cx, |table, _| {
-                table.delegate_mut().csv = self.settings.export.csv.clone();
+                table.delegate_mut().export = self.settings.export.clone();
             });
         }
         self.changed(cx);
@@ -156,25 +163,15 @@ impl ExportDialog {
                 .map(|s| s.label().to_owned())
                 .chain(["Custom".into()])
                 .collect(),
+            Format::ALL
+                .iter()
+                .map(|format| format.label().to_owned())
+                .collect(),
+            vec!["Table".into(), "Code block".into()],
         ];
         let selected = selection.is_some();
         let options = settings.csv.clone();
-        let indices = [
-            usize::from(selected),
-            preset_index(&options),
-            Separator::ALL
-                .iter()
-                .position(|s| *s == options.separator)
-                .unwrap(),
-            LineEnding::ALL
-                .iter()
-                .position(|s| *s == options.line_ending)
-                .unwrap(),
-            NullMarker::ALL
-                .iter()
-                .position(|s| *s == options.null)
-                .unwrap_or(3),
-        ];
+        let indices = option_indices(selected, &settings);
         let controls: Vec<_> = choices
             .iter()
             .zip(indices)
@@ -194,6 +191,9 @@ impl ExportDialog {
                 NullMarker::Custom(value) => value.clone(),
                 _ => String::new(),
             })
+        });
+        let cell_width = cx.new(|cx| {
+            InputState::new(window, cx).default_value(settings.markdown.max_cell_width.to_string())
         });
         let mut subscriptions: Vec<_> = controls
             .iter()
@@ -222,6 +222,14 @@ impl ExportDialog {
                                     NullMarker::Custom(this.null_text.read(cx).value().to_string())
                                 })
                         }
+                        5 => this.settings.format = Format::ALL[choice],
+                        6 => {
+                            this.settings.markdown.style = if choice == 0 {
+                                export::markdown::Style::Table
+                            } else {
+                                export::markdown::Style::CodeBlock
+                            }
+                        }
                         _ => unreachable!(),
                     }
                     this.sync(window, cx);
@@ -240,6 +248,17 @@ impl ExportDialog {
                 }
             },
         ));
+        subscriptions.push(cx.subscribe_in(
+            &cell_width,
+            window,
+            |this, input, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.settings.markdown.max_cell_width =
+                        input.read(cx).value().parse().unwrap_or(0);
+                    this.sync(window, cx);
+                }
+            },
+        ));
         let mut this = Self {
             source,
             selection,
@@ -250,7 +269,13 @@ impl ExportDialog {
             controls,
             choices,
             null_text,
+            cell_width,
+            large_copy: false,
             preview: String::new(),
+            preview_pending: false,
+            preview_generation: 0,
+            preview_cancel: Arc::new(AtomicBool::new(false)),
+            preview_task: None,
             error: None,
             running: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -258,7 +283,7 @@ impl ExportDialog {
             dialog: None,
             _subscriptions: subscriptions,
         };
-        this.update_preview();
+        this.update_preview(cx);
         this
     }
 
@@ -270,48 +295,52 @@ impl ExportDialog {
         }
     }
 
-    fn update_preview(&mut self) {
-        if let Err(error) = self.settings.csv.validate() {
+    fn update_preview(&mut self, cx: &mut Context<Self>) {
+        self.preview_cancel.store(true, Ordering::Relaxed);
+        self.preview_task = None;
+        self.preview_generation = self.preview_generation.wrapping_add(1);
+        self.preview.clear();
+        self.preview_pending = false;
+        if let Err(error) = self.settings.validate() {
             self.error = Some(error.to_string());
             self.preview.clear();
             return;
         }
-        let mut table = self.source.table(self.range());
-        table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
-        let mut out = export::LimitedWriter::new(8192);
-        let truncated = export::write_csv(
-            &mut out,
-            &table,
-            &self.settings.csv,
-            &AtomicBool::new(false),
-        )
-        .is_err();
-        self.preview = String::from_utf8_lossy(&out.into_bytes())
-            .trim_start_matches('\u{feff}')
-            .to_owned();
-        if truncated {
-            self.preview.push_str("\n…");
-        }
+        self.preview_cancel = Arc::new(AtomicBool::new(false));
+        self.preview_pending = true;
+        let cancel = self.preview_cancel.clone();
+        let source = self.source.clone();
+        let range = self.range();
+        let settings = self.settings.clone();
+        let generation = self.preview_generation;
+        let task = cx.background_executor().spawn(async move {
+            let mut table = source.table(range);
+            table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
+            let mut out = export::LimitedWriter::new(8192);
+            let truncated = export::write(&mut out, &table, &settings, &cancel).is_err();
+            let mut preview = String::from_utf8_lossy(&out.into_bytes())
+                .trim_start_matches('\u{feff}')
+                .to_owned();
+            if truncated {
+                preview.push_str("\n…");
+            }
+            preview
+        });
+        self.preview_task = Some(cx.spawn(async move |weak, cx| {
+            let preview = task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.preview_generation == generation {
+                    this.preview = preview;
+                    this.preview_pending = false;
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let options = self.settings.csv.clone();
-        let indices = [
-            usize::from(self.selected),
-            preset_index(&options),
-            Separator::ALL
-                .iter()
-                .position(|s| *s == options.separator)
-                .unwrap(),
-            LineEnding::ALL
-                .iter()
-                .position(|s| *s == options.line_ending)
-                .unwrap(),
-            NullMarker::ALL
-                .iter()
-                .position(|s| *s == options.null)
-                .unwrap_or(3),
-        ];
+        let indices = option_indices(self.selected, &self.settings);
+        self.large_copy = false;
         for (control, index) in self.controls.iter().zip(indices) {
             control.update(cx, |select, cx| {
                 select.set_selected_index(
@@ -322,7 +351,7 @@ impl ExportDialog {
             });
         }
         self.error = None;
-        self.update_preview();
+        self.update_preview(cx);
         cx.notify();
     }
 
@@ -330,7 +359,7 @@ impl ExportDialog {
         if self.running {
             return;
         }
-        if let Err(error) = self.settings.csv.validate() {
+        if let Err(error) = self.settings.validate() {
             self.error = Some(error.to_string());
             cx.notify();
             return;
@@ -341,7 +370,7 @@ impl ExportDialog {
         let cancel = self.cancel.clone();
         let source = self.source.clone();
         let range = self.range();
-        let options = self.settings.csv.clone();
+        let options = self.settings.clone();
         let jobs = cx.global::<export::Jobs>().clone();
         let directory = self
             .settings
@@ -385,15 +414,17 @@ impl ExportDialog {
                     let table = source.table(range);
                     if let Some(path) = output_path {
                         export::save(&path, &cancel, |out| {
-                            export::write_csv(out, &table, &options, &cancel)
+                            export::write(out, &table, &options, &cancel)
                         })
                         .map(|count| (count, None))
                     } else {
                         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-                        let count = export::write_csv(&mut out, &table, &options, &cancel)?;
+                        let count = export::write(&mut out, &table, &options, &cancel)?;
                         Ok((
                             count,
-                            Some(String::from_utf8(out.into_bytes()).expect("CSV is UTF-8")),
+                            Some(
+                                String::from_utf8(out.into_bytes()).expect("Text export is UTF-8"),
+                            ),
                         ))
                     }
                 })
@@ -420,6 +451,14 @@ impl ExportDialog {
         match result {
             Ok((count, text)) => {
                 if let Some(text) = text {
+                    if self.settings.format == Format::Markdown
+                        && text.chars().count() > 40_000
+                        && !self.large_copy
+                    {
+                        self.large_copy = true;
+                        cx.notify();
+                        return;
+                    }
                     if !request
                         .as_ref()
                         .is_some_and(|request| request.is_current(cx))
@@ -464,6 +503,31 @@ impl ExportDialog {
     }
 }
 
+fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 7] {
+    let options = &settings.csv;
+    [
+        usize::from(selected),
+        preset_index(options),
+        Separator::ALL
+            .iter()
+            .position(|value| *value == options.separator)
+            .unwrap(),
+        LineEnding::ALL
+            .iter()
+            .position(|value| *value == options.line_ending)
+            .unwrap(),
+        NullMarker::ALL
+            .iter()
+            .position(|value| *value == options.null)
+            .unwrap_or(3),
+        Format::ALL
+            .iter()
+            .position(|value| *value == settings.format)
+            .unwrap(),
+        usize::from(settings.markdown.style == export::markdown::Style::CodeBlock),
+    ]
+}
+
 fn preset_index(options: &CsvOptions) -> usize {
     options
         .preset()
@@ -495,16 +559,27 @@ fn export_filename(title: &str, extension: &str) -> String {
 impl Render for ExportDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.running;
-        let invalid = self.settings.csv.validate().is_err();
-        let labels = ["Rows", "Preset", "Separator", "Line Ending", "Null Values"];
+        let invalid = self.settings.validate().is_err();
+        let format = self.settings.format;
+        let labels = [
+            "Rows",
+            "Preset",
+            "Separator",
+            "Line Ending",
+            "Null Values",
+            "Format",
+            "Style",
+        ];
         let ids = [
             "export-rows",
             "export-preset",
             "export-separator",
             "export-line-ending",
             "export-null",
+            "export-format",
+            "export-markdown-style",
         ];
-        let options = self.settings.csv.clone();
+        let options = &self.settings.csv;
         let flags = [
             ("export-header", "Include column names", options.header),
             (
@@ -519,79 +594,169 @@ impl Render for ExportDialog {
                 options.escape_formulas,
             ),
         ];
-        let table = self.source.table(self.range());
-        let one_column_null = table.column_indices.count() == 1 && options.null.as_str().is_empty();
+        let json_flags = [
+            (
+                "export-json-typed",
+                "Typed values",
+                self.settings.json.typed,
+            ),
+            (
+                "export-json-pretty",
+                "Pretty output",
+                self.settings.json.pretty,
+            ),
+            (
+                "export-json-decimals",
+                "Decimals as numbers",
+                self.settings.json.decimals_as_numbers,
+            ),
+        ];
+        let one_column_null = format == Format::Csv
+            && self.source.table(self.range()).column_indices.count() == 1
+            && options.null.as_str().is_empty();
+        let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
+        let preview = if self.preview_pending {
+            "Preparing preview…".to_owned()
+        } else {
+            self.preview.clone()
+        };
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children(self.controls.iter().enumerate().map(|(index, control)| {
-                field().label(labels[index]).child(Select::new(control).id(ids[index]).focus_ring(false)
-                    .disabled(busy || index == 0 && self.selection.is_none()).w_full().accessibility_label(labels[index]))
-            })))
-            .when(matches!(options.null, NullMarker::Custom(_)), |view| view.child(
-                field().label("Null Marker").description("Exclude separators, quotes, and line breaks.")
-                    .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false)
-                        .disabled(busy).aria_label("Null Marker"))))
-            .child(v_flex().gap_2().children(flags.into_iter().enumerate().map(|(index, (id, label, checked))| {
-                Checkbox::new(id).label(label).checked(checked).disabled(busy)
-                    .on_click(cx.listener(move |this, checked, window, cx| {
-                        match index { 0 => this.settings.csv.header = *checked,
-                            1 => this.settings.csv.byte_order_mark = *checked,
-                            2 => this.settings.csv.quote_all = *checked,
-                            3 => this.settings.csv.escape_formulas = *checked,
-                            _ => unreachable!() }
-                        this.sync(window, cx);
-                    }))
-            })))
+            .child(v_form().columns(2).children([5,0,1,2,3,4,6].into_iter()
+                .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6)
+                .map(|index| field().label(labels[index]).child(
+                    Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
+                        .disabled(busy || index == 0 && self.selection.is_none()).w_full().accessibility_label(labels[index])))))
+            .when(custom_null, |view| view.child(field().label("Null Marker")
+                .description("Exclude separators, quotes, and line breaks.")
+                .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
+            .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
+                flags.into_iter().enumerate().map(|(index,(id,label,checked))|
+                    Checkbox::new(id).label(label).checked(checked).disabled(busy)
+                        .on_click(cx.listener(move |this,checked,window,cx| {
+                            match index {0 => this.settings.csv.header = *checked,
+                                1 => this.settings.csv.byte_order_mark = *checked,
+                                2 => this.settings.csv.quote_all = *checked,
+                                3 => this.settings.csv.escape_formulas = *checked, _ => unreachable!()}
+                            this.sync(window,cx);
+                        }))))))
+            .when(format == Format::Markdown, |view| view
+                .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
+                    field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")
+                        .child(Input::new(&self.cell_width).id("export-cell-width").focus_ring(false).disabled(busy).aria_label("Maximum Cell Width"))))
+                .child(Checkbox::new("export-row-numbers").label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
+                    .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);}))))
+            .when(matches!(format, Format::Json | Format::JsonLines), |view| view.child(v_flex().gap_2().children(
+                json_flags.into_iter().enumerate().map(|(index,(id,label,checked))|
+                    Checkbox::new(id).label(label).checked(checked).disabled(busy || index == 1 && format == Format::JsonLines || index == 2 && !self.settings.json.typed)
+                        .on_click(cx.listener(move |this,checked,window,cx| {
+                            match index {0 => this.settings.json.typed = *checked, 1 => this.settings.json.pretty = *checked,
+                                2 => this.settings.json.decimals_as_numbers = *checked, _ => unreachable!()}
+                            this.sync(window,cx);
+                        }))))))
             .when(self.incomplete, |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
                 .child("Only the downloaded rows are included. More rows may be available.")))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
                 .child("Empty null rows can be skipped by CSV readers. Choose a non-empty null marker.")))
+            .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
+                .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
+                .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
             .child(v_flex().gap_2().child("Preview")
-                .child(div().id("export-preview").test_support().role(Role::Label).aria_label(self.preview.clone())
+                .child(div().id("export-preview").test_support().role(Role::Label).aria_label(preview.clone())
                     .w_full().max_h_32().overflow_hidden().p_2().rounded(cx.theme().radius)
-                    .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs()
-                    .child(self.preview.clone())))
-            .when_some(self.error.clone(), |view, error| view.child(div().id("export-error").test_support()
-                .role(Role::Alert).aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
+                    .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(preview)))
+            .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
+                .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
             .child(h_flex().gap_2().child(div().flex_1())
                 .when(busy, |row| row.child(div().text_sm().child("Exporting…")))
-                .child(Button::new("export-cancel").label("Cancel").on_click(cx.listener(|this, _, window, cx| {
-                    this.cancel.store(true, Ordering::Relaxed);
-                    window.close_dialog(cx);
+                .child(Button::new("export-cancel").label("Cancel").on_click(cx.listener(|this,_,window,cx| {
+                    this.cancel.store(true,Ordering::Relaxed); window.close_dialog(cx);
                 })))
-                .child(Button::new("export-copy").label("Copy").disabled(busy || invalid)
-                    .on_click(cx.listener(|this, _, window, cx| this.start(false, window, cx))))
+                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid)
+                    .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
                 .child(Button::new("export-save").label("Save…").primary().disabled(busy || invalid)
-                    .on_click(cx.listener(|this, _, window, cx| this.start(true, window, cx)))))
+                    .on_click(cx.listener(|this,_,window,cx| this.start(true,window,cx)))))
     }
 }
 
 /// Context-menu copy shares the same writer and clipboard bound as the dialog.
-pub(super) fn copy_csv(
+pub(super) fn copy_format(
     source: Arc<Snapshot>,
     range: Option<RangeSelection>,
-    options: CsvOptions,
+    options: export::Settings,
     window: &mut Window,
     cx: &mut App,
 ) {
     let request = CopyRequest::new(cx);
+    let format = options.format;
     let cancel = Arc::new(AtomicBool::new(false));
     let guard = cx.global::<export::Jobs>().register(cancel.clone());
     let task = cx.background_executor().spawn(async move {
         let _guard = guard;
         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-        export::write_csv(&mut out, &source.table(range), &options, &cancel)?;
-        Ok::<_, std::io::Error>(String::from_utf8(out.into_bytes()).expect("CSV is UTF-8"))
+        export::write(&mut out, &source.table(range), &options, &cancel)?;
+        Ok::<_, std::io::Error>(String::from_utf8(out.into_bytes()).expect("Text export is UTF-8"))
     });
     let window = window.window_handle();
     cx.spawn(async move |cx| {
         let result = task.await;
         let _ = cx.update_window(window, |_, window, cx| match result {
-            Ok(text) if request.is_current(cx) => copy_text(text, cx),
+            Ok(text) if request.is_current(cx) => {
+                if format == Format::Markdown && text.chars().count() > 40_000 {
+                    let pending = std::rc::Rc::new(std::cell::RefCell::new(Some((request, text))));
+                    window.open_alert_dialog(cx, move |alert, _, _| {
+                        let button_pending = pending.clone();
+                        let enter_pending = pending.clone();
+                        alert
+                            .title("Large Markdown")
+                            .description(
+                                "Markdown exceeds 40,000 characters. It can exceed message limits.",
+                            )
+                            .on_ok(move |_, window, cx| {
+                                confirm_markdown_copy(&enter_pending, window, cx);
+                                true
+                            })
+                            .footer(
+                                DialogFooter::new()
+                                    .justify_end()
+                                    .child(
+                                        Button::new("markdown-copy-cancel")
+                                            .label("Cancel")
+                                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                                    )
+                                    .child(
+                                        Button::new("markdown-copy-anyway")
+                                            .label("Copy anyway")
+                                            .primary()
+                                            .on_click(move |_, window, cx| {
+                                                confirm_markdown_copy(&button_pending, window, cx);
+                                                window.close_dialog(cx);
+                                            }),
+                                    ),
+                            )
+                    });
+                } else {
+                    copy_text(text, cx);
+                }
+            }
             Ok(_) => {}
             Err(error) => window.push_notification(error.to_string(), cx),
         });
     })
     .detach();
+}
+
+fn confirm_markdown_copy(
+    pending: &std::cell::RefCell<Option<(CopyRequest, String)>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some((request, text)) = pending.borrow_mut().take() {
+        if request.is_current(cx) {
+            copy_text(text, cx);
+        } else {
+            window.push_notification("The clipboard changed. Choose Copy to try again.", cx);
+        }
+    }
 }
 
 #[derive(Default)]
