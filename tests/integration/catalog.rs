@@ -1749,10 +1749,15 @@ fn automatic_refreshes_use_the_preferred_member_while_it_is_live() {
     // Both members are live: the preferred one refreshes.
     let server = warehouse();
     let mut h = Harness::with_config(server.clone(), config.clone(), None, minute);
-    h.worker.set_live(small.id, true);
     h.worker.set_live(large.id, true);
+    h.worker.set_live(small.id, true);
     h.wait(|h| h.catalog().fetched_at.is_some() && h.status.is_idle());
-    assert_eq!(users(&server)[0], "user-large");
+    let first = users(&server).len();
+    h.wait(|h| users(&server).len() > first && h.status.is_idle());
+    assert!(
+        users(&server).iter().all(|user| user == "user-large"),
+        "every automatic refresh must use the live preferred member"
+    );
     h.worker.shutdown();
 
     // Without the preferred member, the first live member refreshes.
