@@ -89,14 +89,16 @@ impl Worker {
         })?;
         let download = Download::pending(cancel.clone());
         let weak = Arc::downgrade(&download);
-        let guard = jobs.register_with_cancel(
+        let guard = jobs.register_for_profile(
             cancel,
             Some(Arc::new(move || {
                 if let Some(download) = weak.upgrade() {
                     download.cancel_in_background();
                 }
             })),
-        );
+            profile.id,
+            profile.transfer.settings().concurrent_exports,
+        )?;
         let mut active = self.download.lock().unwrap();
         if active.is_some() || self.stopped.load(Ordering::SeqCst) {
             return Err(io::Error::other("The query worker is busy or stopped."));
@@ -216,6 +218,10 @@ impl Runner {
             request.download.cancel_flag(),
         )?;
         control.check()?;
+        self.session
+            .as_mut()
+            .unwrap()
+            .configure_export(&request.profile.transfer)?;
         self.emit(Event::Running);
         let started = Instant::now();
         self.execution = Some(ExecutionTiming {
@@ -225,7 +231,12 @@ impl Runner {
             execution_completed: false,
         });
         *self.target.lock().unwrap() = None;
-        let target = match self.session.as_mut().unwrap().execute_export(&request.sql) {
+        let target = match self
+            .session
+            .as_mut()
+            .unwrap()
+            .execute_export_controlled(&request.sql, &control)
+        {
             Ok(target) => target,
             Err(error) => {
                 if error.is::<QueryError>() {
@@ -310,17 +321,24 @@ impl Runner {
         let mut preview_rows = 0usize;
         let mut preview_bytes = 0usize;
         let mut preview_full = false;
+        let transfer_started = Instant::now();
+        let initial_bytes = spool.bytes();
         let result = (|| -> Result<()> {
             loop {
                 export::check_cancelled(request.download.cancelled())?;
                 let _fetch_memory = producer.reserve_fetch()?;
-                let mut batch = self.session.as_mut().unwrap().fetch(PREVIEW_ROWS)?;
+                let requested = self.session.as_ref().unwrap().export_fetch_rows();
+                anyhow::ensure!(
+                    (1..=crate::model::transfer::MAX_FETCH_ROWS).contains(&requested),
+                    "Invalid export fetch count"
+                );
+                let mut batch = self.session.as_mut().unwrap().fetch(requested)?;
                 request
                     .download
                     .set_progress_percentage(self.session.as_ref().unwrap().progress_percentage());
                 export::check_cancelled(request.download.cancelled())?;
                 anyhow::ensure!(
-                    batch.rows.len() <= PREVIEW_ROWS,
+                    batch.rows.len() <= requested,
                     "Connector returned more rows than requested"
                 );
                 if batch.rows.is_empty() {
@@ -359,6 +377,13 @@ impl Runner {
                     elapsed: started.elapsed(),
                     percentage: request.download.progress_percentage(),
                 });
+                drop(batch);
+                pace(
+                    &request.profile,
+                    spool.bytes().saturating_sub(initial_bytes),
+                    transfer_started,
+                    request.download.cancelled(),
+                )?;
             }
             if !finished
                 && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
@@ -391,5 +416,56 @@ impl Runner {
             spool,
         });
         Ok(())
+    }
+}
+
+pub(super) fn pace(
+    profile: &Profile,
+    bytes: u64,
+    started: Instant,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    if profile.database_type != DatabaseType::Kyuubi {
+        return Ok(());
+    }
+    let rate = profile.transfer.settings().speed_limit_mb;
+    if rate == 0 {
+        return Ok(());
+    }
+    let desired = Duration::from_secs_f64(bytes as f64 / (f64::from(rate) * 1_000_000.));
+    loop {
+        export::check_cancelled(cancel)?;
+        let remaining = desired.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
+}
+
+#[cfg(test)]
+mod pacing_tests {
+    use super::{AtomicBool, DatabaseType, Duration, Instant, Profile, pace};
+    use crate::model::transfer::{TransferPreset, TransferSettings};
+
+    #[test]
+    fn rate_limit_waits_for_transfer_bytes_and_cancel_interrupts_it() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Kyuubi,
+            ..Default::default()
+        };
+        profile.transfer.preset = TransferPreset::Custom;
+        profile.transfer.custom = TransferSettings {
+            speed_limit_mb: 1,
+            ..Default::default()
+        };
+        let started = Instant::now();
+        pace(&profile, 100_000, started, &AtomicBool::new(false)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(pace(&profile, 1_000_000, Instant::now(), &AtomicBool::new(true)).is_err());
+        profile.database_type = DatabaseType::Postgres;
+        let started = Instant::now();
+        pace(&profile, 1_000_000_000, started, &AtomicBool::new(false)).unwrap();
+        assert!(started.elapsed() < Duration::from_millis(100));
     }
 }

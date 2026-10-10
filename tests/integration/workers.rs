@@ -29,6 +29,8 @@ struct Fixture {
     max_batch: usize,
     requested: Arc<Mutex<Vec<usize>>>,
     closes: Arc<AtomicUsize>,
+    adaptive: bool,
+    transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
 }
 struct FakeSession {
     cancels: Arc<AtomicUsize>,
@@ -47,6 +49,9 @@ struct FakeSession {
     progress_polls: Option<usize>,
     cancelled: Arc<AtomicBool>,
     closes: Arc<AtomicUsize>,
+    adaptive: bool,
+    transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    transfer: qrow::model::transfer::Transfer,
 }
 struct Cancel(Arc<AtomicBool>, Arc<AtomicUsize>);
 impl Cancellation for Cancel {
@@ -82,10 +87,26 @@ impl Connector for Fixture {
             progress_polls: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             closes: self.closes.clone(),
+            adaptive: self.adaptive,
+            transfers: self.transfers.clone(),
+            transfer: Default::default(),
         }))
     }
 }
 impl Session for FakeSession {
+    fn configure_export(&mut self, transfer: &qrow::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()?;
+        self.transfer = transfer.clone();
+        self.transfers.lock().unwrap().push(transfer.clone());
+        Ok(())
+    }
+    fn export_fetch_rows(&self) -> usize {
+        if self.adaptive {
+            self.transfer.settings().request_rows(1024)
+        } else {
+            1000
+        }
+    }
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.preview_offset = Some(self.offset);
         self.execute(sql)
@@ -1560,4 +1581,144 @@ fn cancel_and_writer_failure_before_schema_wake_the_writer_without_submitting_sq
         assert_eq!(fixture.connects.load(Ordering::SeqCst), 0);
         assert!(fixture.executions.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn adaptive_exports_reuse_the_session_and_hold_the_profile_limit_until_publication() {
+    use qrow::{export, logs::ExecutionId, model::transfer::TransferPreset};
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let mut profile = export_profile();
+    let jobs = export::Jobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let publication = jobs
+        .register_for_profile(cancel.clone(), None, profile.id, 1)
+        .unwrap();
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT n".into(),
+            ExecutionId(301),
+            None,
+            &jobs,
+            cancel,
+        )
+        .unwrap();
+    let mut preview = 0;
+    loop {
+        match next(&worker) {
+            Event::PreviewRows { rows, .. } => preview += rows.len(),
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(spool.row_count(), 20_000);
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(preview, 1000);
+    assert!(
+        fixture
+            .requested
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|count| *count == 13_107)
+    );
+    let error = worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT blocked".into(),
+            ExecutionId(302),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("active export"));
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    drop(publication);
+    profile.transfer.preset = TransferPreset::Conservative;
+    worker.update_profile(profile.clone()).unwrap();
+    let expected = worker.session_generation(&profile).unwrap();
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT next".into(),
+            ExecutionId(303),
+            Some(expected),
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        match next(&worker) {
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(spool.row_count(), 20_000);
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(worker.session_generation(&profile), Some(expected));
+    assert_eq!(
+        fixture
+            .transfers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|transfer| transfer.preset)
+            .collect::<Vec<_>>(),
+        [TransferPreset::Balanced, TransferPreset::Conservative]
+    );
+    assert_eq!(
+        *fixture.executions.lock().unwrap(),
+        ["SELECT n", "SELECT next"]
+    );
+    assert!(fixture.requested.lock().unwrap().contains(&3276));
+}
+
+#[test]
+fn rejected_advancing_fetch_stops_without_retry_or_sql_resubmission() {
+    use qrow::{export, logs::ExecutionId};
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        fail_fetch: Some(1),
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let download = worker
+        .run_and_export(
+            export_profile(),
+            "SELECT n".into(),
+            ExecutionId(304),
+            None,
+            &export::Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        if let Event::DownloadFailed {
+            consumed, message, ..
+        } = next(&worker)
+        {
+            assert!(consumed);
+            assert!(message.contains("Fetch transport failed"));
+            break;
+        }
+    }
+    assert_eq!(fixture.fetches.load(Ordering::SeqCst), 2);
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    assert!(matches!(
+        download.wait_spool().unwrap().status(),
+        export::spool::Status::Failed(_)
+    ));
 }

@@ -338,20 +338,29 @@ impl Worker {
         jobs: &crate::export::Jobs,
         cancel: Arc<AtomicBool>,
     ) -> std::io::Result<Arc<Download>> {
+        let profile = self
+            .session_identity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|session| session.profile.clone())
+            .ok_or_else(|| std::io::Error::other("The result session ended."))?;
         let table = source.table(None);
         let transport = crate::export::budget::GLOBAL.allowance(64 * crate::export::budget::MIB)?;
         let (spool, producer) =
             crate::export::spool::Spool::new(table.columns, table.rows.context())?;
         let download = Download::new(spool, cancel.clone());
         let callback_download = Arc::downgrade(&download);
-        let guard = jobs.register_with_cancel(
+        let guard = jobs.register_for_profile(
             cancel,
             Some(Arc::new(move || {
                 if let Some(download) = callback_download.upgrade() {
                     download.cancel_in_background();
                 }
             })),
-        );
+            profile.id,
+            profile.transfer.settings().concurrent_exports,
+        )?;
         self.tx
             .send(Command::Drain(Box::new(Drain {
                 execution,
@@ -366,6 +375,12 @@ impl Worker {
     }
     pub fn update_profile(&self, profile: Profile) -> Result<()> {
         profile.lifecycle.validate()?;
+        profile.transfer.validate()?;
+        if let Some(session) = self.session_identity.lock().unwrap().as_mut()
+            && session.profile.connection_identity_eq(&profile)
+        {
+            session.profile = profile.clone();
+        }
         let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
         Ok(())
     }
@@ -592,6 +607,9 @@ impl Runner {
             );
             self.emit(Event::Connected);
         } else {
+            if let Some(session) = self.session_identity.lock().unwrap().as_mut() {
+                session.profile = profile.clone();
+            }
             self.profile = Some(profile);
         }
         if let Some(control) = control {
@@ -935,6 +953,14 @@ impl Runner {
         let started = Instant::now();
         let mut count = 0usize;
         let result = (|| -> Result<()> {
+            let profile = self
+                .profile
+                .as_ref()
+                .context("Session is disconnected")?
+                .clone();
+            let session = self.session.as_mut().context("Session is disconnected")?;
+            session.configure_export(&profile.transfer)?;
+            session.start_export_fetch()?;
             for batch in source.batches() {
                 producer.append(batch, download.cancelled())?;
                 count += batch.len();
@@ -943,17 +969,24 @@ impl Runner {
                 producer.append(&pending.rows, download.cancelled())?;
                 count += pending.rows.len();
             }
+            let transfer_started = Instant::now();
+            let initial_bytes = download.spool().unwrap().bytes();
             loop {
                 crate::export::check_cancelled(download.cancelled())?;
                 let _fetch_memory = producer.reserve_fetch()?;
+                let requested = self.session.as_ref().unwrap().export_fetch_rows();
+                anyhow::ensure!(
+                    (1..=crate::model::transfer::MAX_FETCH_ROWS).contains(&requested),
+                    "Invalid export fetch count"
+                );
                 let batch = self
                     .session
                     .as_mut()
                     .context("Session is disconnected")?
-                    .fetch(PREVIEW_ROWS)?;
+                    .fetch(requested)?;
                 crate::export::check_cancelled(download.cancelled())?;
                 anyhow::ensure!(
-                    batch.rows.len() <= PREVIEW_ROWS,
+                    batch.rows.len() <= requested,
                     "Connector returned more rows than requested"
                 );
                 if batch.rows.is_empty() {
@@ -971,6 +1004,17 @@ impl Runner {
                     elapsed: started.elapsed(),
                     percentage: None,
                 });
+                drop(batch);
+                run_export::pace(
+                    &profile,
+                    download
+                        .spool()
+                        .unwrap()
+                        .bytes()
+                        .saturating_sub(initial_bytes),
+                    transfer_started,
+                    download.cancelled(),
+                )?;
             }
             self.session.as_mut().unwrap().close_operation()?;
             download.complete(producer)?;

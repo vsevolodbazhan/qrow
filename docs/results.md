@@ -348,6 +348,19 @@ it. Query progress is separate from download and file completion. See
 Qrow preserves the distinction between null and an empty string. It does not
 convert exact decimal text to floating-point values for display.
 
+## Export transfer limits
+
+The connection's [transfer policy](connections.md#export-transfer-policy)
+sets the export count and the Kyuubi fetch estimate and speed limit.
+A busy connection rejects another source download before SQL starts.
+File writers currently use shared memory and shutdown accounting. Snapshot
+and replay writers do not yet use the connection count.
+
+An oversized Kyuubi response stops the export. Qrow does not retry an
+advancing fetch. The target file is not published, and the cursor becomes
+**Consumed**. Choose **Run again and export** to start an explicit new
+execution. Normal preview requests keep their 1000-row limit.
+
 ## Preview limits
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
