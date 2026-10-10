@@ -145,55 +145,61 @@ impl Runner {
         let execution = request.execution;
         let result = self.download_execution(&request);
         request.finished = true;
-        match result {
-            Ok(()) => {}
+        let changed = result
+            .as_ref()
+            .is_err_and(|error| error.is::<SessionChanged>());
+        let event = match result {
+            Ok(event) => event,
             Err(error) => {
                 let message = crate::connector::error_message(&error);
                 if error.is::<SessionChanged>() {
                     request.download.session_changed();
-                    self.emit(Event::DownloadFailed {
+                    Event::DownloadFailed {
                         execution,
                         message,
                         consumed: false,
                         disconnected: self.session.is_none(),
-                    });
-                    *self.download.lock().unwrap() = None;
-                    return;
-                }
-                if error.is::<export::Cancelled>() {
-                    request.download.cancel();
+                    }
                 } else {
-                    request.download.fail(message.clone());
+                    if error.is::<export::Cancelled>() {
+                        request.download.cancel();
+                    } else {
+                        request.download.fail(message.clone());
+                    }
+                    let closed = self
+                        .session
+                        .as_mut()
+                        .is_none_or(|session| session.close_operation().is_err());
+                    let disconnected = !request.download.stopped() || closed;
+                    if disconnected {
+                        self.disconnect();
+                    }
+                    self.set_cursor(Cursor::Consumed);
+                    self.log(
+                        Some(execution),
+                        Severity::Error,
+                        LogKind::Error,
+                        message.clone(),
+                        self.execution_duration(),
+                    );
+                    Event::DownloadFailed {
+                        execution,
+                        message,
+                        consumed: true,
+                        disconnected,
+                    }
                 }
-                let closed = self
-                    .session
-                    .as_mut()
-                    .is_none_or(|session| session.close_operation().is_err());
-                let disconnected = !request.download.stopped() || closed;
-                if disconnected {
-                    self.disconnect();
-                }
-                self.set_cursor(Cursor::Consumed);
-                self.log(
-                    Some(execution),
-                    Severity::Error,
-                    LogKind::Error,
-                    message.clone(),
-                    self.execution_duration(),
-                );
-                self.emit(Event::DownloadFailed {
-                    execution,
-                    message,
-                    consumed: true,
-                    disconnected,
-                });
             }
+        };
+        if !changed {
+            *self.target.lock().unwrap() = None;
         }
-        *self.target.lock().unwrap() = None;
         *self.download.lock().unwrap() = None;
+        drop(request);
+        self.emit(event);
     }
 
-    fn download_execution(&mut self, request: &Request) -> Result<()> {
+    fn download_execution(&mut self, request: &Request) -> Result<Event> {
         if request.expected.is_some_and(|expected| {
             !matches_session(&self.session_identity, &request.profile, expected)
         }) {
@@ -302,11 +308,10 @@ impl Runner {
                 )?;
                 self.complete_execution(false);
                 self.set_cursor(Cursor::Complete);
-                self.emit(Event::Ready {
+                return Ok(Event::Ready {
                     more: false,
                     limited: false,
                 });
-                return Ok(());
             }
             QueryState::Finished { has_results: true }
             | QueryState::Streaming { has_results: true } => {}
@@ -434,11 +439,10 @@ impl Runner {
             execution: request.execution,
             complete: count == preview_rows,
         });
-        self.emit(Event::Downloaded {
+        Ok(Event::Downloaded {
             execution: request.execution,
             spool,
-        });
-        Ok(())
+        })
     }
 }
 
