@@ -137,6 +137,10 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`
   excludes the GPUI frontend and the generated bindings.
+  Coverage runs one top-level test at a time in each test binary. Export tests
+  share the production memory budget in that process. This setting prevents
+  unrelated tests from exhausting the shared budget. Tests that start competing
+  threads still check concurrent work. Other suites keep their test parallelism.
 - Qrow forbids unsafe code in its own sources, including the generated
   bindings. Third-party dependencies can contain unsafe code.
 
