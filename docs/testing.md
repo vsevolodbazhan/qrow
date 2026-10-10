@@ -151,6 +151,10 @@ limits on the wire. Worker tests check session reuse after a preset change,
 first-page retention, rejection before SQL, slot ownership through file
 publication, and terminal failure without fetch retry. Registry tests check
 cancellation before the download callback attaches and during shutdown.
+Worker tests pause the completion notification before the worker can continue.
+They check immediate export admission after producer cleanup. The file writer
+must keep its slot until publication. These checks cover successful downloads,
+commands without results, failures, and successful or rejected cursor drains.
 A Docker backend test checks actual Spark collection behavior with executor
 evidence before the first fetch. It also checks restoration for explicit
 and absent settings, and the collection mode of the next normal query.
