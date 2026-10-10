@@ -58,6 +58,7 @@ type RegisterTransport = Arc<dyn Fn(Arc<dyn Cancellation>) -> Result<()> + Send 
 pub struct ConnectionControl {
     cancelled: Option<Arc<AtomicBool>>,
     register: Option<RegisterTransport>,
+    allowance: Option<Arc<crate::export::budget::Allowance>>,
 }
 
 impl ConnectionControl {
@@ -65,7 +66,22 @@ impl ConnectionControl {
         Self {
             cancelled: Some(cancelled),
             register: Some(register),
+            allowance: None,
         }
+    }
+
+    pub(crate) fn with_allowance(
+        mut self,
+        allowance: Arc<crate::export::budget::Allowance>,
+    ) -> Self {
+        self.allowance = Some(allowance);
+        self
+    }
+    pub(crate) fn allowance(&self) -> Option<Arc<crate::export::budget::Allowance>> {
+        self.allowance.clone()
+    }
+    pub(crate) fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
+        self.cancelled.clone()
     }
 
     pub fn check(&self) -> Result<()> {
@@ -154,6 +170,14 @@ pub trait Session: Send {
     fn poll(&mut self) -> Result<QueryState>;
     fn columns(&mut self) -> Result<Vec<Column>>;
     fn fetch(&mut self, count: usize) -> Result<Batch>;
+    /// Commit a fetched export batch after the spool accepts every row.
+    /// For an empty batch, true requests another fetch and false means EOF.
+    fn commit_export_rows(&mut self, _rows: usize) -> Result<bool> {
+        Ok(false)
+    }
+    fn export_cleanup_warning(&self) -> Option<String> {
+        None
+    }
     /// Settings captured for the current result. Export must not change them.
     /// Interrupt setup or schema reads before an operation cancellation exists.
     fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {

@@ -4,6 +4,10 @@ mod heartbeat;
 mod preview;
 mod protocol;
 mod raw;
+mod segment_download;
+mod segment_reader;
+mod segment_threads;
+mod spooling;
 mod transport;
 #[cfg(test)]
 mod transport_tests;
@@ -12,6 +16,7 @@ use super::{
     Cancellation, ConnectionControl, Connector, MetadataRequest, QueryError, QueryState, Secret,
     Session,
 };
+use crate::model::transfer::TrinoSpooling;
 use crate::{
     model::{Batch, Column, DatabaseType, Profile, Row},
     tls::Trust,
@@ -74,7 +79,8 @@ struct Cursor {
 struct Cancel {
     http: Arc<Http>,
     next: Mutex<Cursor>,
-    requested: AtomicBool,
+    requested: Arc<AtomicBool>,
+    threads: Arc<segment_threads::Threads>,
     active: Mutex<bool>,
     requests: Arc<transport::Transport>,
     cleanup: Mutex<Cleanup>,
@@ -99,6 +105,7 @@ impl Cancellation for Cancel {
         }
         self.requested.store(true, Ordering::SeqCst);
         self.requests.seal();
+        self.requests.close();
         self.heartbeat.stop();
         let mut cleanup = self.cleanup.lock().unwrap();
         if let Some(original) = cleanup.deadline {
@@ -122,16 +129,17 @@ impl Cancellation for Cancel {
         }
         cleanup.deadline = Some(deadline);
         drop(cleanup);
-        let result = self
-            .delete_before(deadline)
-            .and_then(|()| self.requests.wait_idle(deadline))
-            .and_then(|()| {
-                anyhow::ensure!(
-                    !self.http.transport.is_closed(),
-                    "Trino cleanup closed the session; reconnect"
-                );
-                Ok(())
-            });
+        let deleted = self.delete_before(deadline);
+        let idle = self.requests.wait_idle(deadline);
+        let joined = self.threads.join_all(deadline);
+        self.http.end_requests(&self.requests);
+        let result = deleted.and(idle).and(joined).and_then(|()| {
+            anyhow::ensure!(
+                !self.http.transport.is_closed(),
+                "Trino cleanup closed the session; reconnect"
+            );
+            Ok(())
+        });
         if result.is_err() {
             self.abort_transport();
         }
@@ -177,6 +185,9 @@ struct Operation {
     columns: Vec<Column>,
     prefix: Option<preview::Prefix>,
     data: Option<raw::Rows>,
+    segments: Option<segment_reader::Reader>,
+    encoded_started: bool,
+    _allowance: Option<Arc<crate::export::budget::Allowance>>,
     pending: Option<Row>,
     exhausted: bool,
     finished: bool,
@@ -198,6 +209,9 @@ impl Operation {
                 Some(preview::Prefix::new()?)
             },
             data: None,
+            segments: None,
+            encoded_started: false,
+            _allowance: None,
             pending: None,
             exhausted: false,
             finished: false,
@@ -284,11 +298,23 @@ impl Operation {
             .and_then(|stats| stats.progress_percentage)
             .filter(|value| value.is_finite() && (0.0..=100.0).contains(value))
             .or(self.progress);
-        self.data = page
-            .data
-            .filter(|_| !self.command)
-            .map(raw::Rows::new)
-            .transpose()?;
+        if let Some(data) = page.data.filter(|_| !self.command) {
+            if data.get().trim_start().starts_with('{') {
+                let reader = self
+                    .segments
+                    .as_mut()
+                    .context("Trino returned unrequested encoded data")?;
+                reader.install(spooling::Page::new(data)?)?;
+                self.encoded_started = true;
+            } else {
+                anyhow::ensure!(
+                    !self.encoded_started,
+                    "Trino changed encoded results to classic rows"
+                );
+                self.segments = None;
+                self.data = Some(raw::Rows::new(data)?);
+            }
+        }
         self.complete_if_drained();
         Ok(())
     }
@@ -320,8 +346,17 @@ impl Operation {
 
     fn complete_if_drained(&mut self) {
         let terminal = self.cancel.next.lock().unwrap().terminal;
-        if terminal && self.data.is_none() {
+        if terminal {
             self.cancel.heartbeat.stop();
+        }
+        if terminal
+            && self.data.is_none()
+            && self.pending.is_none()
+            && self
+                .segments
+                .as_ref()
+                .is_none_or(|reader| !reader.has_input())
+        {
             self.finished = true;
             // Keep cancellation authority until close_operation joins any
             // concurrent cleanup, including a DELETE racing the final response.
@@ -380,7 +415,12 @@ impl Operation {
         }
         // Legacy completion callers still advance a normal preview. Export
         // paging belongs to fetch, so a page is never replaced before its rows.
-        if self.data.is_none() {
+        if self.data.is_none()
+            && self
+                .segments
+                .as_ref()
+                .is_none_or(|reader| !reader.has_input())
+        {
             self.advance(headers)?;
         }
         self.announced |= matches!(self.state(), QueryState::Streaming { .. });
@@ -409,7 +449,50 @@ impl Operation {
         }
     }
 
+    fn fetch_segments(&mut self, count: usize, headers: &mut SessionHeaders) -> Result<Batch> {
+        self.segments.as_ref().unwrap().ready_to_fetch()?;
+        while self
+            .segments
+            .as_ref()
+            .is_some_and(segment_reader::Reader::has_space)
+        {
+            anyhow::ensure!(!self.cancelled, crate::export::Cancelled);
+            self.segments.as_ref().unwrap().ready_to_fetch()?;
+            if self.segments.as_mut().unwrap().admit()? {
+                continue;
+            }
+            if self.cancel.next.lock().unwrap().terminal {
+                break;
+            }
+            self.advance(headers)?;
+        }
+        if self.segments.is_none() {
+            return self.fetch(count, headers);
+        }
+        let batch = self
+            .segments
+            .as_mut()
+            .unwrap()
+            .fetch(count, self.columns.len())?;
+        self.exhausted = batch.rows.is_empty() && !self.segments.as_ref().unwrap().has_input();
+        Ok(batch)
+    }
+
+    fn commit_export_rows(&mut self, rows: usize) -> Result<bool> {
+        let more = self
+            .segments
+            .as_mut()
+            .map(|reader| reader.commit(rows))
+            .transpose()?
+            .unwrap_or(false);
+        self.complete_if_drained();
+        Ok(more)
+    }
+
     fn fetch(&mut self, count: usize, headers: &mut SessionHeaders) -> Result<Batch> {
+        if self.segments.is_some() && count > 0 {
+            return self.fetch_segments(count, headers);
+        }
         let count = count.min(1000);
         if count == 0 {
             return Ok(Batch { rows: Vec::new() });
@@ -471,7 +554,12 @@ impl Operation {
             // A normal preview retains only its bounded prefix. Direct callers
             // must read all rows through fetch before asking for completion.
             anyhow::ensure!(
-                self.prefix.is_some() || self.data.is_none(),
+                self.prefix.is_some()
+                    || (self.data.is_none()
+                        && self
+                            .segments
+                            .as_ref()
+                            .is_none_or(|reader| !reader.has_input())),
                 "Trino export still has unread rows"
             );
             self.advance(headers)?;
@@ -488,6 +576,7 @@ struct TrinoSession {
     catalog: String,
     operation: Option<Operation>,
     keep_alive: Option<Operation>,
+    export_mode: TrinoSpooling,
 }
 
 impl Connector for TrinoConnector {
@@ -511,6 +600,7 @@ impl Connector for TrinoConnector {
             catalog: profile.database.clone(),
             operation: None,
             keep_alive: None,
+            export_mode: TrinoSpooling::Off,
         };
         // The protocol has no separate login. Probe through the statement endpoint
         // to check authentication and session properties before returning a session.
@@ -530,6 +620,16 @@ impl Connector for TrinoConnector {
 
 impl TrinoSession {
     fn start(&mut self, sql: &str, direct: bool) -> Result<Operation> {
+        self.start_controlled(sql, direct, &ConnectionControl::default())
+    }
+
+    fn start_controlled(
+        &mut self,
+        sql: &str,
+        direct: bool,
+        control: &ConnectionControl,
+    ) -> Result<Operation> {
+        control.check()?;
         anyhow::ensure!(
             !direct || sql.len() <= 1024 * 1024,
             "Trino export SQL exceeds 1 MiB"
@@ -541,26 +641,71 @@ impl TrinoSession {
             .context("Enter a Trino statement")?;
         let sql = &sql[range];
         let sql = sql.strip_suffix(';').unwrap_or(sql);
+        let enabled = direct && self.export_mode != TrinoSpooling::Off;
+        let allowance = if enabled {
+            let allowance = match control.allowance() {
+                Some(allowance) => allowance,
+                None => {
+                    crate::export::budget::GLOBAL.allowance(512 * crate::export::budget::MIB)?
+                }
+            };
+            anyhow::ensure!(
+                allowance.capacity() >= 512 * crate::export::budget::MIB,
+                "Trino spooling requires 512 MiB transport headroom"
+            );
+            Some(allowance)
+        } else {
+            control.allowance()
+        };
+        let heartbeat = heartbeat::Heartbeat::new(self.http.clone())?;
         let cancel = Arc::new(Cancel {
             http: self.http.clone(),
             next: Mutex::new(Cursor::default()),
-            requested: AtomicBool::new(false),
+            requested: Arc::new(AtomicBool::new(false)),
+            threads: Arc::default(),
             active: Mutex::new(true),
-            requests: self.http.begin_requests(),
+            requests: self.http.begin_requests(allowance.clone())?,
             cleanup: Mutex::default(),
             changed: Condvar::new(),
-            heartbeat: heartbeat::Heartbeat::new(self.http.clone())?,
+            heartbeat,
         });
-        let mut operation = Operation::new(cancel, direct)?;
-        let (page, response) = match self.http.page(
+        let mut operation = match Operation::new(cancel.clone(), direct) {
+            Ok(operation) => operation,
+            Err(error) => {
+                cancel.requests.close();
+                self.http.end_requests(&cancel.requests);
+                *cancel.active.lock().unwrap() = false;
+                return Err(error);
+            }
+        };
+        operation._allowance = allowance.clone();
+        if enabled {
+            let allowance = allowance.expect("enabled spooling allowance");
+            let segment_control =
+                self.http
+                    .segment_control(&operation.cancel, allowance, control.cancel_flag());
+            operation.segments = Some(segment_reader::Reader::new(
+                self.export_mode,
+                segment_control,
+            ));
+        }
+        if let Err(error) = control.register(operation.cancel.clone()) {
+            operation.cancel.requests.close();
+            self.http.end_requests(&operation.cancel.requests);
+            *operation.cancel.active.lock().unwrap() = false;
+            return Err(error);
+        }
+        let (page, response) = match self.http.page_encoded(
             reqwest::Method::POST,
             &self.http.statement,
             Some(sql),
             &self.headers,
+            enabled,
         ) {
             Ok(response) => response,
             Err(error) => {
                 operation.cancel.abort_transport();
+                self.http.end_requests(&operation.cancel.requests);
                 *operation.cancel.active.lock().unwrap() = false;
                 return Err(error);
             }
@@ -599,14 +744,26 @@ impl Session for TrinoSession {
         self.operation = Some(operation);
         Ok(cancel)
     }
+    fn configure_export(&mut self, transfer: &crate::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()?;
+        self.export_mode = transfer.settings().trino_spooling;
+        Ok(())
+    }
     fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute_export_controlled(sql, &ConnectionControl::default())
+    }
+    fn execute_export_controlled(
+        &mut self,
+        sql: &str,
+        control: &ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
         anyhow::ensure!(
             !self.http.transport.is_closed(),
             "Trino session is closed; reconnect"
         );
         self.close_keep_alive()?;
         self.close_operation()?;
-        let operation = self.start(sql, true)?;
+        let operation = self.start_controlled(sql, true, control)?;
         let cancel = operation.cancel.clone();
         self.operation = Some(operation);
         Ok(cancel)
@@ -645,6 +802,16 @@ impl Session for TrinoSession {
             .as_mut()
             .context("No Trino operation")?
             .fetch(count, &mut self.headers)
+    }
+    fn commit_export_rows(&mut self, rows: usize) -> Result<bool> {
+        self.operation
+            .as_mut()
+            .context("No Trino operation")?
+            .commit_export_rows(rows)
+    }
+    fn export_cleanup_warning(&self) -> Option<String> {
+        let count = self.operation.as_ref()?.segments.as_ref()?.ack_failures;
+        (count > 0).then(|| format!("Trino could not acknowledge {count} committed segments. Storage cleanup will use their expiry."))
     }
     fn transport_cancellation(&self) -> Option<Arc<dyn Cancellation>> {
         Some(self.http.transport.clone())

@@ -312,6 +312,8 @@ the SQL before the rerun. The form checks the session again after the save
 panel and browser sign-in. A change during that time stops submission and
 requires another explicit **Run again and export…** choice.
 
+For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
+
 The tab stays busy until the download ends. **Cancel** stops the download;
 **Cancel export** also stops its file writer. Cancellation can interrupt
 an established socket before the operation handle or schema arrives.
@@ -351,7 +353,8 @@ convert exact decimal text to floating-point values for display.
 ## Export transfer limits
 
 The connection's [transfer policy](connections.md#export-transfer-policy)
-sets the export count and the Kyuubi fetch estimate and speed limit.
+sets the export count, Kyuubi fetch estimate and speed limit, and Trino
+spooling mode.
 A busy connection rejects another export before sign-in or SQL submission.
 Snapshot exports, retained-result exports, and **Copy as** use the same count.
 A file export holds its slot until publication or temporary-file cleanup ends.

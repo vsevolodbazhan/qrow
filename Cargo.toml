@@ -21,6 +21,7 @@ async-channel = { version = "2", optional = true }
 gpui-kit = { version = "=0.6.6", features = ["tree-sitter"], optional = true }
 tree-sitter-sequel = { version = "0.3.8", optional = true }
 base64 = "0.22"
+lz4_flex = { version = "0.14.0", default-features = false, features = ["std", "safe-decode", "safe-encode", "checked-decode"] }
 form_urlencoded = "1"
 httparse = "1"
 postcard = { version = "1", default-features = false, features = ["use-std"] }

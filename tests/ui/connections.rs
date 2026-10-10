@@ -121,7 +121,30 @@ fn postgres_and_trino_transfer_forms_show_only_applicable_controls(cx: &mut Test
             assert!(window.try_find("connection-transfer-request").is_none());
             assert!(window.try_find("connection-transfer-speed").is_none());
             assert!(window.try_find("connection-transfer-incremental").is_none());
+            assert_eq!(
+                window.try_find("connection-transfer-spooling").is_some(),
+                engine == qrow::model::DatabaseType::Trino
+            );
         });
+        if engine == qrow::model::DatabaseType::Trino {
+            app.select(cx, "connection-transfer-spooling", "Parallel");
+            app.click(cx, "save-profile");
+            app.wait_gone(cx, "save-profile");
+            app.wait_until(cx, "saved spooling mode", Duration::from_secs(5), |_, _| {
+                app.saved().profiles[0].transfer.custom.trino_spooling
+                    == qrow::model::transfer::TrinoSpooling::Parallel
+            });
+            app.context_menu(cx, connection_row(id));
+            app.choose(cx, "popup-menu", "Edit");
+            app.connection_page(cx, "Export");
+            app.wait_for(cx, "connection-transfer-spooling");
+            app.update(cx, |window, _| {
+                assert_eq!(
+                    window.find("connection-transfer-spooling").value(),
+                    Some("Parallel")
+                )
+            });
+        }
         cancel_form(&app, cx);
     }
 }

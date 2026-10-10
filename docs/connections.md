@@ -96,11 +96,13 @@ Transfer-policy changes do not reconnect an otherwise unchanged session.
 | Kyuubi incremental collect | On | Inherit | Inherit |
 | Estimated Kyuubi data per request | 4 MiB | 16 MiB | 32 MiB |
 | Kyuubi speed limit | 20 MB/s | Off | Off |
+| Trino spooled results | Off | Serial | Parallel |
 | Exports at the same time per connection | 1 | 1 | 2 |
 
 **Custom** can select incremental collect as **Inherit**, **On**, or **Off**.
 Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
-1000 MB/s. Zero disables the speed limit. The export count is 1 or 2 for all
+1000 MB/s. Zero disables the speed limit. For Trino, select **Spooled Results**
+as **Off**, **Serial**, or **Parallel**. The export count is 1 or 2 for all
 connection types. The shared memory budget can admit fewer exports than
 this count. The count covers downloads, snapshot exports, retained-result
 exports, and **Copy as**. A file export holds its slot until publication or
@@ -258,6 +260,37 @@ Trino result text keeps the server's timestamp precision. Qrow declares
 support for variable-precision date and time types in the client protocol.
 For Parquet timestamp limits, see [Parquet](results.md#parquet).
 
+### Trino export spooling
+
+For **Run and export**, Trino can send encoded result segments from storage.
+Set **Transfer Preset** on the connection. Conservative uses classic results.
+Balanced downloads one segment at a time. Fast can download the next segment
+while Qrow reads the current segment. Normal Run and schema queries keep
+classic results. If the server returns classic rows, the same export continues.
+Qrow does not submit the SQL again.
+
+Qrow supports `json` and `json+lz4`. Each segment has a 32 MiB limit for both
+received and decoded bytes. Parallel transfer keeps at most two segments.
+Qrow checks row offsets, row counts and the result schema. It acknowledges a
+segment only after the local spool accepts all its rows. Failed acknowledgements
+add a warning to the query log. They do not fail an export whose rows are safe.
+
+Storage requests use a separate HTTPS client. It has no coordinator password,
+sign-in token or session headers. Qrow permits at most two storage redirects.
+It removes storage headers when a redirect changes origin. HTTP downgrade,
+user information in URLs and credential headers are rejected. A failed segment
+GET can have three attempts. Trino 483 sends expiry without a time-zone
+offset. For those values, Qrow uses storage or coordinator rejection to detect
+expiry. It checks expiry with an explicit offset before a request. Invalid metadata, JSON,
+LZ4 or byte sizes stop the export. Qrow never retries the SQL submission.
+
+Spooling reserves 512 MiB of transport memory before SQL starts. Classic
+transfer reserves 192 MiB. The producer reserves another 128 MiB. The shared
+1 GiB export memory limit can reject another export even when the profile
+permits two. Cancellation closes storage requests and joins the segment
+threads within the same cleanup deadline. A thread that ends later keeps its
+memory reservation until it stops. Failed cleanup closes the session.
+
 ### Trino limits
 
 - The schema browser reads one catalog. It shows schemas, tables, views, and
@@ -266,7 +299,7 @@ For Parquet timestamp limits, see [Parquet](results.md#parquet).
   100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
   without keeping them before the tab becomes ready. The result limits do not
   reduce server work. Direct export reads all rows into the export spool.
-- Each HTTP response has a 16 MiB limit before JSON decoding. The HTTP/1 read
+- Each coordinator HTTP response has a 16 MiB limit before JSON decoding. The HTTP/1 read
   buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
   time. Decoding and one response page use memory in addition to the retained
   result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
@@ -288,7 +321,7 @@ For Parquet timestamp limits, see [Parquet](results.md#parquet).
   updates from HEAD. The task stops before the session runs another statement.
   Heartbeats use cached credentials. Unsupported HEAD requests or an expired
   credential can let the server's client timeout expire during a pause.
-- Qrow retries a request only after an explicit authentication rejection. It
+- Qrow retries a coordinator request only after an explicit authentication rejection. It
   does not retry an uncertain network failure or follow HTTP redirects. A result URL
   must use the same scheme, hostname, and port as the coordinator. Configure
   reverse proxies to return URLs for that origin.
@@ -304,8 +337,8 @@ For Parquet timestamp limits, see [Parquet](results.md#parquet).
 - If submission succeeds but no query URL arrives, Qrow cannot send the server
   cancel. The statement can continue until its server timeout. Run does not
   repeat the SQL automatically. Cancellation cannot undo completed SQL.
-- Client certificates, Kerberos, and the result spooling protocol are not
-  supported.
+- Client certificates and Kerberos are not supported. Trino spooling supports
+  JSON and LZ4 only. Zstandard is not supported.
 - Automatic assistant relation context uses the initial schema. It does not
   track `USE` commands. Use qualified names after a schema change.
 
