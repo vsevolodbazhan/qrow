@@ -369,7 +369,7 @@ mod tests {
             let view = cx.new(|cx| ExportDialog::new(source, None, export::Settings::default(),
                 "a-long-export-filename-with-many-words-to-force-a-second-line-of-progress-metrics.csv".into(), false,
                 ExportResult { tab, execution: Some(ExecutionId(42)), cursor: crate::worker::Cursor::Draining, replay: None },
-                owner, window, cx));
+                None, owner, window, cx));
             view.update(cx, |job, _| {
                 job.running = true;
                 job.download = Some(download.clone());
@@ -439,6 +439,7 @@ mod tests {
                         format!("job-{index}"),
                         false,
                         result,
+                        None,
                         owner.clone(),
                         window,
                         cx,

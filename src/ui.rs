@@ -355,6 +355,7 @@ impl Tab {
     }
 }
 struct ProfileEditor {
+    transfer: connection_form::transfer::TransferForm,
     database_type: connection_form::RowSelect,
     _database_type_subscription: Subscription,
     postgres_ssl_mode: connection_form::RowSelect,
@@ -909,6 +910,13 @@ impl Qrow {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
             results.export = self.settings.export.clone();
+            if let Some(profile) = self
+                .profiles
+                .iter()
+                .find(|profile| Some(profile.id) == saved.profile)
+            {
+                results.set_export_profile(profile);
+            }
             // The results delegate owns the selection: a range of cells.
             TableState::new(results, window, cx)
                 .col_selectable(false)
@@ -1738,6 +1746,19 @@ impl Qrow {
                     }
                 }
                 self.oidc.configure(&self.sign_ins, &self.profiles);
+                for tab in &self.tabs {
+                    if tab
+                        .result_profile
+                        .as_ref()
+                        .map(|profile| profile.id)
+                        .or(tab.saved.profile)
+                        == Some(id)
+                    {
+                        tab.table.update(cx, |table, _| {
+                            table.delegate_mut().set_export_profile(&profile)
+                        });
+                    }
+                }
                 self.external_auth.configure(&self.profiles);
                 self.sync_catalogs(previous.as_ref(), cx);
                 if !is_new && self.tabs[self.active].saved.profile.is_none() {
@@ -2143,6 +2164,7 @@ impl Qrow {
         let tab = &mut self.tabs[index];
         tab.table.update(cx, |t, cx| {
             t.delegate_mut().clear();
+            t.delegate_mut().set_export_profile(&profile);
             t.delegate_mut().empty_message = Some("Waiting for query results…");
             t.clear_selection(cx);
             t.horizontal_scroll_handle.set_offset(point(px(0.), px(0.)));
@@ -3100,6 +3122,7 @@ impl Qrow {
                 }
             });
         self.form = Some(ProfileEditor {
+            transfer: connection_form::transfer::TransferForm::new(&profile.transfer, window, cx),
             dbt,
             database_type,
             _database_type_subscription: database_type_subscription,
@@ -3255,6 +3278,9 @@ impl Qrow {
         profile.database = values[5].trim().into();
         profile.trino_schema = values[15].trim().into();
         let parse = (|| -> anyhow::Result<()> {
+            profile.transfer = form
+                .transfer
+                .value(&profile.transfer, profile.database_type, cx)?;
             profile.port = values[2]
                 .trim()
                 .parse()

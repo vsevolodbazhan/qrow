@@ -75,6 +75,7 @@ pub struct Results {
     pub rows: crate::export::Rows,
     pub pagination: Pagination,
     pub export: crate::export::Settings,
+    export_profile: Option<(uuid::Uuid, u8)>,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selection: Option<Selection>,
@@ -90,6 +91,7 @@ impl Default for Results {
             rows: crate::export::Rows::default(),
             pagination: Pagination::default(),
             export: crate::export::Settings::default(),
+            export_profile: None,
             empty_message: None,
             headers: vec![],
             selection: None,
@@ -101,6 +103,9 @@ impl Default for Results {
     }
 }
 impl Results {
+    pub(super) fn set_export_profile(&mut self, profile: &crate::model::Profile) {
+        self.export_profile = Some((profile.id, profile.transfer.settings().concurrent_exports));
+    }
     fn px(&self, value: f32) -> Pixels {
         px(self.ui_scale * value)
     }
@@ -170,6 +175,7 @@ impl Results {
         *self = Self {
             ui_scale: self.ui_scale,
             export: self.export.clone(),
+            export_profile: self.export_profile,
             drag_task,
             ..Self::default()
         };
@@ -523,6 +529,7 @@ impl TableDelegate for Results {
             csv.separator = crate::export::csv::Separator::Comma;
         }
         let settings = self.export.clone();
+        let export_profile = self.export_profile;
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
                 [
@@ -565,6 +572,7 @@ impl TableDelegate for Results {
                             source.clone(),
                             range.clone(),
                             options.clone(),
+                            export_profile,
                             window,
                             cx,
                         );

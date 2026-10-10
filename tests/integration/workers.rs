@@ -1686,6 +1686,76 @@ fn adaptive_exports_reuse_the_session_and_hold_the_profile_limit_until_publicati
 }
 
 #[test]
+fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
+    use qrow::{
+        export::{self, Snapshot},
+        model::transfer::{Transfer, TransferPreset},
+    };
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let profile = export_profile();
+    let execution = worker.run(profile.clone(), "SELECT existing".into());
+    let mut columns = Vec::new();
+    let mut rows = export::Rows::default();
+    loop {
+        match next(&worker) {
+            Event::Columns(value) => columns = value,
+            Event::Rows(value) => rows.extend(value),
+            Event::Ready { more, .. } => {
+                assert!(more);
+                break;
+            }
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows.len(), 1000);
+    assert_eq!(*fixture.requested.lock().unwrap(), [1000]);
+    let generation = worker.session_generation(&profile).unwrap();
+    let jobs = export::Jobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let publication = jobs
+        .register_for_profile(cancel.clone(), None, profile.id, 1)
+        .unwrap();
+    let download = worker
+        .drain_with_transfer(
+            execution,
+            Arc::new(Snapshot::new(&columns, &rows).unwrap()),
+            &jobs,
+            cancel,
+            Some(Transfer {
+                preset: TransferPreset::Conservative,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    loop {
+        match next(&worker) {
+            Event::Downloaded { .. } => break,
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(download.spool().unwrap().row_count(), 20_000);
+    assert!(
+        fixture.requested.lock().unwrap()[1..]
+            .iter()
+            .all(|count| *count == 3276)
+    );
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT existing"]);
+    assert_eq!(worker.session_generation(&profile), Some(generation));
+    assert_eq!(jobs.active_count(), 1);
+    drop(publication);
+    worker.run(profile, "SELECT normal".into());
+    ready(&worker);
+    assert_eq!(*fixture.requested.lock().unwrap().last().unwrap(), 1000);
+}
+
+#[test]
 fn rejected_advancing_fetch_stops_without_retry_or_sql_resubmission() {
     use qrow::{export, logs::ExecutionId};
     let fixture = Arc::new(Fixture {

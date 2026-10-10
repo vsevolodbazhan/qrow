@@ -25,6 +25,7 @@ pub use run_export::SessionChanged;
 
 struct Drain {
     execution: ExecutionId,
+    transfer: crate::model::transfer::Transfer,
     source: Arc<crate::export::Snapshot>,
     producer: crate::export::spool::Producer,
     download: Arc<Download>,
@@ -338,6 +339,17 @@ impl Worker {
         jobs: &crate::export::Jobs,
         cancel: Arc<AtomicBool>,
     ) -> std::io::Result<Arc<Download>> {
+        self.drain_with_transfer(execution, source, jobs, cancel, None)
+    }
+    /// Capture an export-only fetch policy without changing the live query's settings.
+    pub fn drain_with_transfer(
+        &self,
+        execution: ExecutionId,
+        source: Arc<crate::export::Snapshot>,
+        jobs: &crate::export::Jobs,
+        cancel: Arc<AtomicBool>,
+        transfer: Option<crate::model::transfer::Transfer>,
+    ) -> std::io::Result<Arc<Download>> {
         let profile = self
             .session_identity
             .lock()
@@ -345,6 +357,8 @@ impl Worker {
             .as_ref()
             .map(|session| session.profile.clone())
             .ok_or_else(|| std::io::Error::other("The result session ended."))?;
+        let transfer = transfer.unwrap_or_else(|| profile.transfer.clone());
+        transfer.validate().map_err(std::io::Error::other)?;
         let table = source.table(None);
         let transport = crate::export::budget::GLOBAL.allowance(64 * crate::export::budget::MIB)?;
         let (spool, producer) =
@@ -364,6 +378,7 @@ impl Worker {
         self.tx
             .send(Command::Drain(Box::new(Drain {
                 execution,
+                transfer,
                 source,
                 producer,
                 download: download.clone(),
@@ -894,6 +909,7 @@ impl Runner {
     fn drain(&mut self, drain: Drain) {
         let Drain {
             execution,
+            transfer,
             source,
             mut producer,
             download,
@@ -953,11 +969,12 @@ impl Runner {
         let started = Instant::now();
         let mut count = 0usize;
         let result = (|| -> Result<()> {
-            let profile = self
+            let mut profile = self
                 .profile
                 .as_ref()
                 .context("Session is disconnected")?
                 .clone();
+            profile.transfer = transfer;
             let session = self.session.as_mut().context("Session is disconnected")?;
             session.configure_export(&profile.transfer)?;
             session.start_export_fetch()?;

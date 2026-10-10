@@ -89,6 +89,10 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   They verify client messages, but they cannot show how a real server
   responds. The `backend` suite does that.
 - Worker tests check session coordination and bounded fetching.
+  Transfer tests check captured fetch overrides, normal preview request sizes,
+  and connection limits that stay active through file publication.
+  Window tests check preset persistence, engine-specific controls, validation,
+  rejection before sign-in or SQL, and Retry after the result tab closes.
 - Postgres tests check first-page display before server completion, direct
   reads above both preview limits, cancellation of a blocked row consumer,
   and temporary tables, settings, and uncommitted data in the same session.

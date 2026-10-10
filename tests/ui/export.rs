@@ -59,6 +59,96 @@ fn export_is_disabled_before_a_result_has_columns(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_full_connection_rejects_run_export_after_save_before_credentials_or_sql(
+    cx: &mut TestAppContext,
+) {
+    use qrow::export::Jobs;
+    use std::sync::{Arc, atomic::AtomicBool};
+    let profile = offline_profile("One export slot");
+    let id = profile.id;
+    let mut tab = qrow::model::SavedTab::new(1, Some(id));
+    tab.sql = "SELECT must_not_run".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    let occupied = app.update(cx, |_, cx| {
+        cx.global::<Jobs>()
+            .register_for_profile(Arc::new(AtomicBool::new(false)), None, id, 1)
+            .unwrap()
+    });
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| None);
+    app.settle(cx);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("existing.csv");
+    std::fs::write(&path, "Keep this file").unwrap();
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_until(
+        cx,
+        "profile admission failure",
+        Duration::from_secs(5),
+        |window, _| {
+            window.try_find("export-error").is_some_and(|error| {
+                error
+                    .label()
+                    .is_some_and(|text| text.contains("active export"))
+            })
+        },
+    );
+    assert_eq!(app.credentials.reads(), 0);
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "Keep this file");
+    app.update(cx, |_, cx| {
+        assert_eq!(cx.global::<Jobs>().active_count(), 1)
+    });
+    drop(occupied);
+    app.click(cx, "export-cancel");
+    app.wait_gone(cx, "export-save");
+    assert!(!app.logs(cx).contains("Submitted query:"));
+}
+
+#[gpui_kit::test]
+fn run_export_shows_captured_incremental_policy_and_staging_conflict(cx: &mut TestAppContext) {
+    use qrow::model::transfer::{SAVE_TO_FILE_KEY, TransferPreset};
+    let mut profile = offline_profile("Conservative export");
+    profile.transfer.preset = TransferPreset::Conservative;
+    profile
+        .parameters
+        .insert(SAVE_TO_FILE_KEY.into(), "true".into());
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 1".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    app.run_export(cx);
+    app.wait_for(cx, "export-incremental-notice");
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find("export-incremental-notice")
+                .label()
+                .unwrap()
+                .contains("On from Conservative")
+        );
+        assert!(window.try_find("export-save-to-file-warning").is_some());
+    });
+    assert_eq!(app.credentials.reads(), 0);
+    app.click(cx, "export-cancel");
+}
+
+#[gpui_kit::test]
 fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
     cx: &mut TestAppContext,
 ) {
