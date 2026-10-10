@@ -269,6 +269,7 @@ class DockerFixture:
 
     def env(self):
         return {"QROW_E2E_PROJECT": self.project, "QROW_E2E_PORT": str(self.port),
+                "QROW_E2E_RUNTIME": self.runtime,
                 "QROW_E2E_NATIVE_EVIDENCE": str(evidence_dir(self.artifacts).resolve()), **secure_env(self)}
 
     def state(self):
@@ -470,6 +471,7 @@ class NativeFixture:
 
     def env(self):
         return {"QROW_E2E_PROJECT": self.project, "QROW_E2E_PORT": str(self.port),
+                "QROW_E2E_RUNTIME": self.runtime,
                 "QROW_E2E_NATIVE_EVIDENCE": str(evidence_dir(self.artifacts)), **secure_env(self)}
 
     def state(self):

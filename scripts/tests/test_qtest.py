@@ -78,6 +78,22 @@ class CatalogTests(unittest.TestCase):
         self.assertIsNone(trino.fixture)
         self.assertIn("trino", catalog.CI_JOBS["backend"].suites)
 
+    def test_transfer_probes_keep_native_and_docker_ci_requirements_separate(self):
+        kyuubi = catalog.SUITES["perf-e2e"]
+        self.assertEqual(kyuubi.fixture, "any")
+        self.assertNotIn("docker", kyuubi.requires)
+        self.assertIn("transfer_perf::kyuubi", kyuubi.steps[1].nextest_filter)
+        for step, binary in zip(kyuubi.steps, ("e2e", "integration")):
+            self.assertEqual(step.command[step.command.index("--test") + 1], binary)
+        for engine in ("postgres", "trino"):
+            name = "perf-" + engine
+            suite = catalog.SUITES[name]
+            self.assertTrue(suite.explicit_only)
+            self.assertIn("docker", suite.requires)
+            self.assertIn("--perf", suite.steps[0].command)
+            self.assertIn(name, catalog.CI_JOBS["backend"].report_only)
+            self.assertNotIn(name, catalog.CI_JOBS["e2e"].report_only)
+
     def test_guide_topics_that_the_cli_names_exist(self):
         topics = cli.guide_sections()
         self.assertIn("write-a-ui-test", topics)
@@ -411,7 +427,9 @@ class FixtureSessionTests(RunTests):
         self.assertIn("Preparation failed", summary["suites"][1]["reason"])
 
     def test_e2e_and_perf_e2e_share_the_build_of_the_test_binary(self):
-        self.assertEqual(catalog.SUITES["e2e"].prepare, catalog.SUITES["perf-e2e"].prepare)
+        self.assertEqual(catalog.SUITES["e2e"].prepare, (catalog.E2E_BUILD,))
+        self.assertEqual(catalog.SUITES["perf-e2e"].prepare,
+                         (catalog.E2E_BUILD, catalog.TRANSFER_PERF_BUILD))
 
     def test_failed_preparation_starts_no_servers(self):
         events, patches = self.fake()
