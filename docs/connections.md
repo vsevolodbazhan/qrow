@@ -87,7 +87,8 @@ macOS can request Keychain access when you save the password.
 
 ## Export transfer policy
 
-Each profile stores a transfer preset. Existing profiles use **Balanced**.
+Open **Connection Settings → Export** to choose a transfer preset.
+Existing profiles use **Balanced**.
 Transfer-policy changes do not reconnect an otherwise unchanged session.
 
 | Setting | Conservative | Balanced | Fast |
@@ -101,9 +102,10 @@ Transfer-policy changes do not reconnect an otherwise unchanged session.
 Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
 1000 MB/s. Zero disables the speed limit. The export count is 1 or 2 for all
 connection types. The shared memory budget can admit fewer exports than
-this count. Download admission uses this count. File writers currently use
-only the shared memory and shutdown accounting. The profile limit does not
-yet cover snapshot and replay writers.
+this count. The count covers downloads, snapshot exports, retained-result
+exports, and **Copy as**. A file export holds its slot until publication or
+temporary-file cleanup ends. Admission occurs after you choose a file and
+before sign-in or SQL submission.
 
 Kyuubi export requests use the widest owned row seen so far and a 25 percent
 margin. Later rows can be wider. The 64 MiB response and allocation limits
@@ -122,9 +124,14 @@ and 1 MiB of decoded configuration text.
 `${...}` substitution also inherit, to preserve their session behavior.
 An **All rows** export of a live cursor keeps the execution strategy that
 was selected when the original query started.
+Its **Transfer Preset** field can override the fetch estimate and speed limit
+for that download. The connection's export count stays unchanged.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.
+The **Run and export** form shows the configured collection value before
+you choose a file. It also shows a warning when connection parameters enable
+`saveToFile`.
 `kyuubi.engine.spark.operation.incremental.collect` takes precedence over
 `kyuubi.operation.incremental.collect`. The administrator's
 `kyuubi.operation.result.saveToFile.enabled` option conflicts with

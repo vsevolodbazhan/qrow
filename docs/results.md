@@ -352,9 +352,16 @@ convert exact decimal text to floating-point values for display.
 
 The connection's [transfer policy](connections.md#export-transfer-policy)
 sets the export count and the Kyuubi fetch estimate and speed limit.
-A busy connection rejects another source download before SQL starts.
-File writers currently use shared memory and shutdown accounting. Snapshot
-and replay writers do not yet use the connection count.
+A busy connection rejects another export before sign-in or SQL submission.
+Snapshot exports, retained-result exports, and **Copy as** use the same count.
+A file export holds its slot until publication or temporary-file cleanup ends.
+The count uses the connection captured when the export form opens. Retry
+keeps that connection after you close the result tab.
+
+For **All rows** with a live Kyuubi cursor, choose **Transfer Preset** to
+override the fetch estimate and speed limit for that download. This choice
+does not change the saved connection, its export count, or the collection
+mode of the original query. A retained spool needs no server transfer.
 
 An oversized Kyuubi response stops the export. Qrow does not retry an
 advancing fetch. The target file is not published, and the cursor becomes
