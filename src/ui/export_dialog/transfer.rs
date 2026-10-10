@@ -48,6 +48,12 @@ impl ExportDialog {
 }
 
 pub(super) fn notice(intent: &run::Intent) -> Option<String> {
+    if intent.profile.database_type == crate::model::DatabaseType::Trino {
+        return Some(format!(
+            "Trino spooling: {}. The server can return classic results.",
+            intent.profile.transfer.settings().trino_spooling.label()
+        ));
+    }
     if intent.profile.database_type != crate::model::DatabaseType::Kyuubi {
         return None;
     }

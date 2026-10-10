@@ -64,6 +64,20 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("--no-default-features", catalog.CLIPPY_CORE.command)
         self.assertNotIn("--no-default-features", catalog.CLIPPY_APP.command)
 
+    def test_coverage_serializes_shared_budget_tests_without_changing_selection(self):
+        coverage = catalog.SUITES["coverage"]
+        self.assertEqual(coverage.steps[1].command, (
+            "cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
+            "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
+            "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov",
+        ))
+        self.assertEqual(coverage.steps[1].env, (("RUST_TEST_THREADS", "1"),))
+        for suite in catalog.SUITES.values():
+            for step in suite.steps:
+                if suite.name != "coverage":
+                    with self.subTest(suite=suite.name):
+                        self.assertNotIn("RUST_TEST_THREADS", dict(step.env))
+
     def test_postgres_has_its_own_docker_suite_and_backend_ci_job(self):
         postgres = catalog.SUITES["postgres"]
         self.assertTrue(postgres.explicit_only)

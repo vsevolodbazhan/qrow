@@ -136,6 +136,7 @@ fn fixture(engine: &str, case: &str) -> Result<(Profile, DatabaseConnector, Stri
             request_mib: 8,
             speed_limit_mb: 0,
             concurrent_exports: 2,
+            ..TransferSettings::default()
         },
     };
     let (trust, sql) = match engine {

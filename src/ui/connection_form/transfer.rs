@@ -3,7 +3,7 @@ use super::{RowSelect, choice_select, chosen};
 use crate::{
     model::{
         DatabaseType,
-        transfer::{IncrementalCollect, Transfer, TransferPreset},
+        transfer::{IncrementalCollect, Transfer, TransferPreset, TrinoSpooling},
     },
     ui::{ProfileEditor, Qrow, profile_view::connection_row},
 };
@@ -21,6 +21,7 @@ pub(in crate::ui) struct TransferForm {
     request: Entity<InputState>,
     speed: Entity<InputState>,
     count: RowSelect,
+    spooling: RowSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -32,6 +33,12 @@ fn presets() -> Vec<(TransferPreset, String)> {
 }
 fn incremental_choices() -> Vec<(IncrementalCollect, String)> {
     IncrementalCollect::ALL
+        .into_iter()
+        .map(|value| (value, value.label().into()))
+        .collect()
+}
+fn spooling_choices() -> Vec<(TrinoSpooling, String)> {
+    TrinoSpooling::ALL
         .into_iter()
         .map(|value| (value, value.label().into()))
         .collect()
@@ -54,7 +61,13 @@ impl TransferForm {
             cx,
         );
         let count = choice_select(&counts(), &transfer.custom.concurrent_exports, window, cx);
-        let subscriptions = [&preset, &incremental, &count]
+        let spooling = choice_select(
+            &spooling_choices(),
+            &transfer.custom.trino_spooling,
+            window,
+            cx,
+        );
+        let subscriptions = [&preset, &incremental, &count, &spooling]
             .into_iter()
             .map(|select| {
                 cx.subscribe_in(select, window, |_, _, event, _, cx| {
@@ -68,6 +81,7 @@ impl TransferForm {
             preset,
             incremental,
             count,
+            spooling,
             request: cx.new(|cx| {
                 InputState::new(window, cx).default_value(transfer.custom.request_mib.to_string())
             }),
@@ -88,6 +102,9 @@ impl TransferForm {
         transfer.preset = chosen(&self.preset, &presets(), cx);
         if transfer.preset == TransferPreset::Custom {
             transfer.custom.concurrent_exports = chosen(&self.count, &counts(), cx);
+            if engine == DatabaseType::Trino {
+                transfer.custom.trino_spooling = chosen(&self.spooling, &spooling_choices(), cx);
+            }
             if engine == DatabaseType::Kyuubi {
                 transfer.custom.incremental_collect =
                     chosen(&self.incremental, &incremental_choices(), cx);
@@ -223,6 +240,28 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
                     )
                 } else {
                     gpui_kit::div().child(speed.clone()).into_any_element()
+                }
+            },
+        ));
+    }
+    if form.profile.database_type == DatabaseType::Trino {
+        let mode = settings.trino_spooling.label().to_owned();
+        group = group.item(connection_row(
+            owner,
+            "Spooled Results",
+            "Applies to new exports when supported by the server.",
+            &["export", "trino", "spool", "segment", "parallel"],
+            false,
+            move |_, form, _, _| {
+                if custom {
+                    select(
+                        &form.transfer.spooling,
+                        form,
+                        "connection-transfer-spooling",
+                        "Spooled Results",
+                    )
+                } else {
+                    gpui_kit::div().child(mode.clone()).into_any_element()
                 }
             },
         ));

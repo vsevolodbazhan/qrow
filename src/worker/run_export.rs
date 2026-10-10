@@ -84,6 +84,12 @@ impl Worker {
         }
         let memory = budget::GLOBAL.allowance(export::spool::PRODUCER_MEMORY)?;
         let transport = budget::GLOBAL.allowance(match profile.database_type {
+            DatabaseType::Trino
+                if profile.transfer.settings().trino_spooling
+                    != crate::model::transfer::TrinoSpooling::Off =>
+            {
+                512 * budget::MIB
+            }
             DatabaseType::Postgres | DatabaseType::Trino => 192 * budget::MIB,
             DatabaseType::Kyuubi => 64 * budget::MIB,
         })?;
@@ -223,6 +229,7 @@ impl Runner {
             Some(&control),
             request.download.cancel_flag(),
         )?;
+        let control = control.with_allowance(request._transport.clone());
         control.check()?;
         self.session
             .as_mut()
@@ -347,9 +354,16 @@ impl Runner {
                     "Connector returned more rows than requested"
                 );
                 if batch.rows.is_empty() {
+                    if self.session.as_mut().unwrap().commit_export_rows(0)? {
+                        continue;
+                    }
                     break;
                 }
                 producer.append(&batch.rows, request.download.cancelled())?;
+                self.session
+                    .as_mut()
+                    .unwrap()
+                    .commit_export_rows(batch.rows.len())?;
                 count += batch.rows.len();
                 if !preview_full {
                     let mut keep = 0usize;
@@ -397,6 +411,15 @@ impl Runner {
             }
             export::check_cancelled(request.download.cancelled())?;
             self.complete_execution(true);
+            if let Some(warning) = self.session.as_ref().unwrap().export_cleanup_warning() {
+                self.log(
+                    Some(request.execution),
+                    Severity::Info,
+                    LogKind::FetchCompleted,
+                    warning,
+                    None,
+                );
+            }
             self.session.as_mut().unwrap().close_operation()?;
             Ok(())
         })();

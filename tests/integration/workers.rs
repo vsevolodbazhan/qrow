@@ -31,6 +31,8 @@ struct Fixture {
     closes: Arc<AtomicUsize>,
     adaptive: bool,
     transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    commit_enforced: bool,
+    commits: Arc<Mutex<Vec<usize>>>,
 }
 struct FakeSession {
     cancels: Arc<AtomicUsize>,
@@ -51,7 +53,11 @@ struct FakeSession {
     closes: Arc<AtomicUsize>,
     adaptive: bool,
     transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    commit_enforced: bool,
+    commits: Arc<Mutex<Vec<usize>>>,
     transfer: qrow::model::transfer::Transfer,
+    awaiting_commit: Option<usize>,
+    empty_boundary: bool,
 }
 struct Cancel(Arc<AtomicBool>, Arc<AtomicUsize>);
 impl Cancellation for Cancel {
@@ -90,6 +96,10 @@ impl Connector for Fixture {
             adaptive: self.adaptive,
             transfers: self.transfers.clone(),
             transfer: Default::default(),
+            commit_enforced: self.commit_enforced,
+            commits: self.commits.clone(),
+            awaiting_commit: None,
+            empty_boundary: self.commit_enforced,
         }))
     }
 }
@@ -164,7 +174,31 @@ impl Session for FakeSession {
             .into(),
         }])
     }
+    fn commit_export_rows(&mut self, rows: usize) -> Result<bool> {
+        if !self.commit_enforced {
+            return Ok(false);
+        }
+        self.commits.lock().unwrap().push(rows);
+        if let Some(expected) = self.awaiting_commit.take() {
+            anyhow::ensure!(
+                rows == expected,
+                "Worker changed the fetched batch before commit"
+            );
+            return Ok(true);
+        }
+        anyhow::ensure!(rows == 0, "No batch to commit");
+        Ok(false)
+    }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        anyhow::ensure!(
+            self.awaiting_commit.is_none(),
+            "Worker fetched before commit"
+        );
+        if self.empty_boundary {
+            self.empty_boundary = false;
+            self.awaiting_commit = Some(0);
+            return Ok(Batch { rows: Vec::new() });
+        }
         self.requested.lock().unwrap().push(count);
         let count = if self.max_batch == 0 {
             count
@@ -190,6 +224,9 @@ impl Session for FakeSession {
             })
             .collect();
         self.offset = end;
+        if self.commit_enforced && !rows.is_empty() {
+            self.awaiting_commit = Some(rows.len());
+        }
         Ok(Batch { rows })
     }
     fn close_operation(&mut self) -> Result<()> {
@@ -1990,4 +2027,49 @@ fn rejected_advancing_fetch_stops_without_retry_or_sql_resubmission() {
         download.wait_spool().unwrap().status(),
         export::spool::Status::Failed(_)
     ));
+}
+
+#[test]
+fn run_export_commits_after_append_before_preview_drain_and_continues_empty_boundaries() {
+    use qrow::{export, logs::ExecutionId};
+    for oversized in [false, true] {
+        let fixture = Arc::new(Fixture {
+            total_rows: 3,
+            max_batch: 2,
+            commit_enforced: true,
+            value_bytes: if oversized { 8 * 1024 * 1024 + 1 } else { 0 },
+            ..Default::default()
+        });
+        let worker = worker(fixture.clone());
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                export_profile(),
+                "SELECT commit".into(),
+                ExecutionId(405),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        loop {
+            match next(&worker) {
+                Event::Downloaded { spool, .. } => {
+                    assert!(!oversized);
+                    assert_eq!(spool.status(), export::spool::Status::Complete { rows: 3 });
+                    break;
+                }
+                Event::DownloadFailed { .. } => {
+                    assert!(oversized);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            *fixture.commits.lock().unwrap(),
+            if oversized { vec![0] } else { vec![0, 2, 1, 0] }
+        );
+        drop(download);
+    }
 }
