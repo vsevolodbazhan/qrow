@@ -943,10 +943,10 @@ fn decode_columns_limited(
         }
         match column {
             TColumn::BoolVal(c) => measure!(c, |v: &bool| v.to_string().capacity()),
-            TColumn::ByteVal(c) => measure!(c, |v: &i8| v.to_string().capacity()),
-            TColumn::I16Val(c) => measure!(c, |v: &i16| v.to_string().capacity()),
-            TColumn::I32Val(c) => measure!(c, |v: &i32| v.to_string().capacity()),
-            TColumn::I64Val(c) => measure!(c, |v: &i64| v.to_string().capacity()),
+            TColumn::ByteVal(c) => measure!(c, |v: &i8| integer_length(i64::from(*v))),
+            TColumn::I16Val(c) => measure!(c, |v: &i16| integer_length(i64::from(*v))),
+            TColumn::I32Val(c) => measure!(c, |v: &i32| integer_length(i64::from(*v))),
+            TColumn::I64Val(c) => measure!(c, |v: &i64| integer_length(*v)),
             TColumn::DoubleVal(c) => {
                 measure!(c, |v: &thrift::OrderedFloat<f64>| v.to_string().capacity())
             }
@@ -984,10 +984,10 @@ fn decode_columns_limited(
         }
         match column {
             TColumn::BoolVal(c) => append!(c, |v: bool| v.to_string()),
-            TColumn::ByteVal(c) => append!(c, |v: i8| v.to_string()),
-            TColumn::I16Val(c) => append!(c, |v: i16| v.to_string()),
-            TColumn::I32Val(c) => append!(c, |v: i32| v.to_string()),
-            TColumn::I64Val(c) => append!(c, |v: i64| v.to_string()),
+            TColumn::ByteVal(c) => append!(c, |v: i8| integer_text(i64::from(v))),
+            TColumn::I16Val(c) => append!(c, |v: i16| integer_text(i64::from(v))),
+            TColumn::I32Val(c) => append!(c, |v: i32| integer_text(i64::from(v))),
+            TColumn::I64Val(c) => append!(c, integer_text),
             TColumn::DoubleVal(c) => append!(c, |v: thrift::OrderedFloat<f64>| v.to_string()),
             TColumn::StringVal(c) => append!(c, |v| v),
             TColumn::BinaryVal(c) => append!(c, |v: Vec<u8>| {
@@ -1002,6 +1002,24 @@ fn decode_columns_limited(
         }
     }
     Ok(rows)
+}
+
+// Preflight integer storage without formatting each value twice.
+fn integer_length(value: i64) -> usize {
+    let magnitude = value.unsigned_abs();
+    let digits = if magnitude == 0 {
+        1
+    } else {
+        magnitude.ilog10() as usize + 1
+    };
+    digits + usize::from(value < 0)
+}
+
+fn integer_text(value: i64) -> String {
+    use std::fmt::Write;
+    let mut text = String::with_capacity(integer_length(value));
+    write!(&mut text, "{value}").expect("Writing an integer to a String cannot fail");
+    text
 }
 
 fn is_null(nulls: &[u8], index: usize) -> bool {
@@ -1071,6 +1089,49 @@ mod tests {
             decode_columns_limited(columns, 1, 1, 48).unwrap(),
             vec![vec![None]]
         );
+    }
+
+    #[test]
+    fn integer_decode_reserves_exact_storage_at_signed_boundaries() {
+        let values = vec![
+            i64::MIN,
+            i64::MAX,
+            i32::MIN.into(),
+            i32::MAX.into(),
+            i16::MIN.into(),
+            i16::MAX.into(),
+            i8::MIN.into(),
+            i8::MAX.into(),
+            -10,
+            -1,
+            0,
+            1,
+            9,
+            10,
+        ];
+        let columns = vec![TColumn::I64Val(TI64Column::new(values.clone(), vec![]))];
+        let storage = values.len()
+            * (std::mem::size_of::<Row>() + std::mem::size_of::<Option<String>>())
+            + values
+                .iter()
+                .map(|value| value.to_string().len())
+                .sum::<usize>();
+        assert!(decode_columns_limited(columns.clone(), 1, values.len(), storage - 1).is_err());
+        let rows = decode_columns_limited(columns, 1, values.len(), storage).unwrap();
+        for (row, value) in rows.iter().zip(values) {
+            let text = row[0].as_ref().unwrap();
+            assert_eq!(text, &value.to_string());
+            assert_eq!(text.capacity(), text.len());
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn integer_storage_matches_formatted_values(value: i64) {
+            let text = integer_text(value);
+            proptest::prop_assert_eq!(&text, &value.to_string());
+            proptest::prop_assert_eq!(integer_length(value), text.capacity());
+        }
     }
 
     #[test]

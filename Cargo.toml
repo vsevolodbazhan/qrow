@@ -143,3 +143,7 @@ harness = false
 [[bench]]
 name = "dbt"
 harness = false
+
+[[bench]]
+name = "export"
+harness = false

@@ -38,9 +38,11 @@ accept a test filter.
 | `unit` * | Rust unit and integration tests that need no UI and no servers. | Rust, cargo-nextest |
 | `ui` * | Headless tests of the real Qrow window, without servers. | macOS, cargo-nextest |
 | `coverage` | Core line coverage with an 80% floor. | cargo-llvm-cov |
-| `perf` | SQL validation and dbt manifest benchmarks with enforced budgets. | Rust |
+| `perf` | SQL, dbt, and export benchmarks with enforced budgets. | Rust |
 | `perf-ui` * | Frame, scroll, editor, assistant, and Activity timings of the real window in a release-like build. | macOS, cargo-nextest |
-| `perf-e2e` * | Query and page latency of the real window against the real servers. | macOS, Docker or Java 17 |
+| `perf-e2e` * | Window query latency and Kyuubi export transfer against the real servers. | macOS, Docker or Java 17 |
+| `perf-postgres` | Postgres export transfer and COPY measurements. | Docker, cargo-nextest |
+| `perf-trino` | Trino export transfer measurements. | Docker, cargo-nextest |
 | `perf-app` | Launch time, idle memory, and idle CPU of the release app on the desktop. | macOS desktop |
 | `scripts` | ShellCheck, actionlint, Ruff, and automation unit tests. | uv, ShellCheck, actionlint |
 | `policy` | Dependency waiver dates and pinned CI actions. | uv |
@@ -527,9 +529,11 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 
 | Suite | Probes |
 | --- | --- |
-| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. |
+| `perf` | SQL validation of 10 KB, 100 KB, and 1 MB. The parse of synthetic dbt manifests of 5, 15, 35, and 70 MB, the load of their saved index, and a search of the index. Kyuubi column decoding and CSV/Parquet export throughput, peak memory, and spool size on narrow, wide, and null-heavy data. |
 | `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. It builds with the `perf` Cargo profile, which optimizes like the release build. |
-| `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
+| `perf-e2e` | The time from **Run** to the first result row and to the next page. Kyuubi export throughput and peak memory for each preset. |
+| `perf-postgres` | Postgres export throughput and peak memory for each preset. Normal protocol and server CSV `COPY` comparison. |
+| `perf-trino` | Trino export throughput and peak memory for each preset. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
 
 CI runs `perf` with its budgets. It runs the other probes as report-only
@@ -567,6 +571,66 @@ The [SQL benchmark](../benches/sql.rs) reports the median of 21 samples
 after a warm-up. Its budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms at
 1 MB. The release profile favors a small size, so run `perf` after you change
 it.
+
+The [export benchmark](../benches/export.rs) runs one spool producer and one
+CSV or Parquet writer in each fresh process. It checks the full row count
+and publishes the file with the normal atomic Save procedure. It reports
+the median of three measured samples after one warm-up. Latency is per MiB
+of cell payload. The memory probe uses the largest operating-system peak
+resident set size of the three samples. The CSV cases also report the
+spool-to-CSV size ratio. The decoder cases use the same narrow, wide, and
+null-heavy schemas and exclude input cloning from their timed interval.
+
+Export budgets allow large regressions before failure. Integer decoding
+must stay below 400 ns per cell. Wide and null-heavy decoding must stay below
+50 ns per cell. Writer latency limits are 400 ms/MiB for narrow data and
+800 ms/MiB for null-heavy data. Wide CSV and Parquet limits are 20 and
+10 ms/MiB. Each process must stay below 384 MiB peak resident set size.
+The spool-to-CSV ratio limits are 3 for narrow data, 1.25 for wide data,
+and 2 for null-heavy data.
+
+The [transfer probes](../tests/integration/transfer_perf.rs) measure the
+normal Worker, spool, and CSV Save path on 50,000 rows with a different
+1 KiB text value in each row. Run all engines with:
+
+```sh
+./qtest run perf-e2e perf-postgres perf-trino --runtime docker
+```
+
+Each case uses a fresh client process and a warmed connection. One warm-up
+precedes three measured samples. The report gives median milliseconds per MiB
+of published file and the largest client peak resident set size. Raw samples include file bytes
+and elapsed seconds for throughput calculations. A complete probe has a
+20-minute deadline. It checks every exported row and each unique ID.
+Trino selects an ordered, bounded key range from TPCH sf1 orders. The range
+keeps the server sort within the fixture memory limit. Kyuubi uses a separate
+CONNECTION engine and an in-memory catalog for each sample. The corpus does not need a persistent metastore. Before each Docker
+sample, the probe stops engines within its disposable fixture. This releases
+the two worker cores held by the readiness engine.
+Its profile starts with incremental collect off. Conservative and Custom
+change it to on. With Docker, the probe also reads the driver's peak resident
+set size before the session closes. This peak includes JVM startup and warm-up.
+The native runtime reports client memory only.
+
+The default comparison case is `legacy_policy`. It uses the current code
+with fixed 1,000-row Kyuubi requests and no collection override. It is not a
+measurement of an older source revision. To compare an older executable,
+set `QROW_TRANSFER_BASELINE_BIN` to an integration-test executable with
+`transfer_perf::sample`. Use the same corpus, validation, and test harness.
+The sample must print `QROW_TRANSFER_SAMPLE` JSON. Set
+`QROW_TRANSFER_BASELINE_REVISION` to its full commit ID. The case then has
+the name `baseline`. Raw samples record that commit ID.
+
+The Postgres protocol and `COPY` cases use the same ordered query and atomic
+file publication. Both use unencrypted transport to the disposable local
+server. They check row order, NULLs, commas, quotes, line breaks, and Unicode.
+These cases compare local CSV formatting with server CSV formatting. They do
+not measure the complete Worker and spool path. Production export continues
+to use the normal protocol.
+
+CI runs Kyuubi probes with `perf-e2e` on the macOS native fixture. It runs
+Postgres and Trino probes on the Linux Docker job. These probes report
+measurements without enforced throughput budgets.
 
 The [dbt benchmark](../benches/dbt.rs) makes synthetic manifests with the
 [generator](../tests/support/dbt_manifest.rs) and reports the median of 7
@@ -777,7 +841,7 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `core` | Linux | `coverage`, which runs the unit tests of the core library | |
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
-| `backend` | Linux | `backend`, `postgres`, `trino` with Docker | `core` |
+| `backend` | Linux | `backend`, `postgres`, `trino`, and `perf-postgres`, `perf-trino` (report only), with Docker | `core` |
 | `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
 | `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
@@ -846,8 +910,9 @@ events, required checks, and releases.
   frames without the GPU. They do not measure Metal rendering. `perf-app`
   measures the time until Qrow reports a ready UI, not until the first frame
   is on the screen.
-- Performance on an M1 Mac with 8 GB of memory is not verified. A pass on a
-  larger machine does not show performance on that machine.
+- Synthetic export and Docker transfer probes have local measurements on an
+  M1 Mac with 8 GB of memory. These probes do not establish Metal frame times
+  or performance for every query, server, or concurrent export.
 - The pixel checks of `desktop` depend on the main display and its scale.
 - In CI, only `perf` has enforced budgets. The other probes are report-only,
   so a slower probe does not fail CI. Compare their history on `main`.
