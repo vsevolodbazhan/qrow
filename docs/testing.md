@@ -163,6 +163,8 @@ reuse, late connection rejection, and the cleanup deadline. A heartbeat's
 transport can close while the primary transport stays open.
 The tests also check a stalled primary body after a successful cancel response,
 cancellation before GET admission, and old cancellation after session handoff.
+Closed query pools must release their memory reservation before the next query.
+These tests keep the old cancellation handle and session alive.
 Repeated cancellation sends one `DELETE` and uses the first cleanup result.
 Raw JSON tests check exact decimal text, row and schema limits, and decoding
 on demand. Session tests reject cumulative header limits without partial
@@ -176,14 +178,25 @@ SQL error tests check transaction-header updates before the next statement.
 Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
 the real window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
-port. It checks password authentication, certificate checks, types, pagination,
+port. A pinned Adobe S3Mock 5.2.3 container supplies HTTPS storage. It shares
+a network namespace with Trino, so presigned loopback URLs work from both
+the coordinator and client. The fixture removes both containers after the run.
+S3Mock does not check presigned signatures or expiry and does not encrypt stored
+objects. Fake HTTPS peers check expiry and storage encryption headers.
+The suite checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
 and result limits.
 The fixture sets the client timeout to five seconds. A direct-export test
 commits a spool batch, stops result reads for 12 seconds, then continues the
 download. It checks repeated HEAD requests in the fixture request log and
-session reuse after cancellation. Other direct tests exceed both preview
-limits and check settings, prepared statements, transactions, and empty results.
+session reuse after cancellation. Serial and parallel export tests validate and
+replay 50,000 rows with Bangkok and New York session time zones. They compare
+storage request logs before and after each execution. Each remote GET must
+have a matching DELETE after the client commits its segment. Connector tests
+run one at a time to keep this trace specific to the execution.
+Fake peers check offset-bearing expiry before a GET. Offsetless expiry uses
+terminal storage responses, with no retry or ACK after HTTP 403 or 410.
+Other direct tests exceed both preview limits and check settings, prepared statements, transactions, and empty results.
 Window tests save large direct exports, keep prepared statements and session
 settings, and reuse completed spools. They check original SQL after editor
 changes, warnings after disconnect, retry after tab closure, cancellation,
@@ -198,7 +211,7 @@ sign-in. A query starts sign-in when necessary. Tests also check browser
 progress and cancellation in the connection toolbar, token reuse without a
 saved sign-in, and renewal without another browser login.
 The fixture provider uses only synthetic accounts and an HTTPS callback at
-Trino. It removes the container after the run.
+Trino. The storage namespace stays alive during the OAuth2 restart.
 
 The suite needs Docker and OpenSSL. It builds the tests before the server
 starts. The Linux backend CI job runs its connector tests. The real-window

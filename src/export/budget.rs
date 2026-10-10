@@ -127,6 +127,9 @@ impl Budget {
 }
 
 impl Allowance {
+    pub(crate) fn capacity(&self) -> usize {
+        self.limit
+    }
     pub(crate) fn acquire(self: &Arc<Self>, bytes: usize) -> io::Result<Allocation> {
         let mut used = self.used.lock().unwrap();
         if bytes > self.limit.saturating_sub(*used) {

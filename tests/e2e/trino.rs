@@ -7,9 +7,16 @@ use qrow::{
 };
 
 fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
+    launch_with_preset(cx, sql, qrow::model::transfer::TransferPreset::Balanced)
+}
+fn launch_with_preset(
+    cx: &mut TestAppContext,
+    sql: &str,
+    preset: qrow::model::transfer::TransferPreset,
+) -> TestApp {
     let fixture = std::env::var("QROW_TRINO_FIXTURE").expect("Run with ./qtest run trino");
     assert!(fixture.starts_with("qrow-e2e-trino-"));
-    let profile = Profile {
+    let mut profile = Profile {
         database_type: DatabaseType::Trino,
         name: "Trino".into(),
         host: "localhost".into(),
@@ -20,6 +27,7 @@ fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
         tls: true,
         ..Profile::default()
     };
+    profile.transfer.preset = preset;
     let credentials = MemoryCredentials::default();
     credentials
         .set_password(profile.id, "qrow-test-password")
@@ -551,4 +559,44 @@ fn parquet_picosecond_error_preserves_the_file_and_text_retry_uses_the_result(
         text
     );
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut TestAppContext) {
+    let app = launch_with_preset(
+        cx,
+        "SELECT orderkey AS id, lpad(CAST(orderkey AS varchar),10,'0') || rpad('',1014,'x') AS payload FROM tpch.sf1.orders WHERE orderkey <=200000 ORDER BY orderkey LIMIT 50000",
+        qrow::model::transfer::TransferPreset::Fast,
+    );
+    app.run_export(cx);
+    app.wait_for(cx, "export-incremental-notice");
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find("export-incremental-notice")
+                .label()
+                .unwrap()
+                .contains("Trino spooling: Parallel")
+        )
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("parallel.csv");
+    save_export(&app, cx, &output);
+    let mut count = 0;
+    let mut previous = 0;
+    for row in csv::Reader::from_path(output).unwrap().records() {
+        let row = row.unwrap();
+        assert_eq!(row.len(), 2);
+        let id = row[0].parse::<u64>().unwrap();
+        assert!(id > previous);
+        previous = id;
+        assert_eq!(&row[1], format!("{id:010}{}", "x".repeat(1014)));
+        count += 1;
+    }
+    assert_eq!(count, 50000);
+    app.wait_status(cx, "Preview: Export download complete");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.wait_cell(cx, 0, 1, "42");
 }

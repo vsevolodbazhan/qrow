@@ -56,3 +56,8 @@ failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Trino transfer assertions compare execution-specific storage request logs.
+[[profile.default.overrides]]
+filter = "binary(integration) & test(/^trino::/)"
+test-group = "fixture-serial"

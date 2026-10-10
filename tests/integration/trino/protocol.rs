@@ -1,9 +1,8 @@
+use super::protocol_fixture as fixture;
 use super::*;
+use fixture::{Reply, Server, done};
 use serde_json::json;
 use std::sync::Arc;
-#[path = "../../support/trino_protocol.rs"]
-mod fixture;
-use fixture::{Reply, Server, done};
 
 #[test]
 fn direct_progress_keeps_the_latest_valid_server_percentage() -> Result<()> {
