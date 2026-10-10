@@ -44,6 +44,7 @@ struct FakeSession {
     requested: Arc<Mutex<Vec<usize>>>,
     offset: usize,
     slow: bool,
+    progress_polls: Option<usize>,
     cancelled: Arc<AtomicBool>,
     closes: Arc<AtomicUsize>,
 }
@@ -78,6 +79,7 @@ impl Connector for Fixture {
             requested: self.requested.clone(),
             offset: 0,
             slow: false,
+            progress_polls: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             closes: self.closes.clone(),
         }))
@@ -96,6 +98,7 @@ impl Session for FakeSession {
         self.executions.lock().unwrap().push(sql.into());
         self.offset = 0;
         self.slow = sql == "slow";
+        self.progress_polls = (sql == "SELECT progress").then_some(0);
         self.cancelled.store(false, Ordering::SeqCst);
         if sql == "broken" {
             return Err(qrow::connector::QueryError("syntax error".into()).into());
@@ -109,6 +112,12 @@ impl Session for FakeSession {
         unreachable!("tab workers do not read the catalog")
     }
     fn poll(&mut self) -> Result<QueryState> {
+        if let Some(polls) = self.progress_polls.as_mut() {
+            *polls += 1;
+            if *polls < 3 && !self.cancelled.load(Ordering::SeqCst) {
+                return Ok(QueryState::Running);
+            }
+        }
         Ok(if self.cancelled.load(Ordering::SeqCst) {
             QueryState::Cancelled
         } else if self.slow {
@@ -118,6 +127,10 @@ impl Session for FakeSession {
                 has_results: !self.no_result,
             }
         })
+    }
+    fn progress_percentage(&self) -> Option<f64> {
+        self.progress_polls
+            .map(|polls| (polls as f64 * 40.).min(100.))
     }
     fn columns(&mut self) -> Result<Vec<Column>> {
         Ok(vec![Column {
@@ -1216,6 +1229,50 @@ fn export_profile() -> Profile {
         username: "synthetic-export".into(),
         ..Default::default()
     }
+}
+
+#[test]
+fn run_and_export_publishes_query_progress_before_the_schema() {
+    use qrow::{export, logs::ExecutionId};
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let download = worker
+        .run_and_export(
+            export_profile(),
+            "SELECT progress".into(),
+            ExecutionId(104),
+            None,
+            &export::Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    let mut has_columns = false;
+    let mut before_schema = Vec::new();
+    loop {
+        match next(&worker) {
+            Event::Columns(_) => has_columns = true,
+            Event::DownloadProgress {
+                execution,
+                rows,
+                bytes,
+                percentage,
+                ..
+            } if !has_columns => {
+                assert_eq!(execution, ExecutionId(104));
+                assert_eq!((rows, bytes), (0, 0));
+                before_schema.push(percentage.unwrap());
+            }
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(spool.row_count(), 1250);
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(before_schema, [40., 80., 100.]);
+    assert_eq!(download.progress_percentage(), Some(100.));
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT progress"]);
 }
 
 #[test]

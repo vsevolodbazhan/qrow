@@ -1128,8 +1128,9 @@ impl Render for ExportDialog {
                     .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(preview)))
             .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
                 .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
+            .when(busy, |view| view.child(div().id("export-progress").test_support().role(Role::Status)
+                .aria_label(self.status_text()).w_full().text_sm().text_color(cx.theme().muted_foreground).child(self.status_text())))
             .child(h_flex().gap_2().child(div().flex_1())
-                .when(busy, |row| row.child(div().text_sm().child("Exporting…")))
                 .child(Button::new("export-cancel").label(if self.background && !busy { "Dismiss" } else if self.background { "Cancel export" } else { "Cancel" }).on_click(cx.listener(|this,_,window,cx| {
                     this.cancel.store(true,Ordering::Relaxed);
                     this.cancel_download();

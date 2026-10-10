@@ -45,6 +45,7 @@ enum Source {
 }
 
 struct State {
+    percentage: Option<f64>,
     source: Source,
     route: Route,
     cancellation_started: bool,
@@ -73,6 +74,7 @@ impl Download {
         Arc::new(Self {
             cancel,
             state: Mutex::new(State {
+                percentage: None,
                 source,
                 route: Route::Pending,
                 cancellation_started: false,
@@ -90,6 +92,15 @@ impl Download {
             Source::Ready(spool) => Some(spool.clone()),
             _ => None,
         }
+    }
+
+    pub fn progress_percentage(&self) -> Option<f64> {
+        self.state.lock().unwrap().percentage
+    }
+
+    pub(super) fn set_progress_percentage(&self, percentage: Option<f64>) {
+        self.state.lock().unwrap().percentage =
+            percentage.filter(|value| value.is_finite() && (0.0..=100.0).contains(value));
     }
 
     pub fn wait_spool(&self) -> io::Result<Arc<Spool>> {
@@ -372,6 +383,22 @@ mod tests {
     use super::*;
     use crate::export::spool::Status;
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn server_progress_is_optional_bounded_and_owned_by_one_download() {
+        let first = Download::pending(Arc::new(AtomicBool::new(false)));
+        let other = Download::pending(Arc::new(AtomicBool::new(false)));
+        assert_eq!(first.progress_percentage(), None);
+        first.set_progress_percentage(Some(37.5));
+        assert_eq!(first.progress_percentage(), Some(37.5));
+        assert_eq!(other.progress_percentage(), None);
+        for invalid in [f64::NAN, f64::INFINITY, -1.0, 101.0] {
+            first.set_progress_percentage(Some(invalid));
+            assert_eq!(first.progress_percentage(), None);
+        }
+        first.set_progress_percentage(Some(100.0));
+        assert_eq!(first.progress_percentage(), Some(100.0));
+    }
 
     struct Target {
         spool: Arc<Spool>,

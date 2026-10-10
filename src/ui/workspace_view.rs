@@ -265,23 +265,16 @@ impl Qrow {
                     })
                     .disabled(active.is_none() && !self.demo)
                     .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
-                let button = if matches!(
-                    self.tab_database_type(active),
-                    crate::model::DatabaseType::Kyuubi | crate::model::DatabaseType::Postgres
-                ) {
-                    let action_context = self.focus.clone();
-                    DropdownButton::new("run-options")
-                        .button(button)
-                        .small()
-                        .disabled(active.is_none() && !self.demo)
-                        .dropdown_menu(move |menu, _, _| {
-                            menu.action_context(action_context.clone())
-                                .menu("Run and export…", Box::new(RunAndExport))
-                        })
-                        .into_any_element()
-                } else {
-                    button.into_any_element()
-                };
+                let action_context = self.focus.clone();
+                let button = DropdownButton::new("run-options")
+                    .button(button)
+                    .small()
+                    .disabled(active.is_none() && !self.demo)
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.action_context(action_context.clone())
+                            .menu("Run and export…", Box::new(RunAndExport))
+                    })
+                    .into_any_element();
                 el.child(button)
             })
             .when(tab.busy || authenticating, |el| {
