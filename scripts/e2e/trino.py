@@ -51,7 +51,11 @@ def main():
             "http-server.https.keystore.path=/etc/trino/server.pem\n"
             "http-server.authentication.type=PASSWORD\n"
             "internal-communication.shared-secret=qrow-trino-synthetic-internal-secret\n"
-            "discovery.uri=http://localhost:8080\n")
+            "discovery.uri=http://localhost:8080\n"
+            "query.client.timeout=5s\n"
+            "http-server.log.path=/tmp/qrow-http-request.log\n"
+            "http-server.log.immediate-flush=true\n"
+            "http-server.log.compression.enabled=false\n")
         (path / "node.properties").write_text("node.environment=test\nnode.id=qrow-test\nnode.data-dir=/tmp/trino-data\n")
         (path / "jvm.config").write_text("-server\n-Xmx768M\n-XX:+UseG1GC\n-XX:+ExitOnOutOfMemoryError\n-Djdk.attach.allowAttachSelf=true\n")
         (path / "log.properties").write_text("io.trino=INFO\n")

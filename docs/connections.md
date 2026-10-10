@@ -209,21 +209,48 @@ For Parquet timestamp limits, see [Parquet](results.md#parquet).
 
 - The schema browser reads one catalog. It shows schemas, tables, views, and
   column types. It does not read table or column comments.
-- Qrow reads all result pages before it shows the first page. It keeps up to
+- Qrow shows the first page before the query ends. Normal Run keeps up to
   100,000 rows or approximately 64 MiB in a temporary file. It reads later rows
-  without keeping them. The result limits do not reduce server work.
-- Each HTTP response has a 16 MiB limit before JSON decoding. Decoding and one
-  response page use memory in addition to the retained result limits.
+  without keeping them before the tab becomes ready. The result limits do not
+  reduce server work. Direct export reads all rows into the export spool.
+- Each HTTP response has a 16 MiB limit before JSON decoding. The HTTP/1 read
+  buffer has a 1 MiB limit. Qrow keeps a raw JSON page and decodes one row at a
+  time. Decoding and one response page use memory in addition to the retained
+  result limits. Direct fetches contain at most 1,000 rows and 48 MiB, with one
+  pending row of up to 16 MiB. See [Export downloaded rows](results.md#export-downloaded-rows).
+- A schema can have 4,096 columns. Column names have a 1 KiB limit, type names
+  have a 4 KiB limit, and their combined text has a 1 MiB limit. Session state
+  can have 1,024 settings and 256 KiB of text. Each setting or encoded prepared
+  statement has a 64 KiB limit. Catalog, schema and transaction names have a
+  1 KiB limit. Expanded request session headers have a 512 KiB limit. Rejected
+  session updates do not change the saved client state.
+- Direct-export SQL has a 1 MiB limit. User names have a 1 KiB limit and
+  credentials have a 64 KiB limit.
 - Nested values use JSON text. Binary and temporal values use the server's
   JSON representation. Nulls remain distinct from empty strings.
 - **Response Timeout** bounds each HTTP request. It does not bound total query
   time. Use the `query_max_run_time` session property for that limit.
+- After the first executing GET, a separate task sends `HEAD` heartbeats while
+  result reads or spool writes pause. It does not fetch rows or apply session
+  updates from HEAD. The task stops before the session runs another statement.
+  Heartbeats use cached credentials. Unsupported HEAD requests or an expired
+  credential can let the server's client timeout expire during a pause.
 - Qrow retries a request only after an explicit authentication rejection. It
   does not retry an uncertain network failure or follow HTTP redirects. A result URL
   must use the same scheme, hostname, and port as the coordinator. Configure
   reverse proxies to return URLs for that origin.
-- Cancellation sends HTTP `DELETE` to the query cursor. It cannot undo completed
-  SQL. A request already in progress can wait until its response timeout.
+- Cancellation sends HTTP `DELETE` to the captured query cursor. Cleanup uses
+  the established coordinator address and cached credentials. It does not
+  refresh tokens or start browser sign-in. Cleanup waits for the current
+  response read to stop, even when `DELETE` succeeds. Repeated cancellation
+  uses the same cleanup result and deadline. If cleanup cannot finish within
+  two seconds, Qrow closes the session and the next Run reconnects.
+- Cancellation closes raw sockets during TLS or a stalled response. It cannot
+  stop a system DNS lookup that has already started. A late connection is
+  rejected before TLS or authentication.
+- If submission succeeds but no query URL arrives, Qrow cannot send the server
+  cancel. The statement can continue until its server timeout. Run does not
+  repeat the SQL automatically. Cancellation cannot undo completed SQL.
 - Client certificates, Kerberos, and the result spooling protocol are not
   supported.
 - Automatic assistant relation context uses the initial schema. It does not

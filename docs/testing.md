@@ -124,9 +124,9 @@ paints the adjacent pixel. They cover both display scales and pane resizing.
   disconnect. Wire tests cancel before SASL, the operation handle, and the
   schema arrive, and while a previous session closes. UI tests check that
   cancelling the save panel submits no SQL and reads no credentials.
-  Wire tests check that completed queries close without another status request.
   Export tests wait for the preview update after the file appears. File
   completion and window updates can arrive at different times.
+  Wire tests check that completed queries close without another status request.
 - Storage tests check competing processes, and the release of the workspace
   lock after a process is killed.
 - The core library must build with `--no-default-features`. `coverage`
@@ -142,12 +142,41 @@ the real macOS Keychain, so no suite runs it. Run that test with
 
 ## Trino tests
 
+Local wire tests check raw socket closure during TLS, request headers and
+response bodies. They cover POST, GET, HEAD and DELETE, pooled connection
+reuse, late connection rejection, and the cleanup deadline. A heartbeat's
+transport can close while the primary transport stays open.
+The tests also check a stalled primary body after a successful cancel response,
+cancellation before GET admission, and old cancellation after session handoff.
+Repeated cancellation sends one `DELETE` and uses the first cleanup result.
+Raw JSON tests check exact decimal text, row and schema limits, and decoding
+on demand. Session tests reject cumulative header limits without partial
+updates. Preview tests check positional reads while the prefix writer stays
+open.
+Wire tests also check the heartbeat timer while a primary response body
+stops. A stalled HEAD request can stop without closing the primary socket.
+Wide-row tests check the fetch byte limit and the order of a pending row.
+SQL error tests check transaction-header updates before the next statement.
+
 Run `./qtest run trino --runtime docker` to test the connector and, on macOS,
 the real window against a disposable Trino 483 coordinator. The suite uses
 synthetic credentials, a temporary certificate authority, and a loopback HTTPS
 port. It checks password authentication, certificate checks, types, pagination,
 session changes, transactions, prepared statements, metadata, cancellation,
-and result limits. It then runs the same disposable coordinator with OAuth2
+and result limits.
+The fixture sets the client timeout to five seconds. A direct-export test
+commits a spool batch, stops result reads for 12 seconds, then continues the
+download. It checks repeated HEAD requests in the fixture request log and
+session reuse after cancellation. Other direct tests exceed both preview
+limits and check settings, prepared statements, transactions, and empty results.
+Window tests save large direct exports, keep prepared statements and session
+settings, and reuse completed spools. They check original SQL after editor
+changes, warnings after disconnect, retry after tab closure, cancellation,
+empty results, and preservation of an existing file for a statement with no
+result set. Offline window tests cancel the save panel without SQL or credentials.
+Worker tests publish query progress before the schema arrives. A window test
+checks the full status in Details, including text wrapping for a long filename.
+The suite then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
 coordinator and provider redirects over verified HTTPS. Tests check that connection selection does not start
 sign-in. A query starts sign-in when necessary. Tests also check browser
