@@ -1,4 +1,5 @@
 """Run Postgres connector and UI tests with a disposable Docker server."""
+import argparse
 import os
 from pathlib import Path
 import platform
@@ -16,14 +17,19 @@ def command(*args, **kwargs):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    options = parser.parse_args()
     name = "qrow-e2e-postgres-" + uuid.uuid4().hex[:12]
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
     # Compile before starting the server, so builds do not consume its resources.
-    command("cargo", "test", "--locked", "--no-default-features", "--test", "integration", "--no-run")
-    if platform.system() == "Darwin":
+    build = ("--profile", "perf") if options.perf else ()
+    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+    if not options.perf and platform.system() == "Darwin":
         command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
-    fixture_root = ROOT / "target" / "qtest" / "postgres"
+    target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
+    fixture_root = target / "qtest" / "postgres"
     fixture_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fixture-", dir=fixture_root) as temporary:
         path = Path(temporary)
@@ -69,6 +75,11 @@ def main():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Postgres fixture did not answer SELECT 1 in time")
                 time.sleep(0.2)
+            if options.perf:
+                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--cargo-profile", "perf",
+                        "--no-default-features", "--test", "integration", "--run-ignored", "ignored-only",
+                        "--no-capture", "-E", "test(/^transfer_perf::postgres$/)", env=env)
+                return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^postgres::/)", env=env)
             if platform.system() == "Darwin":

@@ -41,6 +41,91 @@ fn saved_names(app: &TestApp) -> Vec<String> {
     names
 }
 
+#[gpui_kit::test]
+fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
+    cx: &mut TestAppContext,
+) {
+    use qrow::model::transfer::{IncrementalCollect, TransferPreset};
+    let (workspace, credentials) = connections(&["Transfer fixture"]);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.wait_for(cx, "connection-transfer-preset");
+    app.select(cx, "connection-transfer-preset", "Custom");
+    app.wait_for(cx, "connection-transfer-request");
+    app.fill(cx, "connection-transfer-request", "33");
+    app.click(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "invalid transfer request",
+        Duration::from_secs(5),
+        |window, _| {
+            label(window, "connection-form-error-accessibility")
+                .is_some_and(|error| error.contains("1 to 32"))
+        },
+    );
+    app.fill(cx, "connection-transfer-request", "7");
+    app.fill(cx, "connection-transfer-speed", "12");
+    app.select(cx, "connection-transfer-incremental", "Off");
+    app.select(cx, "connection-transfer-count", "2");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved transfer values",
+        Duration::from_secs(5),
+        |_, _| app.saved().profiles[0].transfer.preset == TransferPreset::Custom,
+    );
+    let transfer = &app.saved().profiles[0].transfer;
+    assert_eq!(transfer.custom.request_mib, 7);
+    assert_eq!(transfer.custom.speed_limit_mb, 12);
+    assert_eq!(transfer.custom.incremental_collect, IncrementalCollect::Off);
+    assert_eq!(transfer.custom.concurrent_exports, 2);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.wait_for(cx, "connection-transfer-request");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-request").value(),
+            Some("7")
+        )
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn postgres_and_trino_transfer_forms_show_only_applicable_controls(cx: &mut TestAppContext) {
+    for engine in [
+        qrow::model::DatabaseType::Postgres,
+        qrow::model::DatabaseType::Trino,
+    ] {
+        let mut profile = offline_profile("Transfer controls");
+        profile.database_type = engine;
+        let id = profile.id;
+        let app = TestApp::launch(
+            cx,
+            Workspace {
+                profiles: vec![profile],
+                ..Default::default()
+            },
+        );
+        app.context_menu(cx, connection_row(id));
+        app.choose(cx, "popup-menu", "Edit");
+        app.connection_page(cx, "Export");
+        app.select(cx, "connection-transfer-preset", "Custom");
+        app.wait_for(cx, "connection-transfer-count");
+        app.update(cx, |window, _| {
+            assert!(window.try_find("connection-transfer-request").is_none());
+            assert!(window.try_find("connection-transfer-speed").is_none());
+            assert!(window.try_find("connection-transfer-incremental").is_none());
+        });
+        cancel_form(&app, cx);
+    }
+}
+
 /// A workspace with these offline connections, one tab each, and a password
 /// for each connection.
 fn connections(names: &[&str]) -> (Workspace, MemoryCredentials) {

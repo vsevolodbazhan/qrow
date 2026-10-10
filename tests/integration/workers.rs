@@ -29,6 +29,8 @@ struct Fixture {
     max_batch: usize,
     requested: Arc<Mutex<Vec<usize>>>,
     closes: Arc<AtomicUsize>,
+    adaptive: bool,
+    transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
 }
 struct FakeSession {
     cancels: Arc<AtomicUsize>,
@@ -47,6 +49,9 @@ struct FakeSession {
     progress_polls: Option<usize>,
     cancelled: Arc<AtomicBool>,
     closes: Arc<AtomicUsize>,
+    adaptive: bool,
+    transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    transfer: qrow::model::transfer::Transfer,
 }
 struct Cancel(Arc<AtomicBool>, Arc<AtomicUsize>);
 impl Cancellation for Cancel {
@@ -82,10 +87,26 @@ impl Connector for Fixture {
             progress_polls: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             closes: self.closes.clone(),
+            adaptive: self.adaptive,
+            transfers: self.transfers.clone(),
+            transfer: Default::default(),
         }))
     }
 }
 impl Session for FakeSession {
+    fn configure_export(&mut self, transfer: &qrow::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()?;
+        self.transfer = transfer.clone();
+        self.transfers.lock().unwrap().push(transfer.clone());
+        Ok(())
+    }
+    fn export_fetch_rows(&self) -> usize {
+        if self.adaptive {
+            self.transfer.settings().request_rows(1024)
+        } else {
+            1000
+        }
+    }
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.preview_offset = Some(self.offset);
         self.execute(sql)
@@ -186,6 +207,205 @@ fn worker(fixture: Arc<Fixture>) -> Worker {
         Arc::new(|_| Ok(Secret::password(""))),
     )
 }
+
+struct PausedNotifications {
+    notified: std::sync::mpsc::Receiver<()>,
+    resume: std::sync::mpsc::Sender<()>,
+}
+
+impl PausedNotifications {
+    fn terminal(&self, worker: &Worker) -> Vec<Event> {
+        let mut events = Vec::new();
+        loop {
+            self.notified
+                .recv_timeout(Duration::from_secs(3))
+                .expect("Worker notification stalled");
+            events.extend(worker.events.try_iter());
+            for _ in worker.logs.try_iter() {}
+            if events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::Downloaded { .. } | Event::DownloadFailed { .. } | Event::Ready { .. }
+                )
+            }) {
+                return events;
+            }
+            self.resume.send(()).unwrap();
+        }
+    }
+
+    fn resume(&self) {
+        self.resume.send(()).unwrap();
+    }
+}
+
+fn paused_worker(fixture: Arc<Fixture>) -> (Worker, PausedNotifications) {
+    let (wake, notified) = std::sync::mpsc::channel();
+    let (resume, continued) = std::sync::mpsc::channel();
+    let continued = Mutex::new(continued);
+    let worker = Worker::with_connector(
+        Arc::new(move || {
+            if wake.send(()).is_ok() {
+                let _ = continued
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(3));
+            }
+        }),
+        fixture,
+        Arc::new(|_| Ok(Secret::password("synthetic"))),
+    );
+    (worker, PausedNotifications { notified, resume })
+}
+
+#[test]
+fn terminal_export_notifications_release_the_producer_before_immediate_admission() {
+    use qrow::{export, logs::ExecutionId};
+    for outcome in ["rows", "command", "failure"] {
+        let fixture = Arc::new(Fixture {
+            total_rows: 4,
+            no_result: outcome == "command",
+            fail_fetch: (outcome == "failure").then_some(0),
+            ..Default::default()
+        });
+        let (worker, notifications) = paused_worker(fixture.clone());
+        let profile = export_profile();
+        let jobs = export::Jobs::default();
+        let flag = Arc::new(AtomicBool::new(false));
+        let publication = jobs
+            .register_for_profile(flag.clone(), None, profile.id, 1)
+            .unwrap();
+        worker
+            .run_and_export(
+                profile.clone(),
+                "SELECT first".into(),
+                ExecutionId(401),
+                None,
+                &jobs,
+                flag,
+            )
+            .unwrap();
+        let events = notifications.terminal(&worker);
+        assert!(events.iter().any(|event| match outcome {
+            "rows" => matches!(event, Event::Downloaded { .. }),
+            "command" => matches!(event, Event::Ready { .. }),
+            _ => matches!(event, Event::DownloadFailed { .. }),
+        }));
+        assert_eq!(
+            jobs.active_count(),
+            1,
+            "The unpublished writer must hold admission"
+        );
+        drop(publication);
+        assert_eq!(
+            jobs.active_count(),
+            0,
+            "The producer must release admission before notification"
+        );
+        worker
+            .run_and_export(
+                profile,
+                "SELECT immediate".into(),
+                ExecutionId(402),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        notifications.resume();
+        let events = notifications.terminal(&worker);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::DownloadFailed { .. }))
+        );
+        assert_eq!(jobs.active_count(), 0);
+        assert_eq!(
+            *fixture.executions.lock().unwrap(),
+            ["SELECT first", "SELECT immediate"]
+        );
+        notifications.resume();
+        drop(notifications);
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+    }
+}
+
+#[test]
+fn terminal_cursor_drain_notifications_release_the_producer_before_immediate_admission() {
+    use qrow::{export, logs::ExecutionId};
+    for outcome in ["rows", "stale", "failure"] {
+        let fixture = Arc::new(Fixture {
+            total_rows: 1250,
+            fail_fetch: (outcome == "failure").then_some(1),
+            ..Default::default()
+        });
+        let (worker, notifications) = paused_worker(fixture.clone());
+        let profile = export_profile();
+        let execution = worker.run(profile.clone(), "SELECT preview".into());
+        let events = notifications.terminal(&worker);
+        let mut columns = Vec::new();
+        let mut rows = export::Rows::default();
+        for event in events {
+            match event {
+                Event::Columns(value) => columns = value,
+                Event::Rows(value) if outcome != "stale" => rows.extend(value),
+                Event::Ready { more, .. } => assert!(more),
+                _ => {}
+            }
+        }
+        let jobs = export::Jobs::default();
+        let flag = Arc::new(AtomicBool::new(false));
+        let publication = jobs
+            .register_for_profile(flag.clone(), None, profile.id, 1)
+            .unwrap();
+        worker
+            .drain(
+                execution,
+                Arc::new(export::Snapshot::new(&columns, &rows).unwrap()),
+                &jobs,
+                flag,
+            )
+            .unwrap();
+        notifications.resume();
+        let events = notifications.terminal(&worker);
+        assert!(events.iter().any(|event| if outcome == "rows" {
+            matches!(event, Event::Downloaded { .. })
+        } else {
+            matches!(event, Event::DownloadFailed { .. })
+        }));
+        assert_eq!(jobs.active_count(), 1);
+        drop(publication);
+        assert_eq!(jobs.active_count(), 0);
+        worker
+            .run_and_export(
+                profile,
+                "SELECT immediate".into(),
+                ExecutionId(403),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        notifications.resume();
+        let events = notifications.terminal(&worker);
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, Event::Downloaded { .. }))
+        );
+        assert_eq!(jobs.active_count(), 0);
+        assert_eq!(
+            *fixture.executions.lock().unwrap(),
+            ["SELECT preview", "SELECT immediate"]
+        );
+        notifications.resume();
+        drop(notifications);
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+    }
+}
+
 fn next(worker: &Worker) -> Event {
     worker
         .events
@@ -1560,4 +1780,214 @@ fn cancel_and_writer_failure_before_schema_wake_the_writer_without_submitting_sq
         assert_eq!(fixture.connects.load(Ordering::SeqCst), 0);
         assert!(fixture.executions.lock().unwrap().is_empty());
     }
+}
+
+#[test]
+fn adaptive_exports_reuse_the_session_and_hold_the_profile_limit_until_publication() {
+    use qrow::{export, logs::ExecutionId, model::transfer::TransferPreset};
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let mut profile = export_profile();
+    let jobs = export::Jobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let publication = jobs
+        .register_for_profile(cancel.clone(), None, profile.id, 1)
+        .unwrap();
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT n".into(),
+            ExecutionId(301),
+            None,
+            &jobs,
+            cancel,
+        )
+        .unwrap();
+    let mut preview = 0;
+    loop {
+        match next(&worker) {
+            Event::PreviewRows { rows, .. } => preview += rows.len(),
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(spool.row_count(), 20_000);
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(preview, 1000);
+    assert!(
+        fixture
+            .requested
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|count| *count == 13_107)
+    );
+    let error = worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT blocked".into(),
+            ExecutionId(302),
+            None,
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("active export"));
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    drop(publication);
+    profile.transfer.preset = TransferPreset::Conservative;
+    worker.update_profile(profile.clone()).unwrap();
+    let expected = worker.session_generation(&profile).unwrap();
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT next".into(),
+            ExecutionId(303),
+            Some(expected),
+            &jobs,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        match next(&worker) {
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(spool.row_count(), 20_000);
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    assert_eq!(worker.session_generation(&profile), Some(expected));
+    assert_eq!(
+        fixture
+            .transfers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|transfer| transfer.preset)
+            .collect::<Vec<_>>(),
+        [TransferPreset::Balanced, TransferPreset::Conservative]
+    );
+    assert_eq!(
+        *fixture.executions.lock().unwrap(),
+        ["SELECT n", "SELECT next"]
+    );
+    assert!(fixture.requested.lock().unwrap().contains(&3276));
+}
+
+#[test]
+fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
+    use qrow::{
+        export::{self, Snapshot},
+        model::transfer::{Transfer, TransferPreset},
+    };
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let profile = export_profile();
+    let execution = worker.run(profile.clone(), "SELECT existing".into());
+    let mut columns = Vec::new();
+    let mut rows = export::Rows::default();
+    loop {
+        match next(&worker) {
+            Event::Columns(value) => columns = value,
+            Event::Rows(value) => rows.extend(value),
+            Event::Ready { more, .. } => {
+                assert!(more);
+                break;
+            }
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(rows.len(), 1000);
+    assert_eq!(*fixture.requested.lock().unwrap(), [1000]);
+    let generation = worker.session_generation(&profile).unwrap();
+    let jobs = export::Jobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let publication = jobs
+        .register_for_profile(cancel.clone(), None, profile.id, 1)
+        .unwrap();
+    let download = worker
+        .drain_with_transfer(
+            execution,
+            Arc::new(Snapshot::new(&columns, &rows).unwrap()),
+            &jobs,
+            cancel,
+            Some(Transfer {
+                preset: TransferPreset::Conservative,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    loop {
+        match next(&worker) {
+            Event::Downloaded { .. } => break,
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(download.spool().unwrap().row_count(), 20_000);
+    assert!(
+        fixture.requested.lock().unwrap()[1..]
+            .iter()
+            .all(|count| *count == 3276)
+    );
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT existing"]);
+    assert_eq!(worker.session_generation(&profile), Some(generation));
+    assert_eq!(jobs.active_count(), 1);
+    drop(publication);
+    worker.run(profile, "SELECT normal".into());
+    ready(&worker);
+    assert_eq!(*fixture.requested.lock().unwrap().last().unwrap(), 1000);
+}
+
+#[test]
+fn rejected_advancing_fetch_stops_without_retry_or_sql_resubmission() {
+    use qrow::{export, logs::ExecutionId};
+    let fixture = Arc::new(Fixture {
+        adaptive: true,
+        fail_fetch: Some(1),
+        total_rows: 20_000,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let download = worker
+        .run_and_export(
+            export_profile(),
+            "SELECT n".into(),
+            ExecutionId(304),
+            None,
+            &export::Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        if let Event::DownloadFailed {
+            consumed, message, ..
+        } = next(&worker)
+        {
+            assert!(consumed);
+            assert!(message.contains("Fetch transport failed"));
+            break;
+        }
+    }
+    assert_eq!(fixture.fetches.load(Ordering::SeqCst), 2);
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    assert!(matches!(
+        download.wait_spool().unwrap().status(),
+        export::spool::Status::Failed(_)
+    ));
 }

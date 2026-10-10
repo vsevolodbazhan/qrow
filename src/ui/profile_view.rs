@@ -121,6 +121,7 @@ impl Qrow {
         let qrow = cx.weak_entity();
         let panel = settings_panel("connection-settings", window, cx)
             .page(self.general_page(form, &qrow, cx))
+            .page(connection_form::transfer::page(form, &qrow, cx))
             .page(connection_form::catalog_page(form, &qrow, cx))
             .page(self.dbt_page(form, &qrow, cx))
             .pages(

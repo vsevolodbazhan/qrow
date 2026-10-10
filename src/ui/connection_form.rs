@@ -5,6 +5,7 @@ use crate::model::{
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::ActiveTheme;
 use uuid::Uuid;
+pub(super) mod transfer;
 
 pub(super) fn profile_name_is_taken(profiles: &[Profile], candidate: &Profile) -> bool {
     profiles

@@ -1,6 +1,7 @@
 use super::*;
 pub(super) mod background;
 mod run;
+mod transfer;
 use crate::export::{
     self, Format, Snapshot,
     csv::{CsvOptions, LineEnding, NullMarker, Preset, Separator},
@@ -77,6 +78,8 @@ struct ExportDialog {
     retained: Option<Arc<export::spool::Spool>>,
     download: Option<Arc<crate::worker::Download>>,
     run: Option<run::Intent>,
+    profile: Option<Profile>,
+    transfer: Choice,
     settings: export::Settings,
     filename: String,
     incomplete: bool,
@@ -146,9 +149,23 @@ impl Qrow {
         };
         let owner = cx.weak_entity();
         let intent = self.export_result_intent(tab);
+        let profile = self
+            .profiles
+            .iter()
+            .find(|profile| {
+                Some(profile.id)
+                    == tab
+                        .result_profile
+                        .as_ref()
+                        .map(|profile| profile.id)
+                        .or(tab.saved.profile)
+            })
+            .cloned()
+            .or_else(|| tab.result_profile.clone());
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
-                source, selection, settings, filename, incomplete, result, owner, window, cx,
+                source, selection, settings, filename, incomplete, result, profile, owner, window,
+                cx,
             );
             if incomplete && let Some(intent) = intent {
                 view.run = Some(intent);
@@ -212,10 +229,19 @@ impl ExportDialog {
         filename: String,
         incomplete: bool,
         result: ExportResult,
+        profile: Option<Profile>,
         owner: WeakEntity<Qrow>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let transfer = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(transfer::choices(profile.as_ref())),
+                Some(gpui_kit::component::IndexPath::default().row(0)),
+                window,
+                cx,
+            )
+        });
         let mut scopes = vec![format!("Downloaded rows ({})", source.row_count())];
         let mut row_scopes = vec![Scope::Downloaded];
         if let Some((rows, columns)) = &selection {
@@ -379,6 +405,11 @@ impl ExportDialog {
                 }
             },
         ));
+        subscriptions.push(cx.subscribe_in(&transfer, window, |_, _, event, _, cx| {
+            if matches!(event, SelectEvent::Confirm(Some(_))) {
+                cx.notify();
+            }
+        }));
         let mut this = Self {
             source,
             selection,
@@ -393,6 +424,8 @@ impl ExportDialog {
             retained: None,
             download: None,
             run: None,
+            profile,
+            transfer,
             settings,
             filename,
             incomplete,
@@ -505,7 +538,7 @@ impl ExportDialog {
     fn start_with_writer(
         &mut self,
         save: bool,
-        writer: fn() -> std::io::Result<background::WriterSender>,
+        writer: impl FnOnce() -> std::io::Result<background::WriterSender> + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -521,7 +554,7 @@ impl ExportDialog {
         }
         self.running = true;
         self.error = None;
-        self.cancel.store(false, Ordering::Relaxed);
+        self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
         let source = self.source.clone();
         let range = self.range();
@@ -560,6 +593,23 @@ impl ExportDialog {
             } else {
                 None
             };
+            let guard = match weak.update_in(cx, |this, _, _| {
+                export::check_cancelled(&cancel)?;
+                match this.transfer_profile() {
+                    Some(profile) => jobs.register_for_profile(cancel.clone(), None, profile.id,
+                        profile.transfer.settings().concurrent_exports),
+                    None => Ok(jobs.register(cancel.clone())),
+                }
+            }) {
+                Ok(Ok(guard)) => guard,
+                result => {
+                    let _ = weak.update_in(cx, |this, window, cx| {
+                        let error = match result { Ok(Err(error)) => error, _ => std::io::Error::other("The export form closed.") };
+                        this.complete(Err(error), path, request, window, cx);
+                    });
+                    return;
+                }
+            };
             let authentication = weak.update_in(cx, |this, _, cx| this.authenticate_run(cx));
             let authentication = match authentication {
                 Ok(Ok(authentication)) => authentication,
@@ -572,7 +622,6 @@ impl ExportDialog {
                 }
             };
             if let Some(id) = authentication {
-                let _guard = jobs.register(cancel.clone());
                 loop {
                     match weak.update_in(cx, |this, _, cx| this.sign_in_ready(id, cx)) {
                         Ok(Ok(true)) => break,
@@ -629,7 +678,6 @@ impl ExportDialog {
                     this.output_bytes.clone()
                 })
                 .unwrap_or_else(|_| Arc::new(AtomicU64::new(0)));
-            let guard = jobs.register(cancel.clone());
             let failed_download = download.clone();
             let (done, finished) = async_channel::bounded(1);
             let admitted = writer.send(Box::new(move || {
@@ -742,6 +790,7 @@ impl ExportDialog {
         let result = self.result.clone();
         let source = self.source.clone();
         let cancel = self.cancel.clone();
+        let transfer = self.transfer_override(cx);
         let download = self
             .owner
             .update(cx, |owner, cx| -> std::io::Result<_> {
@@ -765,7 +814,7 @@ impl ExportDialog {
                     .worker
                     .as_ref()
                     .ok_or_else(|| std::io::Error::other("The query worker stopped."))?
-                    .drain(execution, source, jobs, cancel)?;
+                    .drain_with_transfer(execution, source, jobs, cancel, transfer)?;
                 tab.download = Some(download.clone());
                 tab.busy = true;
                 tab.cancelling = false;
@@ -1074,6 +1123,15 @@ impl Render for ExportDialog {
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
+            .when(matches!(self.scope, Scope::All) && self.incomplete && self.result.cursor == crate::worker::Cursor::Available && self.profile.is_some() && self.retained.is_none() && self.result.replay.is_none(), |view| view.child(
+                field().label("Transfer Preset").description("Request size and speed only; collection mode stays.")
+                    .child(Select::new(&self.transfer).id("export-transfer-preset").focus_ring(false).disabled(busy).w_full().accessibility_label("Transfer Preset"))
+                    .children(self.transfer_override(cx).map(|policy| {
+                        let settings = policy.settings();
+                        let speed = if settings.speed_limit_mb == 0 { "no speed limit".into() } else { format!("{} MB/s", settings.speed_limit_mb) };
+                        div().text_xs().text_color(cx.theme().muted_foreground)
+                            .child(format!("{} MiB estimate, {speed}, export limit {}", settings.request_mib, settings.concurrent_exports))
+                    }))))
             .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
                 flags.into_iter().enumerate().map(|(index,(id,label,checked))|
                     Checkbox::new(id).label(label).checked(checked).disabled(busy)
@@ -1117,6 +1175,13 @@ impl Render for ExportDialog {
                     .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
                         .aria_label("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")
                         .text_sm().text_color(cx.theme().warning).child("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")))))
+            .when(self.scope.executes(), |view| view.children(self.run.as_ref().and_then(transfer::notice).map(|text|
+                div().id("export-incremental-notice").test_support().role(Role::Label).aria_label(text.clone())
+                    .text_sm().text_color(cx.theme().muted_foreground).child(text)))
+                .when(self.run.as_ref().is_some_and(transfer::save_to_file), |view| view.child(
+                    div().id("export-save-to-file-warning").test_support().role(Role::Alert)
+                        .aria_label("saveToFile is enabled in this connection. It can change how incremental collect works.")
+                        .text_sm().text_color(cx.theme().warning).child("saveToFile is enabled in this connection. It can change how incremental collect works."))))
             .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
                 .child("Empty null rows can be skipped by CSV readers. Choose a non-empty null marker.")))
             .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
@@ -1149,13 +1214,25 @@ pub(super) fn copy_format(
     source: Arc<Snapshot>,
     range: Option<RangeSelection>,
     options: export::Settings,
+    profile: Option<(Uuid, u8)>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let request = CopyRequest::new(cx);
     let format = options.format;
     let cancel = Arc::new(AtomicBool::new(false));
-    let guard = cx.global::<export::Jobs>().register(cancel.clone());
+    let jobs = cx.global::<export::Jobs>();
+    let guard = match profile {
+        Some((id, limit)) => jobs.register_for_profile(cancel.clone(), None, id, limit),
+        None => Ok(jobs.register(cancel.clone())),
+    };
+    let guard = match guard {
+        Ok(guard) => guard,
+        Err(error) => {
+            window.push_notification(error.to_string(), cx);
+            return;
+        }
+    };
     let task = cx.background_executor().spawn(async move {
         let _guard = guard;
         let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
@@ -1291,6 +1368,143 @@ mod tests {
     use gpui_kit::{ClipboardItem, Image, ImageFormat, TestAppContext};
 
     #[gpui_kit::test]
+    fn replay_publication_holds_the_profile_slot_and_retry_keeps_it_after_tab_close(
+        cx: &mut TestAppContext,
+    ) {
+        use super::*;
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(1280.), px(820.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let failed = directory.path().join("directory.csv");
+        std::fs::create_dir(&failed).unwrap();
+        let output = directory.path().join("retry.csv");
+        let (sender, work) = std::sync::mpsc::sync_channel(1);
+        let dialog = cx
+            .update_window(window.into(), |_, window, cx| {
+                let (source, mut result) = owner
+                    .update(cx, |owner, cx| {
+                        let tab = &owner.tabs[0];
+                        let data = tab.table.read(cx).delegate();
+                        (
+                            Arc::new(Snapshot::new(&data.columns, &data.rows).unwrap()),
+                            ExportResult {
+                                tab: tab.saved.id,
+                                execution: tab.current_execution,
+                                cursor: crate::worker::Cursor::Complete,
+                                replay: None,
+                            },
+                        )
+                    })
+                    .unwrap();
+                let columns = [crate::model::Column {
+                    name: "n".into(),
+                    data_type: "INT".into(),
+                }];
+                let (spool, mut producer) =
+                    export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+                producer
+                    .append(&[vec![Some("42".into())]], &AtomicBool::new(false))
+                    .unwrap();
+                producer.finish(&AtomicBool::new(false)).unwrap();
+                result.replay = Some(spool);
+                let profile = owner.upgrade().unwrap().read(cx).profiles[0].clone();
+                let dialog = cx.new(|cx| {
+                    ExportDialog::new(
+                        source,
+                        None,
+                        export::Settings::default(),
+                        "publication".into(),
+                        false,
+                        result,
+                        Some(profile),
+                        owner.clone(),
+                        window,
+                        cx,
+                    )
+                });
+                ExportDialog::open(&dialog, window, cx);
+                dialog.update(cx, |dialog, cx| {
+                    dialog.scope = Scope::Replay;
+                    dialog.start_with_writer(true, move || Ok(sender), window, cx);
+                });
+                dialog
+            })
+            .unwrap();
+        cx.simulate_new_path_selection(|_| Some(failed.clone()));
+        cx.run_until_parked();
+        let first_work = work.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (jobs, profile, old_cancel) = cx
+            .update_window(window.into(), |_, window, cx| {
+                let job = dialog.read(cx);
+                let profile = job.profile.as_ref().unwrap().clone();
+                let jobs = cx.global::<export::Jobs>().clone();
+                assert_eq!(jobs.active_count(), 1);
+                assert!(
+                    jobs.register_for_profile(
+                        Arc::new(AtomicBool::new(false)),
+                        None,
+                        profile.id,
+                        1
+                    )
+                    .is_err()
+                );
+                let old_cancel = job.cancel.clone();
+                let old_tab = job.result.tab;
+                owner
+                    .update(cx, |owner, cx| owner.close_tab(0, window, cx))
+                    .unwrap();
+                assert!(
+                    owner
+                        .upgrade()
+                        .unwrap()
+                        .read(cx)
+                        .tabs
+                        .iter()
+                        .all(|tab| tab.saved.id != old_tab)
+                );
+                (jobs, profile, old_cancel)
+            })
+            .unwrap();
+        assert!(failed.is_dir());
+        first_work();
+        // Publication and cleanup release the permit before the UI handles completion.
+        assert_eq!(jobs.active_count(), 0);
+        assert!(failed.is_dir());
+        cx.run_until_parked();
+        let (sender, work) = std::sync::mpsc::sync_channel(1);
+        cx.update_window(window.into(), |_, window, cx| {
+            assert!(dialog.read(cx).error.is_some());
+            old_cancel.store(true, Ordering::Relaxed);
+            dialog.update(cx, |dialog, cx| {
+                dialog.start_with_writer(true, move || Ok(sender), window, cx)
+            });
+        })
+        .unwrap();
+        cx.simulate_new_path_selection(|_| Some(output.clone()));
+        cx.run_until_parked();
+        let retry_work = work.recv_timeout(Duration::from_secs(3)).unwrap();
+        cx.update_window(window.into(), |_, _, cx| {
+            let job = dialog.read(cx);
+            assert_eq!(job.profile.as_ref().unwrap().id, profile.id);
+            assert!(!Arc::ptr_eq(&old_cancel, &job.cancel));
+            assert!(old_cancel.load(Ordering::Relaxed));
+            assert!(!job.cancel.load(Ordering::Relaxed));
+        })
+        .unwrap();
+        assert_eq!(jobs.active_count(), 1);
+        retry_work();
+        assert_eq!(jobs.active_count(), 0);
+        assert_eq!(std::fs::read_to_string(output).unwrap(), "n\r\n42\r\n");
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
     fn writer_thread_failure_leaves_the_cursor_available_and_reports_the_error(
         cx: &mut TestAppContext,
     ) {
@@ -1331,6 +1545,7 @@ mod tests {
                         "thread-failure".into(),
                         true,
                         result,
+                        None,
                         owner.clone(),
                         window,
                         cx,
@@ -1430,6 +1645,7 @@ mod tests {
                     "background".into(),
                     false,
                     result,
+                    None,
                     owner.clone(),
                     window,
                     cx,
@@ -1567,6 +1783,7 @@ mod tests {
                     "test".into(),
                     incomplete,
                     result,
+                    None,
                     owner.clone(),
                     window,
                     cx,
@@ -1665,6 +1882,7 @@ mod tests {
                             cursor: crate::worker::Cursor::Complete,
                             replay: None,
                         },
+                        None,
                         owner.clone(),
                         window,
                         cx,

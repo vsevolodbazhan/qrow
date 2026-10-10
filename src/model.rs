@@ -2,6 +2,7 @@ use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
+pub mod transfer;
 
 pub const PREVIEW_ROWS: usize = 1_000;
 pub const WORKSPACE_VERSION: u32 = 8;
@@ -431,6 +432,8 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub trino_schema: String,
     pub parameters: BTreeMap<String, String>,
+    #[serde(default)]
+    pub transfer: transfer::Transfer,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
     #[serde(default)]
@@ -959,6 +962,7 @@ impl Default for Profile {
             database: "avia".into(),
             trino_schema: String::new(),
             parameters: BTreeMap::new(),
+            transfer: transfer::Transfer::default(),
             lifecycle: ConnectionLifecycle::default(),
             catalog: CatalogSettings::default(),
             catalog_column_reads: CatalogColumnReads::default(),
@@ -1007,6 +1011,7 @@ impl Profile {
 
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(!self.name.trim().is_empty(), "Give this connection a name.");
+        self.transfer.validate()?;
         anyhow::ensure!(
             self.name.chars().count() <= MAX_PROFILE_NAME,
             "Connection name must be {MAX_PROFILE_NAME} characters or fewer."

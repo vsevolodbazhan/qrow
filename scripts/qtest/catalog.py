@@ -140,6 +140,7 @@ CLIPPY_CORE = Step(("cargo", "clippy", "--locked", "--no-default-features", "--a
 CLIPPY_APP = Step(("cargo", "clippy", "--locked", "--all-targets", "--", "-D", "warnings"))
 # The e2e and perf-e2e suites use the same test binary. A run builds it once.
 E2E_BUILD = Step(("cargo", "test", "--locked", "--no-run", "--test", "e2e"))
+TRANSFER_PERF_BUILD = Step(("cargo", "test", "--locked", "--profile", "perf", "--no-default-features", "--test", "integration", "--no-run"))
 
 _UNIT = (
     (nextest("not binary(ui)"), Step(("cargo", "test", "--locked", "--doc")))
@@ -172,9 +173,10 @@ SUITES = {
                Step(("cargo", "llvm-cov", "--locked", "--no-default-features", "--lib", "--tests",
                      "--ignore-filename-regex", "src/connector/t_c_l_i_service.rs|tests/|src/bin/",
                      "--fail-under-lines", "80", "--lcov", "--output-path", "{target}/coverage/core.lcov")),)),
-        Suite("perf", "SQL validation and dbt manifest benchmarks with enforced budgets.", ("cargo",),
+        Suite("perf", "SQL, dbt, and export benchmarks with enforced budgets.", ("cargo",),
               (Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "sql")),
-               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")))),
+               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "dbt")),
+               Step(("cargo", "bench", "--locked", "--no-default-features", "--bench", "export")))),
         Suite("scripts", "ShellCheck, actionlint, Ruff, and automation unit tests.",
               ("uv", "shellcheck", "actionlint"),
               (Step(("sh", "-c", "find scripts -type f -name '*.sh' -exec shellcheck {} + "
@@ -210,11 +212,18 @@ SUITES = {
               ("cargo", "cargo-nextest", "macos"),
               (nextest("binary(perf)", "--cargo-profile", "perf", "--run-ignored", "only", "--no-capture"),),
               macos_only=True, explicit_only=True),
-        Suite("perf-e2e", "Query and page latency of the real window against the real servers.",
+        Suite("perf-e2e", "Window query latency and Kyuubi export transfer against the real servers.",
               ("cargo", "cargo-nextest", "macos", "fixture-runtime"),
-              (nextest("binary(e2e) & test(/^perf::/)", "--run-ignored", "only", "--no-capture"),),
+              (nextest("binary(e2e) & test(/^perf::/)", "--test", "e2e", "--run-ignored", "only", "--no-capture"),
+               nextest("binary(integration) & test(/^transfer_perf::kyuubi$/)", "--cargo-profile", "perf", "--no-default-features", "--test", "integration", "--run-ignored", "only", "--no-capture")),
               macos_only=True, explicit_only=True, fixture="any",
-              prepare=(E2E_BUILD,)),
+              prepare=(E2E_BUILD, TRANSFER_PERF_BUILD)),
+        Suite("perf-postgres", "Postgres export transfer and COPY measurements against a disposable server.",
+              ("cargo", "cargo-nextest", "docker"),
+              (Step((PYTHON, "scripts/e2e/postgres.py", "--perf")),), explicit_only=True),
+        Suite("perf-trino", "Trino export transfer measurements against a disposable coordinator.",
+              ("cargo", "cargo-nextest", "docker"),
+              (Step((PYTHON, "scripts/e2e/trino.py", "--perf")),), explicit_only=True),
         Suite("perf-app", "Launch time, idle memory, and idle CPU of the release app on the desktop.",
               ("cargo", "uv", "macos"),
               (Step(("cargo", "build", "--locked", "--release", "--bin", "qrow"), timeout=40 * 60),
@@ -315,7 +324,7 @@ CI_JOBS = {
         CiJob("package", MACOS_RUNNER, ("package",), report_only=("perf-app",), needs=("core",),
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
-              runtime="docker"),
+              report_only=("perf-postgres", "perf-trino"), runtime="docker"),
         CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop"), report_only=("perf-e2e",), needs=("package",),
               paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
         CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui",), needs=("core",), paths=RUST_PATHS),
