@@ -624,8 +624,15 @@ of published file and the largest client peak resident set size. Raw samples inc
 and elapsed seconds for throughput calculations. A complete probe has a
 20-minute deadline. It checks every exported row and each unique ID.
 Trino selects an ordered, bounded key range from TPCH sf1 orders. The range
-keeps the server sort within the fixture memory limit. Kyuubi uses a separate
-CONNECTION engine and an in-memory catalog for each sample. The corpus does not need a persistent metastore. Before each Docker
+keeps the server sort within the fixture memory limit. Conservative uses
+classic paging. Balanced uses Serial spooling. Fast uses Parallel spooling.
+The Custom case uses Serial spooling. The historical baseline uses classic
+paging. The spooling cases use the fixture's TLS storage. The corpus contains
+repeated text. These
+results do not predict performance with incompressible data or remote storage.
+Each sample runs one export. Separate tests check the parallel segment limit.
+Kyuubi uses a separate CONNECTION engine and an in-memory catalog for each
+sample. The corpus does not need a persistent metastore. Before each Docker
 sample, the probe stops engines within its disposable fixture. This releases
 the two worker cores held by the readiness engine.
 Its profile starts with incremental collect off. Conservative and Custom
