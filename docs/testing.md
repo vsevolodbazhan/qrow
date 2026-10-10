@@ -140,6 +140,15 @@ change the default keychain or its search list. A separate password test uses
 the real macOS Keychain, so no suite runs it. Run that test with
 `cargo test --test integration keychain:: -- --ignored`.
 
+Kyuubi transfer tests check adaptive request counts and normal preview
+limits on the wire. Worker tests check session reuse after a preset change,
+first-page retention, rejection before SQL, slot ownership through file
+publication, and terminal failure without fetch retry. Registry tests check
+cancellation before the download callback attaches and during shutdown.
+A Docker backend test checks actual Spark collection behavior with executor
+evidence before the first fetch. It also checks restoration for explicit
+and absent settings, and the collection mode of the next normal query.
+
 ## Trino tests
 
 Local wire tests check raw socket closure during TLS, request headers and

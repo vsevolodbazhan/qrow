@@ -231,8 +231,12 @@ pub struct HiveSession {
     session: Option<TSessionHandle>,
     operation: Option<TOperationHandle>,
     preview_operation: Option<TOperationHandle>,
+    preview_transfer: Option<(bool, usize)>,
     column_count: usize,
     abort: Arc<sasl::Abort>,
+    transfer: crate::model::transfer::TransferSettings,
+    exporting: bool,
+    widest_row: usize,
 }
 
 impl Connector for HiveConnector {
@@ -276,8 +280,12 @@ impl Connector for HiveConnector {
             session: Some(session),
             operation: None,
             preview_operation: None,
+            preview_transfer: None,
             column_count: 0,
             abort,
+            transfer: profile.transfer.settings(),
+            exporting: false,
+            widest_row: 1024,
         };
         let setup = (|| -> Result<()> {
             ensure!(
@@ -410,16 +418,23 @@ impl Session for HiveSession {
     }
     fn execute_keep_alive(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.preview_operation = self.operation.take();
+        self.preview_transfer = Some((self.exporting, self.widest_row));
         self.execute(sql)
     }
 
     fn close_keep_alive(&mut self) -> Result<()> {
         let result = self.close_operation();
         self.operation = self.preview_operation.take();
+        if let Some((exporting, widest)) = self.preview_transfer.take() {
+            self.exporting = exporting;
+            self.widest_row = widest;
+        }
         result
     }
 
     fn execute(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.exporting = false;
+        self.widest_row = 1024;
         self.close_operation()?;
         let response = self.client.execute_statement(TExecuteStatementReq::new(
             self.session.clone().context("Session is closed")?,
@@ -430,6 +445,92 @@ impl Session for HiveSession {
         ))?;
         check(response.status)?;
         self.start_operation(response.operation_handle)
+    }
+
+    fn configure_export(&mut self, transfer: &crate::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()?;
+        self.transfer = transfer.settings();
+        Ok(())
+    }
+
+    fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
+        self.execute_export_controlled(sql, &super::ConnectionControl::default())
+    }
+
+    fn execute_export_controlled(
+        &mut self,
+        sql: &str,
+        control: &super::ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
+        self.close_operation()?;
+        self.exporting = true;
+        self.widest_row = 1024;
+        let override_value = self
+            .transfer
+            .incremental_collect
+            .value()
+            .filter(|_| crate::model::transfer::incremental_override_applies(sql));
+        let original = if override_value.is_some() {
+            Some(self.incremental_setting(control)?)
+        } else {
+            None
+        };
+        // Kyuubi 1.12 captures incremental collect from Spark SQLConf when it
+        // constructs the operation. Its statement overlay does not apply it.
+        let submitted = (|| -> Result<_> {
+            if let Some(value) = override_value {
+                self.configuration_statement(
+                    &format!("SET {}={value}", crate::model::transfer::INCREMENTAL_KEY),
+                    false,
+                    control,
+                )?;
+            }
+            control.check()?;
+            let response = self.client.execute_statement(TExecuteStatementReq::new(
+                self.session.clone().context("Session is closed")?,
+                sql.to_owned(),
+                None,
+                Some(true),
+                None,
+            ))?;
+            check(response.status)?;
+            self.start_operation(response.operation_handle)
+        })();
+        if let Some(original) = original {
+            // Restoration must run even when submission or cancellation fails.
+            // It has an independent operation handle, never the user handle.
+            let restored = (|| -> Result<()> {
+                let key = crate::model::transfer::INCREMENTAL_KEY;
+                let statement = match &original {
+                    Some(value) => format!("SET {key}={value}"),
+                    None => format!("RESET {key}"),
+                };
+                let cleanup = super::ConnectionControl::default();
+                self.configuration_statement(&statement, false, &cleanup)?;
+                ensure!(
+                    self.incremental_setting(&cleanup)? == original,
+                    "Kyuubi did not restore the incremental collect setting"
+                );
+                Ok(())
+            })();
+            if let Err(error) = restored {
+                self.abort.shutdown();
+                return Err(ConnectionFailure {
+                    message: "The export stopped because its temporary collect setting could not be restored. The session must reconnect; SQL will not run again automatically.".into(),
+                    details: Some(ErrorDetails(error.to_string())),
+                }.into());
+            }
+        }
+        submitted
+    }
+
+    fn start_export_fetch(&mut self) -> Result<()> {
+        self.exporting = true;
+        Ok(())
+    }
+
+    fn export_fetch_rows(&self) -> usize {
+        self.transfer.request_rows(self.widest_row)
     }
 
     fn execute_metadata(&mut self, request: &MetadataRequest) -> Result<Arc<dyn Cancellation>> {
@@ -528,14 +629,24 @@ impl Session for HiveSession {
             })
             .collect();
         self.column_count = columns.len();
+        self.widest_row = self.widest_row.max(
+            self.column_count
+                .saturating_mul(std::mem::size_of::<Option<String>>())
+                .saturating_add(std::mem::size_of::<Row>()),
+        );
         Ok(columns)
     }
 
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        let count = count.min(if self.exporting {
+            crate::model::transfer::MAX_FETCH_ROWS
+        } else {
+            1000
+        });
         let response = self.client.fetch_results(TFetchResultsReq::new(
             self.operation.clone().context("No active operation")?,
             TFetchOrientation::FETCH_NEXT,
-            count.min(1000) as i64,
+            count as i64,
             Some(0),
         ))?;
         check(response.status)?;
@@ -551,9 +662,15 @@ impl Session for HiveSession {
         let rows = decode_columns_limited(
             results.columns.unwrap_or_default(),
             self.column_count,
-            count.min(1000),
+            count,
             MAX_RESULT_BYTES,
         )?;
+        for row in &rows {
+            let bytes = row.capacity() * std::mem::size_of::<Option<String>>()
+                + row.iter().flatten().map(String::capacity).sum::<usize>()
+                + std::mem::size_of::<Row>();
+            self.widest_row = self.widest_row.max(bytes);
+        }
         // Older Hive-compatible servers report hasMoreRows=false even when more rows exist.
         // The worker uses an empty fetch as the end-of-results signal, like PyHive.
         Ok(Batch { rows })
@@ -589,6 +706,116 @@ impl Session for HiveSession {
 }
 
 impl HiveSession {
+    fn configuration_statement(
+        &mut self,
+        sql: &str,
+        read: bool,
+        control: &super::ConnectionControl,
+    ) -> Result<Vec<Row>> {
+        control.check()?;
+        let response = self.client.execute_statement(TExecuteStatementReq::new(
+            self.session.clone().context("Session is closed")?,
+            sql.to_owned(),
+            None,
+            Some(false),
+            None,
+        ))?;
+        check(response.status)?;
+        let handle = response
+            .operation_handle
+            .context("Kyuubi returned no configuration operation handle")?;
+        let result = (|| -> Result<Vec<Row>> {
+            control.check()?;
+            let response = self
+                .client
+                .get_operation_status(TGetOperationStatusReq::new(handle.clone(), Some(false)))?;
+            check(response.status)?;
+            ensure!(
+                response.operation_state == Some(TOperationState::FINISHED_STATE),
+                "Kyuubi configuration statement failed: {}",
+                response
+                    .error_message
+                    .unwrap_or_else(|| "operation did not finish".into())
+            );
+            if !read {
+                return Ok(vec![]);
+            }
+            control.check()?;
+            let response = self.client.fetch_results(TFetchResultsReq::new(
+                handle.clone(),
+                TFetchOrientation::FETCH_NEXT,
+                4097,
+                Some(0),
+            ))?;
+            check(response.status)?;
+            let columns = response
+                .results
+                .context("Kyuubi returned no configuration result")?
+                .columns
+                .context("Kyuubi configuration result is not columnar")?;
+            let rows = decode_columns_limited(columns, 2, 4096, 1024 * 1024)?;
+            // Read to EOF so a setting beyond this bounded page is not missed.
+            control.check()?;
+            let response = self.client.fetch_results(TFetchResultsReq::new(
+                handle.clone(),
+                TFetchOrientation::FETCH_NEXT,
+                1,
+                Some(0),
+            ))?;
+            check(response.status)?;
+            let columns = response
+                .results
+                .context("Kyuubi returned no configuration end result")?
+                .columns
+                .context("Kyuubi configuration end result is not columnar")?;
+            ensure!(
+                decode_columns_limited(columns, 2, 0, 1024)?.is_empty(),
+                "Kyuubi configuration has too many settings"
+            );
+            Ok(rows)
+        })();
+        let closed = (|| -> Result<()> {
+            check(
+                self.client
+                    .close_operation(TCloseOperationReq::new(handle))?
+                    .status,
+            )
+        })();
+        if let Err(error) = closed {
+            self.abort.shutdown();
+            return Err(ConnectionFailure {
+                message: "The Kyuubi configuration operation could not close. The session must reconnect.".into(),
+                details: Some(ErrorDetails(error.to_string())),
+            }.into());
+        }
+        result
+    }
+
+    fn incremental_setting(
+        &mut self,
+        control: &super::ConnectionControl,
+    ) -> Result<Option<String>> {
+        let rows = self.configuration_statement("SET", true, control)?;
+        let mut original = None;
+        for row in rows {
+            if row[0].as_deref() == Some(crate::model::transfer::INCREMENTAL_KEY) {
+                let value = row[1]
+                    .as_deref()
+                    .context("Kyuubi returned an empty incremental collect setting")?;
+                ensure!(
+                    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false"),
+                    "Kyuubi returned an invalid incremental collect setting"
+                );
+                ensure!(
+                    original.is_none(),
+                    "Kyuubi returned duplicate incremental collect settings"
+                );
+                original = Some(value.to_owned());
+            }
+        }
+        Ok(original)
+    }
+
     fn start_operation(
         &mut self,
         handle: Option<TOperationHandle>,

@@ -170,6 +170,139 @@ fn initialize(peer: &mut Peer) {
     peer.reply(TCloseOperationResp::new(success()));
 }
 
+fn configuration(peer: &mut Peer, sql: &str, read_value: Option<&str>) {
+    let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+    assert_eq!(request.statement, sql);
+    assert_eq!(request.run_async, Some(false));
+    assert!(request.conf_overlay.is_none());
+    peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+    let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+    peer.reply(status(TOperationState::FINISHED_STATE, true));
+    if let Some(value) = read_value {
+        for values in [
+            vec![
+                vec![qrow::model::transfer::INCREMENTAL_KEY.to_owned()],
+                vec![value.to_owned()],
+            ],
+            vec![vec![], vec![]],
+        ] {
+            let _: TFetchResultsReq = peer.read("FetchResults");
+            peer.reply(TFetchResultsResp::new(
+                success(),
+                Some(false),
+                Some(TRowSet::new(
+                    0,
+                    vec![],
+                    Some(
+                        values
+                            .into_iter()
+                            .map(|values| TColumn::StringVal(TStringColumn::new(values, vec![0])))
+                            .collect(),
+                    ),
+                    None,
+                    None,
+                )),
+            ));
+        }
+    }
+    let _: TCloseOperationReq = peer.read("CloseOperation");
+    peer.reply(TCloseOperationResp::new(success()));
+}
+
+#[test]
+fn export_collect_setting_is_restored_and_adaptive_fetch_preserves_normal_limits() {
+    use qrow::model::transfer::{INCREMENTAL_KEY, Transfer, TransferPreset};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let p = profile(listener.local_addr().unwrap().port());
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        for (sql, overrides, requested, value) in [
+            ("SELECT export", true, 3276, "x".repeat(4096)),
+            ("SELECT inherit", false, 13107, "small".into()),
+            ("SELECT normal", false, 1000, "n".into()),
+        ] {
+            if overrides {
+                configuration(&mut peer, "SET", Some("false"));
+                configuration(&mut peer, &format!("SET {INCREMENTAL_KEY}=true"), None);
+            }
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(request.statement, sql);
+            assert!(request.conf_overlay.is_none());
+            peer.reply(TExecuteStatementResp::new(success(), Some(operation(true))));
+            if overrides {
+                configuration(&mut peer, &format!("SET {INCREMENTAL_KEY}=false"), None);
+                configuration(&mut peer, "SET", Some("false"));
+            }
+            let _: TGetResultSetMetadataReq = peer.read("GetResultSetMetadata");
+            peer.reply(TGetResultSetMetadataResp::new(
+                success(),
+                Some(TTableSchema::new(vec![TColumnDesc::new(
+                    "value".into(),
+                    TTypeDesc::new(vec![TTypeEntry::PrimitiveEntry(TPrimitiveTypeEntry::new(
+                        TTypeId::STRING_TYPE,
+                        None,
+                    ))]),
+                    0,
+                    None,
+                )])),
+            ));
+            let fetch: TFetchResultsReq = peer.read("FetchResults");
+            assert_eq!(fetch.max_rows, requested);
+            peer.reply(TFetchResultsResp::new(
+                success(),
+                Some(true),
+                Some(TRowSet::new(
+                    0,
+                    vec![],
+                    Some(vec![TColumn::StringVal(TStringColumn::new(
+                        vec![value],
+                        vec![0],
+                    ))]),
+                    None,
+                    None,
+                )),
+            ));
+            let _: TCloseOperationReq = peer.read("CloseOperation");
+            peer.reply(TCloseOperationResp::new(success()));
+        }
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let mut session = HiveConnector::default()
+        .connect(&p, Secret::password("test-password"))
+        .unwrap();
+    session
+        .configure_export(&Transfer {
+            preset: TransferPreset::Conservative,
+            ..Default::default()
+        })
+        .unwrap();
+    session.execute_export("SELECT export").unwrap();
+    session.columns().unwrap();
+    let rows = session.fetch(session.export_fetch_rows()).unwrap().rows;
+    assert_eq!(rows[0][0].as_ref().unwrap().len(), 4096);
+    assert!(session.export_fetch_rows() < 900);
+    session.close_operation().unwrap();
+    session.configure_export(&Transfer::default()).unwrap();
+    session.execute_export("SELECT inherit").unwrap();
+    session.columns().unwrap();
+    assert_eq!(
+        session.fetch(session.export_fetch_rows()).unwrap().rows[0][0].as_deref(),
+        Some("small")
+    );
+    session.close_operation().unwrap();
+    session.execute("SELECT normal").unwrap();
+    session.columns().unwrap();
+    assert_eq!(
+        session.fetch(50_000).unwrap().rows[0][0].as_deref(),
+        Some("n")
+    );
+    session.close_operation().unwrap();
+    session.close().unwrap();
+    server.join().unwrap();
+}
+
 #[test]
 fn export_cancellation_deadline_bounds_a_stalled_separate_authentication() {
     use std::{sync::mpsc, time::Instant};
@@ -1045,5 +1178,93 @@ fn run_export_cancel_interrupts_the_previous_profiles_session_close() {
     assert!(download.wait_spool().is_err());
     assert!(jobs.cancel_and_wait(Duration::from_secs(2)));
     assert!(started.elapsed() < Duration::from_secs(1));
+    server.join().unwrap();
+}
+
+#[test]
+fn failed_collect_restoration_discards_the_session_without_submitting_user_sql() {
+    use qrow::{
+        export::Jobs,
+        logs::ExecutionId,
+        model::transfer::TransferPreset,
+        worker::{Event, Worker},
+    };
+    use std::sync::{Arc, atomic::AtomicBool};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut profile = profile(listener.local_addr().unwrap().port());
+    profile.transfer.preset = TransferPreset::Conservative;
+    let server = thread::spawn(move || {
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        configuration(&mut peer, "SET", Some("false"));
+        for value in ["true", "false"] {
+            let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+            assert_eq!(
+                request.statement,
+                format!("SET {}={value}", qrow::model::transfer::INCREMENTAL_KEY)
+            );
+            peer.reply(TExecuteStatementResp::new(
+                TStatus {
+                    status_code: TStatusCode::ERROR_STATUS,
+                    error_message: Some("Setting denied".into()),
+                    ..success()
+                },
+                None,
+            ));
+        }
+        drop(peer);
+        let mut peer = Peer::accept(&listener);
+        initialize(&mut peer);
+        let request: TExecuteStatementReq = peer.read("ExecuteStatement");
+        assert_eq!(request.statement, "SELECT reconnect");
+        peer.reply(TExecuteStatementResp::new(
+            success(),
+            Some(operation(false)),
+        ));
+        let _: TGetOperationStatusReq = peer.read("GetOperationStatus");
+        peer.reply(status(TOperationState::FINISHED_STATE, false));
+        let _: TCloseOperationReq = peer.read("CloseOperation");
+        peer.reply(TCloseOperationResp::new(success()));
+        let _: TCloseSessionReq = peer.read("CloseSession");
+        peer.reply(TCloseSessionResp::new(success()));
+    });
+    let worker = Worker::with_connector(
+        Arc::new(|| {}),
+        Arc::new(HiveConnector::default()),
+        Arc::new(|_| Ok(Secret::password("test-password"))),
+    );
+    worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT must_not_run".into(),
+            ExecutionId(501),
+            None,
+            &Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    loop {
+        if let Event::DownloadFailed {
+            message,
+            disconnected,
+            ..
+        } = worker.events.recv_timeout(Duration::from_secs(10)).unwrap()
+        {
+            assert!(disconnected);
+            assert!(message.contains("could not be restored"));
+            break;
+        }
+    }
+    assert!(worker.session_generation(&profile).is_none());
+    worker.run(profile.clone(), "SELECT reconnect".into());
+    loop {
+        match worker.events.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Ready { .. } => break,
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert!(worker.session_generation(&profile).is_some());
+    worker.shutdown();
     server.join().unwrap();
 }

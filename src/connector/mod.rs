@@ -123,6 +123,26 @@ pub trait Session: Send {
     fn execute_export(&mut self, sql: &str) -> Result<Arc<dyn Cancellation>> {
         self.execute(sql)
     }
+
+    fn execute_export_controlled(
+        &mut self,
+        sql: &str,
+        control: &ConnectionControl,
+    ) -> Result<Arc<dyn Cancellation>> {
+        control.check()?;
+        self.execute_export(sql)
+    }
+    /// Apply captured export policy, including when the session is reused.
+    fn configure_export(&mut self, transfer: &crate::model::transfer::Transfer) -> Result<()> {
+        transfer.validate()
+    }
+    /// Switch an existing live cursor to export transfer without submitting SQL.
+    fn start_export_fetch(&mut self) -> Result<()> {
+        Ok(())
+    }
+    fn export_fetch_rows(&self) -> usize {
+        crate::model::PREVIEW_ROWS
+    }
     /// Wait for server completion and protocol cleanup after reading rows.
     fn finish_execution(&mut self) -> Result<Completion> {
         wait_for_completion(self, None)
