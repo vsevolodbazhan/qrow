@@ -319,7 +319,6 @@ impl Download {
         let download = self.clone();
         let deadline = Instant::now() + CLEANUP_TIMEOUT;
         if spawn(Box::new(move || {
-            let _guard = guard;
             let watchdog = download.clone();
             let abort = target.clone();
             if std::thread::Builder::new()
@@ -343,6 +342,8 @@ impl Download {
                 download.abort_operation();
             }
             let failed = target.cancel_with_deadline(deadline).is_err();
+            drop(target);
+            drop(guard);
             let mut state = download.state.lock().unwrap();
             state.cancellation_done = true;
             state.cancellation_failed = failed;

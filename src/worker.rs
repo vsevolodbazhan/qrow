@@ -928,6 +928,10 @@ impl Runner {
                 .spool()
                 .expect("A cursor drain has a spool")
                 .fail(message.clone());
+            drop(producer);
+            drop(source);
+            drop(_transport);
+            drop(_guard);
             self.emit(Event::DownloadFailed {
                 execution,
                 message,
@@ -943,6 +947,10 @@ impl Runner {
                 .spool()
                 .expect("A cursor drain has a spool")
                 .fail(message.clone());
+            drop(producer);
+            drop(source);
+            drop(_transport);
+            drop(_guard);
             self.emit(Event::DownloadFailed {
                 execution,
                 message,
@@ -956,6 +964,10 @@ impl Runner {
                 .spool()
                 .expect("A cursor drain has a spool")
                 .cancel();
+            drop(producer);
+            drop(source);
+            drop(_transport);
+            drop(_guard);
             self.emit(Event::DownloadFailed {
                 execution,
                 message: error.to_string(),
@@ -1037,15 +1049,15 @@ impl Runner {
             download.complete(producer)?;
             Ok(())
         })();
-        match result {
+        let event = match result {
             Ok(()) => {
                 *self.target.lock().unwrap() = None;
                 *self.download.lock().unwrap() = None;
                 self.set_cursor(Cursor::Downloaded);
-                self.emit(Event::Downloaded {
+                Event::Downloaded {
                     execution,
                     spool: download.spool().expect("A cursor drain has a spool"),
-                });
+                }
             }
             Err(error) => {
                 let message = crate::connector::error_message(&error);
@@ -1061,14 +1073,19 @@ impl Runner {
                     self.disconnect();
                 }
                 self.set_cursor(Cursor::Consumed);
-                self.emit(Event::DownloadFailed {
+                Event::DownloadFailed {
                     execution,
                     message,
                     consumed: true,
                     disconnected,
-                });
+                }
             }
-        }
+        };
+        drop(source);
+        drop(_transport);
+        drop(_guard);
+        drop(download);
+        self.emit(event);
     }
 
     fn fetch_completed(&self, summary: FetchSummary) {
