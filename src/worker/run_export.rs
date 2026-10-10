@@ -217,9 +217,10 @@ impl Runner {
         )?;
         control.check()?;
         self.emit(Event::Running);
+        let started = Instant::now();
         self.execution = Some(ExecutionTiming {
             id: request.execution,
-            started: Instant::now(),
+            started,
             fetch_page: 0,
             execution_completed: false,
         });
@@ -245,7 +246,26 @@ impl Runner {
             "SQL accepted by the server",
             None,
         );
-        let state = wait_for_result(self.session.as_mut().unwrap().as_mut(), None)?;
+        let state = loop {
+            export::check_cancelled(request.download.cancelled())?;
+            let state = self.session.as_mut().unwrap().poll()?;
+            request
+                .download
+                .set_progress_percentage(self.session.as_ref().unwrap().progress_percentage());
+            if request.download.progress_percentage().is_some() {
+                self.emit(Event::DownloadProgress {
+                    execution: request.execution,
+                    rows: 0,
+                    bytes: 0,
+                    elapsed: started.elapsed(),
+                    percentage: request.download.progress_percentage(),
+                });
+            }
+            if state != QueryState::Running {
+                break state;
+            }
+            thread::sleep(Duration::from_millis(100));
+        };
         let finished = matches!(state, QueryState::Finished { .. });
         match state {
             QueryState::Cancelled => return Err(export::Cancelled.into()),
@@ -290,12 +310,14 @@ impl Runner {
         let mut preview_rows = 0usize;
         let mut preview_bytes = 0usize;
         let mut preview_full = false;
-        let started = Instant::now();
         let result = (|| -> Result<()> {
             loop {
                 export::check_cancelled(request.download.cancelled())?;
                 let _fetch_memory = producer.reserve_fetch()?;
                 let mut batch = self.session.as_mut().unwrap().fetch(PREVIEW_ROWS)?;
+                request
+                    .download
+                    .set_progress_percentage(self.session.as_ref().unwrap().progress_percentage());
                 export::check_cancelled(request.download.cancelled())?;
                 anyhow::ensure!(
                     batch.rows.len() <= PREVIEW_ROWS,
@@ -335,6 +357,7 @@ impl Runner {
                     rows: count,
                     bytes: spool.bytes(),
                     elapsed: started.elapsed(),
+                    percentage: request.download.progress_percentage(),
                 });
             }
             if !finished

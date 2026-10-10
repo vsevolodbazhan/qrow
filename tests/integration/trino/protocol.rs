@@ -6,6 +6,39 @@ mod fixture;
 use fixture::{Reply, Server, done};
 
 #[test]
+fn direct_progress_keeps_the_latest_valid_server_percentage() -> Result<()> {
+    let server = Server::new(
+        false,
+        vec![
+            done(),
+            Reply::page(
+                json!({"columns":[{"name":"n","type":"bigint"}],"data":[[1]],"nextUri":"{origin}/progress/2","stats":{"progressPercentage":12.5}}),
+            ),
+            Reply::page(
+                json!({"data":[[2]],"nextUri":"{origin}/progress/3","stats":{"progressPercentage":-1}}),
+            ),
+            Reply::page(json!({"data":[[3]],"nextUri":"{origin}/progress/4"})),
+            Reply::page(json!({"data":[[4]],"stats":{"progressPercentage":100}})),
+        ],
+    );
+    let mut session = server.connect();
+    session.execute_export("SELECT progress")?;
+    qrow::connector::wait_for_result(&mut *session, None)?;
+    for number in 1..=4 {
+        assert_eq!(
+            session.fetch(1)?.rows[0][0].as_deref(),
+            Some(number.to_string().as_str())
+        );
+        assert_eq!(
+            session.progress_percentage(),
+            Some(if number == 4 { 100.0 } else { 12.5 })
+        );
+    }
+    assert!(session.fetch(1)?.rows.is_empty());
+    session.close()
+}
+
+#[test]
 fn direct_wide_fetch_bounds_owned_batches_and_keeps_the_pending_row_in_order() -> Result<()> {
     let mut replies = vec![done()];
     for index in 0..7 {

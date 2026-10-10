@@ -1,6 +1,5 @@
 //! Captured SQL and session checks for executions started by the export form.
 use super::*;
-use crate::model::DatabaseType;
 use std::io;
 
 #[derive(Clone)]
@@ -26,12 +25,6 @@ impl Qrow {
             window.push_notification("Choose a connection before running SQL.", cx);
             return;
         };
-        if !matches!(
-            profile.database_type,
-            DatabaseType::Kyuubi | DatabaseType::Postgres
-        ) {
-            return;
-        }
         let sql = match self.selected_tab_sql(index, window, cx) {
             Ok(sql) => sql,
             Err(message) => {
@@ -95,12 +88,6 @@ impl Qrow {
 
     pub(super) fn export_result_intent(&self, tab: &Tab) -> Option<Intent> {
         let original = tab.result_profile.as_ref()?;
-        if !matches!(
-            original.database_type,
-            DatabaseType::Kyuubi | DatabaseType::Postgres
-        ) {
-            return None;
-        }
         let profile = self
             .profiles
             .iter()

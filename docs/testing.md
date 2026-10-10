@@ -169,6 +169,13 @@ commits a spool batch, stops result reads for 12 seconds, then continues the
 download. It checks repeated HEAD requests in the fixture request log and
 session reuse after cancellation. Other direct tests exceed both preview
 limits and check settings, prepared statements, transactions, and empty results.
+Window tests save large direct exports, keep prepared statements and session
+settings, and reuse completed spools. They check original SQL after editor
+changes, warnings after disconnect, retry after tab closure, cancellation,
+empty results, and preservation of an existing file for a statement with no
+result set. Offline window tests cancel the save panel without SQL or credentials.
+Worker tests publish query progress before the schema arrives. A window test
+checks the full status in Details, including text wrapping for a long filename.
 The suite then runs the same disposable coordinator with OAuth2
 and a synthetic confidential client. An injectable browser follows the
 coordinator and provider redirects over verified HTTPS. Tests check that connection selection does not start
