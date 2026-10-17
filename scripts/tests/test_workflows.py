@@ -89,6 +89,7 @@ class PlanTests(unittest.TestCase):
             "tests/fixture/server/Blocking.java": ["static", "core", "package", "backend", "e2e"],
             "scripts/package/macos.sh": ["static", "core", "package"],
             "scripts/package/dmg.py": ["static", "core", "package"],
+            "scripts/perf/renderers.py": ["static", "core", "package", "perf"],
             ".github/workflows/checks.yml": everything,
             "scripts/qtest/catalog.py": everything,
         }

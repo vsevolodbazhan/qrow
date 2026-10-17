@@ -58,7 +58,15 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
   certificate verification. Trino uses HTTP or HTTPS with a username, a password,
   or an OpenID Connect access token. DuckDB is planned. See
   [connections](docs/connections.md) for connector limits.
-- **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
+- **macOS 12 or later.** Qrow uses Metal when a compatible GPU is available.
+  On Macs without Metal, it uses hardware OpenGL when available and falls back
+  to CPU rendering if OpenGL cannot start. Set `QROW_RENDERER=software` to
+  choose CPU rendering directly.
+  CPU rendering uses more CPU time during scrolling and window resizing.
+  Shadows can differ from Metal rendering. CPU curves and gradients can also
+  differ. CPU and OpenGL modes do not support video surfaces; Qrow does not
+  use these surfaces. OpenGL uses grayscale text antialiasing and limits its
+  texture atlas to 128 MiB. An image must fit a 2046 by 2046 pixel atlas tile.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
   Other operating systems are not supported. The assistant also needs a compatible
   Codex or Claude Code executable.
@@ -192,6 +200,25 @@ Or, after building the release executable:
 ```sh
 ./target/release/qrow --demo
 ```
+
+To select a renderer for the demo, set `QROW_RENDERER`:
+
+```sh
+QROW_RENDERER=opengl ./target/release/qrow --demo
+QROW_RENDERER=software ./target/release/qrow --demo
+```
+
+The default, `auto`, selects Metal when available and OpenGL otherwise. It
+falls back to CPU rendering if OpenGL cannot start.
+OpenGL requires a hardware Core Profile with OpenGL 3.3+, GLSL 3.30, and
+instanced drawing. It does not create legacy OpenGL contexts.
+Fallback is limited to initialization; a later drawing error is reported
+and does not switch the renderer.
+`metal` and `opengl` require the selected GPU backend and stop with a diagnostic
+if initialization fails. An invalid value also stops the application.
+`QROW_SOFTWARE_RENDERER=1` selects CPU rendering when `QROW_RENDERER` is unset.
+In CPU mode, gradients use sRGB interpolation, including gradients that request
+Oklab interpolation.
 
 ![dbt details in the demo](assets/screenshots/demo-dbt.png)
 

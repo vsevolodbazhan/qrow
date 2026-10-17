@@ -303,7 +303,8 @@ def run_steps(item, steps, options, extra, env, run_dir, output, started, iterat
         if item.test_filter and step in suite.steps and step.nextest_filter is None:
             continue
         command = render_command(step, options, item.test_filter, extra)
-        step_env = {key: value.replace("{target}", str(target_dir())) for key, value in step.env}
+        step_env = {key: value.replace("{target}", str(target_dir())).replace("{artifacts}", str(run_dir))
+                    for key, value in step.env}
         if step.nextest_filter is not None:
             # A step that fails before nextest writes a report must not report old failures.
             junit_report().unlink(missing_ok=True)

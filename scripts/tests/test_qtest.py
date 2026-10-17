@@ -30,6 +30,14 @@ class SummaryTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_preparation_steps_require_a_fixture(self):
+        # The runner executes preparation only before starting a server fixture.
+        # Desktop suites without a fixture must build their app in normal steps.
+        for suite in catalog.SUITES.values():
+            with self.subTest(suite=suite.name):
+                if suite.prepare:
+                    self.assertIsNotNone(suite.fixture)
+
     def test_groups_name_existing_suites_without_server_suites(self):
         for name, (_, members) in catalog.GROUPS.items():
             for member in members:
@@ -298,6 +306,13 @@ class RunTests(unittest.TestCase):
         step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_DIST_DIR"'), env=(("QROW_DIST_DIR", "{target}/package"),))
         summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
         self.assertIn(f"dir={os.environ['CARGO_TARGET_DIR']}/package", Path(summary["suites"][0]["log"]).read_text())
+
+    def test_step_environment_names_the_current_run_artifact_directory(self):
+        step = catalog.Step(("sh", "-c", 'echo "dir=$QROW_E2E_ARTIFACTS"'),
+                            env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),))
+        summary = self.run_suites(catalog.Suite("env", "Fake env.", (), (step,)))
+        log = Path(summary["suites"][0]["log"])
+        self.assertIn(f"dir={log.parent.parent}/software-ui", log.read_text())
 
     def test_a_suite_stops_at_its_first_failed_step(self):
         summary = self.run_suites(fake_suite("steps", "exit 1", "echo second"))

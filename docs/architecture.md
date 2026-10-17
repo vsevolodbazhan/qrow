@@ -172,5 +172,21 @@ Upgrade these dependencies together. Runtime Metal shader compilation permits
 builds with Xcode command-line tools. Initialize the framework, assets, SQL
 language registry, and root view before using editor controls.
 
+The macOS platform selects Metal when available. Otherwise it selects hardware
+OpenGL and falls back to CPU rendering if OpenGL cannot start. The OpenGL path
+uses the same GPUI scene, native window, input handling, and Core Text glyphs.
+It requires hardware Core OpenGL 3.3+ and uses instanced drawing with GLSL 3.30.
+Each rectangle or path triangle is stored as one affine instance.
+Renderer fallback occurs only during initialization. A drawing failure is logged
+without changing backends or reusing another backend's atlas.
+It stores the scene until the native OpenGL layer draws it and uploads new
+atlas tiles. Window drawing does not read full frames back to the CPU. The CPU
+renderer stores image and glyph pixels in memory and sends each frame to a
+Core Animation layer. Both paths keep native windows, Core Text, input, and
+accessibility.
+See [renderer selection and limits](../README.md#limitations),
+[CPU rendering checks](testing.md#check-cpu-rendering), and
+[OpenGL rendering checks](testing.md#check-opengl-rendering).
+
 Generated Thrift bindings are checked in. Their maintenance and regeneration
 procedure belongs in [Development](development.md#generated-bindings).

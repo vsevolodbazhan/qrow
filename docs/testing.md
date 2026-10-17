@@ -51,10 +51,15 @@ accept a test filter.
 | `e2e` * | The real Qrow window, headless, against the real servers. | macOS, Docker or Java 17 |
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
+| `software-ui` | CPU rendering of the editor and results, with native input and synthetic demo data. | macOS desktop, Xcode tools |
+| `opengl-renderer` | Hardware OpenGL shader, atlas, and pixel regression tests. | macOS with hardware OpenGL |
+| `opengl-ui` | Hardware OpenGL rendering and native input in a separate demo package. | macOS desktop, hardware OpenGL, Xcode tools |
+| `perf-renderers` | Native release CPU and OpenGL composition, scrolling, launch, memory, and idle measurements. | macOS desktop, hardware OpenGL, Xcode tools |
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
 macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `package`, and `desktop`. `clippy-app` is the second
+`perf-e2e`, `perf-app`, `package`, `desktop`, `software-ui`, `opengl-renderer`,
+`opengl-ui`, and `perf-renderers`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
 The `backend`, `e2e`, and `desktop` suites use disposable LDAP, Kyuubi,
@@ -76,6 +81,59 @@ at 75%, 100%, 110%, 125%, and 150% UI scale. It runs this check on the process m
 thread because AppKit requires that thread. The other headless UI tests
 use GPUI's test text backend. Run `./qtest run ui` to include the native
 check. A test filter runs only the matching GPUI tests.
+
+The full `ui` suite also runs CPU renderer unit tests. These tests check
+clipping, transparency, borders, atlas storage, image colors, glyph transforms,
+and path coverage without a GPU.
+
+## Check CPU rendering
+
+Run `./qtest run software-ui` to check the real application with CPU rendering.
+This suite builds its own package inside the run artifact directory. It uses
+the demo, an isolated workspace directory, and native macOS input. It checks
+the editor line highlight, result text, Unicode SQL input, and demo query
+execution. It also checks both result scroll axes, splitters, menu dialogs,
+resize, minimize, hide, restore, and last-window closure.
+It opens a normal window with an empty isolated workspace, enters SQL, and
+checks the saved text after closure.
+It needs Accessibility and Screen Recording permission, as the
+[desktop suite](#run-the-desktop-suite) does. It needs no database servers,
+Keychain credentials, Docker, or Java.
+
+The suite runs only when selected by name and takes over the desktop. It sets
+`QROW_SOFTWARE_RENDERER=1`, so a Mac with Metal also checks the CPU path.
+Screenshots and application logs are in the run's `software-ui/` directory.
+
+## Check OpenGL rendering
+
+Run `./qtest run opengl-renderer` to check actual GPU pixels. It requires
+hardware Core OpenGL 3.3+, compiles GLSL 3.30 shaders, and checks blending,
+clipping, borders, paths, texture upload, and texture reuse.
+It also checks renderer configuration and precedence over the compatibility alias.
+
+Run `./qtest run opengl-ui` to build a separate package and check its native
+window with `QROW_RENDERER=opengl`. It uses the same isolated demo scenarios
+as `software-ui` and checks Core Profile and hardware acceleration in the
+application log. Results are in `opengl-ui/core/`. The pixel tests also check
+mixed batches, rotated sprites, and per-instance upload sizes. Native checks
+require Accessibility and Screen Recording permission.
+Both suites run only when selected by name. They need no database or credentials.
+
+Run `./qtest run perf-renderers` to compare CPU and OpenGL in the same release
+package. The suite uses three separate demo workspaces per backend. It records
+result scrolling in both axes, editor scrolling, launch, sampled memory, and
+idle CPU time. `perf-renderers/measurements.json` contains the results.
+Run it without other builds or UI tests. It takes over the desktop.
+
+The composition measurement includes scene encoding and drawing. OpenGL waits
+for GPU completion only when `QROW_RENDER_METRICS=1`. The measurement excludes
+GPUI layout and final display presentation. The initial targets are OpenGL
+composition p95 at most 33 ms in each scroll scenario and lower process CPU time in scripted actions
+than CPU rendering. Screenshots must show movement and a return to the start.
+Monotonic timestamps limit each measurement to its action interval.
+These targets do not change the existing performance budgets.
+
+## UI coverage
 
 UI tests also compare the Connections and Sign-Ins headers with query tabs.
 They check text height, control centers, and separator positions at different
@@ -187,6 +245,9 @@ snapshots set it, as
 | `junit/<suite>.xml` | The nextest JUnit report of a failed suite. |
 | `fixture/` | Server logs, execution evidence, and the versions of the servers. |
 | `desktop/` | Screenshots, accessibility snapshots, and logs of the desktop driver. |
+| `software-ui/` | A separate application package, screenshots, accessibility snapshots, and logs of CPU rendering checks. |
+| `opengl-ui/` | A separate OpenGL package, native screenshots, accessibility snapshots, and application logs. |
+| `perf-renderers/` | The comparison package, native resource logs, and `measurements.json`. |
 
 The summary gives the status of each suite: `passed`, `failed`, `skipped`, or
 `missing`. A failed suite names its failed step. A failed nextest suite also
@@ -453,6 +514,7 @@ each suite in `metrics`, and the run directory has them in `perf.json`.
 | `perf-ui` | A frame and a scroll step of the demo result table with 141 columns, opening and typing into a tab with 1 MB of SQL, an assistant reply of 800 streamed parts and a frame of the transcript after three such replies, a keystroke in the message field, and [Activity](activity.md) with a full log of 50,000 entries: opening it, a frame, a scroll step, a new entry, the removal of old entries, a change of filter, and 100 new entries while Activity is closed. The keystroke probe draws its frames like the window does: only the views that changed render again. The other probes render the full window in each frame. It builds with the `perf` Cargo profile, which optimizes like the release build. |
 | `perf-e2e` | The time from **Run** to the first result row, and to the next page of a long result. |
 | `perf-app` | The time until the release app reports a ready UI, its memory after it idles, and its CPU use while it idles. The memory probes are the resident size and the physical footprint. Activity Monitor shows the physical footprint. The workspace has one synthetic connection and an indented query. The app idles for 18 seconds before the measurement, so the caret no longer blinks and Qrow has returned its free memory to macOS. The first launch after a build warms up, and the median of the next three counts. |
+| `perf-renderers` | Three native release runs per backend. Reports composition p95 and the process CPU ratio for result and editor scrolling. [OpenGL checks](#check-opengl-rendering) describe the measurement limits and the full comparison file. |
 
 CI runs `perf` with its budgets. It runs the other probes as report-only
 suites, because the hosted runners are slower and less steady than a
@@ -700,11 +762,11 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
 | `backend` | Linux | `backend`, `postgres`, `trino` with Docker | `core` |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, and `perf-e2e` (report only), with local Java servers | `package` |
-| `perf` | macOS ARM64 | `perf`, and `perf-ui` (report only) | `core` |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, renderer checks (`software-ui`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package` |
+| `perf` | macOS ARM64 | `perf`, and `perf-ui`, `perf-renderers` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, and `perf-e2e` (report only), with local Java servers | `package-intel` |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, renderer checks (`software-ui`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package-intel` |
 
 The failures of `core` predict the failures of the macOS and server jobs, so
 these jobs wait for it. `e2e` also waits for the package that it tests. A
@@ -724,6 +786,7 @@ sources or `.cargo/config.toml` select all pull request jobs. Changes to the
 server fixture or the E2E scripts select `backend` and `e2e`. Changes under
 `tests/desktop/` select `e2e`. Changes to the packaging or probe scripts,
 `assets/`, `LICENSE`, or `NOTICE` select `package`. Changes to the
+native renderer performance script also select `perf`. Changes to the
 workflows, `qtest`, `scripts/core/`, or the Python dependencies select all
 pull request jobs. A selected job also selects the jobs that it waits for. A
 job that the plan does not select shows as skipped. To see the plan of your
