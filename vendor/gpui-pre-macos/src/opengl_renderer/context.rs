@@ -14,6 +14,16 @@ pub(super) struct Context {
     pub format: CGLPixelFormatObj,
 }
 
+/// The driver has no hardware pixel format for the requested Core profile.
+#[derive(Debug)]
+struct UnavailablePixelFormat;
+impl std::fmt::Display for UnavailablePixelFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("hardware OpenGL Core pixel format unavailable (10002)")
+    }
+}
+impl std::error::Error for UnavailablePixelFormat {}
+
 // Access is serialized by the owner's mutex and CGLLockContext. A context is
 // never current on two threads. No GL reference escapes with_current.
 unsafe impl Send for Context {}
@@ -36,6 +46,9 @@ impl Context {
         let mut format = ptr::null_mut();
         let mut count = 0;
         let error = unsafe { CGLChoosePixelFormat(attributes.as_ptr(), &mut format, &mut count) };
+        if error == 10002 {
+            return Err(UnavailablePixelFormat.into());
+        }
         ensure!(
             error == 0 && !format.is_null(),
             "hardware OpenGL pixel format unavailable ({error})"
@@ -147,6 +160,24 @@ fn validate_limits(attributes: i32, varyings: i32, texture: i32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The CI capability probe uses production context creation and limits,
+    // without compiling shaders. Unexpected errors remain test failures.
+    #[test]
+    fn hardware_capability_probe() {
+        let description = match Context::new() {
+            Ok(context) => {
+                let gl = context.load().unwrap();
+                context.with_current(|| info(&gl)).unwrap()
+            }
+            Err(error) if error.is::<UnavailablePixelFormat>() => {
+                println!("QROW_OPENGL_CAPABILITY unavailable: {error:#}");
+                return;
+            }
+            Err(error) => panic!("OpenGL capability probe failed: {error:#}"),
+        };
+        println!("QROW_OPENGL_CAPABILITY available: {description}");
+    }
+
     #[test]
     fn insufficient_hardware_limits_fail_before_scene_drawing() {
         assert!(validate_limits(14, 48, super::super::atlas::PAGE_SIZE).is_ok());

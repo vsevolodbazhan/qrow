@@ -242,6 +242,15 @@ SUITES = {
                Step(("sh", "scripts/e2e/software.sh"),
                     env=(("QROW_E2E_ARTIFACTS", "{artifacts}/software-ui"),)),),
               macos_only=True, explicit_only=True),
+        Suite("opengl-unit", "OpenGL scene/atlas/limit and shared renderer startup-policy tests without a GPU.",
+              ("cargo", "macos"),
+              (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
+                     "--features", "gpui-kit/test-support", "--lib", "opengl_renderer::", "--", "--skip", "opengl_renderer::tests::",
+                     "--skip", "hardware_capability_probe")),
+               Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos",
+                     "--features", "gpui-kit/test-support", "--lib", "renderer::tests::", "--",
+                     "--skip", "opengl_renderer::", "--skip", "software_renderer::"))),
+              macos_only=True, explicit_only=True),
         Suite("opengl-renderer", "Hardware OpenGL shader, atlas, and pixel regression tests.",
               ("cargo", "macos"),
               (Step(("cargo", "test", "--locked", "-p", "qrow", "-p", "gpui-pre-macos", "--lib",
@@ -337,6 +346,9 @@ class CiJob:
     # False keeps the job out of pull requests. Pushes, manual runs, and releases run every job.
     pull_requests: bool = True
     runtime: str = "auto"
+    # Hosted macOS can lack CGL hardware. Record only that capability as
+    # unsupported, while keeping GPU-independent renderer coverage required.
+    probe_opengl: bool = False
 
 
 LINUX, MACOS_RUNNER = "ubuntu-24.04", "macos-15"
@@ -351,16 +363,16 @@ CI_JOBS = {
               paths=rf"{RUST_PATHS}|^(scripts/package/|scripts/perf/|assets/|LICENSE$|NOTICE$)"),
         CiJob("backend", LINUX, ("backend", "postgres", "trino"), needs=("core",), paths=rf"{RUST_PATHS}|{E2E_PATHS}",
               runtime="docker"),
-        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",), needs=("package",),
-              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native"),
+        CiJob("e2e", MACOS_RUNNER, ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",), needs=("package",),
+              paths=rf"{RUST_PATHS}|{E2E_PATHS}|^tests/desktop/", runtime="native", probe_opengl=True),
         CiJob("perf", MACOS_RUNNER, ("perf",), report_only=("perf-ui", "perf-renderers"), needs=("core",),
-              paths=rf"{RUST_PATHS}|^scripts/perf/renderers\.py$"),
+              paths=rf"{RUST_PATHS}|^scripts/perf/renderers\.py$", probe_opengl=True),
         # The Intel runners are slower, so pull requests do not use them.
         CiJob("ui-intel", "macos-15-intel", ("clippy-app", "unit", "ui"), needs=("core",), pull_requests=False),
         CiJob("package-intel", "macos-15-intel", ("package",), report_only=("perf-app",), needs=("core",),
               pull_requests=False),
-        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",),
-              needs=("package-intel",), runtime="native", pull_requests=False),
+        CiJob("e2e-intel", "macos-15-intel", ("e2e", "desktop", "software-ui", "opengl-unit", "opengl-renderer", "opengl-ui"), report_only=("perf-e2e",),
+              needs=("package-intel",), runtime="native", pull_requests=False, probe_opengl=True),
     ]
 }
 # A change to these paths can change any job, so it runs all of them.

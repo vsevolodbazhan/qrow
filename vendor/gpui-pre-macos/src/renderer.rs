@@ -47,16 +47,16 @@ pub(crate) unsafe fn new_renderer(
         || (preference == Preference::Auto && !metal_available)
     {
         let scale: f64 = unsafe { msg_send![native_window as cocoa::base::id, backingScaleFactor] };
-        match OpenGlRenderer::new(bounds, scale as f32, transparent) {
-            Ok(renderer) => Backend::OpenGl(renderer),
-            Err(error) if preference == Preference::Auto => {
-                eprintln!(
-                    "Qrow: OpenGL initialization failed; using CPU rendering: {error:#}"
-                );
+        match initialize_opengl(
+            preference,
+            || OpenGlRenderer::new(bounds, scale as f32, transparent).map(Backend::OpenGl),
+            || {
                 Backend::Software(unsafe {
                     SoftwareRenderer::new(bounds, scale as f32, transparent)
                 })
-            }
+            },
+        ) {
+            Ok(backend) => backend,
             Err(error) => {
                 eprintln!("Qrow: OpenGL initialization failed: {error:#}");
                 std::process::exit(1)
@@ -166,6 +166,23 @@ fn parse_preference(
     })
 }
 
+/// Shared startup policy for native windows and headless rendering. This is
+/// called only during initialization; drawing never changes an active backend.
+fn initialize_opengl<T>(
+    preference: Preference,
+    initialize: impl FnOnce() -> anyhow::Result<T>,
+    software: impl FnOnce() -> T,
+) -> anyhow::Result<T> {
+    match initialize() {
+        Ok(renderer) => Ok(renderer),
+        Err(error) if preference == Preference::Auto => {
+            eprintln!("Qrow: OpenGL initialization failed; using CPU rendering: {error:#}");
+            Ok(software())
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn preference_or_exit() -> Preference {
     parse_preference(
         std::env::var_os("QROW_RENDERER").as_deref(),
@@ -197,26 +214,25 @@ impl HeadlessRenderer {
             eprintln!("Qrow: Metal initialization failed: no Metal device is available");
             std::process::exit(1);
         }
-        if preference == Preference::OpenGl
-            || (preference == Preference::Auto && !metal_available)
+        if preference == Preference::OpenGl || (preference == Preference::Auto && !metal_available)
         {
-            Self(Box::new(
-                match crate::opengl_renderer::OpenGlHeadlessRenderer::new() {
-                    Ok(renderer) => renderer,
-                    Err(error) if preference == Preference::Auto => {
-                        eprintln!(
-                            "Qrow: OpenGL initialization failed; using CPU rendering: {error:#}"
-                        );
-                        return Self(Box::new(
-                            crate::software_renderer::SoftwareHeadlessRenderer::default(),
-                        ));
-                    }
-                    Err(error) => {
-                        eprintln!("Qrow: OpenGL initialization failed: {error:#}");
-                        std::process::exit(1)
-                    }
+            let backend = initialize_opengl(
+                preference,
+                || {
+                    crate::opengl_renderer::OpenGlHeadlessRenderer::new().map(|renderer| {
+                        Box::new(renderer) as Box<dyn gpui::PlatformHeadlessRenderer>
+                    })
                 },
-            ))
+                || {
+                    Box::new(crate::software_renderer::SoftwareHeadlessRenderer::default())
+                        as Box<dyn gpui::PlatformHeadlessRenderer>
+                },
+            )
+            .unwrap_or_else(|error| {
+                eprintln!("Qrow: OpenGL initialization failed: {error:#}");
+                std::process::exit(1)
+            });
+            Self(backend)
         } else if preference == Preference::Software {
             Self(Box::new(
                 crate::software_renderer::SoftwareHeadlessRenderer::default(),
@@ -233,6 +249,46 @@ impl HeadlessRenderer {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    #[test]
+    fn startup_falls_back_only_in_auto_and_only_after_initialization_failure() {
+        use std::cell::Cell;
+        for preference in [Preference::Auto, Preference::OpenGl] {
+            let attempts = Cell::new(0);
+            let fallbacks = Cell::new(0);
+            let result = initialize_opengl(
+                preference,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    anyhow::bail!("synthetic context failure")
+                },
+                || {
+                    fallbacks.set(fallbacks.get() + 1);
+                    "software"
+                },
+            );
+            assert_eq!(attempts.get(), 1);
+            if preference == Preference::Auto {
+                assert_eq!(result.unwrap(), "software");
+                assert_eq!(fallbacks.get(), 1);
+            } else {
+                assert_eq!(result.unwrap_err().to_string(), "synthetic context failure");
+                assert_eq!(fallbacks.get(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn successful_startup_keeps_the_gpu_backend() {
+        for preference in [Preference::Auto, Preference::OpenGl] {
+            let renderer = initialize_opengl(
+                preference,
+                || Ok("opengl"),
+                || panic!("successful OpenGL startup must not create a CPU backend"),
+            );
+            assert_eq!(renderer.unwrap(), "opengl");
+        }
+    }
+
     #[test]
     fn renderer_preference_is_validated_and_explicit_values_override_the_alias() {
         let parse = |value: Option<&str>, legacy: Option<&str>| {

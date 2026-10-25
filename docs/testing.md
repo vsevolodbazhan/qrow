@@ -52,13 +52,14 @@ accept a test filter.
 | `package` | The release app package in `target/package/`, its installer image, and its size budget. | macOS, Xcode tools |
 | `desktop` | Smoke checks of the packaged app on the desktop: the menu bar, Keychain, quit, and pixels. | macOS desktop, Docker or Java 17 |
 | `software-ui` | CPU rendering of the editor and results, with native input and synthetic demo data. | macOS desktop, Xcode tools |
+| `opengl-unit` | OpenGL scene encoding, atlas storage, limits, and shared renderer startup policy without a GPU. | macOS, Cargo |
 | `opengl-renderer` | Hardware OpenGL shader, atlas, and pixel regression tests. | macOS with hardware OpenGL |
 | `opengl-ui` | Hardware OpenGL rendering and native input in a separate demo package. | macOS desktop, hardware OpenGL, Xcode tools |
 | `perf-renderers` | Native release CPU and OpenGL composition, scrolling, launch, memory, and idle measurements. | macOS desktop, hardware OpenGL, Xcode tools |
 
 On Linux, `unit` and `clippy` use only the core library. These suites need
 macOS and are not available on Linux: `clippy-app`, `ui`, `e2e`, `perf-ui`,
-`perf-e2e`, `perf-app`, `package`, `desktop`, `software-ui`, `opengl-renderer`,
+`perf-e2e`, `perf-app`, `package`, `desktop`, `software-ui`, `opengl-unit`, `opengl-renderer`,
 `opengl-ui`, and `perf-renderers`. `clippy-app` is the second
 pass of `clippy` on macOS. It is not in a group, because `clippy` includes it.
 
@@ -106,6 +107,12 @@ Screenshots and application logs are in the run's `software-ui/` directory.
 
 ## Check OpenGL rendering
 
+Run `./qtest run opengl-unit` to check scene encoding, atlas storage and
+hardware limits without creating a GPU context. It also checks the startup
+policy shared by native and headless rendering: only automatic selection can
+fall back after OpenGL initialization fails. A successful GPU startup keeps
+its backend. Drawing does not invoke this startup policy.
+
 Run `./qtest run opengl-renderer` to check actual GPU pixels. It requires
 hardware Core OpenGL 3.3+, compiles GLSL 3.30 shaders, and checks blending,
 clipping, borders, paths, texture upload, and texture reuse.
@@ -117,7 +124,21 @@ as `software-ui` and checks Core Profile and hardware acceleration in the
 application log. Results are in `opengl-ui/core/`. The pixel tests also check
 mixed batches, rotated sprites, and per-instance upload sizes. Native checks
 require Accessibility and Screen Recording permission.
-Both suites run only when selected by name. They need no database or credentials.
+These suites run only when selected by name. They need no database or credentials.
+
+Hosted macOS runners can lack a hardware CGL pixel format. The `e2e`,
+`e2e-intel`, and `perf` CI jobs probe production context creation and hardware
+limits before selecting hardware suites. An unavailable pixel format (CGL
+error 10002) records `opengl-renderer`, `opengl-ui`, or `perf-renderers` as
+`skipped`, with the diagnostic in `opengl-capability.json` in the run directory.
+The required `opengl-unit` and CPU desktop checks still run. Probe build errors,
+crashes, timeouts, and unexpected context or limit errors fail the job. Shader
+and drawing failures on supported hardware also fail their checks.
+
+An explicit local `./qtest run opengl-renderer opengl-ui` stays strict: absent
+hardware does not count as a pass. Run these commands on a physical Mac with
+an unlocked desktop and automation permissions before claiming GPU validation.
+A hosted capability skip supplies no GPU pixel or native-input coverage.
 
 Run `./qtest run perf-renderers` to compare CPU and OpenGL in the same release
 package. The suite uses three separate demo workspaces per backend. It records
@@ -762,11 +783,11 @@ command, for example `./qtest ci ui`. `./qtest ci` lists the jobs:
 | `ui` | macOS ARM64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package` | macOS ARM64 | `package`, and `perf-app` (report only) | `core` |
 | `backend` | Linux | `backend`, `postgres`, `trino` with Docker | `core` |
-| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, renderer checks (`software-ui`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package` |
+| `e2e` | macOS ARM64 | `e2e`, `desktop` on the package of `package`, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package` |
 | `perf` | macOS ARM64 | `perf`, and `perf-ui`, `perf-renderers` (report only) | `core` |
 | `ui-intel` | macOS x86_64 | `clippy-app`, `unit`, `ui` | `core` |
 | `package-intel` | macOS x86_64 | `package`, and `perf-app` (report only) | `core` |
-| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, renderer checks (`software-ui`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package-intel` |
+| `e2e-intel` | macOS x86_64 | `e2e`, `desktop` on the Intel package, renderer checks (`software-ui`, `opengl-unit`, `opengl-renderer`, `opengl-ui`), and `perf-e2e` (report only), with local Java servers | `package-intel` |
 
 The failures of `core` predict the failures of the macOS and server jobs, so
 these jobs wait for it. `e2e` also waits for the package that it tests. A

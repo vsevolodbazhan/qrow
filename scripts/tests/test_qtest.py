@@ -30,6 +30,25 @@ class SummaryTests(unittest.TestCase):
 
 
 class CatalogTests(unittest.TestCase):
+    def test_hosted_renderer_jobs_probe_hardware_and_keep_units_required(self):
+        for name in ("e2e", "e2e-intel"):
+            job = catalog.CI_JOBS[name]
+            self.assertTrue(job.probe_opengl)
+            self.assertIn("opengl-unit", job.suites)
+            self.assertIn("software-ui", job.suites)
+            self.assertNotIn("opengl-unit", job.report_only)
+        self.assertTrue(catalog.CI_JOBS["perf"].probe_opengl)
+        self.assertEqual(runner.opengl.HARDWARE_SUITES,
+                         {"opengl-renderer", "opengl-ui", "perf-renderers"})
+
+    def test_gpu_independent_suite_excludes_substring_matches_in_other_renderers(self):
+        scene, startup = catalog.SUITES["opengl-unit"].steps
+        self.assertIn("hardware_capability_probe", scene.command)
+        self.assertIn("opengl_renderer::tests::", scene.command)
+        for module in ("opengl_renderer::", "software_renderer::"):
+            index = startup.command.index(module)
+            self.assertEqual(startup.command[index - 1], "--skip")
+
     def test_preparation_steps_require_a_fixture(self):
         # The runner executes preparation only before starting a server fixture.
         # Desktop suites without a fixture must build their app in normal steps.
@@ -268,9 +287,61 @@ class RunTests(unittest.TestCase):
         self.assertEqual((summary["status"], summary["exit_code"]), ("missing", runner.EXIT_MISSING))
         self.assertEqual([suite["status"] for suite in summary["suites"]], ["skipped", "missing"])
 
+    def test_ci_capability_skip_keeps_renderer_units_required_and_records_evidence(self):
+        capability = {"available": False, "reason": "no hardware pixel format"}
+        selected = [runner.Selected(fake_suite("opengl-unit", "exit 0")),
+                    runner.Selected(fake_suite("opengl-renderer", "exit 7"))]
+        summary = runner.run(selected, {"repeat": 1, "ci_opengl_capability": capability}, [],
+                             runner.Output(quiet=True), require_all=True)
+        self.assertEqual(summary["exit_code"], 0)
+        self.assertEqual([x["status"] for x in summary["suites"]], ["passed", "skipped"])
+        evidence = Path(summary["artifacts"]) / "opengl-capability.json"
+        self.assertEqual(json.loads(evidence.read_text()), capability)
+        self.assertIn("no hardware pixel format", summary["suites"][1]["reason"])
+
+    def test_explicit_hardware_suite_is_strict_even_in_ci_environment(self):
+        with patch.dict(os.environ, {"CI": "true"}):
+            summary = self.run_suites(fake_suite("opengl-renderer", "exit 7"))
+        self.assertEqual(summary["exit_code"], runner.EXIT_FAILED)
+        self.assertEqual(summary["suites"][0]["status"], "failed")
+
+    def test_unavailable_gpu_does_not_skip_other_missing_prerequisites(self):
+        suite = fake_suite("software-ui", "exit 0", requires=("desktop",))
+        with patch.object(runner, "check_requirement", return_value="Grant Accessibility."):
+            result = runner.precheck(runner.Selected(suite), {
+                "ci_opengl_capability": {"available": False, "reason": "no hardware"}})
+        self.assertEqual(result.status, "missing")
+
+    def test_ci_probe_errors_persist_and_fail_even_when_hardware_measurements_are_report_only(self):
+        capability = {"available": None, "error": "probe compile failed", "output": "compiler diagnostic"}
+        selected = [runner.Selected(fake_suite("perf", "exit 0")),
+                    runner.Selected(fake_suite("perf-renderers", "exit 0"))]
+        summary = runner.run(selected, {"repeat": 1, "ci_opengl_capability": capability}, [],
+                             runner.Output(quiet=True), report_only=("perf-renderers",), require_all=True)
+        self.assertEqual(summary["exit_code"], runner.EXIT_FAILED)
+        self.assertEqual(summary["suites"][0]["name"], "opengl-capability")
+        self.assertEqual(summary["suites"][0]["status"], "failed")
+        self.assertEqual(summary["suites"][0]["reason"], "probe compile failed")
+        evidence = Path(summary["artifacts"]) / "opengl-capability.json"
+        self.assertEqual(json.loads(evidence.read_text()), capability)
+        self.assertTrue((Path(summary["artifacts"]) / "summary.json").exists())
+        self.assertEqual([r["status"] for r in summary["suites"][1:]], ["skipped", "skipped"])
+
+    def test_ci_missing_prerequisites_do_not_build_the_capability_probe(self):
+        missing = runner.SuiteResult("software-ui", "missing", reason="Grant Accessibility.")
+        with patch.object(runner, "precheck", return_value=missing), patch.object(cli.opengl, "probe") as probe, \
+                patch.object(runner, "run", return_value={"exit_code": runner.EXIT_MISSING}) as run, \
+                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(["ci", "e2e"])
+        self.assertEqual(code, runner.EXIT_MISSING)
+        probe.assert_not_called()
+        self.assertNotIn("ci_opengl_capability", run.call_args.args[1])
+        self.assertTrue(run.call_args.kwargs["require_all"])
+
     def test_ci_jobs_stop_before_they_build_when_a_prerequisite_is_missing(self):
         with patch.object(runner, "run", return_value={"exit_code": 0}) as run, \
-                patch.object(cli, "print_summary"), contextlib.redirect_stderr(io.StringIO()):
+                patch.object(cli, "print_summary"), patch.object(cli.opengl, "probe", return_value={"available": True}), \
+                patch.object(runner, "precheck", return_value=None), contextlib.redirect_stderr(io.StringIO()):
             cli.main(["ci", "e2e"])
         self.assertTrue(run.call_args.kwargs["require_all"])
 

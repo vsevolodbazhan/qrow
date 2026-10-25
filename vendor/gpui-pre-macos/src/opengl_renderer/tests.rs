@@ -335,20 +335,6 @@ fn srgb_gradients_and_patterns_match_reference_pixels() {
 }
 
 #[test]
-fn rectangles_upload_one_affine_instance_each() {
-    use std::mem::size_of;
-    let s = scene(vec![
-        quad(bounds(0., 0., 8., 8.), 0xff000080),
-        quad(bounds(8., 0., 8., 8.), 0x00ff0080),
-    ]);
-    let frame = scene::Frame::encode(&s);
-    assert_eq!(frame.instances.len(), 2);
-    assert_eq!(frame.batches.len(), 1);
-    assert_eq!(frame.batches[0].vertices_per_instance, 6);
-    assert_eq!(size_of::<scene::Instance>(), 224);
-}
-
-#[test]
 fn rotated_sprites_and_mixed_batches_keep_positions_and_paint_order() {
     fn render() -> image::RgbaImage {
         let mut renderer = OpenGlHeadlessRenderer {

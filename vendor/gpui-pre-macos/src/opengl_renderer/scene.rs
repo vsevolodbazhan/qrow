@@ -1,4 +1,4 @@
-//! Encode a borrowed scene as owned vertices or affine instances, in paint order.
+//! Encode a borrowed scene as owned affine instances, in paint order.
 use super::atlas::PAGE_SIZE;
 use gpui::{
     AtlasTile, Background, BorderStyle, Bounds, Corners, Hsla, PrimitiveBatch, Rgba, ScaledPixels,
@@ -303,5 +303,37 @@ impl Frame {
             }
         }
         frame
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rectangles_upload_one_affine_instance_each() {
+        let mut scene = Scene::default();
+        for _ in 0..2 {
+            scene.insert_primitive(gpui::Quad {
+                bounds: Bounds {
+                    origin: gpui::point(ScaledPixels(0.), ScaledPixels(0.)),
+                    size: gpui::size(ScaledPixels(8.), ScaledPixels(8.)),
+                },
+                content_mask: gpui::ContentMask {
+                    bounds: Bounds {
+                        origin: gpui::point(ScaledPixels(0.), ScaledPixels(0.)),
+                        size: gpui::size(ScaledPixels(16.), ScaledPixels(16.)),
+                    },
+                },
+                background: gpui::rgba(0xff000080).into(),
+                ..Default::default()
+            });
+        }
+        scene.finish();
+        let frame = Frame::encode(&scene);
+        assert_eq!(frame.instances.len(), 2);
+        assert_eq!(frame.batches.len(), 1);
+        assert_eq!(frame.batches[0].vertices_per_instance, 6);
+        assert_eq!(std::mem::size_of::<Instance>(), 224);
     }
 }
