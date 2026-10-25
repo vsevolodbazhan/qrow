@@ -247,6 +247,14 @@ jobs:
         with:
           name: macos-package
           path: target/macos-package
+      # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
+      # change as the native scenarios launch additional app bundles.
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then
+            killall Dock
+          fi
       - run: ./qtest ci e2e --install
         env:
           QROW_E2E_REUSE_MACOS_PACKAGE: true
@@ -288,6 +296,14 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           version: "0.12.10"
+      # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
+      # change as the native scenarios launch additional app bundles.
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then
+            killall Dock
+          fi
       - run: ./qtest ci perf --install
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -409,6 +425,14 @@ jobs:
         with:
           name: macos-package-x86_64
           path: target/macos-package
+      # Keep the fixed 992x652 test viewport clear of the Dock. Its size can
+      # change as the native scenarios launch additional app bundles.
+      - name: Prepare desktop work area
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          if pgrep -x Dock >/dev/null; then
+            killall Dock
+          fi
       - run: ./qtest ci e2e-intel --install
         env:
           QROW_E2E_REUSE_MACOS_PACKAGE: true

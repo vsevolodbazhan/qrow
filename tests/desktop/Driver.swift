@@ -82,7 +82,8 @@ func setTestWindowFrame(_ app: AXUIElement) throws {
     let visible = screen.visibleFrame
     try require(
         visible.width - 32 >= testWindowSize.width && visible.height - 32 >= testWindowSize.height,
-        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window"
+        "Main display is too small for the \(Int(testWindowSize.width)) by \(Int(testWindowSize.height)) point test window; "
+            + "screen=\(screen.frame), visible=\(visible), required margin=16 points"
     )
     let top = screen.frame.maxY - visible.maxY
     let safeFrame = CGRect(x: visible.minX, y: top, width: visible.width, height: visible.height)

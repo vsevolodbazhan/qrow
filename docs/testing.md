@@ -487,7 +487,13 @@ The suite builds a release package in the run directory. It does not replace
 passwords. The driver restores the clipboard after it types text. It sets the
 Qrow window to 992 by 652 points, the window size on a hosted macOS runner,
 so local and CI runs show the same layout. The main display must fit this
-window with 16 points of space on each side. The pixel checks read the
+window with 16 points of space on each side. Hosted `e2e`, `e2e-intel`, and
+`perf` jobs enable Dock auto-hide before the native checks, so Dock resizing
+as additional app bundles start cannot reduce the usable work area. This
+configuration applies only to the disposable CI desktop. Local runs do not
+change Dock settings. The driver keeps the fixed viewport and checks that the
+whole window fits; failures include the display and visible-frame bounds.
+The pixel checks read the
 pixels of the Qrow window alone, so other windows, their shadows, and
 notifications do not change the result. A check captures its region again
 until two captures in a row match, so it does not measure a frame of an
