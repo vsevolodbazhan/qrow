@@ -147,15 +147,25 @@ fn fixture(engine: &str, case: &str) -> Result<(Profile, DatabaseConnector, Stri
             );
             profile.port = std::env::var("QROW_E2E_PORT")?.parse()?;
             profile.database = "default".into();
-            profile.parameters.extend([
-                ("kyuubi.engine.share.level".into(), "CONNECTION".into()),
-                ("spark.sql.catalogImplementation".into(), "in-memory".into()),
-                ("kyuubi.session.engine.idle.timeout".into(), "PT1S".into()),
-                (
-                    "kyuubi.engine.spark.operation.incremental.collect".into(),
-                    "false".into(),
-                ),
-            ]);
+            match std::env::var("QROW_E2E_RUNTIME")?.as_str() {
+                "docker" => profile.parameters.extend([
+                    ("kyuubi.engine.share.level".into(), "CONNECTION".into()),
+                    ("spark.sql.catalogImplementation".into(), "in-memory".into()),
+                    ("kyuubi.session.engine.idle.timeout".into(), "PT1S".into()),
+                ]),
+                // The readiness USER engine holds both worker cores. Native
+                // fixtures cannot safely stop it, so use a new session on it.
+                "native" => {
+                    profile
+                        .parameters
+                        .insert("kyuubi.engine.share.level".into(), "USER".into());
+                }
+                _ => anyhow::bail!("Unknown Kyuubi fixture runtime"),
+            }
+            profile.parameters.insert(
+                "kyuubi.engine.spark.operation.incremental.collect".into(),
+                "false".into(),
+            );
             (
                 Trust::default(),
                 format!(
@@ -412,7 +422,9 @@ fn export_sample(engine: &str, case: &str) -> Result<()> {
     ensure!(jobs.active_count() == 0, "Export cleanup did not finish");
     println!(
         "QROW_TRANSFER_SAMPLE {}",
-        serde_json::json!({"seconds": elapsed, "bytes": bytes, "spool_bytes":spool_bytes, "spark_mib": spark})
+        serde_json::json!({"seconds": elapsed, "bytes": bytes, "spool_bytes":spool_bytes, "spark_mib": spark,
+            "fixture_runtime": std::env::var("QROW_E2E_RUNTIME").ok(),
+            "engine_share_level": profile.parameters.get("kyuubi.engine.share.level")})
     );
     Ok(())
 }
@@ -555,6 +567,12 @@ struct Measurements {
 
 fn measure(engine: &str) -> Result<()> {
     let executable = std::env::current_exe()?;
+    ensure!(
+        engine != "kyuubi"
+            || std::env::var("QROW_E2E_RUNTIME").as_deref() != Ok("native")
+            || std::env::var_os("QROW_TRANSFER_BASELINE_BIN").is_none(),
+        "Historical Kyuubi executables need the Docker fixture's separate engines"
+    );
     let baseline = if std::env::var_os("QROW_TRANSFER_BASELINE_BIN").is_some() {
         "baseline"
     } else {
@@ -572,8 +590,8 @@ fn measure(engine: &str) -> Result<()> {
         let length = cases.len();
         cases.rotate_left(round % length);
         for &case in &cases {
-            // The Docker worker has two cores, all held by readiness's USER
-            // engine. Each sample must own a fresh CONNECTION engine.
+            // Docker scopes engine cleanup to the disposable container.
+            // Native samples reuse the USER engine that holds both cores.
             if engine == "kyuubi" && std::env::var("QROW_E2E_RUNTIME").as_deref() == Ok("docker") {
                 clear_fixture_driver()?;
             }

@@ -631,20 +631,27 @@ paging. The spooling cases use the fixture's TLS storage. The corpus contains
 repeated text. These
 results do not predict performance with incompressible data or remote storage.
 Each sample runs one export. Separate tests check the parallel segment limit.
-Kyuubi uses a separate CONNECTION engine and an in-memory catalog for each
-sample. The corpus does not need a persistent metastore. Before each Docker
+With Docker, Kyuubi uses a separate CONNECTION engine and an in-memory catalog
+for each sample. The corpus does not need a persistent metastore. Before each
 sample, the probe stops engines within its disposable fixture. This releases
 the two worker cores held by the readiness engine.
-Its profile starts with incremental collect off. Conservative and Custom
+With the native runtime, each sample opens a new session on the readiness USER
+engine. This engine holds both worker cores. The native fixture cannot stop
+engines safely. Native samples share JVM warm-up and report client memory only.
+Do not compare native measurements with the Docker measurements.
+Raw samples record the runtime and engine share level.
+The profile starts with incremental collect off. Conservative and Custom
 change it to on. With Docker, the probe also reads the driver's peak resident
 set size before the session closes. This peak includes JVM startup and warm-up.
-The native runtime reports client memory only.
 
 The default comparison case is `legacy_policy`. It uses the current code
 with fixed 1,000-row Kyuubi requests and no collection override. It is not a
 measurement of an older source revision. To compare an older executable,
 set `QROW_TRANSFER_BASELINE_BIN` to an integration-test executable with
 `transfer_perf::sample`. Use the same corpus, validation, and test harness.
+For historical Kyuubi comparisons, use Docker. The native probe uses
+`legacy_policy` as its comparison case. An older executable can request a
+separate engine and wait for worker cores that the native readiness engine holds.
 The sample must print `QROW_TRANSFER_SAMPLE` JSON. Set
 `QROW_TRANSFER_BASELINE_REVISION` to its full commit ID. The case then has
 the name `baseline`. Raw samples record that commit ID.

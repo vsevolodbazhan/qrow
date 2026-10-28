@@ -397,6 +397,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
         window.find("result-loaded").label() == Some("1000 loaded")
     });
+    app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     assert!(!app.logs(cx).contains("987654"));
 }
@@ -439,6 +440,7 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
         csv::Reader::from_path(output).unwrap().records().count(),
         2123
     );
+    app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
 }
 

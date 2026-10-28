@@ -112,6 +112,7 @@ fn run_export_waits_for_browser_sign_in_before_submitting_its_captured_sql(
         |_, _| output.exists(),
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "value\r\n753\r\n");
+    app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
     assert_eq!(app.credentials.reads(), 0);
 }
