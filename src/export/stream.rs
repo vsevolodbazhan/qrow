@@ -98,29 +98,63 @@ fn markdown(
         .iter()
         .map(|column| column.name.as_str())
         .collect();
-    let mut widths: Vec<_> = names
-        .iter()
-        .map(|name| markdown::width(name, options.max_cell_width))
-        .collect();
+    let pretty = options.style == markdown::Style::Table && options.pretty;
+    let mut widths = if pretty {
+        markdown::table_widths(
+            names.iter().copied(),
+            spool
+                .columns()
+                .iter()
+                .map(|column| ValueKind::of(&column.data_type) == ValueKind::Number),
+        )
+    } else {
+        names
+            .iter()
+            .map(|name| markdown::width(name, options.max_cell_width))
+            .collect()
+    };
     let mut count = 0usize;
-    if options.style == markdown::Style::CodeBlock {
+    if options.style == markdown::Style::CodeBlock || pretty {
         let mut reader = spool.reader()?;
         while let Some(batch) = reader.next(cancel)? {
             let table = table(spool, batch.rows());
             for row in table.row_indices.clone() {
                 check_cancelled(cancel)?;
-                for (column, text) in table.values(row).enumerate() {
-                    widths[column] = widths[column].max(markdown::width(
-                        text.unwrap_or("NULL"),
-                        options.max_cell_width,
-                    ));
+                if pretty {
+                    markdown::measure_table(&mut widths, table.values(row));
+                } else {
+                    for (column, text) in table.values(row).enumerate() {
+                        widths[column] = widths[column].max(markdown::width(
+                            text.unwrap_or("NULL"),
+                            options.max_cell_width,
+                        ));
+                    }
                 }
             }
             count += table.row_count();
         }
     }
-    let number_width = count.to_string().len().max(1);
+    let number_width = count.to_string().len().max(if pretty { 4 } else { 1 });
     match options.style {
+        markdown::Style::Table if pretty => {
+            markdown::pretty_line(
+                out,
+                options.row_numbers.then_some(("#", number_width)),
+                names.iter().copied().map(Some),
+                &widths,
+                cancel,
+            )?;
+            markdown::pretty_separator(
+                out,
+                options.row_numbers.then_some(number_width),
+                &widths,
+                spool
+                    .columns()
+                    .iter()
+                    .map(|column| ValueKind::of(&column.data_type) == ValueKind::Number),
+                cancel,
+            )?;
+        }
         markdown::Style::Table => {
             markdown::line(
                 out,
@@ -166,6 +200,15 @@ fn markdown(
             count += 1;
             let number = count.to_string();
             match options.style {
+                markdown::Style::Table if pretty => markdown::pretty_line(
+                    out,
+                    options
+                        .row_numbers
+                        .then_some((number.as_str(), number_width)),
+                    table.values(row),
+                    &widths,
+                    cancel,
+                )?,
                 markdown::Style::Table => markdown::line(
                     out,
                     options.row_numbers.then_some(number.as_str()),
@@ -257,13 +300,19 @@ mod tests {
             format: Format::Markdown,
             ..Settings::default()
         };
-        settings.markdown.style = markdown::Style::CodeBlock;
-        settings.markdown.row_numbers = true;
-        let mut expected = Vec::new();
-        super::super::write(&mut expected, &table, &settings, &AtomicBool::new(false)).unwrap();
-        let mut actual = Vec::new();
-        write(&mut actual, &spool, &settings, &AtomicBool::new(false)).unwrap();
-        assert_eq!(actual, expected);
+        for style in [markdown::Style::Table, markdown::Style::CodeBlock] {
+            for pretty in [false, true] {
+                settings.markdown.style = style;
+                settings.markdown.pretty = pretty;
+                settings.markdown.row_numbers = true;
+                let mut expected = Vec::new();
+                super::super::write(&mut expected, &table, &settings, &AtomicBool::new(false))
+                    .unwrap();
+                let mut actual = Vec::new();
+                write(&mut actual, &spool, &settings, &AtomicBool::new(false)).unwrap();
+                assert_eq!(actual, expected);
+            }
+        }
     }
 
     #[test]
