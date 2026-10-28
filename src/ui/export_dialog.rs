@@ -991,7 +991,7 @@ impl Render for ExportDialog {
                     }))))
             .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
                 flags.into_iter().enumerate().map(|(index,(id,label,checked))|
-                    Checkbox::new(id).label(label).checked(checked).disabled(busy)
+                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy)
                         .on_click(cx.listener(move |this,checked,window,cx| {
                             match index {0 => this.settings.csv.header = *checked,
                                 1 => this.settings.csv.byte_order_mark = *checked,
@@ -1000,14 +1000,17 @@ impl Render for ExportDialog {
                             this.sync(window,cx);
                         }))))))
             .when(format == Format::Markdown, |view| view
+                .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
+                    Checkbox::new("export-markdown-pretty").small().label("Pretty formatted").checked(self.settings.markdown.pretty).disabled(busy)
+                        .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
                 .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
                     field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")
                         .child(Input::new(&self.cell_width).id("export-cell-width").focus_ring(false).disabled(busy).aria_label("Maximum Cell Width"))))
-                .child(Checkbox::new("export-row-numbers").label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
+                .child(Checkbox::new("export-row-numbers").small().label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
                     .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);}))))
             .when(matches!(format, Format::Json | Format::JsonLines), |view| view.child(v_flex().gap_2().children(
-                json_flags.into_iter().enumerate().map(|(index,(id,label,checked))|
-                    Checkbox::new(id).label(label).checked(checked).disabled(busy || index == 1 && format == Format::JsonLines || index == 2 && !self.settings.json.typed)
+                json_flags.into_iter().enumerate().filter(|(index,_)| *index != 1 || format == Format::Json).map(|(index,(id,label,checked))|
+                    Checkbox::new(id).small().label(label).checked(checked).disabled(busy || index == 2 && !self.settings.json.typed)
                         .on_click(cx.listener(move |this,checked,window,cx| {
                             match index {0 => this.settings.json.typed = *checked, 1 => this.settings.json.pretty = *checked,
                                 2 => this.settings.json.decimals_as_numbers = *checked, _ => unreachable!()}

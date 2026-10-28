@@ -89,6 +89,8 @@ macOS can request Keychain access when you save the password.
 
 Open **Connection Settings → Export** to choose a transfer preset.
 Existing profiles use **Balanced**.
+Preset values stay visible in read-only fields. Choose **Custom** to edit
+the values. A preset change keeps unsaved Custom values in the open form.
 Transfer-policy changes do not reconnect an otherwise unchanged session.
 
 | Setting | Conservative | Balanced | Fast |
@@ -131,7 +133,7 @@ for that download. The connection's export count stays unchanged.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.
-The **Run and export** form shows the configured collection value before
+The export rerun form shows the configured collection value before
 you choose a file. It also shows a warning when connection parameters enable
 `saveToFile`.
 `kyuubi.engine.spark.operation.incremental.collect` takes precedence over
@@ -262,7 +264,7 @@ For Parquet timestamp limits, see [Parquet](results.md#parquet).
 
 ### Trino export spooling
 
-For **Run and export**, Trino can send encoded result segments from storage.
+For an export rerun, Trino can send encoded result segments from storage.
 Set **Transfer Preset** on the connection. Conservative uses classic results.
 Balanced downloads one segment at a time. Fast can download the next segment
 while Qrow reads the current segment. Normal Run and schema queries keep

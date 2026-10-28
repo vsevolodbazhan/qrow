@@ -209,20 +209,20 @@ impl ExportDialog {
     }
 
     pub(super) fn status_text(&self) -> String {
-        let filename = self
+        let prefix = self
             .output_path
             .as_deref()
             .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.filename.clone());
+            .map(|name| format!("{}: ", name.to_string_lossy()))
+            .unwrap_or_default();
         if let Some(error) = &self.error {
-            return format!("{filename}: {error}");
+            return format!("{prefix}{error}");
         }
         if !self.running {
-            return format!("{filename}: Ready to retry");
+            return format!("{prefix}Ready to retry");
         }
         if self.cancel.load(Ordering::Relaxed) {
-            return format!("{filename}: Stopping export…");
+            return format!("{prefix}Stopping export…");
         }
         let elapsed = self
             .started
@@ -233,7 +233,7 @@ impl ExportDialog {
             .and_then(|download| download.progress_percentage())
             .map_or(String::new(), |value| format!(", query {value:.0}%"));
         if self.download.is_some() && self.retained.is_none() {
-            return format!("{filename}: Preparing export, {elapsed:.0}s{query}");
+            return format!("{prefix}Preparing export, {elapsed:.0}s{query}");
         }
         if let Some(spool) = &self.retained
             && matches!(spool.status(), export::spool::Status::Downloading)
@@ -241,7 +241,7 @@ impl ExportDialog {
             let rows = spool.row_count();
             let mib = spool.bytes() as f64 / (1024. * 1024.);
             return format!(
-                "{filename}: Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
+                "{prefix}Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
                 rows as f64 / elapsed.max(0.001)
             );
         }
@@ -253,7 +253,7 @@ impl ExportDialog {
             });
         let mib = self.output_bytes.load(Ordering::Relaxed) as f64 / (1024. * 1024.);
         format!(
-            "{filename}: Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
+            "{prefix}Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
             mib / elapsed.max(0.001)
         )
     }
@@ -376,6 +376,9 @@ mod tests {
                 job.running = true;
                 job.download = Some(download.clone());
                 job.started = Some(Instant::now() - Duration::from_secs(10));
+                assert!(job.status_text().starts_with("Preparing export, 10s"));
+                assert!(!job.status_text().contains(&job.filename));
+                job.output_path = Some(PathBuf::from(&job.filename));
             });
             ExportDialog::open(&view, window, cx);
             window.render_frame(cx);
@@ -395,7 +398,7 @@ mod tests {
             window.click("export-save", cx);
             assert!(view.read(cx).running);
             assert!(!flag.load(Ordering::Relaxed));
-            assert_eq!(view.read(cx).output_path, None);
+            assert_eq!(view.read(cx).output_path, Some(PathBuf::from(&view.read(cx).filename)));
         }).unwrap();
         download.cancel();
         worker.shutdown();

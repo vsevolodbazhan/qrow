@@ -100,7 +100,7 @@ A complete result needs no server work. For an incomplete result, the export
 uses a retained download or reads the remaining cursor. If the cursor is
 unavailable, the form shows the original SQL and **Run again and export…**.
 Review the SQL before you save. See [all-row exports](#export-all-rows-and-reuse-a-download)
-and [reruns](#run-and-export).
+and [reruns](#rerun-for-export).
 
 For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
 column names, quoting, byte-order mark, and formula escaping. A change to
@@ -170,9 +170,16 @@ remaining cursor without the preview limits.
 
 ### Markdown
 
-Choose **Table** for a Markdown table. Numeric columns align to the right.
+Choose **Table** for a Markdown table. Numeric columns align to the right. The `:` in a separator such as `---:`
+sets that alignment in Markdown.
 The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
 Null values use `NULL`. Empty strings stay empty.
+
+Enable **Pretty formatted** to align the pipes in the Markdown source.
+Each column uses the widest escaped value from the complete result.
+The writer adds spaces without shortening values. Tabs use `&#9;` so their
+source width is fixed. This option is off by default and stays saved after
+a successful export. It does not apply to **Code block**, which is always padded.
 
 Choose **Code block** for a padded text table in a fence. Set **Maximum Cell
 Width** from 1 to 1000 display columns. Longer cells end with an ellipsis. Line
@@ -185,8 +192,9 @@ text in a `.md` file.
 
 ### JSON
 
-Choose **JSON array** for an array of row objects. **Pretty output** adds
-indentation. Choose **JSON Lines** for one compact object on each line.
+Choose **JSON (array)** for an array of row objects. **Pretty output** adds
+indentation. Choose **JSON (lines)** for one compact object on each line.
+Pretty output is available only for **JSON (array)**.
 Files use `.json` or `.jsonl` respectively.
 
 **Typed values** writes Boolean, integer, and finite floating-point values
@@ -257,7 +265,7 @@ its snapshot stale. Reopen Export in that case.
 The tab is busy during the download. **Run** and **Next page** are disabled.
 The form closes when saving starts. The results bar shows downloaded rows,
 bytes, average speed, and elapsed time. The format
-writer reads committed spool batches. Parquet exact decimals and Markdown
+writer reads committed spool batches. Parquet exact decimals, pretty Markdown tables, and Markdown
 code blocks need a complete first pass. After the download, you can run
 another query or close the tab while the file writer continues.
 
@@ -289,24 +297,19 @@ anonymous spool disappears when its last handle closes, including after a
 crash. Disconnecting keeps a completed replay spool but releases a live
 cursor.
 
-## Run and export
+## Rerun for export
 
-Open the menu beside **Run**, then choose **Run and export…**. Select a format and
-destination. The form captures the selected SQL or the statement at the
-cursor, and its connection, before the save panel opens. It shows that SQL
-and connection for review. Cancelling the save panel submits no SQL.
+For an incomplete result with no retained spool or available cursor, the
+export form shows **Run again and export…**. Review the original result SQL
+and connection, then choose a format and destination. Edited editor text
+does not change that SQL. Cancelling the save panel submits no SQL.
+A completed spool can be saved without a new execution.
 
-The export runs in the tab's session. Session settings, temporary views,
-and an open transaction still apply. A new execution replaces the result.
+The rerun uses the tab's session. Session settings, temporary views,
+and an open transaction still apply. The new execution replaces the result.
 The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
 and file receive all rows from the same fetch sequence. The preview is
 complete only when the whole result fits in it.
-
-For an incomplete result with no retained spool or available cursor, the
-export form shows **Run again and export…**. This action submits the original
-result SQL. Edited editor text does not change that SQL. A completed spool
-can still be saved without a new execution. To run the current editor SQL
-again, use **Run and export…** in the Run menu.
 
 If the original session ended or its connection changed, the form explains
 that its settings, temporary tables, and open transaction are gone. Review

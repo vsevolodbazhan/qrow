@@ -63,8 +63,8 @@ impl Format {
         match self {
             Self::Csv => "CSV / TSV",
             Self::Markdown => "Markdown",
-            Self::Json => "JSON array",
-            Self::JsonLines => "JSON Lines",
+            Self::Json => "JSON (array)",
+            Self::JsonLines => "JSON (lines)",
             Self::Parquet => "Parquet",
         }
     }

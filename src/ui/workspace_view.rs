@@ -2,9 +2,7 @@ use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable as _, TitleBar,
-    button::DropdownButton,
-    h_flex,
+    Icon, Selectable as _, TitleBar, h_flex,
     input::Editor,
     shimmer::ShimmerText,
     status_bar::StatusBar,
@@ -265,16 +263,6 @@ impl Qrow {
                     })
                     .disabled(active.is_none() && !self.demo)
                     .on_click(cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)));
-                let action_context = self.focus.clone();
-                let button = DropdownButton::new("run-options")
-                    .button(button)
-                    .small()
-                    .disabled(active.is_none() && !self.demo)
-                    .dropdown_menu(move |menu, _, _| {
-                        menu.action_context(action_context.clone())
-                            .menu("Run and export…", Box::new(RunAndExport))
-                    })
-                    .into_any_element();
                 el.child(button)
             })
             .when(tab.busy || authenticating, |el| {

@@ -1229,12 +1229,9 @@ impl TestApp {
         );
     }
 
+    // Exercise the captured execution pipeline shared by export reruns.
     pub fn run_export(&self, cx: &mut TestAppContext) {
-        self.update(cx, |window, cx| {
-            window.within("run-options").click("popup", cx)
-        });
-        self.settle(cx);
-        self.choose(cx, "popup-menu", "Run and export…");
+        self.dispatch(cx, qrow::ui::RunAndExport);
     }
 
     /// The workspace as Qrow last saved it.

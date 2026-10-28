@@ -255,7 +255,7 @@ fn trino_run_export_captures_unicode_sql_and_cancelled_save_reads_no_credentials
 }
 
 #[gpui_kit::test]
-fn run_export_menu_handles_a_window_without_editor_focus(cx: &mut TestAppContext) {
+fn captured_export_handles_a_window_without_editor_focus(cx: &mut TestAppContext) {
     let profile = crate::support::offline_profile("Unfocused export");
     let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
     tab.sql = "SELECT 'captured 😀';".into();
@@ -681,14 +681,14 @@ fn json_array_lines_and_text_values_include_all_rows(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
-    app.select(cx, "export-format", "JSON array");
+    app.select(cx, "export-format", "JSON (array)");
     let text = copy(&app, cx);
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(json.as_array().unwrap().len(), 2250);
     assert_eq!(json[0]["route"], "BKK → SIN");
     assert_eq!(json[0]["departures"], 3821);
     open(&app, cx);
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     app.click(cx, "export-json-typed");
     let text = copy(&app, cx);
     assert_eq!(text.lines().count(), 2250);
@@ -698,8 +698,39 @@ fn json_array_lines_and_text_values_include_all_rows(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert_eq!(
             value(window, "export-format").as_deref(),
-            Some("JSON Lines")
+            Some("JSON (lines)")
         )
+    });
+    app.click(cx, "export-cancel");
+}
+
+#[gpui_kit::test]
+fn export_shows_only_controls_that_apply_to_the_selected_format(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    app.update(cx, |window, _| {
+        assert!(window.try_find("run-options").is_none())
+    });
+    open(&app, cx);
+    app.select(cx, "export-format", "JSON (array)");
+    app.wait_for(cx, "export-json-pretty");
+    app.select(cx, "export-format", "JSON (lines)");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-json-pretty").is_none());
+        assert!(
+            window.find("export-json-typed").bounds().size.height
+                < window.find("export-format").bounds().size.height
+        );
+    });
+    app.select(cx, "export-format", "Markdown");
+    app.wait_for(cx, "export-markdown-pretty");
+    app.click(cx, "export-markdown-pretty");
+    app.select(cx, "export-markdown-style", "Code block");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-markdown-pretty").is_none())
+    });
+    app.select(cx, "export-markdown-style", "Table");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
     });
     app.click(cx, "export-cancel");
 }
@@ -809,9 +840,9 @@ fn export_has_no_row_choice_or_preview_in_any_format(cx: &mut TestAppContext) {
     for format in [
         "CSV / TSV",
         "Parquet",
-        "JSON array",
+        "JSON (array)",
         "Markdown",
-        "JSON Lines",
+        "JSON (lines)",
     ] {
         app.select(cx, "export-format", format);
         app.update(cx, |window, _| {

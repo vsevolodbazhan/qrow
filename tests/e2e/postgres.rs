@@ -178,7 +178,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
                 .contains("temporary tables")
         );
     });
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
     save_export(&app, cx, &output);
@@ -221,7 +221,7 @@ fn completed_spool_retry_survives_new_sql_and_tab_close(cx: &mut TestAppContext)
     );
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     let retry = directory.path().join("retry.jsonl");
     save_export(&app, cx, &retry);
     let text = std::fs::read_to_string(retry).unwrap();

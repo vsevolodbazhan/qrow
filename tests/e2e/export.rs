@@ -46,17 +46,18 @@ pub(super) fn copy_query(cx: &mut TestAppContext, app: &TestApp) -> String {
 }
 
 pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
+    use gpui_kit::test::TestWindowExt;
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
-    for format in ["JSON array", "JSON Lines"] {
+    for format in ["JSON (array)", "JSON (lines)"] {
         app.click(cx, "export-results");
         app.select(cx, "export-format", format);
         let text = copy_query(cx, app);
-        if format == "JSON Lines" {
+        if format == "JSON (lines)" {
             assert_eq!(text.lines().count(), 1, "{text}");
         }
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let row = if format == "JSON array" {
+        let row = if format == "JSON (array)" {
             &json[0]
         } else {
             &json
@@ -78,7 +79,7 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
         );
     }
     app.click(cx, "export-results");
-    app.select(cx, "export-format", "JSON array");
+    app.select(cx, "export-format", "JSON (array)");
     app.click(cx, "export-json-decimals");
     let text = copy_query(cx, app);
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -88,6 +89,19 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     let text = copy_query(cx, app);
     assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
     assert_eq!(text.lines().count(), 3);
+    app.click(cx, "export-results");
+    app.click(cx, "export-markdown-pretty");
+    let pretty = copy_query(cx, app);
+    use unicode_width::UnicodeWidthStr as _;
+    let widths: Vec<_> = pretty.lines().map(|line| line.width()).collect();
+    assert_eq!(widths.len(), 3);
+    assert!(widths.iter().all(|width| *width == widths[0]), "{pretty}");
+    assert!(pretty.contains("a\\|b"));
+    app.click(cx, "export-results");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("export-markdown-pretty").checked(), Some(true))
+    });
+    app.click(cx, "export-cancel");
     app.click(cx, "export-results");
     app.select(cx, "export-markdown-style", "Code block");
     let text = copy_query(cx, app);
@@ -174,7 +188,7 @@ fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut T
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     let path = directory.path().join("retried.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
@@ -216,7 +230,7 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
     }
     app.wait_status(cx, "Preview: Export download complete");
     app.click(cx, "export-results");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     let path = directory.path().join("replay.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
@@ -421,7 +435,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     });
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
@@ -545,7 +559,7 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
     });
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select(cx, "export-format", "JSON (lines)");
     let retry = directory.path().join("retry.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(retry.clone()));
