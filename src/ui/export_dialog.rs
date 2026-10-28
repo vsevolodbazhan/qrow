@@ -1001,7 +1001,7 @@ impl Render for ExportDialog {
                         }))))))
             .when(format == Format::Markdown, |view| view
                 .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
-                    Checkbox::new("export-markdown-pretty").small().label("Pretty formatted").checked(self.settings.markdown.pretty).disabled(busy)
+                    Checkbox::new("export-markdown-pretty").small().label("Pretty output").checked(self.settings.markdown.pretty).disabled(busy)
                         .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
                 .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
                     field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")

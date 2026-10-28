@@ -175,7 +175,7 @@ sets that alignment in Markdown.
 The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
 Null values use `NULL`. Empty strings stay empty.
 
-Enable **Pretty formatted** to align the pipes in the Markdown source.
+Enable **Pretty output** to align the pipes in the Markdown source.
 Each column uses the widest escaped value from the complete result.
 The writer adds spaces without shortening values. Tabs use `&#9;` so their
 source width is fixed. This option is off by default and stays saved after
