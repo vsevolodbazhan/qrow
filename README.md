@@ -131,14 +131,20 @@ Measured on MacBook Air M3 (macOS 15.7.7).
 
 Qrow is a personal tool, tailored to my setup and my needs, so:
 
-- **Kyuubi/Spark, Postgres, and Trino.** DuckDB is planned. See
-  [connections](docs/connections.md) for connector limits.
+- **Kyuubi/Spark, Postgres, and Trino only.** DuckDB is planned. Kerberos and
+  SSH tunnels are not supported. See [connections](docs/connections.md) for
+  connector limits.
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
-  Other operating systems are not supported. The assistant also needs a compatible
-  Codex or Claude Code executable.
-- **Core functionality first.** 90% of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
-- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
+  Other operating systems are not supported.
+- **Querying first.** 90% of the work I do in such an app is choosing a connection,
+  writing a query, running it, and seeing results. Everything else in Qrow — the
+  schema catalog, dbt metadata, and the assistant — exists to help with that. The
+  editor has no autocomplete, results cannot be exported to a file, and results
+  are not restored after a restart.
+- **Bring your own assistant.** The assistant needs a separately installed Codex
+  or Claude Code executable and your own subscription or API key.
+- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
 
 ## Installation
 
