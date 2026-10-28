@@ -137,11 +137,6 @@ Qrow is a personal tool, tailored to my setup and my needs, so:
 - **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
   The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
   Other operating systems are not supported.
-- **Querying first.** 90% of the work I do in such an app is choosing a connection,
-  writing a query, running it, and seeing results. Everything else in Qrow — the
-  schema catalog, dbt metadata, and the assistant — exists to help with that. The
-  editor has no autocomplete, results cannot be exported to a file, and results
-  are not restored after a restart.
 - **Bring your own assistant.** The assistant needs a separately installed Codex
   or Claude Code executable and your own subscription or API key.
 - **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
