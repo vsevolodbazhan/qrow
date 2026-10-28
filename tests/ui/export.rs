@@ -22,11 +22,29 @@ fn open(app: &TestApp, cx: &mut TestAppContext) {
 fn copy(app: &TestApp, cx: &mut TestAppContext) -> String {
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     app.click(cx, "export-copy");
-    app.wait_until(cx, "copied CSV", Duration::from_secs(5), |_, cx| {
-        cx.read_from_clipboard()
-            .and_then(|item| item.text())
-            .is_some_and(|text| text != "unchanged")
+    app.wait_until(
+        cx,
+        "copied text or confirmation",
+        Duration::from_secs(5),
+        |window, cx| {
+            window.try_find("export-copy-warning").is_some()
+                || cx
+                    .read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .is_some_and(|text| text != "unchanged")
+        },
+    );
+    let confirmation = app.update(cx, |window, _| {
+        window.try_find("export-copy-warning").is_some()
     });
+    if confirmation {
+        app.click(cx, "export-copy");
+        app.wait_until(cx, "confirmed text", Duration::from_secs(5), |_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text != "unchanged")
+        });
+    }
     cx.read_from_clipboard().unwrap().text().unwrap()
 }
 
@@ -334,16 +352,20 @@ fn run_export_rejects_multiple_selected_statements_without_starting_work(cx: &mu
 }
 
 #[gpui_kit::test]
-fn export_selection_presets_copy_and_saved_options(cx: &mut TestAppContext) {
+fn export_presets_copy_all_rows_and_save_options(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
     app.select(cx, "export-preset", "Excel (semicolon)");
     let text = copy(&app, cx);
-    assert_eq!(
-        text,
-        "\u{feff}route;carrier;departures\r\nLHR → JFK;British Airways;3820\r\nHEL → ARN;Singapore Airlines;3819\r\nCDG → FCO;Finnair;3818\r\n"
-    );
+    assert!(text.starts_with("\u{feff}route;carrier;departures;"));
+    let mut reader = csv::ReaderBuilder::new()
+        .delimiter(b';')
+        .from_reader(text.as_bytes());
+    assert_eq!(reader.headers().unwrap().len(), 141);
+    let rows = reader.records().collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(rows.len(), 2250);
+    assert_eq!(&rows[0][0], "BKK → SIN");
     open(&app, cx);
     app.update(cx, |window, _| {
         assert_eq!(
@@ -357,7 +379,7 @@ fn export_selection_presets_copy_and_saved_options(cx: &mut TestAppContext) {
     });
     let text = copy(&app, cx);
     assert!(
-        text.starts_with("\u{feff}route;carrier;departures\r\n"),
+        text.starts_with("\u{feff}route;carrier;departures;"),
         "{text}"
     );
     open(&app, cx);
@@ -368,11 +390,14 @@ fn export_selection_presets_copy_and_saved_options(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn export_downloaded_rows_includes_other_pages_and_headers(cx: &mut TestAppContext) {
+fn export_ignores_selection_and_includes_all_pages_and_columns(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
-    app.select(cx, "export-rows", "Downloaded rows (2250)");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-rows").is_none());
+        assert!(window.try_find("export-preview").is_none());
+    });
     let text = copy(&app, cx);
     let mut reader = csv::Reader::from_reader(text.as_bytes());
     assert_eq!(reader.headers().unwrap().len(), 141);
@@ -395,12 +420,12 @@ fn export_save_uses_the_native_prompt_and_remembers_the_directory(cx: &mut TestA
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_until(cx, "saved CSV", Duration::from_secs(5), |_, _| {
         std::fs::read_to_string(&path)
-            .is_ok_and(|text| text.starts_with("route,carrier,departures\r\n"))
+            .is_ok_and(|text| text.starts_with("route,carrier,departures,"))
     });
     let text = std::fs::read_to_string(&path).unwrap();
     assert_eq!(
         csv::Reader::from_reader(text.as_bytes()).records().count(),
-        3
+        2250
     );
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     app.wait_until(
@@ -426,13 +451,6 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("all.csv");
     open(&app, cx);
-    app.select(cx, "export-rows", "All rows");
-    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
-    app.click(cx, "export-copy");
-    assert_eq!(
-        cx.read_from_clipboard().unwrap().text().as_deref(),
-        Some("preserved")
-    );
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
@@ -538,7 +556,7 @@ fn custom_null_validation_and_saved_value_follow_the_separator(cx: &mut TestAppC
     assert!(!cx.did_prompt_for_new_path());
     app.select(cx, "export-separator", "Pipe");
     let text = copy(&app, cx);
-    assert!(text.starts_with("route|carrier|departures\r\n"));
+    assert!(text.starts_with("route|carrier|departures|"));
     open(&app, cx);
     app.update(cx, |window, _| {
         assert_eq!(value(window, "export-null").as_deref(), Some("Custom"));
@@ -548,7 +566,7 @@ fn custom_null_validation_and_saved_value_follow_the_separator(cx: &mut TestAppC
     app.fill(cx, "export-null-text", "未知😀");
     app.settle(cx);
     let text = copy(&app, cx);
-    assert!(text.starts_with("route,carrier,departures\r\n"));
+    assert!(text.starts_with("route,carrier,departures,"));
 }
 
 #[gpui_kit::test]
@@ -558,7 +576,7 @@ fn copy_as_csv_includes_headers_after_a_headerless_tsv_export(cx: &mut TestAppCo
     open(&app, cx);
     app.select(cx, "export-preset", "Tab-separated");
     app.click(cx, "export-header");
-    assert!(copy(&app, cx).starts_with("LHR → JFK\t"));
+    assert!(copy(&app, cx).starts_with("BKK → SIN\t"));
     app.update(cx, |window, cx| {
         let cell = find_in(window, ("row", 2usize), ("cell", 2usize)).unwrap();
         pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
@@ -629,8 +647,8 @@ fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
     open(&app, cx);
     app.select(cx, "export-format", "Markdown");
     let text = copy(&app, cx);
-    assert!(text.starts_with("| route | carrier | departures |\n| --- | --- | ---: |\n"));
-    assert_eq!(text.lines().count(), 5);
+    assert!(text.starts_with("| route | carrier | departures |"));
+    assert_eq!(text.lines().count(), 2252);
     open(&app, cx);
     app.select(cx, "export-markdown-style", "Code block");
     app.fill(cx, "export-cell-width", "8");
@@ -638,7 +656,11 @@ fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
     let text = copy(&app, cx);
     assert!(text.starts_with("```\n"));
     assert!(text.contains("British…"));
-    assert!(text.contains("| 2 |"));
+    assert!(text.lines().any(|line| {
+        line.split('|')
+            .nth(1)
+            .is_some_and(|value| value.trim() == "2")
+    }));
     open(&app, cx);
     app.update(cx, |window, _| {
         assert_eq!(
@@ -655,23 +677,23 @@ fn markdown_styles_row_numbers_and_saved_options(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn json_array_lines_and_text_values_use_the_same_selection(cx: &mut TestAppContext) {
+fn json_array_lines_and_text_values_include_all_rows(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
     app.select(cx, "export-format", "JSON array");
     let text = copy(&app, cx);
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(json.as_array().unwrap().len(), 3);
-    assert_eq!(json[0]["route"], "LHR → JFK");
-    assert_eq!(json[0]["departures"], 3820);
+    assert_eq!(json.as_array().unwrap().len(), 2250);
+    assert_eq!(json[0]["route"], "BKK → SIN");
+    assert_eq!(json[0]["departures"], 3821);
     open(&app, cx);
     app.select(cx, "export-format", "JSON Lines");
     app.click(cx, "export-json-typed");
     let text = copy(&app, cx);
-    assert_eq!(text.lines().count(), 3);
+    assert_eq!(text.lines().count(), 2250);
     let row: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
-    assert_eq!(row["departures"], "3820");
+    assert_eq!(row["departures"], "3821");
     open(&app, cx);
     app.update(cx, |window, _| {
         assert_eq!(
@@ -780,29 +802,27 @@ fn context_large_markdown_confirms_with_enter_and_cancel_preserves_clipboard(
 }
 
 #[gpui_kit::test]
-fn export_preview_follows_the_latest_format_after_rapid_changes(cx: &mut TestAppContext) {
+fn export_has_no_row_choice_or_preview_in_any_format(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
-    for format in ["JSON array", "Markdown", "JSON Lines"] {
+    for format in [
+        "CSV / TSV",
+        "Parquet",
+        "JSON array",
+        "Markdown",
+        "JSON Lines",
+    ] {
         app.select(cx, "export-format", format);
+        app.update(cx, |window, _| {
+            assert!(window.try_find("export-rows").is_none());
+            assert!(window.try_find("export-preview").is_none());
+        });
     }
-    app.wait_until(
-        cx,
-        "the current JSON Lines preview",
-        Duration::from_secs(5),
-        |window, _| {
-            label(window, "export-preview").is_some_and(|text| text.starts_with("{\"route\":"))
-        },
-    );
-    app.update(cx, |window, _| {
-        assert_eq!(
-            value(window, "export-format").as_deref(),
-            Some("JSON Lines")
-        );
-        assert!(!label(window, "export-preview").unwrap().starts_with('['));
-    });
-    app.click(cx, "export-cancel");
+    let text = copy(&app, cx);
+    assert_eq!(text.lines().count(), 2250);
+    let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+    assert_eq!(first["route"], "BKK → SIN");
 }
 
 #[gpui_kit::test]
@@ -825,10 +845,8 @@ fn parquet_save_disables_copy_and_remembers_format_options(cx: &mut TestAppConte
         Some("preserved")
     );
     app.update(cx, |window, _| {
-        assert_eq!(
-            window.find("export-preview").label(),
-            Some("A Parquet file has no text preview.")
-        )
+        assert!(window.try_find("export-preview").is_none());
+        assert!(window.try_find("export-rows").is_none());
     });
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("selected.parquet");
@@ -837,10 +855,10 @@ fn parquet_save_disables_copy_and_remembers_format_options(cx: &mut TestAppConte
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
     let reader = SerializedFileReader::new(std::fs::File::open(&path).unwrap()).unwrap();
-    assert_eq!(reader.metadata().file_metadata().num_rows(), 3);
+    assert_eq!(reader.metadata().file_metadata().num_rows(), 2250);
     let row = reader.get_row_iter(None).unwrap().next().unwrap().unwrap();
-    assert_eq!(row.get_string(0).unwrap(), "LHR → JFK");
-    assert_eq!(row.get_string(2).unwrap(), "3820");
+    assert_eq!(row.get_string(0).unwrap(), "BKK → SIN");
+    assert_eq!(row.get_string(2).unwrap(), "3821");
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     open(&app, cx);
     app.update(cx, |window, _| {

@@ -114,7 +114,6 @@ fn run_export_keeps_settings_prepared_statements_and_the_transaction(cx: &mut Te
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 5);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.select(cx, "export-format", "Parquet");
     let replay = directory.path().join("replay.parquet");
     save_export(&app, cx, &replay);
@@ -178,7 +177,6 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
     app.update(cx, |window, _| {
         assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(

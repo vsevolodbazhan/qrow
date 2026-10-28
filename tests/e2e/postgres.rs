@@ -107,7 +107,6 @@ fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestA
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
     // All rows reuses the completed spool and its captured DateStyle.
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.select(cx, "export-format", "Parquet");
     app.wait_for(cx, "export-date-style-warning");
     let replay = directory.path().join("replay.parquet");
@@ -169,7 +168,6 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
     app.update(cx, |window, _| {
         assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(

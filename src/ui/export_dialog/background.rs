@@ -1,6 +1,6 @@
 //! The Results panel keeps long export jobs reachable after their form closes.
 use super::*;
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{h_flex, scroll::ScrollableElement};
 use std::io::{self, Write};
 
 pub(in crate::ui) struct Entry {
@@ -245,10 +245,12 @@ impl ExportDialog {
                 rows as f64 / elapsed.max(0.001)
             );
         }
-        let rows = self.retained.as_ref().map_or(
-            self.source.table(self.range()).row_count() as u64,
-            |spool| spool.row_count(),
-        );
+        let rows = self
+            .retained
+            .as_ref()
+            .map_or(self.source.table(None).row_count() as u64, |spool| {
+                spool.row_count()
+            });
         let mib = self.output_bytes.load(Ordering::Relaxed) as f64 / (1024. * 1024.);
         format!(
             "{filename}: Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
@@ -366,7 +368,7 @@ mod tests {
             let tab = owner.upgrade().unwrap().read(cx).tabs[0].saved.id;
             let columns = [crate::model::Column { name: "n".into(), data_type: "INT".into() }];
             let source = Arc::new(Snapshot::new(&columns, &export::Rows::default()).unwrap());
-            let view = cx.new(|cx| ExportDialog::new(source, None, export::Settings::default(),
+            let view = cx.new(|cx| ExportDialog::new(source, export::Settings::default(),
                 "a-long-export-filename-with-many-words-to-force-a-second-line-of-progress-metrics.csv".into(), false,
                 ExportResult { tab, execution: Some(ExecutionId(42)), cursor: crate::worker::Cursor::Draining, replay: None },
                 None, owner, window, cx));
@@ -434,7 +436,6 @@ mod tests {
                 let view = cx.new(|cx| {
                     ExportDialog::new(
                         source.clone(),
-                        None,
                         export::Settings::default(),
                         format!("job-{index}"),
                         false,

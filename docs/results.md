@@ -89,22 +89,22 @@ Use **Copy as → TSV** to copy it with tab separators and column names.
 Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
 These actions run in the background. Text above 10 MiB must be saved to a file.
 
-## Export downloaded rows
+## Export results
 
 Click **Export results…** in the Results toolbar. The button is available
-when the result has columns. Choose a format, then **Selection** or **Downloaded rows**.
-The selection includes only the selected rows and columns. Downloaded rows
-includes all pages that the preview has stored.
+when the result has columns. Choose a format, then **Save…**. The export
+includes all rows and columns. Grid selection does not limit the export.
+Use the [copy commands](#browse-and-copy) to copy selected cells.
 
-The dialog takes a snapshot when it opens. A later page fetch or query does
-not change these choices. Selection and downloaded-row exports do not run
-SQL or fetch rows from the server.
-If the preview is incomplete, the dialog shows a message.
+A complete result needs no server work. For an incomplete result, the export
+uses a retained download or reads the remaining cursor. If the cursor is
+unavailable, the form shows the original SQL and **Run again and export…**.
+Review the SQL before you save. See [all-row exports](#export-all-rows-and-reuse-a-download)
+and [reruns](#run-and-export).
 
 For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
 column names, quoting, byte-order mark, and formula escaping. A change to
-these options selects **Custom**. The preview shows up to five rows. During a preview update, the dialog shows
-**Preparing preview…**.
+these options selects **Custom**. The dialog does not show a text preview.
 
 | Preset | Separator | Line ending | UTF-8 byte-order mark | Formula escaping |
 | --- | --- | --- | --- | --- |
@@ -113,7 +113,8 @@ these options selects **Custom**. The preview shows up to five rows. During a pr
 | Excel (semicolon) | Semicolon | CRLF | Yes | Yes |
 | Tab-separated | Tab | LF | No | No |
 
-**Copy** puts up to 10 MiB of text on the clipboard. **Save…** opens the
+For a complete local result, **Copy** puts up to 10 MiB of text on the clipboard.
+Copy is unavailable for a download or rerun. **Save…** opens the
 native save panel. Tab separators use the `.tsv` extension. Other separators
 use `.csv`. After a save, use **Reveal in Finder** to locate the file.
 A successful copy or save stores the options for the next export. A save
@@ -136,7 +137,7 @@ names the affected volume and leaves the destination unchanged.
 Export stops if a cell exceeds 8 MiB or a row exceeds 16 MiB. These limits
 apply to each format. They do not limit a server message before Qrow receives
 the message.
-Export also stops if the selected column headers exceed 16 MiB.
+Export also stops if the column headers exceed 16 MiB.
 
 ### CSV values and limits
 
@@ -164,7 +165,7 @@ Shared batches count once. Encoding writes
 cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
 
-For Kyuubi, [All rows](#export-all-rows-and-reuse-a-download) can read the
+For Kyuubi, [exports](#export-all-rows-and-reuse-a-download) can read the
 remaining cursor without the preview limits.
 
 ### Markdown
@@ -246,7 +247,7 @@ an existing destination file.
 
 ## Export all rows and reuse a download
 
-Choose **All rows**, then **Save…**, to export the complete result. A complete
+Choose **Save…** to export the complete result. A complete
 preview needs no server work. For an incomplete Kyuubi result, the tab worker
 reads the remaining cursor into a temporary spool. It includes the preview
 and any batch held at the preview limit, in their original order. It does
@@ -271,7 +272,7 @@ It does not limit credential lookup, token refresh, DNS lookup, or a TCP
 connection that has not yet returned a socket on every connector. See the
 [connection limits](connections.md) for each connector. Export jobs stay active
 until the producer and writer return. A stopped drain consumes its cursor. To
-get all rows after that, use **Run again and export**.
+get all rows after that, reopen Export and use **Run again and export…**.
 
 After download completion, writer cancellation and errors affect only that
 file. They cannot cancel a later query. A writer error stays in the results
@@ -279,8 +280,8 @@ bar and keeps the completed spool. **Retry…** opens the form and uses that
 spool without running SQL. You can change the format or destination.
 **Dismiss** releases this job's handle.
 
-**Export again as…** uses the tab's retained spool, with its row count and
-size shown in the Rows list. **Settings → Export → Replay Limit** controls
+A new export automatically uses the tab's retained spool. You can choose
+another format without server work. **Settings → Export → Replay Limit** controls
 the maximum retained size. The default is 2048 MiB. Zero disables retention.
 A larger spool remains available to its running writer and failed job.
 A new query or tab close releases only the tab's replay handle. The
@@ -301,16 +302,17 @@ The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
 and file receive all rows from the same fetch sequence. The preview is
 complete only when the whole result fits in it.
 
-For an incomplete result, choose **Run again and export (all rows)**
-in the Rows list to submit its original SQL. Edited editor text does not
-change this choice. This is also the way to replace a consumed or closed
-cursor. A completed spool can still be saved without a new execution.
+For an incomplete result with no retained spool or available cursor, the
+export form shows **Run again and export…**. This action submits the original
+result SQL. Edited editor text does not change that SQL. A completed spool
+can still be saved without a new execution. To run the current editor SQL
+again, use **Run and export…** in the Run menu.
 
 If the original session ended or its connection changed, the form explains
 that its settings, temporary tables, and open transaction are gone. Review
 the SQL before the rerun. The form checks the session again after the save
 panel and browser sign-in. A change during that time stops submission and
-requires another explicit **Run again and export…** choice.
+requires another click on **Run again and export…**.
 
 For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
 
@@ -361,7 +363,7 @@ A file export holds its slot until publication or temporary-file cleanup ends.
 The count uses the connection captured when the export form opens. Retry
 keeps that connection after you close the result tab.
 
-For **All rows** with a live Kyuubi cursor, choose **Transfer Preset** to
+For an export with a live Kyuubi cursor, choose **Transfer Preset** to
 override the fetch estimate and speed limit for that download. This choice
 does not change the saved connection, its export count, or the collection
 mode of the original query. A retained spool needs no server transfer.
@@ -375,7 +377,7 @@ execution. Normal preview requests keep their 1000-row limit.
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
 For Kyuubi, if an incoming batch would exceed either limit, Qrow keeps that
-batch outside the preview and keeps the cursor open for **All rows**. The
+batch outside the preview and keeps the cursor open for export. The
 grid cannot fetch more pages at the preview limit. The memory
 limit measures retained row storage, not the total application memory.
 

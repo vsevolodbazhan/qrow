@@ -10,7 +10,6 @@ use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
     checkbox::Checkbox,
     form::{field, v_form},
-    h_flex,
     notification::Notification,
     scroll::ScrollableElement,
     select::{Select, SelectState},
@@ -36,8 +35,7 @@ struct ExportResult {
 
 #[derive(Clone, Copy)]
 enum Scope {
-    Downloaded,
-    Selection,
+    Complete,
     All,
     Replay,
     Run,
@@ -70,10 +68,7 @@ impl Global for export::Jobs {}
 
 struct ExportDialog {
     source: Arc<Snapshot>,
-    selection: Option<RangeSelection>,
-    selected: bool,
     scope: Scope,
-    scopes: Vec<Scope>,
     result: ExportResult,
     retained: Option<Arc<export::spool::Spool>>,
     download: Option<Arc<crate::worker::Download>>,
@@ -88,11 +83,6 @@ struct ExportDialog {
     null_text: Entity<InputState>,
     cell_width: Entity<InputState>,
     large_copy: bool,
-    preview: String,
-    preview_pending: bool,
-    preview_generation: u64,
-    preview_cancel: Arc<AtomicBool>,
-    preview_task: Option<Task<()>>,
     error: Option<String>,
     running: bool,
     id: Uuid,
@@ -110,7 +100,6 @@ struct ExportDialog {
 impl Drop for ExportDialog {
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::Relaxed);
-        self.preview_cancel.store(true, Ordering::Relaxed);
         self.cancel_download();
     }
 }
@@ -129,12 +118,6 @@ impl Qrow {
                 return;
             }
         };
-        let selection = data.selection.map(|selection| {
-            (
-                *selection.rows().start()..selection.rows().end() + 1,
-                selection.columns(),
-            )
-        });
         let settings = self.settings.export.clone();
         let filename = tab.saved.title.clone();
         let incomplete = !tab.preview_complete;
@@ -164,16 +147,15 @@ impl Qrow {
             .or_else(|| tab.result_profile.clone());
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
-                source, selection, settings, filename, incomplete, result, profile, owner, window,
-                cx,
+                source, settings, filename, incomplete, result, profile, owner, window, cx,
             );
-            if incomplete && let Some(intent) = intent {
-                view.run = Some(intent);
-                view.scopes.push(Scope::RunAgain);
-                view.choices[0].push("Run again and export (all rows)".into());
-                view.controls[0].update(cx, |control, cx| {
-                    control.set_items(SearchableVec::new(view.choices[0].clone()), window, cx)
-                });
+            view.run = intent;
+            if incomplete
+                && view.result.replay.is_none()
+                && view.result.cursor != crate::worker::Cursor::Available
+                && view.run.is_some()
+            {
+                view.scope = Scope::RunAgain;
             }
             view
         });
@@ -193,10 +175,15 @@ impl Qrow {
 
 impl ExportDialog {
     fn open(view: &Entity<Self>, window: &mut Window, cx: &mut App) {
+        view.update(cx, |view, cx| {
+            if view.background && !view.running && matches!(view.scope, Scope::RunAgain) {
+                view.refresh_run_session(cx);
+            }
+        });
         let dialog_view = view.clone();
         let view = view.clone();
         let close_view = view.downgrade();
-        window.open_dialog(cx, move |dialog, window, _| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let close_view = close_view.clone();
             let submit = view.downgrade();
             dialog
@@ -204,6 +191,7 @@ impl ExportDialog {
                 .w(setting_row::Rows::dialog_width(window, 36.))
                 .overlay_closable(false)
                 .child(view.clone())
+                .footer(view.update(cx, |view, cx| view.render_footer(cx)))
                 .on_ok(move |_, window, cx| {
                     let _ = submit.update(cx, |this, cx| this.start(true, window, cx));
                     false
@@ -224,7 +212,6 @@ impl ExportDialog {
     #[allow(clippy::too_many_arguments)]
     fn new(
         source: Arc<Snapshot>,
-        selection: Option<RangeSelection>,
         settings: export::Settings,
         filename: String,
         incomplete: bool,
@@ -242,31 +229,7 @@ impl ExportDialog {
                 cx,
             )
         });
-        let mut scopes = vec![format!("Downloaded rows ({})", source.row_count())];
-        let mut row_scopes = vec![Scope::Downloaded];
-        if let Some((rows, columns)) = &selection {
-            scopes.push(format!(
-                "Selection ({} rows, {} columns)",
-                rows.len(),
-                columns.clone().count()
-            ));
-            row_scopes.push(Scope::Selection);
-        }
-        scopes.push("All rows".into());
-        row_scopes.push(Scope::All);
-        if let Some(spool) = &result.replay {
-            let count = match spool.status() {
-                export::spool::Status::Complete { rows } => rows,
-                _ => 0,
-            };
-            scopes.push(format!(
-                "Export again as… ({count} rows, {:.1} MiB)",
-                spool.bytes() as f64 / (1024. * 1024.)
-            ));
-            row_scopes.push(Scope::Replay);
-        }
         let choices = vec![
-            scopes,
             Preset::ALL
                 .iter()
                 .map(|p| p.label().to_owned())
@@ -300,9 +263,8 @@ impl ExportDialog {
                 .map(|value| value.label().to_owned())
                 .collect(),
         ];
-        let selected = selection.is_some();
         let options = settings.csv.clone();
-        let indices = option_indices(selected, &settings);
+        let indices = option_indices(&settings);
         let controls: Vec<_> = choices
             .iter()
             .zip(indices)
@@ -340,42 +302,38 @@ impl ExportDialog {
                     };
                     match index {
                         0 => {
-                            this.scope = this.scopes[choice];
-                            this.selected = matches!(this.scope, Scope::Selection);
-                        }
-                        1 => {
                             if let Some(preset) = Preset::ALL.get(choice) {
                                 this.settings.csv = preset.options();
                             }
                         }
-                        2 => this.settings.csv.separator = Separator::ALL[choice],
-                        3 => this.settings.csv.line_ending = LineEnding::ALL[choice],
-                        4 => {
+                        1 => this.settings.csv.separator = Separator::ALL[choice],
+                        2 => this.settings.csv.line_ending = LineEnding::ALL[choice],
+                        3 => {
                             this.settings.csv.null =
                                 NullMarker::ALL.get(choice).cloned().unwrap_or_else(|| {
                                     NullMarker::Custom(this.null_text.read(cx).value().to_string())
                                 })
                         }
-                        5 => this.settings.format = Format::ALL[choice],
-                        6 => {
+                        4 => this.settings.format = Format::ALL[choice],
+                        5 => {
                             this.settings.markdown.style = if choice == 0 {
                                 export::markdown::Style::Table
                             } else {
                                 export::markdown::Style::CodeBlock
                             }
                         }
-                        7 => {
+                        6 => {
                             this.settings.parquet.compression =
                                 export::parquet::Compression::ALL[choice]
                         }
-                        8 => {
+                        7 => {
                             this.settings.parquet.column_types = if choice == 0 {
                                 export::parquet::ColumnTypes::Typed
                             } else {
                                 export::parquet::ColumnTypes::Text
                             }
                         }
-                        9 => this.settings.parquet.numeric = export::parquet::Numeric::ALL[choice],
+                        8 => this.settings.parquet.numeric = export::parquet::Numeric::ALL[choice],
                         _ => unreachable!(),
                     }
                     this.sync(window, cx);
@@ -410,16 +368,15 @@ impl ExportDialog {
                 cx.notify();
             }
         }));
-        let mut this = Self {
+        Self {
             source,
-            selection,
-            selected,
-            scope: if selected {
-                Scope::Selection
+            scope: if result.replay.is_some() {
+                Scope::Replay
+            } else if incomplete {
+                Scope::All
             } else {
-                Scope::Downloaded
+                Scope::Complete
             },
-            scopes: row_scopes,
             result,
             retained: None,
             download: None,
@@ -434,11 +391,6 @@ impl ExportDialog {
             null_text,
             cell_width,
             large_copy: false,
-            preview: String::new(),
-            preview_pending: false,
-            preview_generation: 0,
-            preview_cancel: Arc::new(AtomicBool::new(false)),
-            preview_task: None,
             error: None,
             running: false,
             id: Uuid::new_v4(),
@@ -451,71 +403,11 @@ impl ExportDialog {
             owner,
             dialog: None,
             _subscriptions: subscriptions,
-        };
-        this.update_preview(cx);
-        this
-    }
-
-    fn range(&self) -> Option<RangeSelection> {
-        if self.selected {
-            self.selection.clone()
-        } else {
-            None
         }
-    }
-
-    fn update_preview(&mut self, cx: &mut Context<Self>) {
-        self.preview_cancel.store(true, Ordering::Relaxed);
-        self.preview_task = None;
-        self.preview_generation = self.preview_generation.wrapping_add(1);
-        self.preview.clear();
-        self.preview_pending = false;
-        if matches!(self.scope, Scope::Run) || self.source.column_count() == 0 {
-            self.preview = "The preview is available after the statement runs.".into();
-            return;
-        }
-        if let Err(error) = self.settings.validate() {
-            self.error = Some(error.to_string());
-            self.preview.clear();
-            return;
-        }
-        if self.settings.format == Format::Parquet {
-            self.preview = "A Parquet file has no text preview.".into();
-            return;
-        }
-        self.preview_cancel = Arc::new(AtomicBool::new(false));
-        self.preview_pending = true;
-        let cancel = self.preview_cancel.clone();
-        let source = self.source.clone();
-        let range = self.range();
-        let settings = self.settings.clone();
-        let generation = self.preview_generation;
-        let task = cx.background_executor().spawn(async move {
-            let mut table = source.table(range);
-            table.row_indices.end = table.row_indices.end.min(table.row_indices.start + 5);
-            let mut out = export::LimitedWriter::new(8192);
-            let truncated = export::write(&mut out, &table, &settings, &cancel).is_err();
-            out.into_preview(truncated)
-        });
-        self.preview_task = Some(cx.spawn(async move |weak, cx| {
-            let preview = task.await;
-            let _ = weak.update(cx, |this, cx| {
-                if this.preview_generation == generation {
-                    this.preview = preview.into_string();
-                    this.preview_pending = false;
-                    cx.notify();
-                }
-            });
-        }));
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let mut indices = option_indices(self.selected, &self.settings);
-        indices[0] = self
-            .scopes
-            .iter()
-            .position(|scope| std::mem::discriminant(scope) == std::mem::discriminant(&self.scope))
-            .unwrap();
+        let indices = option_indices(&self.settings);
         self.large_copy = false;
         for (control, index) in self.controls.iter().zip(indices) {
             control.update(cx, |select, cx| {
@@ -526,8 +418,11 @@ impl ExportDialog {
                 )
             });
         }
-        self.error = None;
-        self.update_preview(cx);
+        self.error = self
+            .settings
+            .validate()
+            .err()
+            .map(|error| error.to_string());
         cx.notify();
     }
 
@@ -557,7 +452,6 @@ impl ExportDialog {
         self.cancel = Arc::new(AtomicBool::new(false));
         let cancel = self.cancel.clone();
         let source = self.source.clone();
-        let range = self.range();
         let options = self.settings.clone();
         let jobs = cx.global::<export::Jobs>().clone();
         let directory = self
@@ -683,7 +577,7 @@ impl ExportDialog {
             let admitted = writer.send(Box::new(move || {
                 let _guard = guard;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let table = source.table(range);
+                    let table = source.table(None);
                     let result: std::io::Result<(usize, Option<export::Text>)> =
                         if let Some(path) = output_path {
                             export::save(&path, &cancel, |out| {
@@ -844,47 +738,19 @@ impl ExportDialog {
         if let Some(spool) = self.download.as_ref().and_then(|download| download.spool()) {
             self.retained = Some(spool);
         }
-        if self.download.is_some() && self.scope.executes() {
-            self.selection = None;
-            self.selected = false;
+        if self.download.is_some() {
             if let Some(spool) = &self.retained
                 && let export::spool::Status::Complete { rows } = spool.status()
             {
-                self.scopes = vec![Scope::Downloaded, Scope::Replay, Scope::RunAgain];
-                self.choices[0] = vec![
-                    format!("Downloaded rows ({})", self.source.row_count()),
-                    format!(
-                        "Export again as… ({rows} rows, {:.1} MiB)",
-                        spool.bytes() as f64 / (1024. * 1024.)
-                    ),
-                    "Run again and export (all rows)".into(),
-                ];
                 self.scope = Scope::Replay;
                 self.incomplete = rows != self.source.row_count() as u64;
-            } else {
-                self.scopes = vec![Scope::RunAgain];
-                self.choices[0] = vec!["Run again and export (all rows)".into()];
+            } else if self.run.is_some() {
                 self.scope = Scope::RunAgain;
             }
-            self.controls[0].update(cx, |control, cx| {
-                control.set_items(SearchableVec::new(self.choices[0].clone()), window, cx)
-            });
             self.sync(window, cx);
         }
-        if self.download.is_some()
-            && let Some(intent) = &mut self.run
-        {
-            let _ = self.owner.update(cx, |owner, _| {
-                if let Some(tab) = owner
-                    .tabs
-                    .iter()
-                    .find(|tab| tab.saved.id == self.result.tab)
-                    && tab.current_execution == self.result.execution
-                    && tab.result_session.is_some()
-                {
-                    intent.expected = tab.result_session;
-                }
-            });
+        if self.download.is_some() {
+            self.refresh_run_session(cx);
         }
         // A producer failure also stops format work. Preserve its cause when
         // the writer observes the stop flag before the failed spool record.
@@ -982,10 +848,9 @@ fn writer_stopped(
     Err(error)
 }
 
-fn option_indices(selected: bool, settings: &export::Settings) -> [usize; 10] {
+fn option_indices(settings: &export::Settings) -> [usize; 9] {
     let options = &settings.csv;
     [
-        usize::from(selected),
         preset_index(options),
         Separator::ALL
             .iter()
@@ -1047,10 +912,8 @@ fn export_filename(title: &str, extension: &str) -> String {
 impl Render for ExportDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let busy = self.running;
-        let invalid = self.settings.validate().is_err();
         let format = self.settings.format;
         let labels = [
-            "Rows",
             "Preset",
             "Separator",
             "Line Ending",
@@ -1062,7 +925,6 @@ impl Render for ExportDialog {
             "Numeric As",
         ];
         let ids = [
-            "export-rows",
             "export-preset",
             "export-separator",
             "export-line-ending",
@@ -1106,20 +968,15 @@ impl Render for ExportDialog {
             ),
         ];
         let one_column_null = format == Format::Csv
-            && self.source.table(self.range()).column_indices.count() == 1
+            && self.source.table(None).column_indices.count() == 1
             && options.null.as_str().is_empty();
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
-        let preview = if self.preview_pending {
-            "Preparing preview…".to_owned()
-        } else {
-            self.preview.clone()
-        };
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children([5,0,1,2,3,4,6,7,8,9].into_iter()
-                .filter(|index| matches!(index, 0|5) || format == Format::Csv && (1..=4).contains(index) || format == Format::Markdown && *index == 6 || format == Format::Parquet && (7..=9).contains(index))
+            .child(v_form().columns(2).children([4,0,1,2,3,5,6,7,8].into_iter()
+                .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || format == Format::Parquet && (6..=8).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
-                        .disabled(busy || index == 9 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
+                        .disabled(busy || index == 8 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
@@ -1157,16 +1014,13 @@ impl Render for ExportDialog {
                             this.sync(window,cx);
                         }))))))
             .when(format == Format::Parquet && self.settings.parquet.column_types == export::parquet::ColumnTypes::Typed && self.settings.parquet.numeric == export::parquet::Numeric::Double, |view| view.child(div().text_sm().text_color(cx.theme().warning).child("Double can change numeric values.")))
-            .when(format == Format::Parquet && !self.source.table(self.range()).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
+            .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(format == Format::Parquet && self.scope.executes() && self.source.table(self.range()).rows.context().iso_dates()
+            .when(format == Format::Parquet && self.scope.executes() && self.source.table(None).rows.context().iso_dates()
                 && self.run.as_ref().is_some_and(|intent| intent.profile.database_type == crate::model::DatabaseType::Postgres), |view| view.child(div().id("export-session-date-style").test_support().role(Role::Label)
                 .aria_label("Non-ISO session dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("Non-ISO session dates and timestamps remain text.")))
-            .when(self.incomplete && !self.scope.file_only(), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground)
-                .child("Only the downloaded rows are included. More rows may be available.")))
-            .when(matches!(self.scope, Scope::All | Scope::Replay | Scope::RunAgain), |view| view.child(div().text_sm().text_color(cx.theme().muted_foreground).child("Preview shows the first downloaded rows.")))
             .when(self.scope.executes(), |view| view
                 .when_some(self.run.as_ref(), |view, intent| view
                     .child(div().id("export-captured-connection").test_support().role(Role::Label).aria_label(intent.profile.name.clone()).text_sm().child(format!("Connection: {}", intent.profile.name)))
@@ -1187,25 +1041,69 @@ impl Render for ExportDialog {
             .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
                 .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
                 .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
-            .child(v_flex().gap_2().child("Preview")
-                .child(div().id("export-preview").test_support().role(Role::Label).aria_label(preview.clone())
-                    .w_full().max_h_32().overflow_hidden().p_2().rounded(cx.theme().radius)
-                    .bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(preview)))
             .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
                 .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
             .when(busy, |view| view.child(div().id("export-progress").test_support().role(Role::Status)
                 .aria_label(self.status_text()).w_full().text_sm().text_color(cx.theme().muted_foreground).child(self.status_text())))
-            .child(h_flex().gap_2().child(div().flex_1())
-                .child(Button::new("export-cancel").label(if self.background && !busy { "Dismiss" } else if self.background { "Cancel export" } else { "Cancel" }).on_click(cx.listener(|this,_,window,cx| {
-                    this.cancel.store(true,Ordering::Relaxed);
-                    this.cancel_download();
-                    this.remove_background(cx);
-                    window.close_dialog(cx);
-                })))
-                .child(Button::new("export-copy").label(if self.large_copy {"Copy anyway"} else {"Copy"}).disabled(busy || invalid || format == Format::Parquet || self.scope.file_only())
-                    .on_click(cx.listener(|this,_,window,cx| this.start(false,window,cx))))
-                .child(Button::new("export-save").label(if self.error.is_some() && self.retained.as_ref().is_some_and(|spool| matches!(spool.status(), export::spool::Status::Complete { .. })) { "Retry…" } else if matches!(self.scope, Scope::Run) { "Run and export…" } else if matches!(self.scope, Scope::RunAgain) { "Run again and export…" } else { "Save…" }).primary().disabled(busy || invalid)
-                    .on_click(cx.listener(|this,_,window,cx| this.start(true,window,cx)))))
+    }
+}
+
+impl ExportDialog {
+    fn render_footer(&mut self, cx: &mut Context<Self>) -> DialogFooter {
+        let busy = self.running;
+        let invalid = self.settings.validate().is_err();
+        let format = self.settings.format;
+        DialogFooter::new()
+            .justify_end()
+            .child(
+                Button::new("export-cancel")
+                    .label(if self.background && !busy {
+                        "Dismiss"
+                    } else if self.background {
+                        "Cancel export"
+                    } else {
+                        "Cancel"
+                    })
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.cancel.store(true, Ordering::Relaxed);
+                        this.cancel_download();
+                        this.remove_background(cx);
+                        window.close_dialog(cx);
+                    })),
+            )
+            .child(
+                Button::new("export-copy")
+                    .label(if self.large_copy {
+                        "Copy anyway"
+                    } else {
+                        "Copy"
+                    })
+                    .disabled(
+                        busy || invalid || format == Format::Parquet || self.scope.file_only(),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.start(false, window, cx))),
+            )
+            .child(
+                Button::new("export-save")
+                    .label(
+                        if self.error.is_some()
+                            && self.retained.as_ref().is_some_and(|spool| {
+                                matches!(spool.status(), export::spool::Status::Complete { .. })
+                            })
+                        {
+                            "Retry…"
+                        } else if matches!(self.scope, Scope::Run) {
+                            "Run and export…"
+                        } else if matches!(self.scope, Scope::RunAgain) {
+                            "Run again and export…"
+                        } else {
+                            "Save…"
+                        },
+                    )
+                    .primary()
+                    .disabled(busy || invalid)
+                    .on_click(cx.listener(|this, _, window, cx| this.start(true, window, cx))),
+            )
     }
 }
 
@@ -1417,7 +1315,6 @@ mod tests {
                 let dialog = cx.new(|cx| {
                     ExportDialog::new(
                         source,
-                        None,
                         export::Settings::default(),
                         "publication".into(),
                         false,
@@ -1540,7 +1437,6 @@ mod tests {
                 let dialog = cx.new(|cx| {
                     ExportDialog::new(
                         source,
-                        None,
                         export::Settings::default(),
                         "thread-failure".into(),
                         true,
@@ -1640,7 +1536,6 @@ mod tests {
             let dialog = cx.new(|cx| {
                 ExportDialog::new(
                     source,
-                    None,
                     export::Settings::default(),
                     "background".into(),
                     false,
@@ -1778,7 +1673,6 @@ mod tests {
             let dialog = cx.new(|cx| {
                 ExportDialog::new(
                     source,
-                    None,
                     export::Settings::default(),
                     "test".into(),
                     incomplete,
@@ -1872,7 +1766,6 @@ mod tests {
                 let dialog = cx.new(|cx| {
                     ExportDialog::new(
                         source.clone(),
-                        None,
                         export::Settings::default(),
                         "test".into(),
                         false,

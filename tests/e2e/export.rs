@@ -151,7 +151,6 @@ fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut T
     let blocked = directory.path().join("blocked.csv");
     std::fs::create_dir(&blocked).unwrap();
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(blocked.clone()));
     app.wait_gone(cx, "export-save");
@@ -161,7 +160,6 @@ fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut T
     // With no tab replay, a fresh dialog can still use the failed job's spool.
     let shared = directory.path().join("shared.csv");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(shared.clone()));
     app.wait_gone(cx, "export-save");
@@ -203,7 +201,6 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("all.csv");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
@@ -219,7 +216,6 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
     }
     app.wait_status(cx, "Preview: Export download complete");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Export again as… (2123 rows, 0.0 MiB)");
     app.select(cx, "export-format", "JSON Lines");
     let path = directory.path().join("replay.jsonl");
     app.click(cx, "export-save");
@@ -252,7 +248,6 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     std::fs::write(&path, "original").unwrap();
     gate.pause();
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
@@ -274,6 +269,55 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn failed_cursor_download_details_offers_a_reviewed_rerun(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let sql = "SELECT id AS value FROM range(2123) ORDER BY id";
+    let (mut workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let gate = response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.type_sql(cx, "SELECT must_not_run");
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("failed.csv");
+    std::fs::write(&output, "original").unwrap();
+    gate.pause();
+    app.click(cx, "export-results");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_gone(cx, "export-save");
+    app.wait_until(cx, "the blocked cursor download", QUERY_TIMEOUT, |_, _| {
+        gate.blocked()
+    });
+    drop(gate);
+    app.wait_until(cx, "failed download cleanup", QUERY_TIMEOUT, |_, cx| {
+        cx.global::<qrow::export::Jobs>().active_count() == 0
+            && app.status(cx).starts_with("Export download stopped")
+    });
+    app.click(cx, "results-panel-tab");
+    app.click_labelled(cx, "Details…");
+    app.wait_for(cx, "export-error");
+    app.wait_for(cx, "export-session-warning");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
+        assert_eq!(
+            window.find("export-save").label(),
+            Some("Run again and export…")
+        );
+        assert!(window.try_find("export-rows").is_none());
+        assert!(window.try_find("export-preview").is_none());
+    });
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| None);
+    app.settle(cx);
+    app.click(cx, "export-cancel");
+    assert_eq!(std::fs::read_to_string(output).unwrap(), "original");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn kyuubi_all_rows_preserves_the_batch_that_crossed_the_preview_byte_limit(
     cx: &mut TestAppContext,
 ) {
@@ -290,7 +334,6 @@ fn kyuubi_all_rows_preserves_the_batch_that_crossed_the_preview_byte_limit(
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("wide.csv");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
@@ -366,7 +409,6 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
     app.update(cx, |window, _| {
         assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(
@@ -413,8 +455,7 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
-    app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
+    app.run_export(cx);
     app.update(cx, |window, _| {
         assert!(window.try_find("export-session-warning").is_none())
     });
@@ -430,7 +471,15 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
         "Disconnected: Idle timeout"
     );
     assert_eq!(std::fs::read_to_string(&output).unwrap(), "original");
+    app.update(cx, |window, _| {
+        let save = window.find("export-save").bounds();
+        assert!(save.bottom() <= window.viewport_size().height);
+    });
     app.click(cx, "export-save");
+    assert!(
+        cx.did_prompt_for_new_path(),
+        "Retry click did not open the save panel"
+    );
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
     app.wait_until(cx, "the reviewed rerun", QUERY_TIMEOUT, |_, _| {
@@ -449,7 +498,6 @@ fn kyuubi_run_export_rechecks_idle_disconnect_after_the_save_panel(cx: &mut Test
 fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_close(
     cx: &mut TestAppContext,
 ) {
-    use gpui_kit::test::TestWindowExt;
     let (workspace, credentials) =
         Kyuubi::get().workspace("SELECT rand() AS value FROM range(1001)", PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
@@ -470,8 +518,7 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
         .unwrap()[0]
         .to_owned();
     app.wait_status(cx, "Preview: Export download complete");
-    app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
+    app.run_export(cx);
     let blocked = directory.path().join("blocked.csv");
     std::fs::create_dir(&blocked).unwrap();
     app.click(cx, "export-save");
@@ -488,17 +535,7 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
     });
     assert_ne!(fresh, old);
     app.click_labelled(cx, "Retry…");
-    app.wait_until(
-        cx,
-        "the refreshed format preview",
-        QUERY_TIMEOUT,
-        |window, _| {
-            window
-                .find("export-preview")
-                .label()
-                .is_some_and(|text| text.contains(&fresh) && !text.contains(&old))
-        },
-    );
+    app.wait_for(cx, "export-save");
     app.press(cx, "escape");
     app.wait_gone(cx, "export-save");
     let closed_tab = app.saved().tabs[0].id;
@@ -531,8 +568,7 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn kyuubi_run_export_empty_result_retry_has_the_new_column_preview(cx: &mut TestAppContext) {
-    use gpui_kit::test::TestWindowExt;
+fn kyuubi_run_export_empty_result_retry_preserves_column_names(cx: &mut TestAppContext) {
     let (workspace, credentials) =
         Kyuubi::get().workspace("SELECT 1 AS empty_value WHERE false", PASSWORD);
     let app = TestApp::launch_with(cx, workspace, credentials);
@@ -545,17 +581,7 @@ fn kyuubi_run_export_empty_result_retry_has_the_new_column_preview(cx: &mut Test
     app.wait_gone(cx, "export-save");
     app.wait_label(cx, "Retry…");
     app.click_labelled(cx, "Retry…");
-    app.wait_until(
-        cx,
-        "the empty result headers",
-        QUERY_TIMEOUT,
-        |window, _| {
-            window
-                .find("export-preview")
-                .label()
-                .is_some_and(|text| text == "empty_value\r\n")
-        },
-    );
+    app.wait_for(cx, "export-save");
     let output = directory.path().join("empty.csv");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
@@ -748,7 +774,7 @@ fn custom_csv_marker_round_trips_null_empty_and_literal_marker(cx: &mut TestAppC
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn drag_selection_exports_only_the_selected_real_query_cells(cx: &mut TestAppContext) {
+fn drag_selection_does_not_limit_export_rows_or_columns(cx: &mut TestAppContext) {
     let (workspace, credentials) = Kyuubi::get().workspace(
         "SELECT id, concat('row-', id) AS label, id * 10 AS amount FROM range(5) ORDER BY id",
         PASSWORD,
@@ -765,11 +791,20 @@ fn drag_selection_exports_only_the_selected_real_query_cells(cx: &mut TestAppCon
     app.settle(cx);
     app.click(cx, "export-results");
     let text = copy_query(cx, &app);
-    assert_eq!(text, "id,label\r\n1,row-1\r\n2,row-2\r\n3,row-3\r\n");
+    assert_eq!(
+        text,
+        "id,label,amount\r\n0,row-0,0\r\n1,row-1,10\r\n2,row-2,20\r\n3,row-3,30\r\n4,row-4,40\r\n"
+    );
     assert_reader_rows(
         &text,
         "",
-        serde_json::json!([["1", "row-1"], ["2", "row-2"], ["3", "row-3"]]),
+        serde_json::json!([
+            ["0", "row-0", "0"],
+            ["1", "row-1", "10"],
+            ["2", "row-2", "20"],
+            ["3", "row-3", "30"],
+            ["4", "row-4", "40"]
+        ]),
     );
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
 }
