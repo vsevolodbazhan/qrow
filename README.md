@@ -44,7 +44,7 @@ authenticate several connections, and you can copy its settings to share them
 with a colleague. Drag connections to change their order. See
 [connections](docs/connections.md).
 
-### Queries and results
+### Queries and Results
 
 Each connection has its own query tabs, and each tab has its own session.
 Tabs run queries at the same time, also when you select another connection.
@@ -58,7 +58,7 @@ connection: schema refreshes, keep-alives, sessions, and queries. See
 [queries](docs/queries.md), [results](docs/results.md), and
 [activity](docs/activity.md).
 
-### Schema catalog
+### Schema Catalog
 
 The Connections sidebar is a tree of schemas, tables, views, and columns.
 Qrow keeps a copy of the catalog on your computer, so the tree shows it also
@@ -75,7 +75,7 @@ when the connection has no session.
 
 See [browse schemas](docs/connections.md#browse-schemas).
 
-### dbt integration
+### Integrations with dbt
 
 Attach a dbt project to a connection. Qrow reads the `manifest.json` that dbt
 writes, and can read it again each time dbt changes it. Qrow does not run dbt.
