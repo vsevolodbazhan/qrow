@@ -51,6 +51,93 @@ fn save_export(app: &TestApp, cx: &mut TestAppContext, path: &std::path::Path) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContext) {
+    use crate::support::{find_in, pointer_click_with};
+    use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
+    let (workspace, credentials) =
+        workspace("SELECT i AS id, 'row ' || i AS name FROM generate_series(1,2) i");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 0usize), ("cell", 1usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Left, Modifiers::default(), cx);
+    });
+    app.press(cx, "shift-right");
+    app.press(cx, "shift-down");
+    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+    app.press(cx, "cmd-c");
+    app.wait_until(
+        cx,
+        "Markdown selection",
+        std::time::Duration::from_secs(10),
+        |_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.starts_with("| id ") && text.contains("row 2"))
+        },
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
+fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-transfer-preset").is_none());
+    });
+    app.fill(cx, "connection-transfer-count", "0");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved Postgres export limit",
+        std::time::Duration::from_secs(5),
+        |_, _| {
+            app.saved().profiles[0]
+                .transfer
+                .settings()
+                .concurrent_exports
+                == 0
+        },
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "export-results");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-transfer-preset").is_none());
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("postgres.csv");
+    save_export(&app, cx, &output);
+    app.wait_for(cx, "export-complete-detail");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window
+                .within("export-complete-notice")
+                .find("export-notification-filename")
+                .label(),
+            Some("postgres.csv")
+        );
+        assert_eq!(
+            window.find("export-complete-detail").label(),
+            Some("Exported 1001 rows")
+        );
+        assert!(window.find("reveal-export").visible());
+    });
+    assert_eq!(
+        csv::Reader::from_path(output).unwrap().records().count(),
+        1001
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestAppContext) {
     let (mut workspace, credentials) = workspace("SELECT 1");
     workspace.profiles[0]
@@ -101,14 +188,16 @@ fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestA
     app.wait_status(cx, "Preview: Export download complete");
     app.wait_cell(cx, 0, 1, "1");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("result-loaded").label(), Some("1000 loaded"))
+        assert_eq!(window.find("result-loaded").label(), Some("100000 loaded"))
     });
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 4);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
     // All rows reuses the completed spool and its captured DateStyle.
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.select(cx, "export-format", "Parquet");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-date-style").is_none());
+    });
     app.wait_for(cx, "export-date-style-warning");
     let replay = directory.path().join("replay.parquet");
     save_export(&app, cx, &replay);
@@ -169,9 +258,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(
             window
                 .find("export-session-warning")
@@ -180,11 +267,8 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
                 .contains("temporary tables")
         );
     });
-    app.select(cx, "export-format", "JSON Lines");
-    let directory = tempfile::tempdir().unwrap();
-    let output = directory.path().join("again.jsonl");
-    save_export(&app, cx, &output);
-    let text = std::fs::read_to_string(output).unwrap();
+    app.select_json(cx, "Lines");
+    let text = super::export::copy_query(cx, &app);
     assert_eq!(text.lines().count(), 2001);
     for (index, line) in text.lines().enumerate() {
         assert_eq!(
@@ -223,7 +307,7 @@ fn completed_spool_retry_survives_new_sql_and_tab_close(cx: &mut TestAppContext)
     );
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select_json(cx, "Lines");
     let retry = directory.path().join("retry.jsonl");
     save_export(&app, cx, &retry);
     let text = std::fs::read_to_string(retry).unwrap();
@@ -257,9 +341,10 @@ fn empty_export_writes_a_header_and_a_statement_without_results_preserves_output
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_label(cx, "preserved.csv");
     app.wait_label(
         cx,
-        "preserved.csv: The statement completed without a result set. No export file was written.",
+        "The statement completed without a result set. No export file was written.",
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "previous output");
     app.run_complete(cx, "SELECT count(*) AS value FROM qrow_no_export");

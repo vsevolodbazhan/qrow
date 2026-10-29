@@ -933,6 +933,11 @@ impl TestApp {
         panic!("{id} has no option {option}");
     }
 
+    pub fn select_json(&self, cx: &mut TestAppContext, style: &str) {
+        self.select(cx, "export-format", "JSON");
+        self.select(cx, "export-json-style", style);
+    }
+
     /// Runs the queued work of the UI, like deferred updates of a select.
     pub fn settle(&self, cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(50));
@@ -1229,12 +1234,9 @@ impl TestApp {
         );
     }
 
+    // Exercise the captured execution pipeline shared by export reruns.
     pub fn run_export(&self, cx: &mut TestAppContext) {
-        self.update(cx, |window, cx| {
-            window.within("run-options").click("popup", cx)
-        });
-        self.settle(cx);
-        self.choose(cx, "popup-menu", "Run and export…");
+        self.dispatch(cx, qrow::ui::RunAndExport);
     }
 
     /// The workspace as Qrow last saved it.

@@ -1,6 +1,6 @@
-//! The Results panel keeps long export jobs reachable after their form closes.
+//! Export notifications keep background jobs reachable after their form closes.
 use super::*;
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{h_flex, scroll::ScrollableElement};
 use std::io::{self, Write};
 
 pub(in crate::ui) struct Entry {
@@ -62,98 +62,209 @@ impl Qrow {
                 .cloned()
         })
     }
+}
 
-    pub(in crate::ui) fn export_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let jobs = v_flex()
+pub(super) fn notification_heading(filename: String) -> impl IntoElement {
+    let tooltip = filename.clone();
+    div()
+        .id("export-notification-filename")
+        .test_support()
+        .role(Role::Label)
+        .aria_label(filename.clone())
+        .w_full()
+        .min_w_0()
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
+        .truncate()
+        .child(filename)
+}
+
+struct ProgressNotice {
+    job: WeakEntity<ExportDialog>,
+    _subscription: Subscription,
+}
+
+impl Render for ProgressNotice {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let Some(job) = self.job.upgrade() else {
+            return div().into_any_element();
+        };
+        let state = job.read(cx);
+        let id = state.id;
+        let message = state.status_detail();
+        let filename = state.output_filename();
+        let error = state.error.is_some();
+        let running = state.running;
+        let cancel = job.downgrade();
+        let owner = state.owner.clone();
+        let multiple = owner
+            .upgrade()
+            .is_some_and(|owner| owner.read(cx).exports.len() > 1);
+        v_flex()
+            .id(SharedString::from(format!("export-job-{id}")))
+            .test_support()
             .w_full()
-            .h(rems((self.exports.len() as f32 * 2.25).min(8.)))
-            .min_h_0()
-            .flex_shrink_0()
-            .children(self.exports.iter().map(|entry| {
-                let job = entry.view.read(cx);
-                let id = job.id;
-                let message = job.status_text();
-                let details = entry.view.clone();
-                let cancel = entry.view.downgrade();
-                h_flex()
-                    .id(SharedString::from(format!("export-job-{id}")))
+            .min_w_0()
+            .gap_1()
+            .child(notification_heading(filename))
+            .child(
+                div()
+                    .id("status")
                     .test_support()
-                    .min_w_0()
-                    .h_9()
-                    .flex_shrink_0()
-                    .px_3()
+                    .role(Role::Status)
+                    .aria_label(message.clone())
+                    .text_sm()
+                    .whitespace_normal()
+                    .text_color(if error {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().foreground
+                    })
+                    .child(message),
+            )
+            .child(
+                h_flex()
+                    .id("export-progress-actions")
+                    .test_support()
+                    .w_full()
+                    .justify_end()
+                    .flex_wrap()
                     .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .id("status")
-                            .test_support()
-                            .role(Role::Status)
-                            .aria_label(message.clone())
-                            .flex_1()
-                            .min_w_0()
-                            .text_xs()
-                            .text_ellipsis()
-                            .text_color(if job.error.is_some() {
-                                cx.theme().danger
-                            } else {
-                                cx.theme().muted_foreground
-                            })
-                            .child(message),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!("export-details-{id}")))
-                            .small()
-                            .ghost()
-                            .label(
-                                if !job.running
-                                    && job.retained.as_ref().is_some_and(|spool| {
-                                        matches!(
-                                            spool.status(),
-                                            export::spool::Status::Complete { .. }
-                                        )
-                                    })
-                                {
-                                    "Retry…"
-                                } else {
-                                    "Details…"
-                                },
-                            )
-                            .on_click(move |_, window, cx| {
-                                ExportDialog::open(&details, window, cx)
-                            }),
-                    )
+                    .when(!running, |view| {
+                        view.child(
+                            Button::new(SharedString::from(format!("export-details-{id}")))
+                                .small()
+                                .label("Retry…")
+                                .on_click(move |_, window, cx| {
+                                    ExportDialog::open(&job, window, cx)
+                                }),
+                        )
+                    })
+                    .when(multiple, |view| {
+                        view.child(
+                            Button::new(SharedString::from(format!("export-all-jobs-{id}")))
+                                .small()
+                                .ghost()
+                                .label("All exports…")
+                                .on_click(move |_, window, cx| {
+                                    ExportList::open(owner.clone(), window, cx)
+                                }),
+                        )
+                    })
                     .child(
                         Button::new(SharedString::from(format!("export-stop-{id}")))
                             .small()
-                            .ghost()
-                            .label(if job.running {
-                                "Cancel export"
-                            } else {
-                                "Dismiss"
-                            })
-                            .on_click(move |_, _, cx| {
+                            .label(if running { "Cancel" } else { "Dismiss" })
+                            .on_click(move |_, window, cx| {
                                 let _ = cancel.update(cx, |job, cx| {
                                     if job.running {
                                         job.cancel.store(true, Ordering::Relaxed);
                                         job.cancel_download();
                                         cx.notify();
                                     } else {
-                                        job.remove_background(cx);
+                                        job.remove_background(window, cx);
                                     }
                                 });
                             }),
+                    ),
+            )
+            .into_any_element()
+    }
+}
+
+struct ExportList {
+    owner: WeakEntity<Qrow>,
+    _subscription: Subscription,
+}
+
+impl ExportList {
+    fn open(owner: WeakEntity<Qrow>, window: &mut Window, cx: &mut App) {
+        let Some(entity) = owner.upgrade() else {
+            return;
+        };
+        let list = cx.new(|cx| {
+            let subscription = cx.observe(&entity, |_, _, cx| cx.notify());
+            Self {
+                owner,
+                _subscription: subscription,
+            }
+        });
+        window.open_dialog(cx, move |dialog, window, _| {
+            dialog
+                .title("Exports")
+                .w(setting_row::Rows::dialog_width(window, 36.))
+                .child(list.clone())
+        });
+    }
+}
+
+impl Render for ExportList {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let jobs = self
+            .owner
+            .upgrade()
+            .map(|owner| {
+                owner
+                    .read(cx)
+                    .exports
+                    .iter()
+                    .map(|entry| entry.view.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        v_flex()
+            .id("export-all-jobs-list")
+            .test_support()
+            .max_h(rems(20.))
+            .overflow_y_scrollbar()
+            .children(jobs.into_iter().map(|job| {
+                let state = job.read(cx);
+                let id = state.id;
+                let message = state.status_text();
+                let running = state.running;
+                let cancel = job.downgrade();
+                v_flex()
+                    .gap_1()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(div().text_sm().child(message))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .when(!running, |view| {
+                                view.child(
+                                    Button::new(SharedString::from(format!(
+                                        "export-list-details-{id}"
+                                    )))
+                                    .small()
+                                    .label("Retry…")
+                                    .on_click(
+                                        move |_, window, cx| ExportDialog::open(&job, window, cx),
+                                    ),
+                                )
+                            })
+                            .child(
+                                Button::new(SharedString::from(format!("export-list-stop-{id}")))
+                                    .small()
+                                    .label(if running { "Cancel" } else { "Dismiss" })
+                                    .on_click(move |_, window, cx| {
+                                        let _ = cancel.update(cx, |job, cx| {
+                                            if job.running {
+                                                job.cancel.store(true, Ordering::Relaxed);
+                                                job.cancel_download();
+                                                cx.notify();
+                                            } else {
+                                                job.remove_background(window, cx);
+                                            }
+                                        });
+                                    }),
+                            ),
                     )
             }))
-            .overflow_y_scrollbar()
-            .id("export-jobs-scroll");
-        div()
-            .id("export-jobs")
-            .test_support()
-            .w_full()
-            .flex_shrink_0()
-            .child(jobs)
     }
 }
 
@@ -176,6 +287,43 @@ impl ExportDialog {
                 root.close_dialog_for(&handle, window, cx)
             });
         }
+        self.show_progress_notification(window, cx);
+        self.start_progress(cx);
+    }
+
+    pub(super) fn show_progress_notification(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.notice_generation = self.notice_generation.wrapping_add(1);
+        let generation = self.notice_generation;
+        let job = cx.entity();
+        let view = cx.new(|cx| {
+            let subscription = cx.observe(&job, |_, _, cx| cx.notify());
+            ProgressNotice {
+                job: job.downgrade(),
+                _subscription: subscription,
+            }
+        });
+        let weak = job.downgrade();
+        window.push_notification(
+            Notification::new()
+                .id1::<ProgressNotice>(SharedString::from(self.id.to_string()))
+                .autohide(false)
+                .content(move |_, _, _| view.clone().into_any_element())
+                .on_close(move |_, cx| {
+                    let _ = weak.update(cx, |job, cx| {
+                        if job.notice_generation == generation && !job.running {
+                            job.remove_background_entry(cx);
+                        }
+                    });
+                }),
+            cx,
+        );
+    }
+
+    pub(super) fn start_progress(&mut self, cx: &mut Context<Self>) {
         self.progress_task = Some(cx.spawn(async move |weak, cx| {
             loop {
                 cx.background_executor()
@@ -200,7 +348,17 @@ impl ExportDialog {
         }));
     }
 
-    pub(super) fn remove_background(&self, cx: &mut Context<Self>) {
+    pub(super) fn remove_background(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.background {
+            window.remove_notification1::<ProgressNotice>(
+                SharedString::from(self.id.to_string()),
+                cx,
+            );
+        }
+        self.remove_background_entry(cx);
+    }
+
+    fn remove_background_entry(&self, cx: &mut Context<Self>) {
         let view = cx.entity();
         let _ = self.owner.update(cx, |owner, cx| {
             owner.exports.retain(|entry| entry.view != view);
@@ -208,21 +366,32 @@ impl ExportDialog {
         });
     }
 
-    pub(super) fn status_text(&self) -> String {
-        let filename = self
-            .output_path
+    fn output_filename(&self) -> String {
+        self.output_path
             .as_deref()
             .and_then(|path| path.file_name())
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| self.filename.clone());
+            .unwrap_or_else(|| self.filename.clone())
+    }
+
+    pub(super) fn status_text(&self) -> String {
+        let detail = self.status_detail();
+        if self.output_path.is_some() {
+            format!("{}: {detail}", self.output_filename())
+        } else {
+            detail
+        }
+    }
+
+    fn status_detail(&self) -> String {
         if let Some(error) = &self.error {
-            return format!("{filename}: {error}");
+            return error.clone();
         }
         if !self.running {
-            return format!("{filename}: Ready to retry");
+            return "Ready to retry".into();
         }
         if self.cancel.load(Ordering::Relaxed) {
-            return format!("{filename}: Stopping export…");
+            return "Stopping export…".into();
         }
         let elapsed = self
             .started
@@ -233,7 +402,7 @@ impl ExportDialog {
             .and_then(|download| download.progress_percentage())
             .map_or(String::new(), |value| format!(", query {value:.0}%"));
         if self.download.is_some() && self.retained.is_none() {
-            return format!("{filename}: Preparing export, {elapsed:.0}s{query}");
+            return format!("Preparing export, {elapsed:.0}s{query}");
         }
         if let Some(spool) = &self.retained
             && matches!(spool.status(), export::spool::Status::Downloading)
@@ -241,17 +410,19 @@ impl ExportDialog {
             let rows = spool.row_count();
             let mib = spool.bytes() as f64 / (1024. * 1024.);
             return format!(
-                "{filename}: Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
+                "Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
                 rows as f64 / elapsed.max(0.001)
             );
         }
-        let rows = self.retained.as_ref().map_or(
-            self.source.table(self.range()).row_count() as u64,
-            |spool| spool.row_count(),
-        );
+        let rows = self
+            .retained
+            .as_ref()
+            .map_or(self.source.table(None).row_count() as u64, |spool| {
+                spool.row_count()
+            });
         let mib = self.output_bytes.load(Ordering::Relaxed) as f64 / (1024. * 1024.);
         format!(
-            "{filename}: Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
+            "Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
             mib / elapsed.max(0.001)
         )
     }
@@ -366,7 +537,7 @@ mod tests {
             let tab = owner.upgrade().unwrap().read(cx).tabs[0].saved.id;
             let columns = [crate::model::Column { name: "n".into(), data_type: "INT".into() }];
             let source = Arc::new(Snapshot::new(&columns, &export::Rows::default()).unwrap());
-            let view = cx.new(|cx| ExportDialog::new(source, None, export::Settings::default(),
+            let view = cx.new(|cx| ExportDialog::new(source, export::Settings::default(),
                 "a-long-export-filename-with-many-words-to-force-a-second-line-of-progress-metrics.csv".into(), false,
                 ExportResult { tab, execution: Some(ExecutionId(42)), cursor: crate::worker::Cursor::Draining, replay: None },
                 None, owner, window, cx));
@@ -374,6 +545,9 @@ mod tests {
                 job.running = true;
                 job.download = Some(download.clone());
                 job.started = Some(Instant::now() - Duration::from_secs(10));
+                assert!(job.status_text().starts_with("Preparing export, 10s"));
+                assert!(!job.status_text().contains(&job.filename));
+                job.output_path = Some(PathBuf::from(&job.filename));
             });
             ExportDialog::open(&view, window, cx);
             window.render_frame(cx);
@@ -393,7 +567,7 @@ mod tests {
             window.click("export-save", cx);
             assert!(view.read(cx).running);
             assert!(!flag.load(Ordering::Relaxed));
-            assert_eq!(view.read(cx).output_path, None);
+            assert_eq!(view.read(cx).output_path, Some(PathBuf::from(&view.read(cx).filename)));
         }).unwrap();
         download.cancel();
         worker.shutdown();
@@ -401,9 +575,8 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn retained_jobs_scroll_to_their_retry_and_dismiss_controls(cx: &mut TestAppContext) {
+    fn retained_jobs_use_independent_notifications(cx: &mut TestAppContext) {
         use super::*;
-        use gpui_kit::InputEvent as _;
         cx.update(crate::ui::init);
         let mut owner = None;
         let window = cx.open_window(size(px(900.), px(620.)), |window, cx| {
@@ -412,6 +585,8 @@ mod tests {
             crate::ui::root(qrow, window, cx)
         });
         let owner = owner.unwrap();
+        let mut first_id = None;
+        let mut last_id = None;
         cx.update_window(window.into(), |_, window, cx| {
             let tab = owner.upgrade().unwrap().read(cx).tabs[0].saved.id;
             let columns = [crate::model::Column {
@@ -434,7 +609,6 @@ mod tests {
                 let view = cx.new(|cx| {
                     ExportDialog::new(
                         source.clone(),
-                        None,
                         export::Settings::default(),
                         format!("job-{index}"),
                         false,
@@ -449,6 +623,23 @@ mod tests {
                     job.running = true;
                     job.retained = Some(spool.clone());
                     job.start_background(window, cx);
+                });
+                if index == 0 {
+                    let id = view.read(cx).id;
+                    window.render_frame(cx);
+                    assert!(
+                        window
+                            .try_find(SharedString::from(format!("export-details-{id}")))
+                            .is_none()
+                    );
+                    assert_eq!(
+                        window
+                            .find(SharedString::from(format!("export-stop-{id}")))
+                            .label(),
+                        Some("Cancel")
+                    );
+                }
+                view.update(cx, |job, cx| {
                     job.complete(
                         Err(io::Error::other("Output volume is full")),
                         None,
@@ -457,38 +648,71 @@ mod tests {
                         cx,
                     );
                 });
+                first_id.get_or_insert(view.read(cx).id);
                 last = Some(view.read(cx).id);
             }
             let last = last.unwrap();
+            last_id = Some(last);
             let details = SharedString::from(format!("export-details-{last}"));
             let dismiss = SharedString::from(format!("export-stop-{last}"));
+            window.set_rem_size(px(21.));
             window.render_frame(cx);
-            let list = window.find("export-jobs");
-            assert!(list.bounds().size.height > px(0.));
-            assert!(list.bounds().size.height <= window.rem_size() * 8.);
-            assert!(!window.find(details.clone()).visible());
-            for _ in 0..8 {
-                let position = window.find("export-jobs").bounds().center();
-                window.dispatch_event(
-                    ScrollWheelEvent {
-                        position,
-                        delta: ScrollDelta::Pixels(point(px(0.), px(-120.))),
-                        ..Default::default()
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-                window.render_frame(cx);
+            assert!(window.try_find("export-jobs").is_none());
+            let notice = window.within(SharedString::from(format!("export-job-{last}")));
+            let text = notice.find("status");
+            let actions = notice.find("export-progress-actions");
+            assert!(text.bounds().size.width > px(50.));
+            assert!(text.bounds().bottom() <= actions.bounds().top());
+            let notice_bounds = window
+                .find(SharedString::from(format!("export-job-{last}")))
+                .bounds();
+            let mut buttons = Vec::new();
+            for id in [
+                details.clone(),
+                dismiss.clone(),
+                SharedString::from(format!("export-all-jobs-{last}")),
+            ] {
+                let button = window.find(id);
+                assert!(button.visible());
+                let bounds = button.bounds();
+                assert!(bounds.left() >= actions.bounds().left());
+                assert!(bounds.right() <= actions.bounds().right());
+                assert!(bounds.top() >= notice_bounds.top());
+                assert!(bounds.bottom() <= notice_bounds.bottom());
+                for other in &buttons {
+                    let other: &Bounds<Pixels> = other;
+                    assert!(
+                        bounds.right() <= other.left()
+                            || bounds.left() >= other.right()
+                            || bounds.bottom() <= other.top()
+                            || bounds.top() >= other.bottom()
+                    );
+                }
+                buttons.push(bounds);
             }
-            assert!(window.find(details).visible());
-            assert!(window.find(dismiss.clone()).visible());
-            assert!(
-                window
-                    .find("export-jobs")
-                    .bounds()
-                    .contains(&window.find(dismiss.clone()).bounds().center())
+            assert_eq!(window.find(details).label(), Some("Retry…"));
+            assert_eq!(window.find(dismiss).label(), Some("Dismiss"));
+            assert_eq!(owner.upgrade().unwrap().read(cx).exports.len(), 8);
+        })
+        .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click(
+                SharedString::from(format!("export-all-jobs-{}", last_id.unwrap())),
+                cx,
             );
-            window.click(dismiss, cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let oldest = SharedString::from(format!("export-list-stop-{}", first_id.unwrap()));
+            assert!(window.find(oldest.clone()).visible());
+            window.click(oldest, cx);
             assert_eq!(owner.upgrade().unwrap().read(cx).exports.len(), 7);
         })
         .unwrap();

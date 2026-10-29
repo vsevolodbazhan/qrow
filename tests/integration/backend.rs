@@ -166,7 +166,7 @@ fn run_and_export_streams_all_rows_in_the_original_session() -> Result<()> {
             _ => {}
         }
     }
-    assert_eq!(preview, 1000);
+    assert_eq!(preview, 100_000);
     assert_eq!(complete, Some(false));
     assert_eq!(writer.join().unwrap()?, 100123);
     for (index, row) in csv::Reader::from_path(output)?.records().enumerate() {

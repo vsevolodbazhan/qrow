@@ -980,6 +980,8 @@ impl Runner {
         self.set_cursor(Cursor::Draining);
         let started = Instant::now();
         let mut count = 0usize;
+        let context = source.table(None).rows.context().clone();
+        let mut preview = run_export::ExportPreview::new(self.rows, self.bytes);
         let result = (|| -> Result<()> {
             let mut profile = self
                 .profile
@@ -994,9 +996,10 @@ impl Runner {
                 producer.append(batch, download.cancelled())?;
                 count += batch.len();
             }
-            if let Some(pending) = self.pending.take() {
+            if let Some(mut pending) = self.pending.take() {
                 producer.append(&pending.rows, download.cancelled())?;
                 count += pending.rows.len();
+                preview.append(self, execution, &mut pending.rows, &context)?;
             }
             let transfer_started = Instant::now();
             let initial_bytes = download.spool().unwrap().bytes();
@@ -1008,7 +1011,7 @@ impl Runner {
                     (1..=crate::model::transfer::MAX_FETCH_ROWS).contains(&requested),
                     "Invalid export fetch count"
                 );
-                let batch = self
+                let mut batch = self
                     .session
                     .as_mut()
                     .context("Session is disconnected")?
@@ -1023,6 +1026,7 @@ impl Runner {
                 }
                 producer.append(&batch.rows, download.cancelled())?;
                 count += batch.rows.len();
+                preview.append(self, execution, &mut batch.rows, &context)?;
                 self.emit(Event::DownloadProgress {
                     execution,
                     rows: count,
@@ -1049,6 +1053,14 @@ impl Runner {
             download.complete(producer)?;
             Ok(())
         })();
+        self.rows = preview.rows;
+        self.bytes = preview.bytes;
+        if result.is_ok() {
+            self.emit(Event::PreviewComplete {
+                execution,
+                complete: count == preview.rows,
+            });
+        }
         let event = match result {
             Ok(()) => {
                 *self.target.lock().unwrap() = None;

@@ -68,6 +68,25 @@ impl IncrementalCollect {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TrinoSpooling {
+    Off,
+    #[default]
+    Serial,
+    Parallel,
+}
+impl TrinoSpooling {
+    pub const ALL: [Self; 3] = [Self::Off, Self::Serial, Self::Parallel];
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Serial => "Serial",
+            Self::Parallel => "Parallel",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct TransferSettings {
@@ -76,6 +95,7 @@ pub struct TransferSettings {
     /// Estimated spool bytes per second, in decimal MB. Zero has no limit.
     pub speed_limit_mb: u32,
     pub concurrent_exports: u8,
+    pub trino_spooling: TrinoSpooling,
 }
 
 impl Default for TransferSettings {
@@ -85,6 +105,7 @@ impl Default for TransferSettings {
             request_mib: 16,
             speed_limit_mb: 0,
             concurrent_exports: 1,
+            trino_spooling: TrinoSpooling::Serial,
         }
     }
 }
@@ -98,10 +119,6 @@ impl TransferSettings {
         anyhow::ensure!(
             self.speed_limit_mb <= 1000,
             "Speed limit must be from 0 to 1000 MB/s."
-        );
-        anyhow::ensure!(
-            (1..=2).contains(&self.concurrent_exports),
-            "Exports at the same time must be 1 or 2."
         );
         Ok(())
     }
@@ -129,11 +146,13 @@ impl Transfer {
                 request_mib: 4,
                 speed_limit_mb: 20,
                 concurrent_exports: 1,
+                trino_spooling: TrinoSpooling::Off,
             },
             TransferPreset::Balanced => TransferSettings::default(),
             TransferPreset::Fast => TransferSettings {
                 request_mib: 32,
                 concurrent_exports: 2,
+                trino_spooling: TrinoSpooling::Parallel,
                 ..TransferSettings::default()
             },
             TransferPreset::Custom => self.custom.clone(),
@@ -198,6 +217,7 @@ mod tests {
                 request_mib: 7,
                 speed_limit_mb: 12,
                 concurrent_exports: 2,
+                trino_spooling: TrinoSpooling::Parallel,
             },
         };
         assert_eq!(
@@ -208,6 +228,27 @@ mod tests {
             serde_json::from_str::<Transfer>("{}").unwrap(),
             Transfer::default()
         );
+    }
+
+    #[test]
+    fn spooling_modes_follow_presets_and_legacy_custom_values_get_serial() {
+        for (preset, expected) in [
+            (TransferPreset::Conservative, TrinoSpooling::Off),
+            (TransferPreset::Balanced, TrinoSpooling::Serial),
+            (TransferPreset::Fast, TrinoSpooling::Parallel),
+        ] {
+            assert_eq!(
+                Transfer {
+                    preset,
+                    ..Default::default()
+                }
+                .settings()
+                .trino_spooling,
+                expected
+            );
+        }
+        let old: TransferSettings = serde_json::from_str(r#"{"concurrent_exports":2}"#).unwrap();
+        assert_eq!(old.trino_spooling, TrinoSpooling::Serial);
     }
 
     #[test]
@@ -222,7 +263,7 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid.request_mib = 16;
         invalid.concurrent_exports = 0;
-        assert!(invalid.validate().is_err());
+        assert!(invalid.validate().is_ok());
     }
 
     #[test]

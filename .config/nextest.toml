@@ -26,7 +26,8 @@ test-group = "fixture-serial"
 slow-timeout = { period = "60s", terminate-after = 5 }
 
 # Each transfer probe runs a complete series of fresh client processes.
-# Spark starts a CONNECTION engine for each sample.
+# Docker Kyuubi samples start separate CONNECTION engines.
+# Native Kyuubi samples open sessions on the readiness USER engine.
 [[profile.default.overrides]]
 filter = "binary(integration) & test(/^transfer_perf::(kyuubi|postgres|trino)$/)"
 test-group = "fixture-serial"
@@ -56,3 +57,8 @@ failure-output = "immediate-final"
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# Trino transfer assertions compare execution-specific storage request logs.
+[[profile.default.overrides]]
+filter = "binary(integration) & test(/^trino::/)"
+test-group = "fixture-serial"

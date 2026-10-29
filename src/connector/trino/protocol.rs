@@ -22,10 +22,8 @@ use url::Url;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) struct Http {
-    client: Client,
-    runtime: Runtime,
     pub transport: Arc<Transport>,
-    requests: Mutex<Arc<Transport>>,
+    requests: Mutex<Requests>,
     peer: Mutex<Option<SocketAddr>>,
     pub statement: Url,
     pub timeout: Duration,
@@ -34,6 +32,36 @@ pub(super) struct Http {
     trust: Trust,
     allow_authentication: AtomicBool,
     cleanup_token: Mutex<Option<zeroize::Zeroizing<String>>>,
+}
+
+#[derive(Clone)]
+struct Requests {
+    scope: Arc<Transport>,
+    client: Option<Client>,
+    runtime: Option<Arc<Runtime>>,
+}
+
+fn coordinator_client(
+    scope: Arc<Transport>,
+    timeout: Duration,
+    tls: bool,
+    trust: &Trust,
+    allowance: Option<Arc<crate::export::budget::Allowance>>,
+) -> Result<Client> {
+    let mut builder = Client::builder()
+        .tcp_connection_control(move |socket| {
+            let lease = scope.register(socket)?;
+            Ok(Arc::new((lease, allowance.clone())) as Arc<dyn Send + Sync>)
+        })
+        .http1_max_buf_size(1024 * 1024)
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy();
+    if tls {
+        builder = builder.use_preconfigured_tls((*trust.client_config()?).clone());
+    }
+    Ok(builder.build()?)
 }
 
 impl Http {
@@ -65,17 +93,8 @@ impl Http {
         statement.set_path("/v1/statement");
         let timeout = Duration::from_secs(profile.lifecycle.response_timeout_seconds);
         let transport = Transport::new();
-        let sockets = transport.clone();
-        let mut builder = Client::builder()
-            .tcp_connection_control(move |socket| sockets.register(socket))
-            .http1_max_buf_size(1024 * 1024)
-            .timeout(timeout)
-            .connect_timeout(timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy();
-        if profile.tls {
-            builder = builder.use_preconfigured_tls((*trust.client_config()?).clone());
-        }
+        let scope = transport.child();
+        let client = coordinator_client(scope.clone(), timeout, profile.tls, trust, None)?;
         let secret = match secret {
             Secret::External(source) => {
                 let sockets = transport.clone();
@@ -88,9 +107,11 @@ impl Http {
             secret => secret,
         };
         let http = Self {
-            client: builder.build()?,
-            runtime: Runtime::new()?,
-            requests: Mutex::new(transport.child()),
+            requests: Mutex::new(Requests {
+                scope,
+                client: Some(client),
+                runtime: Some(Arc::new(Runtime::new()?)),
+            }),
             transport,
             peer: Mutex::default(),
             statement,
@@ -111,14 +132,54 @@ impl Http {
         Ok(http)
     }
 
+    pub fn segment_control(
+        &self,
+        cancel: &super::Cancel,
+        allowance: Arc<crate::export::budget::Allowance>,
+        external: Option<Arc<AtomicBool>>,
+    ) -> super::segment_download::Control {
+        super::segment_download::Control {
+            scope: cancel.requests.clone(),
+            requested: cancel.requested.clone(),
+            external,
+            allowance,
+            trust: self.trust.clone(),
+            timeout: self.timeout,
+            threads: cancel.threads.clone(),
+        }
+    }
+
     pub fn disable_authentication(&self) {
         self.allow_authentication.store(false, Ordering::SeqCst);
     }
 
-    pub fn begin_requests(&self) -> Arc<Transport> {
+    pub fn begin_requests(
+        &self,
+        allowance: Option<Arc<crate::export::budget::Allowance>>,
+    ) -> Result<Arc<Transport>> {
         let scope = self.transport.child();
-        *self.requests.lock().unwrap() = scope.clone();
-        scope
+        let client = coordinator_client(
+            scope.clone(),
+            self.timeout,
+            self.statement.scheme() == "https",
+            &self.trust,
+            allowance,
+        )?;
+        let runtime = Arc::new(Runtime::new()?);
+        *self.requests.lock().unwrap() = Requests {
+            scope: scope.clone(),
+            client: Some(client),
+            runtime: Some(runtime),
+        };
+        Ok(scope)
+    }
+
+    pub fn end_requests(&self, scope: &Arc<Transport>) {
+        let mut requests = self.requests.lock().unwrap();
+        if Arc::ptr_eq(&requests.scope, scope) {
+            requests.client = None;
+            requests.runtime = None;
+        }
     }
 
     #[cfg(test)]
@@ -144,20 +205,25 @@ impl Http {
         url: &Url,
         sql: Option<&str>,
         headers: &SessionHeaders,
-        authenticate: bool,
-        scope: &Transport,
+        requests: &Requests,
+        spooling: bool,
     ) -> Result<reqwest::Response> {
         self.cursor(url.as_str())?;
         anyhow::ensure!(!self.transport.is_closed(), crate::export::Cancelled);
-        let authenticate = authenticate && self.allow_authentication.load(Ordering::SeqCst);
-        let mut request = self
+        let authenticate = self.allow_authentication.load(Ordering::SeqCst);
+        let mut request = requests
             .client
+            .as_ref()
+            .context("Trino operation is closed")?
             .request(method, url.clone())
             .headers(headers.request()?)
             .header("X-Trino-Source", "Qrow")
             .header("X-Trino-Client-Capabilities", "PARAMETRIC_DATETIME")
             .header("X-Trino-User", &self.username)
             .header("Accept", "application/json");
+        if spooling {
+            request = request.header("X-Trino-Query-Data-Encoding", "json+lz4,json");
+        }
         match &self.secret {
             Secret::Password(password) if !password.is_empty() => {
                 request = request.basic_auth(&self.username, Some(password.as_str()));
@@ -214,11 +280,15 @@ impl Http {
             if let Some(token) = &token {
                 current = current.bearer_auth(token.as_str());
             }
-            let response = self.runtime.block_on(scope.run(async {
-                current.send().await.map_err(|error| {
-                    anyhow::Error::new(error.without_url()).context("Trino request failed")
-                })
-            }))?;
+            let response = requests
+                .runtime
+                .as_ref()
+                .context("Trino operation is closed")?
+                .block_on(requests.scope.run(async {
+                    current.send().await.map_err(|error| {
+                        anyhow::Error::new(error.without_url()).context("Trino request failed")
+                    })
+                }))?;
             *self.peer.lock().unwrap() = response.remote_addr();
             if response.status() != reqwest::StatusCode::UNAUTHORIZED || !authenticate {
                 return Ok(response);
@@ -271,9 +341,20 @@ impl Http {
         sql: Option<&str>,
         headers: &SessionHeaders,
     ) -> Result<(Page, HeaderMap)> {
-        let scope = self.requests.lock().unwrap().clone();
-        let _activity = scope.activity()?;
-        let mut response = self.request(method, url, sql, headers, true, &scope)?;
+        self.page_encoded(method, url, sql, headers, false)
+    }
+
+    pub fn page_encoded(
+        &self,
+        method: Method,
+        url: &Url,
+        sql: Option<&str>,
+        headers: &SessionHeaders,
+        spooling: bool,
+    ) -> Result<(Page, HeaderMap)> {
+        let requests = self.requests.lock().unwrap().clone();
+        let _activity = requests.scope.activity()?;
+        let mut response = self.request(method, url, sql, headers, &requests, spooling)?;
         anyhow::ensure!(
             response.status().as_u16() == 200,
             "Trino returned HTTP {}",
@@ -286,21 +367,25 @@ impl Http {
                 "Trino response exceeds 16 MiB"
             );
         }
-        let bytes = self.runtime.block_on(scope.run(async {
-            let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|error| error.without_url())?
-            {
-                anyhow::ensure!(
-                    bytes.len().saturating_add(chunk.len()) <= MAX_RESPONSE_BYTES,
-                    "Trino response exceeds 16 MiB"
-                );
-                bytes.extend_from_slice(&chunk);
-            }
-            Ok::<_, anyhow::Error>(bytes)
-        }))?;
+        let bytes = requests
+            .runtime
+            .as_ref()
+            .context("Trino operation is closed")?
+            .block_on(requests.scope.run(async {
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|error| error.without_url())?
+                {
+                    anyhow::ensure!(
+                        bytes.len().saturating_add(chunk.len()) <= MAX_RESPONSE_BYTES,
+                        "Trino response exceeds 16 MiB"
+                    );
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok::<_, anyhow::Error>(bytes)
+            }))?;
         Ok((
             serde_json::from_slice(&bytes).context("Invalid Trino result response")?,
             headers,

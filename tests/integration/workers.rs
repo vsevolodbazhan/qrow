@@ -31,6 +31,8 @@ struct Fixture {
     closes: Arc<AtomicUsize>,
     adaptive: bool,
     transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    commit_enforced: bool,
+    commits: Arc<Mutex<Vec<usize>>>,
 }
 struct FakeSession {
     cancels: Arc<AtomicUsize>,
@@ -51,7 +53,11 @@ struct FakeSession {
     closes: Arc<AtomicUsize>,
     adaptive: bool,
     transfers: Arc<Mutex<Vec<qrow::model::transfer::Transfer>>>,
+    commit_enforced: bool,
+    commits: Arc<Mutex<Vec<usize>>>,
     transfer: qrow::model::transfer::Transfer,
+    awaiting_commit: Option<usize>,
+    empty_boundary: bool,
 }
 struct Cancel(Arc<AtomicBool>, Arc<AtomicUsize>);
 impl Cancellation for Cancel {
@@ -90,6 +96,10 @@ impl Connector for Fixture {
             adaptive: self.adaptive,
             transfers: self.transfers.clone(),
             transfer: Default::default(),
+            commit_enforced: self.commit_enforced,
+            commits: self.commits.clone(),
+            awaiting_commit: None,
+            empty_boundary: self.commit_enforced,
         }))
     }
 }
@@ -164,7 +174,31 @@ impl Session for FakeSession {
             .into(),
         }])
     }
+    fn commit_export_rows(&mut self, rows: usize) -> Result<bool> {
+        if !self.commit_enforced {
+            return Ok(false);
+        }
+        self.commits.lock().unwrap().push(rows);
+        if let Some(expected) = self.awaiting_commit.take() {
+            anyhow::ensure!(
+                rows == expected,
+                "Worker changed the fetched batch before commit"
+            );
+            return Ok(true);
+        }
+        anyhow::ensure!(rows == 0, "No batch to commit");
+        Ok(false)
+    }
     fn fetch(&mut self, count: usize) -> Result<Batch> {
+        anyhow::ensure!(
+            self.awaiting_commit.is_none(),
+            "Worker fetched before commit"
+        );
+        if self.empty_boundary {
+            self.empty_boundary = false;
+            self.awaiting_commit = Some(0);
+            return Ok(Batch { rows: Vec::new() });
+        }
         self.requested.lock().unwrap().push(count);
         let count = if self.max_batch == 0 {
             count
@@ -190,6 +224,9 @@ impl Session for FakeSession {
             })
             .collect();
         self.offset = end;
+        if self.commit_enforced && !rows.is_empty() {
+            self.awaiting_commit = Some(rows.len());
+        }
         Ok(Batch { rows })
     }
     fn close_operation(&mut self) -> Result<()> {
@@ -1496,7 +1533,7 @@ fn run_and_export_publishes_query_progress_before_the_schema() {
 }
 
 #[test]
-fn run_and_export_has_one_fetch_sequence_and_keeps_only_the_first_page() {
+fn run_and_export_has_one_fetch_sequence_and_keeps_the_bounded_preview() {
     use qrow::{export, logs::ExecutionId};
     let fixture = Arc::new(Fixture {
         total_rows: 100123,
@@ -1555,9 +1592,9 @@ fn run_and_export_has_one_fetch_sequence_and_keeps_only_the_first_page() {
             _ => {}
         }
     }
-    assert_eq!(preview.len(), 1000);
+    assert_eq!(preview.len(), 100_000);
     assert_eq!(complete, Some(false));
-    assert_eq!(preview.get(999).unwrap()[0].as_deref(), Some("999"));
+    assert_eq!(preview.get(99_999).unwrap()[0].as_deref(), Some("99999"));
     assert_eq!(writer.join().unwrap(), 100123);
     for (expected, row) in csv::Reader::from_path(destination)
         .unwrap()
@@ -1613,8 +1650,8 @@ fn run_and_export_completeness_uses_eof_and_session_generation_is_from_execution
                 _ => {}
             }
         }
-        assert_eq!(rows, total.min(1000));
-        assert_eq!(complete, Some(total <= 1000));
+        assert_eq!(rows, total.min(100_000));
+        assert_eq!(complete, Some(total <= 100_000));
         assert_eq!(generation, worker.session_generation(&profile));
         assert!(generation.is_some());
         assert_eq!(download.spool().unwrap().row_count(), total as u64);
@@ -1819,7 +1856,7 @@ fn adaptive_exports_reuse_the_session_and_hold_the_profile_limit_until_publicati
             _ => {}
         }
     }
-    assert_eq!(preview, 1000);
+    assert_eq!(preview, 20_000);
     assert!(
         fixture
             .requested
@@ -1915,6 +1952,15 @@ fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
     assert_eq!(rows.len(), 1000);
     assert_eq!(*fixture.requested.lock().unwrap(), [1000]);
     let generation = worker.session_generation(&profile).unwrap();
+    // The export form captures the then-current connection policy. A later
+    // profile edit must not change that download's transfer policy.
+    let captured = Transfer {
+        preset: TransferPreset::Conservative,
+        ..profile.transfer.clone()
+    };
+    let mut later = profile.clone();
+    later.transfer.preset = TransferPreset::Fast;
+    worker.update_profile(later).unwrap();
     let jobs = export::Jobs::default();
     let cancel = Arc::new(AtomicBool::new(false));
     let publication = jobs
@@ -1926,10 +1972,7 @@ fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
             Arc::new(Snapshot::new(&columns, &rows).unwrap()),
             &jobs,
             cancel,
-            Some(Transfer {
-                preset: TransferPreset::Conservative,
-                ..Default::default()
-            }),
+            Some(captured),
         )
         .unwrap();
     loop {
@@ -1990,4 +2033,49 @@ fn rejected_advancing_fetch_stops_without_retry_or_sql_resubmission() {
         download.wait_spool().unwrap().status(),
         export::spool::Status::Failed(_)
     ));
+}
+
+#[test]
+fn run_export_commits_after_append_before_preview_drain_and_continues_empty_boundaries() {
+    use qrow::{export, logs::ExecutionId};
+    for oversized in [false, true] {
+        let fixture = Arc::new(Fixture {
+            total_rows: 3,
+            max_batch: 2,
+            commit_enforced: true,
+            value_bytes: if oversized { 8 * 1024 * 1024 + 1 } else { 0 },
+            ..Default::default()
+        });
+        let worker = worker(fixture.clone());
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                export_profile(),
+                "SELECT commit".into(),
+                ExecutionId(405),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        loop {
+            match next(&worker) {
+                Event::Downloaded { spool, .. } => {
+                    assert!(!oversized);
+                    assert_eq!(spool.status(), export::spool::Status::Complete { rows: 3 });
+                    break;
+                }
+                Event::DownloadFailed { .. } => {
+                    assert!(oversized);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            *fixture.commits.lock().unwrap(),
+            if oversized { vec![0] } else { vec![0, 2, 1, 0] }
+        );
+        drop(download);
+    }
 }

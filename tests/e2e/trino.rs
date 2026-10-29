@@ -7,9 +7,16 @@ use qrow::{
 };
 
 fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
+    launch_with_preset(cx, sql, qrow::model::transfer::TransferPreset::Balanced)
+}
+fn launch_with_preset(
+    cx: &mut TestAppContext,
+    sql: &str,
+    preset: qrow::model::transfer::TransferPreset,
+) -> TestApp {
     let fixture = std::env::var("QROW_TRINO_FIXTURE").expect("Run with ./qtest run trino");
     assert!(fixture.starts_with("qrow-e2e-trino-"));
-    let profile = Profile {
+    let mut profile = Profile {
         database_type: DatabaseType::Trino,
         name: "Trino".into(),
         host: "localhost".into(),
@@ -20,6 +27,7 @@ fn launch(cx: &mut TestAppContext, sql: &str) -> TestApp {
         tls: true,
         ..Profile::default()
     };
+    profile.transfer.preset = preset;
     let credentials = MemoryCredentials::default();
     credentials
         .set_password(profile.id, "qrow-test-password")
@@ -98,15 +106,14 @@ fn run_export_keeps_settings_prepared_statements_and_the_transaction(cx: &mut Te
     app.wait_status(cx, "Preview: Export download complete");
     app.wait_until(
         cx,
-        "the first-page preview",
+        "the bounded preview",
         std::time::Duration::from_secs(5),
-        |window, _| window.find("result-loaded").label() == Some("1000 loaded"),
+        |window, _| window.find("result-loaded").label() == Some("100000 loaded"),
     );
     app.wait_cell(cx, 0, 1, "1");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 5);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "All rows");
     app.select(cx, "export-format", "Parquet");
     let replay = directory.path().join("replay.parquet");
     save_export(&app, cx, &replay);
@@ -170,9 +177,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.click(cx, "disconnect");
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
-    app.select(cx, "export-rows", "Run again and export (all rows)");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(
             window
                 .find("export-session-warning")
@@ -181,7 +186,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
                 .contains("temporary tables")
         );
     });
-    app.select(cx, "export-format", "JSON Lines");
+    app.select_json(cx, "Lines");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
     save_export(&app, cx, &output);
@@ -225,7 +230,7 @@ fn completed_spool_retry_survives_new_sql_and_tab_close(cx: &mut TestAppContext)
     );
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON Lines");
+    app.select_json(cx, "Lines");
     let retry = directory.path().join("retry.jsonl");
     save_export(&app, cx, &retry);
     let text = std::fs::read_to_string(retry).unwrap();
@@ -256,9 +261,10 @@ fn empty_export_writes_a_header_and_no_result_preserves_output(cx: &mut TestAppC
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_label(cx, "preserved.csv");
     app.wait_label(
         cx,
-        "preserved.csv: The statement completed without a result set. No export file was written.",
+        "The statement completed without a result set. No export file was written.",
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "previous output");
     app.run_complete(cx, "SELECT current_schema AS value");
@@ -551,4 +557,44 @@ fn parquet_picosecond_error_preserves_the_file_and_text_retry_uses_the_result(
         text
     );
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn parallel_spooling_saves_all_rows_and_keeps_normal_queries_usable(cx: &mut TestAppContext) {
+    let app = launch_with_preset(
+        cx,
+        "SELECT orderkey AS id, lpad(CAST(orderkey AS varchar),10,'0') || rpad('',1014,'x') AS payload FROM tpch.sf1.orders WHERE orderkey <=200000 ORDER BY orderkey LIMIT 50000",
+        qrow::model::transfer::TransferPreset::Fast,
+    );
+    app.run_export(cx);
+    app.wait_for(cx, "export-incremental-notice");
+    app.update(cx, |window, _| {
+        assert!(
+            window
+                .find("export-incremental-notice")
+                .label()
+                .unwrap()
+                .contains("Trino spooling: Parallel")
+        )
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("parallel.csv");
+    save_export(&app, cx, &output);
+    let mut count = 0;
+    let mut previous = 0;
+    for row in csv::Reader::from_path(output).unwrap().records() {
+        let row = row.unwrap();
+        assert_eq!(row.len(), 2);
+        let id = row[0].parse::<u64>().unwrap();
+        assert!(id > previous);
+        previous = id;
+        assert_eq!(&row[1], format!("{id:010}{}", "x".repeat(1014)));
+        count += 1;
+    }
+    assert_eq!(count, 50000);
+    app.wait_status(cx, "Preview: Export download complete");
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+    app.run_complete(cx, "SELECT 42 AS value");
+    app.wait_cell(cx, 0, 1, "42");
 }

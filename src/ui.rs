@@ -3089,6 +3089,7 @@ impl Qrow {
                                     )
                                 });
                             }
+                            form.transfer.switch_engine(previous, selected, window, cx);
                             connection_form::reset_authentication(
                                 &form.authentication,
                                 selected,

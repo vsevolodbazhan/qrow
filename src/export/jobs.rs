@@ -57,9 +57,6 @@ impl Jobs {
         profile: uuid::Uuid,
         limit: u8,
     ) -> io::Result<Writer> {
-        if !(1..=2).contains(&limit) {
-            return Err(io::Error::other("Exports at the same time must be 1 or 2."));
-        }
         self.register_inner(cancel, on_cancel, Some((profile, limit)))
     }
 
@@ -109,12 +106,13 @@ impl Jobs {
             if registry.stopping {
                 return Err(io::Error::other(super::Cancelled));
             }
-            if registry
-                .jobs
-                .iter()
-                .filter(|job| job.profile == Some(id))
-                .count()
-                >= usize::from(limit)
+            if limit != 0
+                && registry
+                    .jobs
+                    .iter()
+                    .filter(|job| job.profile == Some(id))
+                    .count()
+                    >= usize::from(limit)
             {
                 return Err(io::Error::other(format!(
                     "This connection already has {limit} active {}. Wait for an export to finish or cancel it.",
@@ -332,6 +330,21 @@ mod tests {
         let replacement = admit(profile).unwrap();
         drop((second, independent, replacement));
         assert_eq!(jobs.active_count(), 0);
+    }
+
+    #[test]
+    fn zero_disables_profile_limit_and_jobs_remain_tracked() {
+        let jobs = Jobs::default();
+        let profile = uuid::Uuid::new_v4();
+        let admit = |limit| {
+            jobs.register_for_profile(Arc::new(AtomicBool::new(false)), None, profile, limit)
+        };
+        let writers: Vec<_> = (0..4).map(|_| admit(0).unwrap()).collect();
+        assert_eq!(jobs.active_count(), 4);
+        assert!(admit(3).is_err());
+        drop(writers);
+        assert_eq!(jobs.active_count(), 0);
+        assert!(admit(3).is_ok());
     }
 
     #[test]

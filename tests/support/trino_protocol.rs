@@ -17,10 +17,10 @@ use std::{
     thread,
     time::Duration,
 };
-fn trust() -> Trust {
+pub fn trust() -> Trust {
     Trust::from_pem(include_bytes!("../integration/testdata/tls/ca.pem")).unwrap()
 }
-fn server_config() -> Arc<rustls::ServerConfig> {
+pub fn server_config() -> Arc<rustls::ServerConfig> {
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject};
     let chain =
         CertificateDer::pem_slice_iter(include_bytes!("../integration/testdata/tls/server.pem"))

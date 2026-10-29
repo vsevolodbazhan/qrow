@@ -16,6 +16,8 @@ pub struct Options {
     pub pretty: bool,
     pub typed: bool,
     pub decimals_as_numbers: bool,
+    /// Last selected JSON style when another export format is active.
+    pub lines: bool,
 }
 impl Default for Options {
     fn default() -> Self {
@@ -23,6 +25,7 @@ impl Default for Options {
             pretty: true,
             typed: true,
             decimals_as_numbers: false,
+            lines: false,
         }
     }
 }

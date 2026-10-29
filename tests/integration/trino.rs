@@ -163,6 +163,8 @@ fn cancellation_and_row_limits_leave_the_session_usable() -> Result<()> {
 }
 
 mod protocol;
+#[path = "../support/trino_protocol.rs"]
+mod protocol_fixture;
 
 /// Only the disposable fixture's request methods/paths are inspected.
 fn fixture_request_log() -> Result<String> {
@@ -483,4 +485,152 @@ fn variable_precision_timestamps_keep_every_server_digit() -> Result<()> {
         ]
     );
     Ok(())
+}
+
+mod spooling;
+
+#[test]
+#[ignore = "needs the server fixture: ./qtest run trino"]
+fn serial_and_parallel_spooling_commit_and_replay_all_rows_in_order() -> Result<()> {
+    use qrow::{
+        export::spool::{Spool, Status},
+        model::transfer::{Transfer, TransferPreset, TrinoSpooling},
+    };
+    use std::sync::atomic::AtomicBool;
+    for (mode, zone) in [
+        (TrinoSpooling::Serial, "Asia/Bangkok"),
+        (TrinoSpooling::Parallel, "America/New_York"),
+    ] {
+        let mut session = connect();
+        complete(&mut *session, &format!("SET TIME ZONE '{zone}'"))?;
+        let mut transfer = Transfer {
+            preset: TransferPreset::Custom,
+            ..Default::default()
+        };
+        transfer.custom.trino_spooling = mode;
+        session.configure_export(&transfer)?;
+        let storage_before = storage_requests()?;
+        session.execute_export("SELECT orderkey AS id, lpad(CAST(orderkey AS varchar),10,'0') || rpad('',1014,'x') AS payload FROM tpch.sf1.orders WHERE orderkey <= 200000 ORDER BY orderkey LIMIT 50000")?;
+        qrow::connector::wait_for_result(
+            &mut *session,
+            Some(Instant::now() + Duration::from_secs(30)),
+        )?;
+        let (spool, mut producer) = Spool::new(&session.columns()?, &session.export_context())?;
+        let stop = AtomicBool::new(false);
+        let mut count = 0;
+        let mut previous = 0;
+
+        loop {
+            let batch = session.fetch(1000)?;
+            if batch.rows.is_empty() {
+                if session.commit_export_rows(0)? {
+                    continue;
+                }
+                break;
+            }
+            for row in &batch.rows {
+                assert_eq!(row.len(), 2);
+                let id = row[0].as_deref().unwrap().parse::<u64>()?;
+                assert!(id > previous && id <= 200000);
+                previous = id;
+                assert_eq!(
+                    row[1].as_deref().unwrap(),
+                    format!("{id:010}{}", "x".repeat(1014))
+                );
+                count += 1;
+            }
+            producer.append(&batch.rows, &stop)?;
+            session.commit_export_rows(batch.rows.len())?;
+        }
+        assert_eq!(count, 50000);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let after = storage_requests()?;
+            let own = after
+                .strip_prefix(&storage_before)
+                .expect("Storage request log changed");
+            let keys: std::collections::HashSet<_> = own
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("GET /qrow-spooling/segments/")
+                        .and_then(|tail| tail.split_whitespace().next())
+                })
+                .collect();
+            let removed: std::collections::HashSet<_> = own
+                .lines()
+                .filter_map(|line| {
+                    line.strip_prefix("DELETE /qrow-spooling/segments/")
+                        .and_then(|tail| tail.split_whitespace().next())
+                })
+                .collect();
+            if !keys.is_empty() && keys.is_subset(&removed) {
+                break;
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "This export did not GET and acknowledge remote storage segments"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(session.export_cleanup_warning().is_none());
+        assert_eq!(
+            session.finish_execution()?,
+            Completion::Finished { has_results: true }
+        );
+        session.close_operation()?;
+        producer.finish(&stop)?;
+        assert_eq!(spool.status(), Status::Complete { rows: count });
+        let mut reader = spool.reader()?;
+        let mut replayed = 0;
+        let mut previous = 0;
+        while let Some(batch) = reader.next(&stop)? {
+            for index in 0..batch.rows().len() {
+                let row = batch.rows().get(index).unwrap();
+                let id = row[0].as_deref().unwrap().parse::<u64>()?;
+                assert!(id > previous);
+                previous = id;
+                assert_eq!(
+                    row[1].as_deref().unwrap(),
+                    format!("{id:010}{}", "x".repeat(1014))
+                );
+                replayed += 1;
+            }
+        }
+        assert_eq!(replayed, count);
+        complete(&mut *session, "SELECT current_timezone()")?;
+        assert_eq!(session.fetch(1)?.rows[0][0].as_deref(), Some(zone));
+        session.close()?;
+    }
+    Ok(())
+}
+
+fn storage_requests() -> Result<String> {
+    let name = std::env::var("QROW_TRINO_STORAGE")?;
+    anyhow::ensure!(
+        name.starts_with("qrow-e2e-trino-")
+            && name.ends_with("-storage")
+            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+        "Not a disposable storage fixture"
+    );
+    let output = std::process::Command::new("docker")
+        .args([
+            "exec",
+            &name,
+            "find",
+            "/tmp/qrow-storage-requests",
+            "-type",
+            "f",
+            "-name",
+            "*.log",
+            "-exec",
+            "cat",
+            "{}",
+            "+",
+        ])
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Cannot read storage fixture request log"
+    );
+    Ok(String::from_utf8(output.stdout)?)
 }

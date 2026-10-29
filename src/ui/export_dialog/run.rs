@@ -72,7 +72,6 @@ impl Qrow {
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
                 source,
-                None,
                 settings,
                 filename,
                 true,
@@ -83,12 +82,7 @@ impl Qrow {
                 cx,
             );
             view.run = Some(intent);
-            view.scopes = vec![Scope::Run];
-            view.choices[0] = vec!["Run and export (all rows)".into()];
             view.scope = Scope::Run;
-            view.controls[0].update(cx, |control, cx| {
-                control.set_items(SearchableVec::new(view.choices[0].clone()), window, cx);
-            });
             view.sync(window, cx);
             view
         });
@@ -282,6 +276,24 @@ impl ExportDialog {
             .map_err(|_| io::Error::other("The result window closed."))?
     }
 
+    pub(super) fn refresh_run_session(&mut self, cx: &mut Context<Self>) {
+        let Some(intent) = &mut self.run else { return };
+        let _ = self.owner.update(cx, |owner, _| {
+            if let Some(tab) = owner
+                .tabs
+                .iter()
+                .find(|tab| tab.saved.id == self.result.tab)
+                && tab.current_execution == self.result.execution
+            {
+                intent.expected = tab
+                    .worker
+                    .as_ref()
+                    .and_then(|worker| worker.session_generation(&intent.profile));
+                intent.warning = intent.expected.is_none() || intent.expected != tab.result_session;
+            }
+        });
+    }
+
     pub(super) fn refresh_session_review(&mut self, cx: &mut Context<Self>) {
         let Some(intent) = &mut self.run else {
             return;
@@ -315,7 +327,6 @@ impl ExportDialog {
         });
         if let Some(source) = source {
             self.source = Arc::new(source);
-            self.update_preview(cx);
         }
     }
 
@@ -338,7 +349,6 @@ impl ExportDialog {
             .map_err(|_| io::Error::other("The result window closed."))??;
         self.result.execution = Some(execution);
         self.source = preview;
-        self.update_preview(cx);
         self.result.replay = None;
         self.retained = None;
         self.download = Some(download.clone());

@@ -64,8 +64,45 @@ fn click_header(app: &TestApp, cx: &mut TestAppContext, column: usize, modifiers
     app.settle(cx);
 }
 
-/// Presses ⌘C and returns the clipboard text.
+/// Press ⌘C and wait for the Markdown copy, confirming large copies.
+fn copy_markdown(app: &TestApp, cx: &mut TestAppContext) -> String {
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.press(cx, "cmd-c");
+    app.wait_until(
+        cx,
+        "Markdown clipboard",
+        Duration::from_secs(15),
+        |window, cx| {
+            if window.try_find("markdown-copy-anyway").is_some() {
+                window.click("markdown-copy-anyway", cx);
+            }
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text != "unchanged")
+        },
+    );
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .unwrap()
+}
+
+/// Read the table cells for selection assertions; separate tests check formatting.
 fn copy(app: &TestApp, cx: &mut TestAppContext) -> String {
+    copy_markdown(app, cx)
+        .lines()
+        .skip(2)
+        .map(|line| {
+            line.trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn copy_empty(app: &TestApp, cx: &mut TestAppContext) -> String {
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     app.press(cx, "cmd-c");
     app.settle(cx);
@@ -86,15 +123,57 @@ fn demo(cx: &mut TestAppContext) -> TestApp {
 }
 
 #[gpui_kit::test]
+fn command_c_copies_pretty_markdown_for_the_selected_cells(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
+    click_cell(&app, cx, 2, 2, MouseButton::Left, shift());
+    let text = copy_markdown(&app, cx);
+    assert_eq!(
+        text,
+        concat!(
+            "| route     | carrier            |\n",
+            "| --------- | ------------------ |\n",
+            "| LHR → JFK | British Airways    |\n",
+            "| HEL → ARN | Singapore Airlines |\n",
+        )
+    );
+}
+
+#[gpui_kit::test]
+fn command_c_large_markdown_respects_cancel_and_clipboard_changes(cx: &mut TestAppContext) {
+    let app = demo(cx);
+    click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
+    app.press(cx, "cmd-a");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
+    app.press(cx, "cmd-c");
+    app.wait_for(cx, "markdown-copy-anyway");
+    app.click(cx, "markdown-copy-cancel");
+    app.wait_gone(cx, "markdown-copy-anyway");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserved")
+    );
+    app.press(cx, "cmd-c");
+    app.wait_for(cx, "markdown-copy-anyway");
+    cx.write_to_clipboard(ClipboardItem::new_string("changed".into()));
+    app.click(cx, "markdown-copy-anyway");
+    app.wait_gone(cx, "markdown-copy-anyway");
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("changed")
+    );
+}
+
+#[gpui_kit::test]
 fn click_shift_click_and_shift_arrows_select_a_range(cx: &mut TestAppContext) {
     let app = demo(cx);
 
-    // One cell copies its raw value.
+    // One cell is copied in a one-column table.
     click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
     assert_eq!(copy(&app, cx), ROUTES[1]);
 
     // Shift-click extends from the anchor to a rectangle of three rows and
-    // three columns. The copy is tab-separated, without a header.
+    // three columns.
     click_cell(&app, cx, 3, 3, MouseButton::Left, shift());
     assert_eq!(
         copy(&app, cx),
@@ -122,7 +201,7 @@ fn click_shift_click_and_shift_arrows_select_a_range(cx: &mut TestAppContext) {
 
     // Escape clears the selection, so ⌘C leaves the clipboard unchanged.
     app.press(cx, "escape");
-    assert_eq!(copy(&app, cx), "unchanged");
+    assert_eq!(copy_empty(&app, cx), "unchanged");
 }
 
 #[gpui_kit::test]
@@ -207,7 +286,7 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
     click_cell(&app, cx, 3, 3, MouseButton::Left, shift());
     app.click(cx, "next-page");
     app.settle(cx);
-    assert_eq!(copy(&app, cx), "unchanged");
+    assert_eq!(copy_empty(&app, cx), "unchanged");
 }
 
 #[gpui_kit::test]
@@ -435,7 +514,7 @@ fn a_held_drag_scrolls_both_axes_and_escape_releases_it(cx: &mut TestAppContext)
     for _ in 0..5 {
         app.settle(cx);
     }
-    assert_eq!(copy(&app, cx), "unchanged");
+    assert_eq!(copy_empty(&app, cx), "unchanged");
 }
 
 #[gpui_kit::test]

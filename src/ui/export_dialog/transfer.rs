@@ -1,20 +1,9 @@
 //! Captured transfer settings and pre-execution collection information.
 use super::*;
 use crate::model::transfer::{
-    INCREMENTAL_KEY, IncrementalCollect, LEGACY_INCREMENTAL_KEY, SAVE_TO_FILE_KEY, Transfer,
-    TransferPreset, incremental_override_applies,
+    INCREMENTAL_KEY, IncrementalCollect, LEGACY_INCREMENTAL_KEY, SAVE_TO_FILE_KEY,
+    incremental_override_applies,
 };
-
-pub(super) fn choices(profile: Option<&Profile>) -> Vec<String> {
-    let preset = profile.map_or(TransferPreset::Balanced, |profile| profile.transfer.preset);
-    std::iter::once(format!("Connection preset ({})", preset.label()))
-        .chain(
-            TransferPreset::ALL
-                .into_iter()
-                .map(|preset| preset.label().into()),
-        )
-        .collect()
-}
 
 impl ExportDialog {
     pub(super) fn transfer_profile(&self) -> Option<&Profile> {
@@ -24,30 +13,15 @@ impl ExportDialog {
             self.profile.as_ref()
         }
     }
-
-    pub(super) fn transfer_override(&self, cx: &App) -> Option<Transfer> {
-        let profile = self.profile.as_ref()?;
-        let choice = self.transfer.read(cx).selected_value()?;
-        let Some(preset) = TransferPreset::ALL
-            .into_iter()
-            .find(|preset| preset.label() == choice.as_str())
-        else {
-            return Some(profile.transfer.clone());
-        };
-        let selected = Transfer {
-            preset,
-            ..profile.transfer.clone()
-        };
-        let mut settings = selected.settings();
-        settings.concurrent_exports = profile.transfer.settings().concurrent_exports;
-        Some(Transfer {
-            preset: TransferPreset::Custom,
-            custom: settings,
-        })
-    }
 }
 
 pub(super) fn notice(intent: &run::Intent) -> Option<String> {
+    if intent.profile.database_type == crate::model::DatabaseType::Trino {
+        return Some(format!(
+            "Trino spooling: {}. The server can return classic results.",
+            intent.profile.transfer.settings().trino_spooling.label()
+        ));
+    }
     if intent.profile.database_type != crate::model::DatabaseType::Kyuubi {
         return None;
     }
@@ -94,6 +68,7 @@ pub(super) fn save_to_file(intent: &run::Intent) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::transfer::TransferPreset;
 
     #[::core::prelude::v1::test]
     fn collection_notice_uses_the_captured_policy_and_keeps_settings_inherited() {

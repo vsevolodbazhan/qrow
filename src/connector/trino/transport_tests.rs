@@ -84,12 +84,20 @@ fn profile(peer: SocketAddr, tls: bool) -> Profile {
 }
 
 fn operation(http: Arc<Http>) -> Result<super::Operation> {
+    operation_with_allowance(http, None)
+}
+
+fn operation_with_allowance(
+    http: Arc<Http>,
+    allowance: Option<Arc<crate::export::budget::Allowance>>,
+) -> Result<super::Operation> {
     let cancel = Arc::new(super::Cancel {
         heartbeat: super::heartbeat::Heartbeat::new(http.clone())?,
-        requests: http.begin_requests(),
+        requests: http.begin_requests(allowance)?,
         http,
         next: std::sync::Mutex::new(super::Cursor::default()),
-        requested: std::sync::atomic::AtomicBool::new(false),
+        requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        threads: Arc::default(),
         active: std::sync::Mutex::new(true),
         cleanup: std::sync::Mutex::default(),
         changed: std::sync::Condvar::new(),
@@ -256,7 +264,7 @@ fn terminal_error_and_detached_cancellation_preserve_successor_transport() -> Re
     let mut current = Some(operation);
     super::TrinoSession::stop(&mut current)?;
     assert!(current.is_none());
-    let successor = http.begin_requests();
+    let successor = http.begin_requests(None)?;
     let _read = successor.activity()?;
     old.abort_transport();
     old.cancel()?;
@@ -504,14 +512,16 @@ fn delete_deadline_closes_its_socket_after_a_stalled_response() -> Result<()> {
 }
 
 #[test]
-fn successful_delete_still_bounds_a_stalled_primary_body() -> Result<()> {
+fn successful_delete_joins_an_interrupted_primary_body() -> Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let http = Arc::new(Http::new(
         &profile(listener.local_addr()?, false),
         Secret::password(""),
         &Trust::default(),
     )?);
-    let requests = http.begin_requests();
+    let capacity = 512 * crate::export::budget::MIB;
+    let budget = crate::export::budget::Budget::new(capacity);
+    let requests = http.begin_requests(Some(budget.allowance(capacity)?))?;
     let cancel = super::Cancel {
         heartbeat: super::heartbeat::Heartbeat::new(http.clone())?,
         http: http.clone(),
@@ -519,7 +529,8 @@ fn successful_delete_still_bounds_a_stalled_primary_body() -> Result<()> {
             next: Some(http.statement.clone()),
             terminal: false,
         }),
-        requested: std::sync::atomic::AtomicBool::new(false),
+        requested: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        threads: Arc::default(),
         active: std::sync::Mutex::new(true),
         requests,
         cleanup: std::sync::Mutex::default(),
@@ -558,16 +569,49 @@ fn successful_delete_still_bounds_a_stalled_primary_body() -> Result<()> {
         thread::sleep(Duration::from_millis(2));
     }
     let start = Instant::now();
-    assert!(
-        cancel
-            .cancel_with_deadline(start + Duration::from_millis(200))
-            .is_err()
-    );
+    cancel.cancel_with_deadline(start + Duration::from_millis(200))?;
     assert!(primary.join().unwrap().is_err());
     server.join().unwrap()?;
     assert!(start.elapsed() < Duration::from_secs(2));
-    assert!(http.transport.is_closed());
-    assert!(cancel.cancel().is_err()); // Cached failure; no second DELETE.
+    assert!(!http.transport.is_closed());
+    cancel.cancel()?; // Cached success; no second DELETE.
+    assert!(budget.allowance(capacity).is_ok());
+    Ok(())
+}
+
+#[test]
+fn ended_keep_alive_pool_releases_allowance_before_a_successor_query() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    let http = Arc::new(Http::new(
+        &profile(listener.local_addr()?, false),
+        Secret::password(""),
+        &Trust::default(),
+    )?);
+    let capacity = 192 * crate::export::budget::MIB;
+    let budget = crate::export::budget::Budget::new(capacity);
+    let operation = operation_with_allowance(http.clone(), Some(budget.allowance(capacity)?))?;
+    operation.cancel.next.lock().unwrap().terminal = true;
+    let server = thread::spawn(move || -> Result<()> {
+        let mut socket = accept(&listener)?;
+        assert!(headers(&mut socket)?.starts_with("GET "));
+        socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")?;
+        socket.flush()?;
+        eof(&mut socket)
+    });
+    http.page(
+        Method::GET,
+        &http.statement,
+        None,
+        &super::protocol::SessionHeaders::default(),
+    )?;
+    assert!(budget.allowance(capacity).is_err());
+    let old_cancel = operation.cancel.clone();
+    let mut current = Some(operation);
+    super::TrinoSession::stop(&mut current)?;
+    server.join().unwrap()?;
+    assert!(budget.allowance(capacity).is_ok());
+    assert!(!http.transport.is_closed());
+    old_cancel.cancel()?;
     Ok(())
 }
 
