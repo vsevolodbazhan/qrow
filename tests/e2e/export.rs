@@ -388,7 +388,7 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     app.wait_until(cx, "the blocked export response", QUERY_TIMEOUT, |_, _| {
         gate.blocked()
     });
-    app.click_labelled(cx, "Cancel export");
+    app.click_labelled(cx, "Cancel");
     gate.resume();
     app.wait_until(cx, "cancelled export cleanup", QUERY_TIMEOUT, |_, cx| {
         cx.global::<qrow::export::Jobs>().active_count() == 0
@@ -403,7 +403,7 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn failed_cursor_download_details_offers_a_reviewed_rerun(cx: &mut TestAppContext) {
+fn failed_cursor_download_retry_offers_a_reviewed_rerun(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
     let sql = "SELECT id AS value FROM range(2123) ORDER BY id";
     let (mut workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
@@ -430,7 +430,7 @@ fn failed_cursor_download_details_offers_a_reviewed_rerun(cx: &mut TestAppContex
             && app.status(cx).starts_with("Export download stopped")
     });
     app.click(cx, "results-panel-tab");
-    app.click_labelled(cx, "Details…");
+    app.click_labelled(cx, "Retry…");
     app.wait_for(cx, "export-error");
     app.wait_for(cx, "export-session-warning");
     app.update(cx, |window, _| {

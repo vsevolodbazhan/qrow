@@ -271,9 +271,8 @@ writer reads committed spool batches. Parquet exact decimals, pretty Markdown ta
 code blocks need a complete first pass. After the download, you can run
 another query or close the tab while the file writer continues.
 
-**Cancel export** in the notification stops the writer and the download.
-**Details…** opens the form without stopping the job. Closing that form
-leaves the job running. Closing the notification hides it while the job runs.
+**Cancel** in the notification stops the writer and the download.
+Closing the notification hides it while the job runs.
 An error shows the notification again. When multiple exports are active,
 **All exports…** opens a list of their controls. The worker sends cancellation
 to the operation that owns the download and completes protocol cleanup
@@ -322,8 +321,9 @@ during that time stops submission. Choose **Copy** or **Save** again.
 
 For Trino transfer modes and storage limits, see [Trino export spooling](connections.md#trino-export-spooling).
 
-The tab stays busy until the download ends. **Cancel** stops the download;
-**Cancel export** also stops its file writer. Cancellation can interrupt
+The tab stays busy until the download ends. **Cancel** in the tab stops the
+download. **Cancel** in the export notification also stops its file writer.
+Cancellation can interrupt
 an established socket before the operation handle or schema arrives.
 If SQL reached the server before its handle arrived, the server can still
 continue that statement after the socket closes. Qrow does not submit it

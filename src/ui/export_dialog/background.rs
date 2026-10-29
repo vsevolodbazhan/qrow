@@ -79,10 +79,6 @@ impl Render for ProgressNotice {
         let message = state.status_text();
         let error = state.error.is_some();
         let running = state.running;
-        let retry = !running
-            && state.retained.as_ref().is_some_and(|spool| {
-                matches!(spool.status(), export::spool::Status::Complete { .. })
-            });
         let cancel = job.downgrade();
         let owner = state.owner.clone();
         let multiple = owner
@@ -111,13 +107,16 @@ impl Render for ProgressNotice {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(
-                        Button::new(SharedString::from(format!("export-details-{id}")))
-                            .small()
-                            .ghost()
-                            .label(if retry { "Retry…" } else { "Details…" })
-                            .on_click(move |_, window, cx| ExportDialog::open(&job, window, cx)),
-                    )
+                    .when(!running, |view| {
+                        view.child(
+                            Button::new(SharedString::from(format!("export-details-{id}")))
+                                .small()
+                                .label("Retry…")
+                                .on_click(move |_, window, cx| {
+                                    ExportDialog::open(&job, window, cx)
+                                }),
+                        )
+                    })
                     .when(multiple, |view| {
                         view.child(
                             Button::new(SharedString::from(format!("export-all-jobs-{id}")))
@@ -132,8 +131,7 @@ impl Render for ProgressNotice {
                     .child(
                         Button::new(SharedString::from(format!("export-stop-{id}")))
                             .small()
-                            .ghost()
-                            .label(if running { "Cancel export" } else { "Dismiss" })
+                            .label(if running { "Cancel" } else { "Dismiss" })
                             .on_click(move |_, window, cx| {
                                 let _ = cancel.update(cx, |job, cx| {
                                     if job.running {
@@ -201,10 +199,6 @@ impl Render for ExportList {
                 let id = state.id;
                 let message = state.status_text();
                 let running = state.running;
-                let retry = !running
-                    && state.retained.as_ref().is_some_and(|spool| {
-                        matches!(spool.status(), export::spool::Status::Complete { .. })
-                    });
                 let cancel = job.downgrade();
                 v_flex()
                     .gap_1()
@@ -215,22 +209,22 @@ impl Render for ExportList {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(
-                                Button::new(SharedString::from(format!(
-                                    "export-list-details-{id}"
-                                )))
-                                .small()
-                                .ghost()
-                                .label(if retry { "Retry…" } else { "Details…" })
-                                .on_click(
-                                    move |_, window, cx| ExportDialog::open(&job, window, cx),
-                                ),
-                            )
+                            .when(!running, |view| {
+                                view.child(
+                                    Button::new(SharedString::from(format!(
+                                        "export-list-details-{id}"
+                                    )))
+                                    .small()
+                                    .label("Retry…")
+                                    .on_click(
+                                        move |_, window, cx| ExportDialog::open(&job, window, cx),
+                                    ),
+                                )
+                            })
                             .child(
                                 Button::new(SharedString::from(format!("export-list-stop-{id}")))
                                     .small()
-                                    .ghost()
-                                    .label(if running { "Cancel export" } else { "Dismiss" })
+                                    .label(if running { "Cancel" } else { "Dismiss" })
                                     .on_click(move |_, window, cx| {
                                         let _ = cancel.update(cx, |job, cx| {
                                             if job.running {
@@ -592,6 +586,23 @@ mod tests {
                     job.running = true;
                     job.retained = Some(spool.clone());
                     job.start_background(window, cx);
+                });
+                if index == 0 {
+                    let id = view.read(cx).id;
+                    window.render_frame(cx);
+                    assert!(
+                        window
+                            .try_find(SharedString::from(format!("export-details-{id}")))
+                            .is_none()
+                    );
+                    assert_eq!(
+                        window
+                            .find(SharedString::from(format!("export-stop-{id}")))
+                            .label(),
+                        Some("Cancel")
+                    );
+                }
+                view.update(cx, |job, cx| {
                     job.complete(
                         Err(io::Error::other("Output volume is full")),
                         None,
