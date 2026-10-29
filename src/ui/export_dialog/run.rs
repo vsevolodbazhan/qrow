@@ -71,7 +71,16 @@ impl Qrow {
         let owner = cx.weak_entity();
         let view = cx.new(|cx| {
             let mut view = ExportDialog::new(
-                source, None, settings, filename, true, result, owner, window, cx,
+                source,
+                None,
+                settings,
+                filename,
+                true,
+                result,
+                Some(intent.profile.clone()),
+                owner,
+                window,
+                cx,
             );
             view.run = Some(intent);
             view.scopes = vec![Scope::Run];
@@ -155,6 +164,7 @@ impl Qrow {
         )?;
         tab.table.update(cx, |table, cx| {
             table.delegate_mut().clear();
+            table.delegate_mut().set_export_profile(&intent.profile);
             table.delegate_mut().empty_message = Some("Waiting for query results…");
             table.clear_selection(cx);
             table

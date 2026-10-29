@@ -1,5 +1,6 @@
 """Run Trino connector and real-window tests with a disposable Docker coordinator."""
 import json
+import argparse
 import os
 from pathlib import Path
 import platform
@@ -22,11 +23,15 @@ def command(*args, **kwargs):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--perf", action="store_true", help="Measure export transfer in an optimized build.")
+    options = parser.parse_args()
     name = "qrow-e2e-trino-" + uuid.uuid4().hex[:12]
     env = os.environ.copy()
     profile = "ci" if env.get("CI") else "default"
-    command("cargo", "test", "--locked", "--no-default-features", "--test", "integration", "--no-run")
-    if platform.system() == "Darwin":
+    build = ("--profile", "perf") if options.perf else ()
+    command("cargo", "test", "--locked", *build, "--no-default-features", "--test", "integration", "--no-run")
+    if not options.perf and platform.system() == "Darwin":
         command("cargo", "test", "--locked", "--test", "e2e", "--no-run")
     target = Path(env.get("CARGO_TARGET_DIR", ROOT / "target"))
     fixture_root = target / "qtest" / "trino"
@@ -97,6 +102,11 @@ def main():
                 if time.monotonic() >= deadline:
                     raise RuntimeError("Trino fixture did not accept SELECT 1 in time")
                 time.sleep(0.2)
+            if options.perf:
+                command("cargo", "nextest", "run", "--locked", "--profile", profile, "--cargo-profile", "perf",
+                        "--no-default-features", "--test", "integration", "--run-ignored", "ignored-only",
+                        "--no-capture", "-E", "test(/^transfer_perf::trino$/)", env=env)
+                return
             command("cargo", "nextest", "run", "--locked", "--profile", profile, "--no-default-features", "--test", "integration",
                     "--run-ignored", "ignored-only", "-E", "test(/^trino::/) & not test(/external_browser/)", env=env)
             if platform.system() == "Darwin":

@@ -99,6 +99,45 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn kyuubi_transfer_preset_save_keeps_the_session_and_exports_all_rows(cx: &mut TestAppContext) {
+    use qrow::model::transfer::TransferPreset;
+    let (workspace, credentials) = Kyuubi::get().workspace(
+        "CREATE TEMPORARY VIEW qrow_transfer_view AS SELECT id FROM range(12003)",
+        PASSWORD,
+    );
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.select(cx, "connection-transfer-preset", "Conservative");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(cx, "saved Conservative preset", QUERY_TIMEOUT, |_, _| {
+        app.saved().profiles[0].transfer.preset == TransferPreset::Conservative
+    });
+    app.type_sql(cx, "SELECT id FROM qrow_transfer_view ORDER BY id");
+    app.run_export(cx);
+    app.wait_for(cx, "export-incremental-notice");
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("transfer.csv");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(output.clone()));
+    app.wait_until(cx, "preset export", QUERY_TIMEOUT, |_, _| output.exists());
+    assert_eq!(
+        csv::Reader::from_path(output).unwrap().records().count(),
+        12003
+    );
+    app.wait_status(cx, "Preview: Export download complete");
+    app.run_complete(cx, "SELECT count(*) AS value FROM qrow_transfer_view");
+    app.wait_cell(cx, 0, 1, "12003");
+    assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut TestAppContext) {
     let (mut workspace, credentials) = Kyuubi::get().workspace(
         "SELECT id AS value FROM range(100123) ORDER BY id",

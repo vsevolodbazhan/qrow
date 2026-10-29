@@ -85,6 +85,59 @@ For example, a session parameter can select an engine-sharing subdomain:
 
 macOS can request Keychain access when you save the password.
 
+## Export transfer policy
+
+Open **Connection Settings → Export** to choose a transfer preset.
+Existing profiles use **Balanced**.
+Transfer-policy changes do not reconnect an otherwise unchanged session.
+
+| Setting | Conservative | Balanced | Fast |
+| --- | --- | --- | --- |
+| Kyuubi incremental collect | On | Inherit | Inherit |
+| Estimated Kyuubi data per request | 4 MiB | 16 MiB | 32 MiB |
+| Kyuubi speed limit | 20 MB/s | Off | Off |
+| Exports at the same time per connection | 1 | 1 | 2 |
+
+**Custom** can select incremental collect as **Inherit**, **On**, or **Off**.
+Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
+1000 MB/s. Zero disables the speed limit. The export count is 1 or 2 for all
+connection types. The shared memory budget can admit fewer exports than
+this count. The count covers downloads, snapshot exports, retained-result
+exports, and **Copy as**. A file export holds its slot until publication or
+temporary-file cleanup ends. Admission occurs after you choose a file and
+before sign-in or SQL submission.
+
+Kyuubi export requests use the widest owned row seen so far and a 25 percent
+margin. Later rows can be wider. The 64 MiB response and allocation limits
+still apply. Normal preview requests remain limited to 1000 rows.
+The speed limit measures newly committed spool bytes in decimal MB per
+second. It excludes query execution time and rows already in the preview.
+A request can exceed the rate briefly. Cancellation interrupts the wait.
+
+An explicit incremental-collect choice changes the setting in the current
+session for one new export. Qrow restores and checks the previous setting
+after it submits the statement. If restoration fails, the export stops and
+the session reconnects on the next explicit Run. SQL does not run again
+automatically. The override supports up to 4096 explicit session settings
+and 1 MiB of decoded configuration text.
+**Inherit** makes no configuration requests. SET, RESET, and SQL with
+`${...}` substitution also inherit, to preserve their session behavior.
+An **All rows** export of a live cursor keeps the execution strategy that
+was selected when the original query started.
+Its **Transfer Preset** field can override the fetch estimate and speed limit
+for that download. The connection's export count stays unchanged.
+
+Incremental collect can reduce Spark driver result memory. It can also
+increase execution time. Server policy can override profile settings.
+The **Run and export** form shows the configured collection value before
+you choose a file. It also shows a warning when connection parameters enable
+`saveToFile`.
+`kyuubi.engine.spark.operation.incremental.collect` takes precedence over
+`kyuubi.operation.incremental.collect`. The administrator's
+`kyuubi.operation.result.saveToFile.enabled` option conflicts with
+incremental collect. It needs shared staging storage and server cleanup.
+Qrow does not configure result staging or Arrow results.
+
 ## Use Postgres
 
 Select **Postgres** in **Connection Type**. The default port is 5432. The initial

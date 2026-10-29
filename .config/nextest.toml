@@ -25,6 +25,13 @@ filter = "binary(integration) & test(/^backend::/)"
 test-group = "fixture-serial"
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# Each transfer probe runs a complete series of fresh client processes.
+# Spark starts a CONNECTION engine for each sample.
+[[profile.default.overrides]]
+filter = "binary(integration) & test(/^transfer_perf::(kyuubi|postgres|trino)$/)"
+test-group = "fixture-serial"
+slow-timeout = { period = "60s", terminate-after = 20 }
+
 # E2E tests that hold executors with `qrow_block` would starve each other on
 # the two executor cores of the fixture.
 [[profile.default.overrides]]
