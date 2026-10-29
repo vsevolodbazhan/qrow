@@ -34,6 +34,12 @@ Qrow changes these files:
   clip their content cut the ring off. The test of each file checks the
   setting. Run them in a copy of the crate in the GPUI Kit repository, as the
   tests read files outside the crate.
+- `src/table/state.rs`: the header clamps the horizontal scroll offset to the
+  content width before it selects the columns to render. Before, a fast
+  trackpad swipe moved the shared offset past the right edge. The header then
+  skipped columns, and the rows showed them at the clamped offset without a
+  name. The Qrow UI test `results::fast_horizontal_scroll_keeps_the_column_headers`
+  checks the fix.
 - `src/tooltip.rs`: with the `test-support` feature, a tooltip is the observed
   element `tooltip`, so application tests can find an open tooltip.
 - `Cargo.toml`: `cargo machete` ignores the `log` dependency, which the crate
