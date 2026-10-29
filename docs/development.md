@@ -91,8 +91,9 @@ each hook and each CI job. Hooks export snapshots into temporary directories
 and share a build cache under `target/hook-checks`. They do not stash,
 restage, or modify working files. They do not package the application.
 
-The release profile favors size so the optional assistant stays within the
-macOS package budget.
+The release profile uses one code generation unit to keep the macOS package
+within its size budget. The `perf` profile uses 16 units and no link-time
+optimization to reduce build time.
 
 Stage required code and configuration together. A passing working-copy check
 does not prove that the staged snapshot passes. Changes under `scripts/`
