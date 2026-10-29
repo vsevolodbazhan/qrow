@@ -176,6 +176,10 @@ impl ExportDialog {
                 root.close_dialog_for(&handle, window, cx)
             });
         }
+        self.start_progress(cx);
+    }
+
+    pub(super) fn start_progress(&mut self, cx: &mut Context<Self>) {
         self.progress_task = Some(cx.spawn(async move |weak, cx| {
             loop {
                 cx.background_executor()

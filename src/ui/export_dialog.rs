@@ -11,7 +11,6 @@ use gpui_kit::component::{
     checkbox::Checkbox,
     form::{field, v_form},
     notification::Notification,
-    scroll::ScrollableElement,
     select::{Select, SelectState},
     v_flex,
 };
@@ -43,7 +42,7 @@ enum Scope {
 }
 
 impl Scope {
-    fn file_only(self) -> bool {
+    fn needs_full_source(self) -> bool {
         matches!(self, Self::All | Self::Replay | Self::Run | Self::RunAgain)
     }
     fn executes(self) -> bool {
@@ -51,11 +50,11 @@ impl Scope {
     }
 }
 
-enum FileSource {
+enum ResultSource {
     Ready(Arc<export::spool::Spool>),
     Pending(Arc<crate::worker::Download>),
 }
-impl FileSource {
+impl ResultSource {
     fn spool(&self) -> std::io::Result<Arc<export::spool::Spool>> {
         match self {
             Self::Ready(spool) => Ok(spool.clone()),
@@ -437,9 +436,7 @@ impl ExportDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.running
-            || !save && (self.settings.format == Format::Parquet || self.scope.file_only())
-        {
+        if self.running || !save && self.settings.format == Format::Parquet {
             return;
         }
         if let Err(error) = self.settings.validate() {
@@ -566,13 +563,16 @@ impl ExportDialog {
                     this.output_bytes.store(0, Ordering::Relaxed);
                     this.started = Some(Instant::now());
                     this.output_path = path.clone();
-                    if path.is_some() && this.scope.file_only() {
+                    if path.is_some() && this.scope.needs_full_source() {
                         this.start_background(window, cx);
+                    } else if path.is_none() && this.scope.needs_full_source() {
+                        this.start_progress(cx);
                     }
                     this.output_bytes.clone()
                 })
                 .unwrap_or_else(|_| Arc::new(AtomicU64::new(0)));
             let failed_download = download.clone();
+            let copying = path.is_none();
             let (done, finished) = async_channel::bounded(1);
             let admitted = writer.send(Box::new(move || {
                 let _guard = guard;
@@ -591,7 +591,18 @@ impl ExportDialog {
                             .map(|count| (count, None))
                         } else {
                             let mut out = export::LimitedWriter::new(export::CLIPBOARD_BYTES);
-                            export::write(&mut out, &table, &options, &cancel)
+                            let count = {
+                                let mut output = background::Output { out: &mut out, bytes: &bytes };
+                                if let Some(spool) = &all_source {
+                                    spool.spool().and_then(|spool| {
+                                        spool.wait_complete(&cancel)?;
+                                        export::stream::write(&mut output, &spool, &options, &cancel)
+                                    })
+                                } else {
+                                    export::write(&mut output, &table, &options, &cancel)
+                                }
+                            };
+                            count
                                 .and_then(|count| out.into_text().map(|text| (count, Some(text))))
                         };
                     result
@@ -599,6 +610,9 @@ impl ExportDialog {
                 .unwrap_or_else(|_| Err(std::io::Error::other("The export writer panicked.")));
                 if let Err(error) = &result
                     && let Some(download) = &download
+                    && !(copying && download.spool().is_some_and(|spool| {
+                        matches!(spool.status(), export::spool::Status::Complete { .. })
+                    }))
                 {
                     if error
                         .get_ref()
@@ -641,8 +655,8 @@ impl ExportDialog {
         &mut self,
         jobs: &export::Jobs,
         cx: &mut Context<Self>,
-    ) -> std::io::Result<Option<FileSource>> {
-        if !self.scope.file_only() {
+    ) -> std::io::Result<Option<ResultSource>> {
+        if !self.scope.needs_full_source() {
             return Ok(None);
         }
         export::check_cancelled(&self.cancel)?;
@@ -656,7 +670,7 @@ impl ExportDialog {
             }
             return self
                 .run_source(jobs, cx)
-                .map(|download| Some(FileSource::Pending(download)));
+                .map(|download| Some(ResultSource::Pending(download)));
         }
         let replay = self
             .retained
@@ -676,7 +690,7 @@ impl ExportDialog {
             });
         if let Some(spool) = replay {
             self.retained = Some(spool.clone());
-            return Ok(Some(FileSource::Ready(spool)));
+            return Ok(Some(ResultSource::Ready(spool)));
         }
         if self.result.cursor == crate::worker::Cursor::Complete || !self.incomplete {
             return Ok(None);
@@ -722,7 +736,7 @@ impl ExportDialog {
             .ok_or_else(|| std::io::Error::other("The cursor drain has no result spool."))?;
         self.retained = Some(spool.clone());
         self.download = Some(download);
-        Ok(Some(FileSource::Ready(spool)))
+        Ok(Some(ResultSource::Ready(spool)))
     }
     fn complete(
         &mut self,
@@ -747,7 +761,11 @@ impl ExportDialog {
             } else if self.run.is_some() {
                 self.scope = Scope::RunAgain;
             }
+            // Internal source changes must not discard a pending large-copy
+            // confirmation. User changes still clear it through `sync`.
+            let large_copy = self.large_copy;
             self.sync(window, cx);
+            self.large_copy = large_copy;
         }
         if self.download.is_some() {
             self.refresh_run_session(cx);
@@ -1000,14 +1018,15 @@ impl Render for ExportDialog {
                             this.sync(window,cx);
                         }))))))
             .when(format == Format::Markdown, |view| view
-                .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
-                    Checkbox::new("export-markdown-pretty").small().label("Pretty output").checked(self.settings.markdown.pretty).disabled(busy)
-                        .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
                 .when(self.settings.markdown.style == export::markdown::Style::CodeBlock, |view| view.child(
                     field().label("Maximum Cell Width").description("Use 1 to 1000 display columns.")
                         .child(Input::new(&self.cell_width).id("export-cell-width").focus_ring(false).disabled(busy).aria_label("Maximum Cell Width"))))
-                .child(Checkbox::new("export-row-numbers").small().label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
-                    .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);}))))
+                .child(v_flex().gap_2()
+                    .when(self.settings.markdown.style == export::markdown::Style::Table, |view| view.child(
+                        Checkbox::new("export-markdown-pretty").small().label("Pretty output").checked(self.settings.markdown.pretty).disabled(busy)
+                            .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.pretty = *checked; this.sync(window,cx);}))))
+                    .child(Checkbox::new("export-row-numbers").small().label("Include row numbers").checked(self.settings.markdown.row_numbers).disabled(busy)
+                        .on_click(cx.listener(|this,checked,window,cx| {this.settings.markdown.row_numbers = *checked; this.sync(window,cx);})))))
             .when(matches!(format, Format::Json | Format::JsonLines), |view| view.child(v_flex().gap_2().children(
                 json_flags.into_iter().enumerate().filter(|(index,_)| *index != 1 || format == Format::Json).map(|(index,(id,label,checked))|
                     Checkbox::new(id).small().label(label).checked(checked).disabled(busy || index == 2 && !self.settings.json.typed)
@@ -1026,9 +1045,6 @@ impl Render for ExportDialog {
                 .text_sm().text_color(cx.theme().muted_foreground).child("Non-ISO session dates and timestamps remain text.")))
             .when(self.scope.executes(), |view| view
                 .when_some(self.run.as_ref(), |view, intent| view
-                    .child(div().id("export-captured-connection").test_support().role(Role::Label).aria_label(intent.profile.name.clone()).text_sm().child(format!("Connection: {}", intent.profile.name)))
-                    .child(div().id("export-captured-sql").test_support().role(Role::Label).aria_label(intent.sql.clone())
-                        .child(div().h_16().overflow_y_scrollbar().p_2().bg(cx.theme().muted).font_family(cx.theme().mono_font_family.clone()).text_xs().child(intent.sql.clone())))
                     .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
                         .aria_label("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")
                         .text_sm().text_color(cx.theme().warning).child("The original session ended or changed. Its settings, temporary tables, and open transaction are gone. This export runs in the current session.")))))
@@ -1081,28 +1097,12 @@ impl ExportDialog {
                     } else {
                         "Copy"
                     })
-                    .disabled(
-                        busy || invalid || format == Format::Parquet || self.scope.file_only(),
-                    )
+                    .disabled(busy || invalid || format == Format::Parquet)
                     .on_click(cx.listener(|this, _, window, cx| this.start(false, window, cx))),
             )
             .child(
                 Button::new("export-save")
-                    .label(
-                        if self.error.is_some()
-                            && self.retained.as_ref().is_some_and(|spool| {
-                                matches!(spool.status(), export::spool::Status::Complete { .. })
-                            })
-                        {
-                            "Retry…"
-                        } else if matches!(self.scope, Scope::Run) {
-                            "Run and export…"
-                        } else if matches!(self.scope, Scope::RunAgain) {
-                            "Run again and export…"
-                        } else {
-                            "Save…"
-                        },
-                    )
+                    .label("Save")
                     .primary()
                     .disabled(busy || invalid)
                     .on_click(cx.listener(|this, _, window, cx| this.start(true, window, cx))),
@@ -1605,7 +1605,7 @@ mod tests {
                 window
                     .find(SharedString::from(format!("export-details-{id}")))
                     .label(),
-                Some("Retry…")
+                Some("Save")
             );
             assert_eq!(
                 dialog.read(cx).error.as_deref(),

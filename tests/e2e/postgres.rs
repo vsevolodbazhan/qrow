@@ -169,7 +169,6 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(
             window
                 .find("export-session-warning")
@@ -179,10 +178,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
         );
     });
     app.select(cx, "export-format", "JSON (lines)");
-    let directory = tempfile::tempdir().unwrap();
-    let output = directory.path().join("again.jsonl");
-    save_export(&app, cx, &output);
-    let text = std::fs::read_to_string(output).unwrap();
+    let text = super::export::copy_query(cx, &app);
     assert_eq!(text.lines().count(), 2001);
     for (index, line) in text.lines().enumerate() {
         assert_eq!(

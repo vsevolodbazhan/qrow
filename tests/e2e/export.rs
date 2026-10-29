@@ -45,6 +45,126 @@ pub(super) fn copy_query(cx: &mut TestAppContext, app: &TestApp) -> String {
     cx.read_from_clipboard().unwrap().text().unwrap()
 }
 
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn copy_downloads_all_rows_and_reuses_the_spool(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let sql = "SELECT id AS value FROM range(6000) ORDER BY id";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "Markdown");
+    app.click(cx, "export-markdown-pretty");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserve this".into()));
+    app.click(cx, "export-copy");
+    app.wait_until(
+        cx,
+        "large Markdown confirmation",
+        QUERY_TIMEOUT,
+        |window, _| window.try_find("export-copy-warning").is_some(),
+    );
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserve this")
+    );
+    app.click(cx, "export-copy");
+    app.wait_until(cx, "confirmed Markdown copy", QUERY_TIMEOUT, |_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .is_some_and(|text| text != "preserve this")
+    });
+    let markdown = cx.read_from_clipboard().unwrap().text().unwrap();
+    assert_eq!(markdown.lines().count(), 6002);
+    assert!(markdown.contains("5999"));
+    app.wait_gone(cx, "export-copy");
+    app.wait_status(cx, "Preview: Export download complete");
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "JSON (lines)");
+    let text = copy_query(cx, &app);
+    assert_eq!(text.lines().count(), 6000);
+    for (index, line) in text.lines().enumerate() {
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["value"],
+            index
+        );
+    }
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn cancelling_a_downloaded_copy_preserves_the_clipboard(cx: &mut TestAppContext) {
+    let sql = "SELECT id AS value FROM range(2123) ORDER BY id";
+    let (mut workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let gate = response_gate::ResponseGate::new(workspace.profiles[0].port);
+    workspace.profiles[0].port = gate.port;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    gate.pause();
+    app.click(cx, "export-results");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserve this".into()));
+    app.click(cx, "export-copy");
+    app.wait_for(cx, "export-progress");
+    app.wait_until(cx, "the blocked cursor download", QUERY_TIMEOUT, |_, _| {
+        gate.blocked()
+    });
+    app.click(cx, "export-cancel");
+    app.wait_gone(cx, "export-save");
+    gate.resume();
+    app.wait_until(
+        cx,
+        "the cancelled download to stop",
+        QUERY_TIMEOUT,
+        |_, cx| cx.global::<qrow::export::Jobs>().active_count() == 0,
+    );
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserve this")
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn oversized_downloaded_copy_preserves_clipboard_and_can_be_saved(cx: &mut TestAppContext) {
+    let sql = "SELECT id AS value, repeat('x', 5000) AS payload FROM range(2200) ORDER BY id";
+    let (workspace, credentials) = Kyuubi::get().workspace(sql, PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "export-results");
+    cx.write_to_clipboard(ClipboardItem::new_string("preserve this".into()));
+    app.click(cx, "export-copy");
+    app.wait_label(
+        cx,
+        "The text exceeds the copy limit. Save it to a file instead.",
+    );
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().as_deref(),
+        Some("preserve this")
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("large.csv");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| Some(path.clone()));
+    app.wait_gone(cx, "export-save");
+    app.wait_until(cx, "saved complete result", QUERY_TIMEOUT, |_, _| {
+        path.is_file()
+    });
+    let mut csv = csv::Reader::from_path(path).unwrap();
+    let mut count = 0;
+    for row in csv.records() {
+        let row = row.unwrap();
+        assert_eq!(&row[0], count.to_string());
+        assert_eq!(row[1].len(), 5000);
+        count += 1;
+    }
+    assert_eq!(count, 2200);
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
 pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     use gpui_kit::test::TestWindowExt;
     app.click(cx, "run");
@@ -314,11 +434,7 @@ fn failed_cursor_download_details_offers_a_reviewed_rerun(cx: &mut TestAppContex
     app.wait_for(cx, "export-error");
     app.wait_for(cx, "export-session-warning");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
-        assert_eq!(
-            window.find("export-save").label(),
-            Some("Run again and export…")
-        );
+        assert_eq!(window.find("export-save").label(), Some("Save"));
         assert!(window.try_find("export-rows").is_none());
         assert!(window.try_find("export-preview").is_none());
     });
@@ -381,7 +497,6 @@ fn kyuubi_run_export_keeps_session_state_and_only_the_first_page(cx: &mut TestAp
     app.type_sql(cx, "SELECT id AS value FROM qrow_direct_export ORDER BY id");
     app.run_export(cx);
     app.wait_for(cx, "export-save");
-    app.click(cx, "export-copy");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("direct.csv");
     app.click(cx, "export-save");
@@ -424,7 +539,6 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     app.wait_status(cx, "Disconnected");
     app.click(cx, "export-results");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("export-captured-sql").label(), Some(sql));
         assert!(
             window
                 .find("export-session-warning")

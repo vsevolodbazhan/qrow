@@ -195,6 +195,26 @@ impl Spool {
         self.commit.lock().unwrap().rows
     }
 
+    /// Wait for a download to finish without reading its batches.
+    pub fn wait_complete(&self, cancel: &AtomicBool) -> io::Result<()> {
+        let mut commit = self.commit.lock().unwrap();
+        loop {
+            check_cancelled(cancel)?;
+            match &commit.status {
+                Status::Complete { .. } => return Ok(()),
+                Status::Failed(message) => return Err(io::Error::other(message.clone())),
+                Status::Cancelled => return Err(io::Error::other(super::Cancelled)),
+                Status::Downloading => {
+                    commit = self
+                        .changed
+                        .wait_timeout(commit, Duration::from_millis(100))
+                        .unwrap()
+                        .0;
+                }
+            }
+        }
+    }
+
     pub fn cancel(&self) {
         self.stop(Status::Cancelled);
     }
@@ -680,6 +700,44 @@ mod tests {
             name: "value".into(),
             data_type: "STRING".into(),
         }]
+    }
+
+    #[test]
+    fn wait_for_completion_reports_failures_and_cancellation() {
+        let (spool, producer) = new_spool(&schema(), &Context::default()).unwrap();
+        let waiting = spool;
+        let (sender, receiver) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            sender
+                .send(waiting.wait_complete(&AtomicBool::new(false)))
+                .unwrap();
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        producer.finish(&AtomicBool::new(false)).unwrap();
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        thread.join().unwrap();
+
+        let (spool, _producer) = new_spool(&schema(), &Context::default()).unwrap();
+        spool.fail("download failed");
+        assert_eq!(
+            spool
+                .wait_complete(&AtomicBool::new(false))
+                .unwrap_err()
+                .to_string(),
+            "download failed"
+        );
+        let (spool, _producer) = new_spool(&schema(), &Context::default()).unwrap();
+        assert!(
+            spool
+                .wait_complete(&AtomicBool::new(true))
+                .unwrap_err()
+                .get_ref()
+                .unwrap()
+                .is::<super::super::Cancelled>()
+        );
     }
 
     #[test]
