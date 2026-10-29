@@ -1576,8 +1576,11 @@ impl Qrow {
                 ),
             )
             .when(!self.profiles.is_empty(), |el| {
+                // Match the query toolbar band so the search box and the Run
+                // button share a centerline. The bottom padding stands in for
+                // the toolbar border.
                 el.child(
-                    div().p_2().flex_shrink_0().child(
+                    h_flex().h_12().px_2().pb_px().flex_shrink_0().child(
                         Input::new(&self.catalog.search)
                             .focus_ring(false)
                             .small()
