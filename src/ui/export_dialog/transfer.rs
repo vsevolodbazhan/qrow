@@ -27,6 +27,9 @@ impl ExportDialog {
 
     pub(super) fn transfer_override(&self, cx: &App) -> Option<Transfer> {
         let profile = self.profile.as_ref()?;
+        if profile.database_type == crate::model::DatabaseType::Postgres {
+            return None;
+        }
         let choice = self.transfer.read(cx).selected_value()?;
         let Some(preset) = TransferPreset::ALL
             .into_iter()

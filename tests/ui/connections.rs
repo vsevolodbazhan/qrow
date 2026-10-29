@@ -192,6 +192,104 @@ fn preset_values_keep_readonly_fields_and_preserve_unsaved_custom_values(cx: &mu
 }
 
 #[gpui_kit::test]
+fn postgres_export_count_preserves_existing_preset_and_saves_changes(cx: &mut TestAppContext) {
+    use qrow::model::{DatabaseType, transfer::TransferPreset};
+    let mut profile = offline_profile("Postgres exports");
+    profile.database_type = DatabaseType::Postgres;
+    profile.transfer.preset = TransferPreset::Fast;
+    let original = profile.transfer.clone();
+    let id = profile.id;
+    let app = TestApp::launch(
+        cx,
+        Workspace {
+            profiles: vec![profile],
+            ..Default::default()
+        },
+    );
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-transfer-preset").is_none());
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"));
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    assert_eq!(
+        app.saved().profiles[0]
+            .transfer
+            .settings()
+            .concurrent_exports,
+        2
+    );
+    assert_eq!(app.saved().profiles[0].transfer, original);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.select(cx, "connection-transfer-count", "1");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved Postgres export limit",
+        Duration::from_secs(5),
+        |_, _| {
+            app.saved().profiles[0]
+                .transfer
+                .settings()
+                .concurrent_exports
+                == 1
+        },
+    );
+    let mut expected = original.settings();
+    expected.concurrent_exports = 1;
+    assert_eq!(app.saved().profiles[0].transfer.settings(), expected);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("1"));
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
+fn switching_connection_types_preserves_export_count_edits(cx: &mut TestAppContext) {
+    let (workspace, credentials) = connections(&["Switch engines"]);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.select(cx, "connection-transfer-preset", "Fast");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"))
+    });
+    app.select(cx, "connection-transfer-count", "1");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-preset").value(),
+            Some("Custom")
+        );
+        assert_eq!(window.find("connection-transfer-count").value(), Some("1"));
+    });
+    app.select(cx, "connection-transfer-count", "2");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(window.find("connection-transfer-count").value(), Some("2"))
+    });
+    cancel_form(&app, cx);
+}
+
+#[gpui_kit::test]
 fn postgres_and_trino_transfer_forms_show_only_applicable_controls(cx: &mut TestAppContext) {
     for engine in [
         qrow::model::DatabaseType::Postgres,
@@ -210,9 +308,15 @@ fn postgres_and_trino_transfer_forms_show_only_applicable_controls(cx: &mut Test
         app.context_menu(cx, connection_row(id));
         app.choose(cx, "popup-menu", "Edit");
         app.connection_page(cx, "Export");
-        app.select(cx, "connection-transfer-preset", "Custom");
+        if engine == qrow::model::DatabaseType::Trino {
+            app.select(cx, "connection-transfer-preset", "Custom");
+        }
         app.wait_for(cx, "connection-transfer-count");
         app.update(cx, |window, _| {
+            assert_eq!(
+                window.try_find("connection-transfer-preset").is_some(),
+                engine == qrow::model::DatabaseType::Trino
+            );
             assert!(window.try_find("connection-transfer-request").is_none());
             assert!(window.try_find("connection-transfer-speed").is_none());
             assert!(window.try_find("connection-transfer-incremental").is_none());

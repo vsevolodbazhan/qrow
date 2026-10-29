@@ -51,6 +51,48 @@ fn save_export(app: &TestApp, cx: &mut TestAppContext, path: &std::path::Path) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("connection-transfer-preset").is_none());
+    });
+    app.select(cx, "connection-transfer-count", "2");
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "saved Postgres export limit",
+        std::time::Duration::from_secs(5),
+        |_, _| {
+            app.saved().profiles[0]
+                .transfer
+                .settings()
+                .concurrent_exports
+                == 2
+        },
+    );
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "export-results");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-transfer-preset").is_none());
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("postgres.csv");
+    save_export(&app, cx, &output);
+    assert_eq!(
+        csv::Reader::from_path(output).unwrap().records().count(),
+        1001
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestAppContext) {
     let (mut workspace, credentials) = workspace("SELECT 1");
     workspace.profiles[0]

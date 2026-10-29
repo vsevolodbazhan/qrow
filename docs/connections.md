@@ -87,8 +87,9 @@ macOS can request Keychain access when you save the password.
 
 ## Export transfer policy
 
-Open **Connection Settings → Export** to choose a transfer preset.
-Existing profiles use **Balanced**.
+Open **Connection Settings → Export** to choose a transfer preset for Kyuubi
+or Trino. Existing profiles use **Balanced**. For Postgres, choose the number
+of exports that can run at the same time.
 Preset values stay visible in read-only fields. Choose **Custom** to edit
 the values. A preset change keeps unsaved Custom values in the open form.
 Transfer-policy changes do not reconnect an otherwise unchanged session.
@@ -128,9 +129,8 @@ and 1 MiB of decoded configuration text.
 **Inherit** makes no configuration requests. SET, RESET, and SQL with
 `${...}` substitution also inherit, to preserve their session behavior.
 An **All rows** export of a live cursor keeps the execution strategy that
-was selected when the original query started.
-Its **Transfer Preset** field can override the fetch estimate and speed limit
-for that download. The connection's export count stays unchanged.
+was selected when the original query started. For Kyuubi and Trino, its
+**Transfer Preset** field can override the transfer settings for that download. The connection's export count stays unchanged.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.

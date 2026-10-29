@@ -21,6 +21,7 @@ pub(in crate::ui) struct TransferForm {
     request: Entity<InputState>,
     speed: Entity<InputState>,
     count: RowSelect,
+    postgres_count: RowSelect,
     spooling: RowSelect,
     readonly: [Entity<InputState>; 5],
     _subscriptions: Vec<Subscription>,
@@ -76,13 +77,19 @@ impl TransferForm {
             cx,
         );
         let count = choice_select(&counts(), &transfer.custom.concurrent_exports, window, cx);
+        let postgres_count = choice_select(
+            &counts(),
+            &transfer.settings().concurrent_exports,
+            window,
+            cx,
+        );
         let spooling = choice_select(
             &spooling_choices(),
             &transfer.custom.trino_spooling,
             window,
             cx,
         );
-        let subscriptions = [&preset, &incremental, &count, &spooling]
+        let subscriptions = [&preset, &incremental, &count, &postgres_count, &spooling]
             .into_iter()
             .map(|select| {
                 cx.subscribe_in(select, window, |this, _, event, window, cx| {
@@ -99,6 +106,7 @@ impl TransferForm {
             preset,
             incremental,
             count,
+            postgres_count,
             spooling,
             readonly: readonly_values(transfer.settings())
                 .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value))),
@@ -110,6 +118,40 @@ impl TransferForm {
                     .default_value(transfer.custom.speed_limit_mb.to_string())
             }),
             _subscriptions: subscriptions,
+        }
+    }
+    pub(in crate::ui) fn switch_engine(
+        &self,
+        previous: DatabaseType,
+        next: DatabaseType,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let preset = chosen(&self.preset, &presets(), cx);
+        let count = if preset == TransferPreset::Custom {
+            chosen(&self.count, &counts(), cx)
+        } else {
+            Transfer {
+                preset,
+                ..Transfer::default()
+            }
+            .settings()
+            .concurrent_exports
+        };
+        if next == DatabaseType::Postgres && previous != DatabaseType::Postgres {
+            self.postgres_count.update(cx, |select, cx| {
+                select.set_selected_value(&usize::from(count - 1), window, cx);
+            });
+        } else if previous == DatabaseType::Postgres && next != DatabaseType::Postgres {
+            let postgres_count = chosen(&self.postgres_count, &counts(), cx);
+            if postgres_count != count {
+                self.count.update(cx, |select, cx| {
+                    select.set_selected_value(&usize::from(postgres_count - 1), window, cx);
+                });
+                self.preset.update(cx, |select, cx| {
+                    select.set_selected_value(&3usize, window, cx);
+                });
+            }
         }
     }
     fn sync_readonly(&self, window: &mut Window, cx: &mut App) {
@@ -129,6 +171,16 @@ impl TransferForm {
         cx: &App,
     ) -> anyhow::Result<Transfer> {
         let mut transfer = previous.clone();
+        if engine == DatabaseType::Postgres {
+            let count = chosen(&self.postgres_count, &counts(), cx);
+            if count != previous.settings().concurrent_exports {
+                transfer.custom = previous.settings();
+                transfer.preset = TransferPreset::Custom;
+                transfer.custom.concurrent_exports = count;
+            }
+            transfer.validate()?;
+            return Ok(transfer);
+        }
         transfer.preset = chosen(&self.preset, &presets(), cx);
         if transfer.preset == TransferPreset::Custom {
             transfer.custom.concurrent_exports = chosen(&self.count, &counts(), cx);
@@ -205,21 +257,25 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
     let preset = chosen(&form.transfer.preset, &presets(), cx);
     let custom = preset == TransferPreset::Custom;
     let kyuubi = form.profile.database_type == DatabaseType::Kyuubi;
-    let mut group = SettingGroup::new().item(connection_row(
-        owner,
-        "Transfer Preset",
-        "Choose how exports use this connection.",
-        &["export", "transfer", "preset"],
-        false,
-        |_, form, _, _| {
-            select(
-                &form.transfer.preset,
-                form,
-                "connection-transfer-preset",
-                "Transfer Preset",
-            )
-        },
-    ));
+    let postgres = form.profile.database_type == DatabaseType::Postgres;
+    let mut group = SettingGroup::new();
+    if !postgres {
+        group = group.item(connection_row(
+            owner,
+            "Transfer Preset",
+            "Choose how exports use this connection.",
+            &["export", "transfer", "preset"],
+            false,
+            |_, form, _, _| {
+                select(
+                    &form.transfer.preset,
+                    form,
+                    "connection-transfer-preset",
+                    "Transfer Preset",
+                )
+            },
+        ));
+    }
     if kyuubi {
         group = group.item(connection_row(
             owner,
@@ -331,7 +387,14 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
         &["export", "concurrent", "limit"],
         false,
         move |_, form, _, _| {
-            if custom {
+            if postgres {
+                select(
+                    &form.transfer.postgres_count,
+                    form,
+                    "connection-transfer-count",
+                    "Exports at the Same Time",
+                )
+            } else if custom {
                 select(
                     &form.transfer.count,
                     form,

@@ -1028,7 +1028,7 @@ impl Render for ExportDialog {
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
-            .when(matches!(self.scope, Scope::All) && self.incomplete && self.result.cursor == crate::worker::Cursor::Available && self.profile.is_some() && self.retained.is_none() && self.result.replay.is_none(), |view| view.child(
+            .when(matches!(self.scope, Scope::All) && self.incomplete && self.result.cursor == crate::worker::Cursor::Available && self.profile.as_ref().is_some_and(|profile| profile.database_type != crate::model::DatabaseType::Postgres) && self.retained.is_none() && self.result.replay.is_none(), |view| view.child(
                 field().label("Transfer Preset").description("Request size and speed only; collection mode stays.")
                     .child(Select::new(&self.transfer).id("export-transfer-preset").focus_ring(false).disabled(busy).w_full().accessibility_label("Transfer Preset"))
                     .children(self.transfer_override(cx).map(|policy| {
