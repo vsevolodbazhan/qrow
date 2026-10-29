@@ -95,7 +95,8 @@ The selection includes only the selected rows and columns. Downloaded rows
 includes all pages that the preview has stored.
 
 The dialog takes a snapshot when it opens. A later page fetch or query does
-not change this export. Export does not run SQL or fetch rows from the server.
+not change these choices. Selection and downloaded-row exports do not run
+SQL or fetch rows from the server.
 If the preview is incomplete, the dialog shows a message.
 
 For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
@@ -125,6 +126,16 @@ leaves the destination unchanged. Failed writes keep the dialog open.
 An application crash can leave a `.qrow-export-*.tmp` file next to the
 destination. You can delete that temporary file.
 
+Save checks free disk space before each write. Exports on the same volume
+share disk reservations. An export stops if the reserved writes would leave
+less than 1 GiB free. Other programs can still use that space. A disk error
+names the affected volume and leaves the destination unchanged.
+
+Export stops if a cell exceeds 8 MiB or a row exceeds 16 MiB. These limits
+apply to each format. They do not limit a server message before Qrow receives
+the message.
+Export also stops if the selected column headers exceed 16 MiB.
+
 ### CSV values and limits
 
 CSV uses double quotes and doubles each quote inside a quoted value.
@@ -146,11 +157,13 @@ Numeric and Boolean values keep their server text. CSV does not change
 decimal values to floating-point numbers.
 
 Exports share immutable preview batches. Concurrent exports can retain up
-to 512 MiB of source row storage. Shared batches count once. Encoding writes
+to 1 GiB across retained sources and reserved writer and spool working memory.
+Shared batches count once. Encoding writes
 cell slices directly for text formats; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
 
-Export of all server rows is not available yet.
+For Kyuubi, [All rows](#export-all-rows-and-reuse-a-download) can read the
+remaining cursor without the preview limits.
 
 ### Markdown
 
@@ -221,12 +234,54 @@ uses a non-ISO DateStyle, dates and timestamps remain text. The export form
 shows this condition.
 
 The writer uses Parquet 1.0 data pages, dictionaries, and statistics. It
-limits each row group to approximately 64 MiB of source values. One larger
-row can exceed this target. The writer prepares one column at a time. Row-group metadata stays in memory
+limits each row group to approximately 64 MiB of source values. A group can
+close earlier to stay within the writer memory allowance. The writer prepares
+one column at a time. Row-group metadata stays in memory
 until the file closes and grows with the number of row groups. These
 limits do not cap total application memory. File metadata contains the
 application version and no query text. A failed or cancelled save preserves
 an existing destination file.
+
+## Export all rows and reuse a download
+
+Choose **All rows**, then **Save…**, to export the complete result. A complete
+preview needs no server work. For an incomplete Kyuubi result, the tab worker
+reads the remaining cursor into a temporary spool. It includes the preview
+and any batch held at the preview limit, in their original order. It does
+not submit the SQL again. A page fetched after the dialog opened can make
+its snapshot stale. Reopen Export in that case.
+
+The tab is busy during the download. **Run** and **Next page** are disabled.
+The form closes when saving starts. The results bar shows downloaded rows,
+bytes, average speed, and elapsed time. The format
+writer reads committed spool batches. Parquet exact decimals and Markdown
+code blocks need a complete first pass. After the download, you can run
+another query or close the tab while the file writer continues.
+
+**Cancel export** in the results bar stops the writer and the download.
+**Details…** opens the form without stopping the job. Closing that form
+leaves the job running. The worker sends cancellation
+to the operation that owns the download and completes protocol cleanup
+before the session can accept another query. Cleanup has a 2-second deadline.
+If cleanup fails or times out, the transport is interrupted and the session
+is discarded. A stopped drain consumes its cursor. To get all rows after
+that, run the query again. All-row exports from limited Postgres and Trino
+previews are not available yet.
+
+After download completion, writer cancellation and errors affect only that
+file. They cannot cancel a later query. A writer error stays in the results
+bar and keeps the completed spool. **Retry…** opens the form and uses that
+spool without running SQL. You can change the format or destination.
+**Dismiss** releases this job's handle.
+
+**Export again as…** uses the tab's retained spool, with its row count and
+size shown in the Rows list. **Settings → Export → Replay Limit** controls
+the maximum retained size. The default is 2048 MiB. Zero disables retention.
+A larger spool remains available to its running writer and failed job.
+A new query or tab close releases only the tab's replay handle. The
+anonymous spool disappears when its last handle closes, including after a
+crash. Disconnecting keeps a completed replay spool but releases a live
+cursor.
 
 ## Value representation
 
@@ -244,8 +299,9 @@ convert exact decimal text to floating-point values for display.
 ## Preview limits
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
-For Kyuubi, if an incoming batch would exceed either limit, Qrow discards that batch and
-closes the cursor. Previously downloaded rows remain available. The memory
+For Kyuubi, if an incoming batch would exceed either limit, Qrow keeps that
+batch outside the preview and keeps the cursor open for **All rows**. The
+grid cannot fetch more pages at the preview limit. The memory
 limit measures retained row storage, not the total application memory.
 
 For Kyuubi, Qrow asks for each page of 1,000 rows in one request. When the server sends

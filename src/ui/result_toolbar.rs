@@ -175,6 +175,7 @@ impl Qrow {
         let page = data.pagination.page();
         let pages = data.pagination.pages(data.rows.len());
         let export_disabled = data.columns.is_empty();
+        let draining = tab.download.is_some() || tab.cursor == crate::worker::Cursor::Draining;
         let summary = ResultSummary::new(tab, cx);
         let page_label = format!("Page {}", page + 1);
         h_flex()
@@ -224,7 +225,7 @@ impl Qrow {
                     .icon(gpui_kit::assets::IconName::Download)
                     .tooltip("Export results…")
                     .accessibility_label("Export results…")
-                    .disabled(export_disabled)
+                    .disabled(export_disabled || draining)
                     .on_click(cx.listener(|this, _, window, cx| this.open_export(window, cx))),
             )
             .child(
@@ -249,7 +250,7 @@ impl Qrow {
                             .icon(IconName::ChevronLeft)
                             .tooltip("Previous page")
                             .accessibility_label("Previous page")
-                            .disabled(page == 0)
+                            .disabled(page == 0 || draining)
                             .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
                         Button::new("next-page")
                             .small()
@@ -257,7 +258,7 @@ impl Qrow {
                             .icon(IconName::ChevronRight)
                             .tooltip("Next page")
                             .accessibility_label("Next page")
-                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
+                            .disabled(draining || page + 1 >= pages && (!tab.more || tab.busy))
                             .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
                         cx,
                     )),

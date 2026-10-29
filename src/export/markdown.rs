@@ -38,6 +38,7 @@ pub fn write(
     cancel: &AtomicBool,
 ) -> io::Result<usize> {
     super::validate_table(table)?;
+    let _memory = super::budget::GLOBAL.allowance(64 * super::budget::MIB)?;
     check_cancelled(cancel)?;
     if options.style == Style::CodeBlock && !(1..=1000).contains(&options.max_cell_width) {
         return Err(io::Error::new(
@@ -122,7 +123,7 @@ pub fn write(
     check_cancelled(cancel)?;
     Ok(table.row_count())
 }
-fn line<'a>(
+pub(crate) fn line<'a>(
     out: &mut impl Write,
     number: Option<&'a str>,
     values: impl Iterator<Item = Option<&'a str>>,
@@ -152,7 +153,7 @@ fn line<'a>(
     }
     out.write_all(b"\n")
 }
-fn width(value: &str, cap: usize) -> usize {
+pub(crate) fn width(value: &str, cap: usize) -> usize {
     clipped(value, cap).1
 }
 
@@ -201,7 +202,7 @@ fn clipped(value: &str, cap: usize) -> (&str, usize, bool) {
     (&value[..end], width + 1, true)
 }
 
-fn code_line<'a>(
+pub(crate) fn code_line<'a>(
     out: &mut impl Write,
     number: Option<(&'a str, usize)>,
     values: impl Iterator<Item = Option<&'a str>>,

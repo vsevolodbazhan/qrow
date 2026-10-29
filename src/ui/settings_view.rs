@@ -35,6 +35,7 @@ const SYSTEM_FONT_LABEL: &str = "System Font";
 /// all of them.
 #[derive(Clone, Copy, PartialEq)]
 enum NumberSetting {
+    ExportReplayLimit,
     Scale,
     EditorFontSize,
     EditorLineHeight,
@@ -46,7 +47,8 @@ enum NumberSetting {
 }
 
 impl NumberSetting {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
+        Self::ExportReplayLimit,
         Self::Scale,
         Self::EditorFontSize,
         Self::EditorLineHeight,
@@ -61,6 +63,7 @@ impl NumberSetting {
     /// keep the unit they are stored in.
     fn value(self, settings: &Settings) -> f32 {
         match self {
+            Self::ExportReplayLimit => settings.export_replay_limit_mib as f32,
             Self::Scale => settings.ui_scale * 100.,
             Self::EditorFontSize => settings.editor_font_size,
             Self::EditorLineHeight => settings.editor_line_height,
@@ -75,6 +78,7 @@ impl NumberSetting {
     /// Minimum, maximum, and step, in the displayed unit.
     fn range(self) -> (f32, f32, f32) {
         match self {
+            Self::ExportReplayLimit => (0., 1024. * 1024., 256.),
             Self::Scale => (
                 MIN_UI_SCALE * 100.,
                 MAX_UI_SCALE * 100.,
@@ -108,6 +112,7 @@ impl NumberSetting {
 
     fn unit(self) -> &'static str {
         match self {
+            Self::ExportReplayLimit => "MiB",
             Self::Scale => "%",
             Self::EditorFontSize | Self::LogsFontSize | Self::AssistantFontSize => "px",
             Self::EditorLineHeight | Self::LogsLineHeight | Self::AssistantLineHeight => "x",
@@ -119,6 +124,7 @@ impl NumberSetting {
     /// so each control names its own scope.
     fn label(self) -> &'static str {
         match self {
+            Self::ExportReplayLimit => "Export Replay Limit",
             Self::Scale => "UI Scale",
             Self::EditorFontSize => "Editor Font Size",
             Self::EditorLineHeight => "Editor Line Height",
@@ -485,6 +491,20 @@ impl Qrow {
         cx: &mut Context<Self>,
     ) {
         match setting {
+            NumberSetting::ExportReplayLimit => {
+                self.settings.export_replay_limit_mib = value as u32;
+                let limit = u64::from(self.settings.export_replay_limit_mib) * 1024 * 1024;
+                for tab in &mut self.tabs {
+                    if tab
+                        .replay
+                        .as_ref()
+                        .is_some_and(|spool| limit == 0 || spool.bytes() > limit)
+                    {
+                        tab.replay = None;
+                    }
+                }
+                self.changed(cx);
+            }
             NumberSetting::Scale => self.apply_ui_scale(value / 100., window, cx),
             NumberSetting::EditorFontSize if self.settings.editor_font_size != value => {
                 self.settings.editor_font_size = value;
@@ -734,6 +754,14 @@ impl Qrow {
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
+                    .page(SettingPage::new("Export").resettable(false).group(
+                        SettingGroup::new().title("Replay").item(setting_item(
+                            "Replay Limit",
+                            "Keep completed downloads up to this size. Zero turns retention off.",
+                            &["export", "replay", "spool", "disk"],
+                            number_field(form, NumberSetting::ExportReplayLimit),
+                        )),
+                    ))
                     .page(assistant_page(
                         form,
                         cx.weak_entity(),
