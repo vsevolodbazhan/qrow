@@ -1,12 +1,32 @@
-use super::{ActivityEvent, ActivityKind, Event, QueryState, Runner, Severity, format_duration};
+use super::{Event, LogEvent, LogKind, Runner, Severity, format_duration};
+use crate::connector::{Completion, wait_for_completion};
 use anyhow::Result;
 use std::{
     sync::atomic::Ordering,
-    thread,
     time::{Duration, Instant},
 };
 
 impl Runner {
+    pub(super) fn idle_disconnect_deferred(&self, refresh: &mut Option<Option<u64>>) -> bool {
+        if !self
+            .profile
+            .as_ref()
+            .is_some_and(|profile| profile.lifecycle.keep_alive_seconds == 0)
+        {
+            return false;
+        }
+        let active = self
+            .idle_guard
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|guard| guard());
+        // Capture once at the idle deadline. A later refresh must not extend
+        // an overdue session, even when there is no gap between refreshes.
+        let waiting = refresh.get_or_insert(active);
+        waiting.is_some() && *waiting == active
+    }
+
     pub(super) fn idle_interval(&self) -> Option<Duration> {
         self.session.as_ref()?;
         let policy = &self.profile.as_ref()?.lifecycle;
@@ -24,10 +44,10 @@ impl Runner {
         let policy = &self.profile.as_ref().unwrap().lifecycle;
         if policy.keep_alive_seconds == 0 {
             self.disconnect();
-            self.activity(
+            self.log(
                 None,
                 Severity::Info,
-                ActivityKind::Disconnected,
+                LogKind::Disconnected,
                 "Disconnected after idle timeout",
                 None,
             );
@@ -36,16 +56,6 @@ impl Runner {
         }
         let sql = policy.keep_alive_sql.clone();
         self.cancelled.store(false, Ordering::SeqCst);
-        self.emit_activity(
-            ActivityEvent::new(
-                None,
-                Severity::Info,
-                ActivityKind::KeepAliveStarted,
-                format!("Submitted keep-alive query:\n{sql}"),
-            )
-            .with_connection(self.profile.as_ref().unwrap().name.clone())
-            .with_sql(sql.clone()),
-        );
         self.emit(Event::KeepAliveStarted);
         let started = Instant::now();
         let result = self.keep_alive(&sql);
@@ -53,35 +63,38 @@ impl Runner {
         if let Err(error) = result {
             // A failed maintenance query must not repeat unattended.
             self.disconnect();
-            let message = format!(
-                "Keep-alive failed: {}",
-                crate::connector::error_message(&error)
-            );
-            self.activity(
+            let reason = crate::connector::error_message(&error);
+            let message = format!("Keep-alive failed: {reason}");
+            let mut event = LogEvent::new(
                 None,
                 Severity::Error,
-                ActivityKind::Error,
+                LogKind::KeepAliveFailed,
                 format!(
-                    "{message} (client measurement: {})",
+                    "Keep-alive failed and closed the session: {reason} (client measurement: {})",
                     format_duration(duration)
                 ),
-                Some(duration),
-            );
+            )
+            .with_sql(sql.clone());
+            event.duration = Some(duration);
+            self.emit_log(event);
             self.emit(Event::Error {
                 message,
                 disconnected: true,
+                sign_in_required: false,
             });
         } else {
-            self.activity(
+            let mut event = LogEvent::new(
                 None,
                 Severity::Info,
-                ActivityKind::KeepAliveCompleted,
+                LogKind::KeepAliveCompleted,
                 format!(
                     "Keep-alive completed (client measurement: {})",
                     format_duration(duration)
                 ),
-                Some(duration),
-            );
+            )
+            .with_sql(sql);
+            event.duration = Some(duration);
+            self.emit_log(event);
             self.emit(Event::KeepAliveFinished);
         }
     }
@@ -95,12 +108,9 @@ impl Runner {
             if self.cancelled.load(Ordering::SeqCst) || self.stopped.load(Ordering::SeqCst) {
                 cancellation.cancel()?;
             }
-            loop {
-                match self.session.as_mut().unwrap().poll()? {
-                    QueryState::Running => thread::sleep(Duration::from_millis(100)),
-                    QueryState::Finished { .. } => return Ok(()),
-                    QueryState::Cancelled => anyhow::bail!("Keep-alive was cancelled"),
-                }
+            match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
+                Completion::Finished { .. } => Ok(()),
+                Completion::Cancelled => anyhow::bail!("Keep-alive was cancelled"),
             }
         })();
         let closed = self.session.as_mut().unwrap().close_keep_alive();

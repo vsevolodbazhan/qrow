@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run against a disposable stack created by scripts/e2e/run.py, in a logged-in macOS session.
+# Drive the packaged app in a logged-in macOS session. `./qtest run desktop` gives it disposable servers.
 set -eu
 cd "$(dirname "$0")/../.."
 . scripts/core/preflight.sh
@@ -15,31 +15,32 @@ case "${1:-}" in
         : "${QROW_E2E_PORT:?Missing isolated fixture port}"
         ;;
 esac
-mkdir -p target/e2e-tools
-if [ ! -x target/e2e-tools/native-driver ] || [ -n "$(find tests/e2e/native/Driver.swift -newer target/e2e-tools/native-driver -print)" ]; then
-    swiftc -warnings-as-errors tests/e2e/native/Driver.swift -o target/e2e-tools/native-driver
+qrow_target_dir="${CARGO_TARGET_DIR:-target}"
+qrow_tools="$qrow_target_dir/e2e-tools"
+qrow_driver="$qrow_tools/native-driver"
+mkdir -p "$qrow_tools"
+if [ ! -x "$qrow_driver" ] || [ -n "$(find tests/desktop/Driver.swift -newer "$qrow_driver" -print)" ]; then
+    swiftc -warnings-as-errors tests/desktop/Driver.swift -o "$qrow_driver"
 fi
-if ! target/e2e-tools/native-driver --preflight > target/e2e-tools/preflight.log 2>&1; then
-    cat target/e2e-tools/preflight.log >&2
-    exit 1
+# Only this mode runs the permission check. In the other modes, the driver
+# checks the permissions when it starts.
+if [ "${1:-}" = --preflight ]; then
+    if ! "$qrow_driver" --preflight > "$qrow_tools/preflight.log" 2>&1; then
+        cat "$qrow_tools/preflight.log" >&2
+        exit 1
+    fi
+    exit 0
 fi
-test "${1:-}" != --preflight || exit 0
 export QROW_DATA_DIR="$QROW_E2E_ARTIFACTS/workspace"
 export QROW_DIST_DIR="$QROW_E2E_ARTIFACTS/package"
 export QROW_E2E_BUNDLE="$QROW_DIST_DIR/Qrow.app"
 QROW_E2E_REUSE_MACOS_PACKAGE="${QROW_E2E_REUSE_MACOS_PACKAGE:-false}"
-QROW_MACOS_PACKAGE="${QROW_MACOS_PACKAGE:-target/macos-package/dist/Qrow-macos.zip}"
+QROW_MACOS_PACKAGE="${QROW_MACOS_PACKAGE:-$qrow_target_dir/macos-package/Qrow-macos.zip}"
 case "$QROW_E2E_REUSE_MACOS_PACKAGE" in
     true | false) ;;
     *) echo "QROW_E2E_REUSE_MACOS_PACKAGE must be true or false." >&2; exit 1 ;;
 esac
 mkdir -p "$QROW_DATA_DIR"
-cleanup() {
-    uv run --locked python scripts/e2e/keychain.py
-}
-trap cleanup 0
-trap 'exit 130' INT
-trap 'exit 143' TERM
 if [ "${1:-}" != --prepared ]; then
     if [ "$QROW_E2E_REUSE_MACOS_PACKAGE" = true ]; then
         if [ ! -f "$QROW_MACOS_PACKAGE" ]; then
@@ -62,4 +63,24 @@ if [ ! -d "$QROW_E2E_BUNDLE" ] || [ ! -f "$QROW_E2E_BUNDLE/Contents/Info.plist" 
     exit 1
 fi
 test "${1:-}" != --prepare || exit 0
-target/e2e-tools/native-driver
+# Only the driver adds synthetic Keychain items, so the preparation needs no cleanup.
+cleanup() {
+    uv run --locked python scripts/e2e/keychain.py
+}
+trap cleanup 0
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# Every run starts from empty workspaces. `./qtest run desktop --repeat N`
+# runs again only after a pass, so the previous workspaces are not needed.
+rm -rf "$QROW_DATA_DIR"
+mkdir -p "$QROW_DATA_DIR"
+"$qrow_driver"
+for scenario in window-close-only assistant-layout-only assistant-selection-only assistant-delete-menu-only editor-highlight-only results-text-only; do
+    scenario_dir="$QROW_E2E_ARTIFACTS/$scenario"
+    rm -rf "$scenario_dir/workspace"
+    mkdir -p "$scenario_dir/workspace"
+    echo "[e2e] Running $scenario with an isolated workspace."
+    QROW_E2E_ARTIFACTS="$scenario_dir" \
+        QROW_DATA_DIR="$scenario_dir/workspace" \
+        "$qrow_driver" "--$scenario"
+done

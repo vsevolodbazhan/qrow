@@ -1,7 +1,9 @@
 # Results
 
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
-The preview does not change the SQL sent to Spark.
+The preview does not change the SQL sent to the server. Postgres and Trino read the
+result stream before the first page. See [Postgres limits](connections.md#postgres-limits)
+and [Trino limits](connections.md#trino-limits).
 
 Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)
@@ -12,19 +14,39 @@ header. Column headers remain visible when a query returns columns but no rows.
 
 ## Browse and copy
 
-Each page contains up to 1,000 rows. **Next** fetches another page when needed.
-**Previous** and **Next** reuse downloaded pages without executing SQL again.
+Each page contains up to 1,000 rows. **Next page** fetches another page when needed.
+The bar above the table shows neutral tags for the visible row range,
+downloaded row count, column count, and query duration. **Loaded** counts the
+rows in the preview. It does not give the total number of rows on the server.
+The tag tooltips use the same names as the rows in **Result Details**:
+**Visible Rows**, **Loaded Rows**, **Columns**, and **Query Duration**.
+When the tags do not fit, the bar keeps the row range and shows an information
+button. Click **Show result details** to read all four values as neutral tags.
+The heading uses semibold text. At the smallest widths, the row range also
+moves into **Result Details**. The page buttons show arrows at all widths.
+Their tooltips show **Previous page** and **Next page**.
+At large UI scales, a wide sidebar can leave too little space for the page
+buttons. Reduce the sidebar width if the buttons do not fit.
+
+With focus in the toolbar, use Tab to focus **Show result details**.
+Press Enter or Space to open it.
+Press Escape or click outside to close it. Escape returns focus to the button.
+The values update as rows arrive. The query duration is absent before the
+first query.
+**Previous page** and **Next page** reuse downloaded pages without
+executing SQL again.
 You can browse downloaded pages while a fetch runs.
 
-Row numbers refer to the full result. If Next finds no more rows, the last
-populated page stays visible. Changing pages clears the selection and resets
+Row numbers refer to the full result. If **Next page** finds no more rows,
+the last populated page stays visible. Changing pages clears the selection and resets
 the scroll position. New batches preserve the current scroll position.
 
 Scroll vertically to see more rows and horizontally to see more columns.
+The scrollbars overlay the right and bottom edges of the table.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
-Right-click a cell to use **Copy Cell** or **Copy Row**. Copy actions use full
+Right-click a cell to use **Copy cell** or **Copy row**. Copy actions use full
 stored values from the displayed page. Long cells show a shortened preview,
 but their stored and copied values are not shortened. File export is not
 implemented.
@@ -37,7 +59,7 @@ implemented.
 | Empty string | An empty cell |
 | Decimal or textual timestamp | The server's text representation |
 | Binary | Hexadecimal text |
-| Nested value | The text returned by HiveServer2 |
+| Nested value | The text returned by the server |
 
 Qrow preserves the distinction between null and an empty string. It does not
 convert exact decimal text to floating-point values for display.
@@ -45,12 +67,14 @@ convert exact decimal text to floating-point values for display.
 ## Preview limits
 
 The preview can store up to 100,000 rows or approximately 64 MiB per tab.
-If an incoming batch would exceed either limit, Qrow discards that batch and
+For Kyuubi, if an incoming batch would exceed either limit, Qrow discards that batch and
 closes the cursor. Previously downloaded rows remain available. The memory
 limit measures retained row storage, not the total application memory.
 
-Qrow fetches batches of up to 250 rows. It does not add a SQL `LIMIT` clause.
-Client preview limits do not guarantee less server work. Each server response
+For Kyuubi, Qrow asks for each page of 1,000 rows in one request. When the server sends
+fewer rows, Qrow asks for the remaining rows of the page. It does not add a
+SQL `LIMIT` clause.
+Client preview limits do not guarantee less server work. For Kyuubi, each server response
 has a 64 MiB byte limit across all transport frames. Each frame also has a
 64 MiB limit. Before the decoder allocates strings or containers, it checks
 the declared sizes against a separate 64 MiB allocation budget. Container
@@ -65,7 +89,7 @@ same time.
 
 Cancellation and fetch failures retain downloaded rows. Disconnecting releases
 unfetched rows, but the downloaded rows remain visible. Selecting another
-connection keeps the preview and its session. **Next** can fetch remaining
+connection keeps the preview and its session. **Next page** can fetch remaining
 rows from that session, even when another connection is selected. The next
 accepted query replaces the previous preview, regardless of the selected
 connection.

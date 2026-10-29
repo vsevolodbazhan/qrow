@@ -1,8 +1,8 @@
 [package]
 name = "qrow"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
-description = "A native SQL workbench for Spark through Kyuubi"
+description = "An SQL workbench for macOS."
 license = "MIT"
 default-run = "qrow"
 
@@ -18,22 +18,88 @@ required-features = ["ui"]
 [dependencies]
 anyhow = "1"
 async-channel = { version = "2", optional = true }
-gpui-kit = { version = "=0.6.1", features = ["tree-sitter"], optional = true }
+gpui-kit = { version = "=0.6.6", features = ["tree-sitter"], optional = true }
 tree-sitter-sequel = { version = "0.3.8", optional = true }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thrift = "0.24"
+base64 = "0.22"
+form_urlencoded = "1"
+httparse = "1"
+postcard = { version = "1", default-features = false, features = ["use-std"] }
+ring = "0.17"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-native-certs = "0.8"
+rustls-pki-types = { version = "1", features = ["std"] }
+serde = { version = "1", features = ["derive", "rc"] }
+# JSON objects keep the order of the file, such as the columns of a dbt model.
+# GPUI turns this on for the app; the core library must not depend on it.
+serde_json = { version = "1", features = ["preserve_order", "raw_value", "arbitrary_precision"] }
+sqlformat = "0.5"
+tempfile = "3"
+thrift = { version = "0.24", default-features = false }
+url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 zeroize = "1"
+notify = "7"
+tokio-postgres = "0.7.18"
+tokio-postgres-rustls = "0.14"
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "time", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
 [dev-dependencies]
-tempfile = "3"
 proptest = "=1.11.0"
 
+# Headless UI integration tests of the real Qrow window. The UI builds only on
+# macOS; keep the version and source equal to the normal dependency.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["tree-sitter", "test-support"] }
+
+[[test]]
+name = "ui"
+required-features = ["ui"]
+
+[[test]]
+name = "e2e"
+required-features = ["ui"]
+
+[[test]]
+name = "perf"
+required-features = ["ui"]
+
+# AppKit's native font backend must be created on the process main thread.
+[[example]]
+name = "tooltip-layout"
+path = "tests/native/tooltip_layout.rs"
+required-features = ["ui"]
+
+[patch.crates-io]
+# GPUI Base 0.6.6 with Qrow fixes to the editor and Markdown text.
+# vendor/gpui-base/QROW-PATCH.md lists them. Remove this patch when a GPUI Kit
+# release includes all fixes.
+gpui-base = { path = "vendor/gpui-base" }
+
+# GPUI Component 0.6.6 with one Qrow fix: the rows of a dropdown list have
+# space between them. See vendor/gpui-component/QROW-PATCH.md. Remove this
+# patch when a GPUI Kit release includes the fix.
+gpui-component = { path = "vendor/gpui-component" }
+
+# GPUI's macOS platform 0.3.6 with one Qrow fix: a window stops its display
+# link while GPUI requests no frames. See vendor/gpui-pre-macos/QROW-PATCH.md.
+# Remove this patch when a GPUI release includes the fix.
+gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
+
+# Performance probes build like the release, without link-time optimization,
+# so that they compile faster.
+[profile.perf]
+inherits = "release"
+lto = false
+incremental = false
+
 [profile.release]
+# Keep the optional GPUI assistant inside the macOS package size budget.
+opt-level = "s"
 lto = "thin"
 strip = true
 
@@ -60,4 +126,8 @@ inefficient_to_string = "warn"
 
 [[bench]]
 name = "sql"
+harness = false
+
+[[bench]]
+name = "dbt"
 harness = false

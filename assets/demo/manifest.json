@@ -1,0 +1,236 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+    "dbt_version": "1.12.5",
+    "generated_at": "2026-10-01T08:00:00Z",
+    "project_name": "travel",
+    "adapter_type": "spark"
+  },
+  "nodes": {
+    "model.travel.bookings": {
+      "unique_id": "model.travel.bookings",
+      "resource_type": "model",
+      "name": "bookings",
+      "package_name": "travel",
+      "database": null,
+      "schema": "avia",
+      "alias": "bookings",
+      "relation_name": "`avia`.`bookings`",
+      "config": {
+        "materialized": "table"
+      },
+      "description": "One row per flight booking. Use booking_id to join payments.",
+      "tags": [
+        "travel"
+      ],
+      "columns": {
+        "booking_id": {
+          "name": "booking_id",
+          "data_type": "BIGINT",
+          "description": "Unique booking identifier."
+        },
+        "gate": {
+          "name": "gate",
+          "data_type": "STRING",
+          "description": "Departure gate."
+        },
+        "amount": {
+          "name": "amount",
+          "data_type": "DECIMAL(12,2)",
+          "description": "Booking amount in USD."
+        },
+        "booked_at": {
+          "name": "booked_at",
+          "data_type": "TIMESTAMP",
+          "description": "Time when the booking was recorded."
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "source.travel.flights.flight_events"
+        ]
+      },
+      "original_file_path": "models/bookings.sql",
+      "raw_code": "select booking_id, gate, amount, booked_at\nfrom {{ source('flights', 'flight_events') }}",
+      "compiled_code": "select booking_id, gate, amount, booked_at\nfrom avia.flight_events"
+    },
+    "model.travel.searches": {
+      "unique_id": "model.travel.searches",
+      "resource_type": "model",
+      "name": "searches",
+      "package_name": "travel",
+      "database": null,
+      "schema": "avia",
+      "alias": "searches",
+      "relation_name": "`avia`.`searches`",
+      "config": {
+        "materialized": "table"
+      },
+      "description": "One row per route search. Origin identifies the departure airport.",
+      "tags": [
+        "travel"
+      ],
+      "columns": {
+        "search_id": {
+          "name": "search_id",
+          "data_type": "BIGINT",
+          "description": "Unique search identifier."
+        },
+        "origin": {
+          "name": "origin",
+          "data_type": "STRING",
+          "description": "Airport where the route starts."
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "source.travel.flights.flight_events"
+        ]
+      },
+      "original_file_path": "models/searches.sql",
+      "raw_code": "select booking_id as search_id, split(route, ' → ')[0] as origin\nfrom {{ source('flights', 'flight_events') }}",
+      "compiled_code": "select booking_id as search_id, split(route, ' → ')[0] as origin\nfrom avia.flight_events"
+    },
+    "model.travel.payments": {
+      "unique_id": "model.travel.payments",
+      "resource_type": "model",
+      "name": "payments",
+      "package_name": "travel",
+      "database": null,
+      "schema": "finance",
+      "alias": "payments",
+      "relation_name": "`finance`.`payments`",
+      "config": {
+        "materialized": "table"
+      },
+      "description": "One row per payment. Join bookings on booking_id to compare paid amounts.",
+      "tags": [
+        "travel"
+      ],
+      "columns": {
+        "payment_id": {
+          "name": "payment_id",
+          "data_type": "BIGINT",
+          "description": "Unique payment identifier."
+        },
+        "booking_id": {
+          "name": "booking_id",
+          "data_type": "BIGINT",
+          "description": "Booking paid by this payment."
+        },
+        "amount": {
+          "name": "amount",
+          "data_type": "DECIMAL(12,2)",
+          "description": "Payment amount in USD."
+        }
+      },
+      "depends_on": {
+        "nodes": [
+          "model.travel.bookings"
+        ]
+      },
+      "original_file_path": "models/payments.sql",
+      "raw_code": "select booking_id as payment_id, booking_id, amount\nfrom {{ ref('bookings') }}",
+      "compiled_code": "select booking_id as payment_id, booking_id, amount\nfrom avia.bookings"
+    },
+    "test.travel.bookings_booking_id_unique": {
+      "unique_id": "test.travel.bookings_booking_id_unique",
+      "resource_type": "test",
+      "name": "unique",
+      "attached_node": "model.travel.bookings",
+      "column_name": "booking_id",
+      "depends_on": {
+        "nodes": [
+          "model.travel.bookings"
+        ]
+      },
+      "test_metadata": {
+        "name": "unique",
+        "kwargs": {
+          "column_name": "booking_id"
+        }
+      }
+    },
+    "test.travel.bookings_booking_id_not_null": {
+      "unique_id": "test.travel.bookings_booking_id_not_null",
+      "resource_type": "test",
+      "name": "not_null",
+      "attached_node": "model.travel.bookings",
+      "column_name": "booking_id",
+      "depends_on": {
+        "nodes": [
+          "model.travel.bookings"
+        ]
+      },
+      "test_metadata": {
+        "name": "not_null",
+        "kwargs": {
+          "column_name": "booking_id"
+        }
+      }
+    }
+  },
+  "sources": {
+    "source.travel.flights.flight_events": {
+      "unique_id": "source.travel.flights.flight_events",
+      "resource_type": "source",
+      "name": "flight_events",
+      "source_name": "flights",
+      "package_name": "travel",
+      "database": null,
+      "schema": "avia",
+      "identifier": "flight_events",
+      "relation_name": "`avia`.`flight_events`",
+      "description": "Flight events used for route performance and booking models.",
+      "columns": {
+        "route": {
+          "name": "route",
+          "data_type": "STRING",
+          "description": "Departure and arrival airports."
+        },
+        "fare": {
+          "name": "fare",
+          "data_type": "DOUBLE",
+          "description": "Ticket fare in USD."
+        },
+        "currency": {
+          "name": "currency",
+          "data_type": "STRING",
+          "description": "Currency of the fare."
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "data_type": "TIMESTAMP",
+          "description": "Time of the last event update."
+        },
+        "departure_date": {
+          "name": "departure_date",
+          "data_type": "DATE",
+          "description": "Scheduled departure date."
+        },
+        "booking_id": {
+          "name": "booking_id",
+          "data_type": "BIGINT",
+          "description": "Unique booking identifier."
+        },
+        "gate": {
+          "name": "gate",
+          "data_type": "STRING",
+          "description": "Departure gate."
+        },
+        "amount": {
+          "name": "amount",
+          "data_type": "DECIMAL(12,2)",
+          "description": "Booking amount in USD."
+        },
+        "booked_at": {
+          "name": "booked_at",
+          "data_type": "TIMESTAMP",
+          "description": "Time when the booking was recorded."
+        }
+      },
+      "original_file_path": "models/sources.yml",
+      "loader": "flight event feed"
+    }
+  }
+}

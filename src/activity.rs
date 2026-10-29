@@ -1,542 +1,397 @@
-use std::time::{Duration, SystemTime};
+//! Activity: the log of the background work of each connection.
+//!
+//! Each connection has one flat log, in the order the entries arrive: schema
+//! refreshes, keep-alives, sessions, and short query events of its tabs. The
+//! log is in memory and has a size limit. Query tab Logs keep only what
+//! changes something for their tab; see [`tab_event`].
 
-pub const MAX_EXECUTION_GROUPS: usize = 100;
+use crate::logs::{LogEvent, LogKind, Severity};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::SystemTime,
+};
+use uuid::Uuid;
+
+/// The most text that the log of one connection keeps.
 pub const MAX_TEXT_BYTES: usize = 8 * 1024 * 1024;
+/// The most entries that the log of one connection keeps.
+pub const MAX_ENTRIES: usize = 50_000;
+/// When a log is over a limit, it removes the oldest entries until it is this
+/// fraction of the limit. Removals in large steps keep them rare.
+const TRIM_TO: f64 = 0.9;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct ExecutionId(pub u64);
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Severity {
-    Info,
-    Error,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ActivityKind {
-    Connected,
-    Submitted,
-    ExecutionStarted,
-    ExecutionCompleted,
-    FetchStarted,
-    FetchCompleted,
-    KeepAliveStarted,
-    KeepAliveCompleted,
-    CancelRequested,
-    Cancelled,
-    Error,
-    Disconnected,
-}
-
-impl ActivityKind {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Connected => "Connected",
-            Self::Submitted => "Submitted",
-            Self::ExecutionStarted => "Execution started",
-            Self::ExecutionCompleted => "Execution complete",
-            Self::FetchStarted => "Fetch started",
-            Self::FetchCompleted => "Fetch complete",
-            Self::KeepAliveStarted => "Keep-alive started",
-            Self::KeepAliveCompleted => "Keep-alive complete",
-            Self::CancelRequested => "Cancellation requested",
-            Self::Cancelled => "Cancelled",
-            Self::Error => "Error",
-            Self::Disconnected => "Disconnected",
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ActivityEvent {
-    pub timestamp: SystemTime,
-    pub execution_id: Option<ExecutionId>,
-    pub severity: Severity,
-    pub kind: ActivityKind,
-    pub text: String,
-    pub connection: Option<String>,
-    pub sql: Option<String>,
-    pub duration: Option<Duration>,
-}
-
-impl ActivityEvent {
-    pub fn new(
-        execution_id: Option<ExecutionId>,
-        severity: Severity,
-        kind: ActivityKind,
-        text: impl Into<String>,
-    ) -> Self {
-        Self {
-            timestamp: SystemTime::now(),
-            execution_id,
-            severity,
-            kind,
-            text: text.into(),
-            connection: None,
-            sql: None,
-            duration: None,
-        }
-    }
-
-    pub fn at(
-        timestamp: SystemTime,
-        execution_id: Option<ExecutionId>,
-        severity: Severity,
-        kind: ActivityKind,
-        text: impl Into<String>,
-    ) -> Self {
-        let mut event = Self::new(execution_id, severity, kind, text);
-        event.timestamp = timestamp;
-        event
-    }
-
-    pub fn with_connection(mut self, connection: impl Into<String>) -> Self {
-        self.connection = Some(connection.into());
-        self
-    }
-
-    pub fn with_sql(mut self, sql: impl Into<String>) -> Self {
-        self.sql = Some(sql.into());
-        self
-    }
-
-    pub fn with_duration(mut self, duration: Duration) -> Self {
-        self.duration = Some(duration);
-        self
-    }
-}
-
+/// One entry of the Activity of a connection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActivityEntry {
     pub timestamp: SystemTime,
-    pub execution_id: Option<ExecutionId>,
     pub severity: Severity,
-    pub kind: ActivityKind,
     pub text: String,
-    pub connection: Option<String>,
-    pub sql: Option<String>,
-    pub duration: Option<Duration>,
-    entry_id: u64,
-    group_id: u64,
-}
-
-impl From<ActivityEvent> for ActivityEntry {
-    fn from(event: ActivityEvent) -> Self {
-        Self {
-            timestamp: event.timestamp,
-            execution_id: event.execution_id,
-            severity: event.severity,
-            kind: event.kind,
-            text: event.text,
-            connection: event.connection,
-            sql: event.sql,
-            duration: event.duration,
-            entry_id: 0,
-            group_id: 0,
-        }
-    }
+    /// The query tab that the entry is about, if any.
+    pub tab: Option<Uuid>,
+    /// Whether the entry counts as an unseen error until its Activity shows.
+    counts: bool,
+    /// Unique in the Activity of all connections, from the order of arrival.
+    id: u64,
 }
 
 impl ActivityEntry {
-    pub fn id(&self) -> u64 {
-        self.entry_id
-    }
-
-    pub fn text_bytes(&self) -> usize {
-        self.text.len()
-            + self.connection.as_deref().map_or(0, str::len)
-            + self.sql.as_deref().map_or(0, str::len)
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct ActivityGroup {
-    pub id: u64,
-    pub execution_id: Option<ExecutionId>,
-    pub connection: Option<String>,
-    pub sql: Option<String>,
-    pub entries: Vec<ActivityEntry>,
-    text_bytes: usize,
-}
-
-impl ActivityGroup {
-    fn new(id: u64, entry: ActivityEntry) -> Self {
-        let text_bytes = entry.text_bytes();
+    /// An entry that no tab shows. An error counts as unseen.
+    pub fn new(severity: Severity, text: impl Into<String>) -> Self {
         Self {
-            id,
-            execution_id: entry.execution_id,
-            connection: entry.connection.clone(),
-            sql: entry.sql.clone(),
-            entries: vec![entry],
-            text_bytes,
+            timestamp: SystemTime::now(),
+            severity,
+            text: text.into(),
+            tab: None,
+            counts: severity == Severity::Error,
+            id: 0,
         }
     }
 
-    fn add(&mut self, entry: ActivityEntry) {
-        self.connection = entry.connection.clone().or_else(|| self.connection.clone());
-        self.sql = entry.sql.clone().or_else(|| self.sql.clone());
-        self.text_bytes += entry.text_bytes();
-        self.entries.push(entry);
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
-    pub fn text_bytes(&self) -> usize {
-        self.text_bytes
+    pub fn is_error(&self) -> bool {
+        self.severity == Severity::Error
+    }
+
+    /// Whether the entry counts as an unseen error.
+    pub fn counts(&self) -> bool {
+        self.counts
     }
 }
 
+/// The entry of a schema refresh event. Only a failed outcome counts as an
+/// unseen error, so a failed refresh counts once, also when several of its
+/// requests failed.
+pub fn from_refresh(event: LogEvent) -> ActivityEntry {
+    ActivityEntry {
+        timestamp: event.timestamp,
+        severity: event.severity,
+        counts: event.severity == Severity::Error && event.kind == LogKind::SchemaRefreshFinished,
+        text: event.text,
+        tab: None,
+        id: 0,
+    }
+}
+
+/// The entry of an event of the query tab `tab` with the title `title`, or
+/// `None` when Activity does not show it. Activity has no SQL: a query shows
+/// as short events with a link to its tab, which has the details. An error
+/// does not count as unseen: the tab shows its own unread error.
+pub fn from_tab(event: &LogEvent, tab: Uuid, title: &str) -> Option<ActivityEntry> {
+    let text = match event.kind {
+        LogKind::Connected
+        | LogKind::Disconnected
+        | LogKind::KeepAliveCompleted
+        | LogKind::KeepAliveFailed
+        | LogKind::ExecutionCompleted
+        | LogKind::SignIn
+        | LogKind::Cancelled => event.text.clone(),
+        LogKind::Submitted => "Submitted a query".into(),
+        // The tab has the full error of its query.
+        LogKind::Error if event.execution_id.is_some() => "Query failed".into(),
+        LogKind::Error => event.text.clone(),
+        LogKind::ExecutionStarted
+        | LogKind::FetchStarted
+        | LogKind::FetchCompleted
+        | LogKind::CancelRequested
+        | LogKind::SchemaRefresh
+        | LogKind::SchemaRefreshFinished
+        | LogKind::HistoryTrimmed => return None,
+    };
+    Some(ActivityEntry {
+        timestamp: event.timestamp,
+        severity: event.severity,
+        text: format!("{title}: {text}"),
+        tab: Some(tab),
+        counts: false,
+        id: 0,
+    })
+}
+
+/// The event that the Logs of the tab show, or `None` when it changes
+/// nothing for the tab. A completed keep-alive shows only in Activity. A
+/// failed keep-alive closed the session of the tab, so the tab shows it with
+/// its SQL, which is a likely cause.
+pub fn tab_event(mut event: LogEvent) -> Option<LogEvent> {
+    match event.kind {
+        LogKind::KeepAliveCompleted => None,
+        LogKind::KeepAliveFailed => {
+            if let Some(sql) = &event.sql {
+                event.text = format!("{}\nKeep-alive query:\n{sql}", event.text);
+            }
+            Some(event)
+        }
+        _ => Some(event),
+    }
+}
+
+/// The Activity log of one connection.
 #[derive(Clone, Debug, Default)]
 pub struct ActivityLog {
-    groups: Vec<ActivityGroup>,
-    ordered_entries: Vec<ActivityEntry>,
-    next_group_id: u64,
-    next_entry_id: u64,
+    entries: VecDeque<ActivityEntry>,
     text_bytes: usize,
-    retention_notice: bool,
+    /// Whether the log removed old entries.
+    trimmed: bool,
+    unseen_errors: usize,
+    /// The sequence number of the newest unseen error.
+    newest_unseen: Option<u64>,
 }
 
 impl ActivityLog {
-    pub fn record(&mut self, event: ActivityEvent) {
-        let mut entry: ActivityEntry = event.into();
-        entry.entry_id = self.next_entry_id;
-        self.next_entry_id += 1;
-        let group = entry.execution_id.and_then(|execution_id| {
-            self.groups
-                .iter()
-                .position(|group| group.execution_id == Some(execution_id))
-        });
-        if let Some(index) = group {
-            entry.group_id = self.groups[index].id;
-            self.ordered_entries.push(entry.clone());
-            let mut group = self.groups.remove(index);
-            self.text_bytes += entry.text_bytes();
-            group.add(entry);
-            self.groups.push(group);
-        } else {
-            let id = self.next_group_id;
-            self.next_group_id += 1;
-            self.text_bytes += entry.text_bytes();
-            entry.group_id = id;
-            self.ordered_entries.push(entry.clone());
-            self.groups.push(ActivityGroup::new(id, entry));
-        }
-        self.retain();
-    }
-
-    pub fn record_connection(
-        &mut self,
-        kind: ActivityKind,
-        text: impl Into<String>,
-        connection: Option<String>,
-    ) {
-        let mut event = ActivityEvent::new(None, Severity::Info, kind, text);
-        event.connection = connection;
-        self.record(event);
-    }
-
-    pub fn clear(&mut self) {
-        self.groups.clear();
-        self.ordered_entries.clear();
-        self.text_bytes = 0;
-        self.retention_notice = false;
-    }
-
-    pub fn groups(&self) -> &[ActivityGroup] {
-        &self.groups
-    }
-
-    pub fn entries(&self) -> impl Iterator<Item = &ActivityEntry> {
-        self.ordered_entries.iter()
+    pub fn entries(&self) -> &VecDeque<ActivityEntry> {
+        &self.entries
     }
 
     pub fn is_empty(&self) -> bool {
-        self.groups.is_empty()
+        self.entries.is_empty()
+    }
+
+    pub fn trimmed(&self) -> bool {
+        self.trimmed
+    }
+
+    pub fn unseen_errors(&self) -> usize {
+        self.unseen_errors
     }
 
     pub fn text_bytes(&self) -> usize {
         self.text_bytes
     }
 
-    pub fn retention_notice(&self) -> bool {
-        self.retention_notice
+    /// Add `entry`. Returns how many old entries the log removed to stay in
+    /// its limits.
+    fn record(&mut self, mut entry: ActivityEntry, sequence: u64) -> usize {
+        entry.id = sequence;
+        if entry.counts() {
+            self.unseen_errors += 1;
+            self.newest_unseen = Some(sequence);
+        }
+        self.text_bytes += entry.text.len();
+        self.entries.push_back(entry);
+        if self.entries.len() <= MAX_ENTRIES && self.text_bytes <= MAX_TEXT_BYTES {
+            return 0;
+        }
+        let entries = (MAX_ENTRIES as f64 * TRIM_TO) as usize;
+        let bytes = (MAX_TEXT_BYTES as f64 * TRIM_TO) as usize;
+        let mut removed = 0;
+        // The newest entry stays, also when it is larger than the limit.
+        while self.entries.len() > 1 && (self.entries.len() > entries || self.text_bytes > bytes) {
+            let old = self.entries.pop_front().unwrap();
+            self.text_bytes -= old.text.len();
+            removed += 1;
+        }
+        self.trimmed = true;
+        removed
     }
 
-    pub fn latest_error(&self) -> Option<&ActivityEntry> {
-        self.entries()
-            .filter(|entry| entry.severity == Severity::Error)
-            .last()
+    fn clear(&mut self) {
+        *self = Self::default();
     }
 
-    pub fn copy_all(&self) -> String {
-        self.entries()
-            .map(|entry| entry.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
+    fn mark_seen(&mut self) {
+        self.unseen_errors = 0;
+        self.newest_unseen = None;
+    }
+}
+
+/// The first line of a log that removed old entries.
+pub const TRIMMED_TEXT: &str = "Older entries were removed";
+
+/// The Activity of all connections.
+#[derive(Clone, Debug, Default)]
+pub struct Activity {
+    logs: HashMap<Uuid, ActivityLog>,
+    sequence: u64,
+}
+
+impl Activity {
+    pub fn log(&self, connection: Uuid) -> Option<&ActivityLog> {
+        self.logs.get(&connection)
     }
 
-    pub fn copy_error(&self) -> Option<String> {
-        self.latest_error().map(|entry| entry.text.clone())
+    /// Add `entry` to the log of `connection`. Returns how many old entries
+    /// that log removed.
+    pub fn record(&mut self, connection: Uuid, entry: ActivityEntry) -> usize {
+        self.sequence += 1;
+        self.logs
+            .entry(connection)
+            .or_default()
+            .record(entry, self.sequence)
     }
 
-    fn retain(&mut self) {
-        let latest_execution = self
-            .groups
+    pub fn clear(&mut self, connection: Uuid) {
+        if let Some(log) = self.logs.get_mut(&connection) {
+            log.clear();
+        }
+    }
+
+    /// Forget a deleted connection.
+    pub fn remove(&mut self, connection: Uuid) {
+        self.logs.remove(&connection);
+    }
+
+    pub fn mark_seen(&mut self, connection: Uuid) {
+        if let Some(log) = self.logs.get_mut(&connection) {
+            log.mark_seen();
+        }
+    }
+
+    /// The unseen errors of all connections.
+    pub fn unseen_errors(&self) -> usize {
+        self.logs.values().map(ActivityLog::unseen_errors).sum()
+    }
+
+    pub fn unseen_errors_of(&self, connection: Uuid) -> usize {
+        self.logs
+            .get(&connection)
+            .map_or(0, ActivityLog::unseen_errors)
+    }
+
+    /// The connection with the newest unseen error.
+    pub fn newest_unseen(&self) -> Option<Uuid> {
+        self.logs
             .iter()
-            .filter_map(|group| group.execution_id)
-            .max_by_key(|id| id.0);
-        let latest_execution_group = latest_execution
-            .and_then(|execution_id| {
-                self.groups
-                    .iter()
-                    .find(|group| group.execution_id == Some(execution_id))
-            })
-            .map(|group| group.id);
-        let latest_error_group = self.latest_error().map(|entry| entry.group_id);
-        let protected_groups = [
-            latest_execution_group,
-            latest_error_group,
-            if latest_execution_group.is_none() && latest_error_group.is_none() {
-                self.groups.last().map(|group| group.id)
-            } else {
-                None
-            },
-        ];
-        let mut removed = false;
-        while (self.groups.len() > MAX_EXECUTION_GROUPS || self.text_bytes > MAX_TEXT_BYTES)
-            && self.groups.len() > 1
-        {
-            let Some(index) = self
-                .groups
-                .iter()
-                .position(|group| !protected_groups.contains(&Some(group.id)))
-            else {
-                break;
-            };
-            let removed_group = self.groups.remove(index);
-            self.text_bytes = self.text_bytes.saturating_sub(removed_group.text_bytes());
-            self.retention_notice = true;
-            removed = true;
-        }
-        if removed {
-            self.ordered_entries
-                .retain(|entry| self.groups.iter().any(|group| group.id == entry.group_id));
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum Panel {
-    #[default]
-    Results,
-    Output,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct PanelState {
-    pub selected: Panel,
-    pub unread_error: bool,
-}
-
-impl PanelState {
-    pub fn execution_started(&mut self) {
-        self.unread_error = false;
-    }
-
-    pub fn user_select(&mut self, panel: Panel) {
-        self.selected = panel;
-        if panel == Panel::Output {
-            self.unread_error = false;
-        }
-    }
-
-    pub fn failure(&mut self, _active: bool) {
-        self.unread_error = true;
-        self.selected = Panel::Output;
-    }
-
-    pub fn success(&mut self) {
-        self.selected = Panel::Results;
-        self.unread_error = false;
-    }
-
-    pub fn output_visible(&mut self) {
-        if self.selected == Panel::Output {
-            self.unread_error = false;
-        }
+            .filter_map(|(id, log)| log.newest_unseen.map(|sequence| (sequence, *id)))
+            .max()
+            .map(|(_, id)| id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::logs::ExecutionId;
 
-    fn event(id: Option<u64>, kind: ActivityKind, text: &str) -> ActivityEvent {
-        ActivityEvent::at(
-            SystemTime::UNIX_EPOCH,
-            id.map(ExecutionId),
-            if kind == ActivityKind::Error {
-                Severity::Error
-            } else {
-                Severity::Info
-            },
-            kind,
-            text,
-        )
+    fn refresh_error(text: &str) -> ActivityEntry {
+        ActivityEntry::new(Severity::Error, text)
     }
 
     #[test]
-    fn execution_entries_stay_in_order_and_connection_entries_are_separate_groups() {
-        let mut log = ActivityLog::default();
-        log.record(event(Some(1), ActivityKind::Submitted, "select 1"));
-        log.record(event(None, ActivityKind::Connected, "connected"));
-        log.record(event(Some(1), ActivityKind::ExecutionCompleted, "complete"));
+    fn only_errors_without_a_tab_count_and_the_newest_wins() {
+        let (first, second) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut activity = Activity::default();
+        activity.record(first, refresh_error("List schemas failed"));
+        activity.record(second, refresh_error("List schemas failed"));
+        let tab_error = LogEvent::new(None, Severity::Error, LogKind::Error, "Query failed");
+        activity.record(
+            first,
+            from_tab(&tab_error, Uuid::from_u128(9), "Query 1").unwrap(),
+        );
+        // A failed request of a refresh does not count; its outcome does.
+        let request = LogEvent::new(None, Severity::Error, LogKind::SchemaRefresh, "List failed");
+        assert!(!from_refresh(request).counts());
+        let outcome = LogEvent::new(
+            None,
+            Severity::Error,
+            LogKind::SchemaRefreshFinished,
+            "Schema refresh failed",
+        );
+        assert!(from_refresh(outcome).counts());
+        activity.record(first, ActivityEntry::new(Severity::Info, "Started"));
+        assert_eq!(activity.unseen_errors(), 2);
+        assert_eq!(activity.newest_unseen(), Some(second));
 
-        assert_eq!(log.groups().len(), 2);
-        assert_eq!(log.groups()[0].entries.len(), 1);
-        assert_eq!(log.groups()[1].entries.len(), 2);
+        activity.mark_seen(second);
+        assert_eq!(activity.unseen_errors(), 1);
+        assert_eq!(activity.newest_unseen(), Some(first));
+        activity.clear(first);
+        assert_eq!(activity.unseen_errors(), 0);
+        assert_eq!(activity.newest_unseen(), None);
+        assert!(activity.log(first).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_full_log_removes_its_oldest_entries_in_one_step() {
+        let mut log = ActivityLog::default();
+        for index in 0..MAX_ENTRIES {
+            assert_eq!(
+                log.record(ActivityEntry::new(Severity::Info, "x"), index as u64),
+                0
+            );
+        }
+        let removed = log.record(ActivityEntry::new(Severity::Info, "newest"), 0);
         assert_eq!(
-            log.entries()
-                .map(|entry| entry.text.as_str())
-                .collect::<Vec<_>>(),
-            ["select 1", "connected", "complete",]
+            removed,
+            MAX_ENTRIES + 1 - (MAX_ENTRIES as f64 * TRIM_TO) as usize
         );
-    }
+        assert!(log.trimmed());
+        assert_eq!(log.entries().back().unwrap().text, "newest");
+        assert_eq!(log.entries().front().unwrap().text, "x");
 
-    #[test]
-    fn retention_removes_whole_old_groups_and_keeps_latest_error_complete() {
+        // One huge entry stays, as the newest one.
         let mut log = ActivityLog::default();
-        for id in 0..=MAX_EXECUTION_GROUPS as u64 {
-            log.record(event(Some(id), ActivityKind::Submitted, "start"));
-            log.record(event(Some(id), ActivityKind::Error, "line one\nline two"));
-        }
-        assert_eq!(log.groups().len(), MAX_EXECUTION_GROUPS);
-        assert!(log.retention_notice());
-        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(1)));
-        assert_eq!(log.latest_error().unwrap().text, "line one\nline two");
-    }
-
-    #[test]
-    fn retention_applies_the_text_budget_and_bounds_non_execution_history() {
-        let mut log = ActivityLog::default();
-        let text = "x".repeat(MAX_TEXT_BYTES / 2 + 1);
-        log.record(event(Some(1), ActivityKind::Submitted, &text));
-        log.record(event(Some(2), ActivityKind::Submitted, &text));
-        assert_eq!(log.groups().len(), 1);
-        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(2)));
-        assert!(log.retention_notice());
-
-        let mut connection_log = ActivityLog::default();
-        for _ in 0..=MAX_EXECUTION_GROUPS {
-            connection_log.record(event(None, ActivityKind::Connected, "connected"));
-        }
-        assert_eq!(connection_log.groups().len(), MAX_EXECUTION_GROUPS);
-        assert!(
-            connection_log
-                .groups()
-                .iter()
-                .all(|group| group.execution_id.is_none())
+        log.record(ActivityEntry::new(Severity::Info, "old"), 0);
+        log.record(
+            ActivityEntry::new(Severity::Error, "e".repeat(MAX_TEXT_BYTES + 1)),
+            1,
         );
+        assert_eq!(log.entries().len(), 1);
+        assert_eq!(log.text_bytes(), MAX_TEXT_BYTES + 1);
     }
 
     #[test]
-    fn retention_keeps_a_latest_connection_error_group() {
-        let mut log = ActivityLog::default();
-        log.record(event(None, ActivityKind::Error, "important\nerror details"));
-        for id in 0..=MAX_EXECUTION_GROUPS as u64 {
-            log.record(event(Some(id), ActivityKind::Submitted, "start"));
-        }
-        assert_eq!(log.latest_error().unwrap().text, "important\nerror details");
-        assert!(
-            log.groups()
-                .iter()
-                .any(|group| group.execution_id.is_none())
+    fn a_tab_shows_only_events_that_change_it() {
+        let tab = Uuid::from_u128(3);
+        let event = |kind, severity, text: &str| LogEvent::new(None, severity, kind, text);
+
+        let completed = event(
+            LogKind::KeepAliveCompleted,
+            Severity::Info,
+            "Keep-alive completed",
         );
-    }
+        assert_eq!(tab_event(completed.clone()), None);
+        assert_eq!(
+            from_tab(&completed, tab, "Query 1").unwrap().text,
+            "Query 1: Keep-alive completed"
+        );
 
-    #[test]
-    fn clear_drops_entries_but_does_not_break_later_events_for_the_same_execution() {
-        let mut log = ActivityLog::default();
-        log.record(event(Some(7), ActivityKind::Submitted, "old"));
-        log.clear();
-        log.record(event(Some(7), ActivityKind::Error, "new"));
-        assert_eq!(log.groups().len(), 1);
-        assert_eq!(log.groups()[0].execution_id, Some(ExecutionId(7)));
-        assert_eq!(log.copy_all(), "new");
-        assert!(!log.retention_notice());
-    }
+        let failed = event(
+            LogKind::KeepAliveFailed,
+            Severity::Error,
+            "Keep-alive failed and closed the session: timeout",
+        )
+        .with_sql("SELECT 1");
+        assert_eq!(
+            tab_event(failed.clone()).unwrap().text,
+            "Keep-alive failed and closed the session: timeout\nKeep-alive query:\nSELECT 1"
+        );
+        let entry = from_tab(&failed, tab, "Query 1").unwrap();
+        assert_eq!(
+            entry.text,
+            "Query 1: Keep-alive failed and closed the session: timeout"
+        );
+        assert!(entry.is_error() && !entry.counts());
 
-    #[test]
-    fn successful_queries_select_results_after_logs_were_selected() {
-        let mut panel = PanelState::default();
-        panel.user_select(Panel::Output);
-        assert_eq!(panel.selected, Panel::Output);
-        panel.success();
-        assert_eq!(panel.selected, Panel::Results);
-
-        panel.failure(true);
-        panel.success();
-        assert_eq!(panel.selected, Panel::Results);
-        assert!(!panel.unread_error);
-
-        panel.failure(true);
-        panel.user_select(Panel::Output);
-        panel.success();
-        assert_eq!(panel.selected, Panel::Results);
-
-        panel.user_select(Panel::Output);
-        assert_eq!(panel.selected, Panel::Output);
-        panel.success();
-        assert_eq!(panel.selected, Panel::Results);
-    }
-
-    #[test]
-    fn failures_select_logs_and_success_clears_errors_on_active_and_background_tabs() {
-        for active in [true, false] {
-            let mut panel = PanelState::default();
-            panel.failure(active);
-            assert_eq!(panel.selected, Panel::Output);
-            assert!(panel.unread_error);
-            panel.output_visible();
-            assert!(!panel.unread_error);
-            panel.success();
-            assert_eq!(panel.selected, Panel::Results);
-
-            panel.failure(active);
-            panel.success();
-            assert_eq!(panel.selected, Panel::Results);
-            assert!(!panel.unread_error);
-        }
-    }
-
-    #[test]
-    fn execution_start_clears_error_without_changing_panel_selection() {
-        let mut panel = PanelState::default();
-        panel.failure(true);
-        assert_eq!(panel.selected, Panel::Output);
-        assert!(panel.unread_error);
-
-        panel.execution_started();
-        assert_eq!(panel.selected, Panel::Output);
-        assert!(!panel.unread_error);
-
-        panel.user_select(Panel::Results);
-        panel.failure(true);
-        panel.user_select(Panel::Results);
-        panel.execution_started();
-        assert_eq!(panel.selected, Panel::Results);
-        assert!(!panel.unread_error);
-    }
-
-    #[test]
-    fn execution_start_does_not_clear_another_tabs_error() {
-        let mut retrying_tab = PanelState::default();
-        let mut background_tab = PanelState::default();
-        retrying_tab.failure(true);
-        background_tab.failure(false);
-
-        retrying_tab.execution_started();
-
-        assert!(!retrying_tab.unread_error);
-        assert!(background_tab.unread_error);
-        assert_eq!(background_tab.selected, Panel::Output);
+        // A query shows without its SQL and without its error.
+        let submitted = LogEvent::new(
+            Some(ExecutionId(1)),
+            Severity::Info,
+            LogKind::Submitted,
+            "Submitted query:\nSELECT secret",
+        );
+        assert_eq!(
+            from_tab(&submitted, tab, "Query 2").unwrap().text,
+            "Query 2: Submitted a query"
+        );
+        let error = LogEvent::new(
+            Some(ExecutionId(1)),
+            Severity::Error,
+            LogKind::Error,
+            "Syntax error near SELECT secret",
+        );
+        assert_eq!(
+            from_tab(&error, tab, "Query 2").unwrap().text,
+            "Query 2: Query failed"
+        );
+        let fetch = LogEvent::new(
+            Some(ExecutionId(1)),
+            Severity::Info,
+            LogKind::FetchCompleted,
+            "Fetched preview page 1",
+        );
+        assert_eq!(from_tab(&fetch, tab, "Query 2"), None);
+        assert!(tab_event(fetch).is_some());
     }
 }

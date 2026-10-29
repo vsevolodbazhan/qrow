@@ -1,12 +1,43 @@
+use crate::sql::{KeywordCase, SqlStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const PREVIEW_ROWS: usize = 1_000;
+pub const WORKSPACE_VERSION: u32 = 8;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_RESULT_ROWS: usize = 100_000;
 pub const MAX_PROFILE_NAME: usize = 60;
+pub const MAX_SIGN_IN_NAME: usize = 60;
+/// The scopes that each sign-in requests: the account, and its name and
+/// email for display.
+pub const BASE_SCOPES: [&str; 3] = ["openid", "profile", "email"];
+
+/// The scopes of `scopes` that are not in [`BASE_SCOPES`], without repeats.
+pub fn extra_scopes(scopes: &[String]) -> Vec<&str> {
+    let mut extra: Vec<&str> = Vec::new();
+    for scope in scopes {
+        if !BASE_SCOPES.contains(&scope.as_str()) && !extra.contains(&scope.as_str()) {
+            extra.push(scope);
+        }
+    }
+    extra
+}
+
+/// The most callback ports of one sign-in.
+pub const MAX_CALLBACK_PORTS: usize = 16;
 pub const MAX_TAB_TITLE: usize = 60;
+pub const MAX_ASSISTANT_CONVERSATION_TITLE: usize = 120;
+/// Version 2 adds schema, table, and column names and comments. Version 3
+/// adds the assistant notes of connections. Version 4 adds the descriptions,
+/// tests, and lineage of dbt projects.
+pub const ASSISTANT_DATA_SHARING_NOTICE_VERSION: u32 = 5;
+/// The largest assistant notes of one connection, in bytes.
+pub const MAX_ASSISTANT_NOTES_BYTES: usize = 16 * 1024;
+pub const MIN_ASSISTANT_PANEL_WIDTH: f32 = 360.;
+pub const DEFAULT_ASSISTANT_PANEL_WIDTH: f32 = 660.;
+pub const MAX_ASSISTANT_PANEL_WIDTH: f32 = 900.;
+pub const SYSTEM_THEME: &str = "System";
 
 fn title_with_suffix(title: &str, suffix: &str) -> String {
     let available = MAX_TAB_TITLE.saturating_sub(suffix.chars().count());
@@ -19,20 +50,41 @@ pub fn copied_profile_name<F>(name: &str, is_taken: F) -> String
 where
     F: Fn(&str) -> bool,
 {
+    copied_name(name, MAX_PROFILE_NAME, is_taken)
+}
+
+/// Keep the name of a pasted sign-in when it is available, otherwise append
+/// a copy suffix.
+pub fn unique_sign_in_name<F>(name: &str, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
+    if !is_taken(name) {
+        name.to_owned()
+    } else {
+        copied_name(name, MAX_SIGN_IN_NAME, is_taken)
+    }
+}
+
+/// Return `name` with the first free copy suffix, within `max` characters.
+fn copied_name<F>(name: &str, max: usize, is_taken: F) -> String
+where
+    F: Fn(&str) -> bool,
+{
     for copy in 1.. {
         let suffix = if copy == 1 {
             " copy".to_owned()
         } else {
             format!(" copy {copy}")
         };
-        let available = MAX_PROFILE_NAME.saturating_sub(suffix.chars().count());
+        let available = max.saturating_sub(suffix.chars().count());
         let base: String = name.chars().take(available).collect();
         let candidate = format!("{base}{suffix}");
         if !is_taken(&candidate) {
             return candidate;
         }
     }
-    unreachable!("profile name search must find a bounded name")
+    unreachable!("copy name search must find a bounded name")
 }
 
 /// Return a copy title that is different from every title accepted by `is_taken`.
@@ -66,6 +118,16 @@ where
     }
 }
 
+/// Fit a conversation title to a tab and keep it unique within its connection.
+pub fn conversation_tab_title<F>(title: &str, is_taken: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let title: String = title.trim().chars().take(MAX_TAB_TITLE).collect();
+    let title = title.trim_end();
+    (!title.is_empty()).then(|| unique_tab_title(title, is_taken))
+}
+
 pub const MIN_UI_SCALE: f32 = 0.75;
 pub const MAX_UI_SCALE: f32 = 1.50;
 pub const UI_SCALE_STEP: f32 = 0.10;
@@ -74,37 +136,58 @@ pub const MAX_EDITOR_FONT_SIZE: f32 = 32.;
 pub const MIN_LINE_HEIGHT: f32 = 1.;
 pub const MAX_LINE_HEIGHT: f32 = 2.;
 pub const LINE_HEIGHT_STEP: f32 = 0.1;
+pub const MIN_TAB_SIZE: u8 = 1;
+pub const MAX_TAB_SIZE: u8 = 8;
+pub const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    pub theme: String,
     pub ui_scale: f32,
     pub ui_font_family: String,
     pub editor_font_family: String,
     pub editor_font_size: f32,
     pub editor_line_height: f32,
+    /// Spaces for each indent level in the SQL editor.
+    pub editor_tab_size: u8,
     pub logs_font_family: String,
     pub logs_font_size: f32,
     pub logs_line_height: f32,
+    pub assistant_font_family: String,
+    pub assistant_font_size: f32,
+    pub assistant_line_height: f32,
+    pub assistant: AssistantSettings,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: SYSTEM_THEME.into(),
             ui_scale: 1.,
-            ui_font_family: ".SystemUIFont".into(),
+            ui_font_family: SYSTEM_FONT_FAMILY.into(),
             editor_font_family: "Menlo".into(),
             editor_font_size: 13.,
             editor_line_height: 1.2,
+            editor_tab_size: 2,
             logs_font_family: "Menlo".into(),
             logs_font_size: 13.,
             logs_line_height: 1.2,
+            assistant_font_family: SYSTEM_FONT_FAMILY.into(),
+            assistant_font_size: 14.,
+            assistant_line_height: 1.6,
+            assistant: AssistantSettings::default(),
         }
     }
 }
 
 impl Settings {
     pub fn sanitize(&mut self) {
+        self.theme = self.theme.trim().into();
+        if self.theme.is_empty() {
+            self.theme = Self::default().theme;
+        }
+
         if !self.ui_scale.is_finite() {
             self.ui_scale = Self::default().ui_scale;
         }
@@ -132,6 +215,11 @@ impl Settings {
             .editor_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
 
+        if self.editor_tab_size == 0 {
+            self.editor_tab_size = Self::default().editor_tab_size;
+        }
+        self.editor_tab_size = self.editor_tab_size.clamp(MIN_TAB_SIZE, MAX_TAB_SIZE);
+
         self.editor_font_family = self.editor_font_family.trim().into();
         if self.editor_font_family.is_empty() {
             self.editor_font_family = Self::default().editor_font_family;
@@ -157,20 +245,647 @@ impl Settings {
         self.logs_line_height = self
             .logs_line_height
             .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant_font_family = self.assistant_font_family.trim().into();
+        if self.assistant_font_family.is_empty() {
+            self.assistant_font_family = Self::default().assistant_font_family;
+        }
+        if !self.assistant_font_size.is_finite() {
+            self.assistant_font_size = Self::default().assistant_font_size;
+        }
+        self.assistant_font_size = self
+            .assistant_font_size
+            .round()
+            .clamp(MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE);
+        if !self.assistant_line_height.is_finite() {
+            self.assistant_line_height = Self::default().assistant_line_height;
+        }
+        self.assistant_line_height = (self.assistant_line_height * 10.).round() / 10.;
+        self.assistant_line_height = self
+            .assistant_line_height
+            .clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT);
+
+        self.assistant.sanitize();
+    }
+
+    /// The layout for SQL that the assistant writes and Qrow formats.
+    pub fn sql_style(&self) -> SqlStyle {
+        SqlStyle {
+            keyword_case: self.assistant.sql_keyword_case,
+            indent_spaces: self.editor_tab_size,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantExecutionMode {
+    #[default]
+    AskBeforeRunning,
+    RunAutomatically,
+}
+
+/// The command-line program that runs the assistant. Each conversation
+/// belongs to the harness that created it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantHarness {
+    #[default]
+    Codex,
+    Claude,
+}
+
+impl AssistantHarness {
+    pub const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+
+    /// The name of the program, for interface text.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Codex => "Codex",
+            Self::Claude => "Claude Code",
+        }
+    }
+}
+
+/// The model choices of one harness. Each harness offers its own models.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantModelChoice {
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+impl AssistantModelChoice {
+    fn sanitize(&mut self) {
+        sanitize_optional_string(&mut self.model);
+        sanitize_optional_string(&mut self.reasoning_effort);
+        sanitize_optional_string(&mut self.service_tier);
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    pub data_sharing_notice_version: u32,
+    pub default_execution_mode: AssistantExecutionMode,
+    /// The harness of new conversations, and the one that Qrow starts.
+    pub harness: AssistantHarness,
+    pub codex_executable: Option<String>,
+    pub claude_executable: Option<String>,
+    pub panel_width: f32,
+    /// The Codex choices keep the field names of earlier workspaces.
+    #[serde(flatten)]
+    pub codex: AssistantModelChoice,
+    pub claude: AssistantModelChoice,
+    pub sql_keyword_case: KeywordCase,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            data_sharing_notice_version: 0,
+            default_execution_mode: AssistantExecutionMode::AskBeforeRunning,
+            harness: AssistantHarness::default(),
+            codex_executable: None,
+            claude_executable: None,
+            panel_width: DEFAULT_ASSISTANT_PANEL_WIDTH,
+            codex: AssistantModelChoice::default(),
+            claude: AssistantModelChoice::default(),
+            sql_keyword_case: KeywordCase::default(),
+        }
+    }
+}
+
+impl AssistantSettings {
+    pub fn sanitize(&mut self) {
+        if self.data_sharing_notice_version != ASSISTANT_DATA_SHARING_NOTICE_VERSION {
+            self.enabled = false;
+            self.data_sharing_notice_version = 0;
+        }
+        if !self.panel_width.is_finite() {
+            self.panel_width = DEFAULT_ASSISTANT_PANEL_WIDTH;
+        }
+        self.panel_width = self
+            .panel_width
+            .clamp(MIN_ASSISTANT_PANEL_WIDTH, MAX_ASSISTANT_PANEL_WIDTH);
+        sanitize_optional_string(&mut self.codex_executable);
+        sanitize_optional_string(&mut self.claude_executable);
+        self.codex.sanitize();
+        self.claude.sanitize();
+    }
+
+    /// The model choices of the selected harness.
+    pub fn choice(&self) -> &AssistantModelChoice {
+        match self.harness {
+            AssistantHarness::Codex => &self.codex,
+            AssistantHarness::Claude => &self.claude,
+        }
+    }
+
+    pub fn choice_mut(&mut self) -> &mut AssistantModelChoice {
+        match self.harness {
+            AssistantHarness::Codex => &mut self.codex,
+            AssistantHarness::Claude => &mut self.claude,
+        }
+    }
+
+    /// The configured executable of the selected harness.
+    pub fn executable(&self) -> Option<&str> {
+        match self.harness {
+            AssistantHarness::Codex => self.codex_executable.as_deref(),
+            AssistantHarness::Claude => self.claude_executable.as_deref(),
+        }
+    }
+}
+
+fn sanitize_optional_string(value: &mut Option<String>) {
+    if let Some(text) = value {
+        *text = text.trim().to_owned();
+        if text.is_empty() {
+            *value = None;
+        }
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Profile {
+    #[serde(default)]
+    pub database_type: DatabaseType,
     pub id: Uuid,
     pub name: String,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub database: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trino_schema: String,
     pub parameters: BTreeMap<String, String>,
     #[serde(default)]
     pub lifecycle: ConnectionLifecycle,
+    #[serde(default)]
+    pub catalog: CatalogSettings,
+    /// The column-read scope of this connection, also for a shared catalog.
+    #[serde(default)]
+    pub catalog_column_reads: CatalogColumnReads,
+    /// The shared catalog that the connection uses, or `None` for a catalog
+    /// of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_catalog: Option<Uuid>,
+    /// Encrypts the transport with TLS. Profiles before version 6 use plain TCP.
+    #[serde(default)]
+    pub tls: bool,
+    /// The Postgres TLS policy. None preserves the earlier TLS checkbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgres_ssl_mode: Option<PostgresSslMode>,
+    #[serde(default)]
+    pub authentication: Authentication,
+    /// Facts about the connection that the user writes for the assistant.
+    /// Qrow adds them to the workspace context of a conversation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub assistant_notes: String,
+    /// The dbt project that describes the tables of the connection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dbt: Option<DbtProject>,
+}
+
+/// The most schema mapping rules of a dbt project.
+pub const MAX_SCHEMA_RULES: usize = 50;
+
+/// The dbt project of a connection. Qrow reads its `manifest.json`. It does
+/// not run dbt or read the other files of the project.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DbtProject {
+    /// The absolute path of the manifest, usually
+    /// `<project>/target/manifest.json`.
+    pub manifest: String,
+    #[serde(default)]
+    pub refresh: DbtRefresh,
+    /// The rules that change a dbt schema into a catalog schema. The first
+    /// rule that matches applies. Without a match, the schema stays.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub schema_mapping: Vec<SchemaRule>,
+}
+
+/// When Qrow reads the manifest of a dbt project again.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DbtRefresh {
+    /// When the manifest changes.
+    #[default]
+    Automatic,
+    /// Only on Refresh, and at launch when the saved index does not agree
+    /// with the manifest.
+    Manual,
+}
+
+/// A rule of the schema mapping of a dbt project. Letter case does not
+/// matter, like in Spark.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SchemaRule {
+    pub kind: SchemaRuleKind,
+    pub from: String,
+    #[serde(default)]
+    pub to: String,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchemaRuleKind {
+    /// Replaces the start `from` of a schema with `to`.
+    Prefix,
+    /// Replaces the schema `from` with `to`.
+    Exact,
+}
+
+impl DbtProject {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            std::path::Path::new(&self.manifest).is_absolute(),
+            "Choose the manifest.json file of the dbt project."
+        );
+        anyhow::ensure!(
+            self.schema_mapping.len() <= MAX_SCHEMA_RULES,
+            "Schema mapping can have {MAX_SCHEMA_RULES} rules or fewer."
+        );
+        for rule in &self.schema_mapping {
+            anyhow::ensure!(
+                !rule.from.trim().is_empty()
+                    && (rule.kind == SchemaRuleKind::Prefix || !rule.to.trim().is_empty()),
+                "Each schema mapping rule needs a dbt schema and a catalog schema."
+            );
+        }
+        Ok(())
+    }
+
+    /// The catalog schema of the dbt schema `schema`.
+    pub fn map_schema<'a>(&self, schema: &'a str) -> std::borrow::Cow<'a, str> {
+        for rule in &self.schema_mapping {
+            match rule.kind {
+                SchemaRuleKind::Exact if schema.eq_ignore_ascii_case(&rule.from) => {
+                    return rule.to.clone().into();
+                }
+                SchemaRuleKind::Prefix
+                    if schema
+                        .get(..rule.from.len())
+                        .is_some_and(|start| start.eq_ignore_ascii_case(&rule.from)) =>
+                {
+                    return format!("{}{}", rule.to, &schema[rule.from.len()..]).into();
+                }
+                _ => {}
+            }
+        }
+        schema.into()
+    }
+}
+
+/// Read schema mapping rules from text with one rule on each line, like
+/// `dbt_dev_* = *` for a prefix or `analytics = prod_analytics` for one
+/// schema. Empty lines do not count.
+pub fn parse_schema_rules(text: &str) -> anyhow::Result<Vec<SchemaRule>> {
+    let mut rules = Vec::new();
+    for (number, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let invalid = || {
+            anyhow::anyhow!(
+                "Schema mapping line {} must be like dbt_dev_* = * or analytics = prod.",
+                number + 1
+            )
+        };
+        let (from, to) = line.split_once('=').ok_or_else(invalid)?;
+        let (from, to) = (from.trim(), to.trim());
+        let rule = match (from.strip_suffix('*'), to.strip_suffix('*')) {
+            (Some(from), Some(to)) => SchemaRule {
+                kind: SchemaRuleKind::Prefix,
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+            (None, None) => SchemaRule {
+                kind: SchemaRuleKind::Exact,
+                from: from.to_owned(),
+                to: to.to_owned(),
+            },
+            _ => return Err(invalid()),
+        };
+        let name = |text: &str| {
+            text.chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+        };
+        if rule.from.is_empty()
+            || (rule.kind == SchemaRuleKind::Exact && rule.to.is_empty())
+            || !name(&rule.from)
+            || !name(&rule.to)
+        {
+            return Err(invalid());
+        }
+        rules.push(rule);
+    }
+    Ok(rules)
+}
+
+/// The text of schema mapping rules, one rule on each line.
+pub fn format_schema_rules(rules: &[SchemaRule]) -> String {
+    rules
+        .iter()
+        .map(|rule| match rule.kind {
+            SchemaRuleKind::Prefix => format!("{}* = {}*", rule.from, rule.to),
+            SchemaRuleKind::Exact => format!("{} = {}", rule.from, rule.to),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The encryption and server identity checks of a Postgres connection.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostgresSslMode {
+    Disable,
+    Require,
+    VerifyFull,
+}
+
+/// The SQL server and dialect of a connection.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DatabaseType {
+    #[default]
+    Kyuubi,
+    Postgres,
+    Trino,
+}
+
+impl DatabaseType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Kyuubi => "Spark (HiveServer2)",
+            Self::Postgres => "Postgres",
+            Self::Trino => "Trino",
+        }
+    }
+
+    pub fn connector_name(self) -> &'static str {
+        match self {
+            Self::Kyuubi => "spark_kyuubi",
+            Self::Postgres => "postgres",
+            Self::Trino => "trino",
+        }
+    }
+
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Kyuubi => 10009,
+            Self::Postgres => 5432,
+            Self::Trino => 8080,
+        }
+    }
+
+    pub fn quote_identifier(self, name: &str) -> String {
+        let quote = match self {
+            Self::Kyuubi => '`',
+            Self::Postgres | Self::Trino => '"',
+        };
+        format!(
+            "{quote}{}{quote}",
+            name.replace(quote, &format!("{quote}{quote}"))
+        )
+    }
+}
+
+/// How a refresh reads columns. Table reads reduce the result held by the driver.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogColumnReads {
+    #[default]
+    Table,
+    Schema,
+}
+
+/// How a connection proves the identity of its database user.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum Authentication {
+    /// The password of the database user, from macOS Keychain.
+    #[default]
+    Password,
+    /// An access token of a reusable sign-in, in the SASL password field.
+    Oidc { sign_in: Uuid },
+    /// Browser authentication delegated to the Trino coordinator.
+    TrinoExternal,
+}
+
+impl Authentication {
+    pub fn sign_in(self) -> Option<Uuid> {
+        match self {
+            Self::Password | Self::TrinoExternal => None,
+            Self::Oidc { sign_in } => Some(sign_in),
+        }
+    }
+}
+
+/// One schema catalog for the connections that read the same metastore,
+/// for example through different users or compute clusters.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SharedCatalog {
+    pub id: Uuid,
+    pub name: String,
+    /// The settings that decide what a refresh reads.
+    pub settings: CatalogSettings,
+    /// The member that automatic refreshes use while it has a live session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred: Option<Uuid>,
+}
+
+/// The maximum length of a shared catalog name, in characters.
+pub const MAX_SHARED_CATALOG_NAME: usize = 60;
+
+impl SharedCatalog {
+    /// Repair a shared catalog that an edited file made invalid. A shared
+    /// catalog always browses schemas: each member can turn browsing off.
+    fn sanitize(&mut self) {
+        if !self.settings.browses() {
+            self.settings.refresh = CatalogRefresh::Manual;
+        }
+        if self.settings.validate().is_err() {
+            self.settings = CatalogSettings {
+                refresh: self.settings.refresh,
+                ..CatalogSettings::default()
+            };
+        }
+        if self.name.trim().is_empty() {
+            self.name = "Shared catalog".into();
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.name.trim().is_empty(),
+            "Give the shared catalog a name."
+        );
+        anyhow::ensure!(
+            self.name.chars().count() <= MAX_SHARED_CATALOG_NAME,
+            "Shared catalog name must be {MAX_SHARED_CATALOG_NAME} characters or fewer."
+        );
+        self.settings.validate()
+    }
+}
+
+/// The catalog settings that apply to `profile`. A member of a shared
+/// catalog uses the shared settings. A connection with schema browsing off
+/// stays off.
+pub fn effective_catalog(profile: &Profile, shared: &[SharedCatalog]) -> CatalogSettings {
+    match profile
+        .shared_catalog
+        .and_then(|id| shared.iter().find(|catalog| catalog.id == id))
+    {
+        Some(catalog) if profile.catalog.browses() => catalog.settings.clone(),
+        _ => profile.catalog.clone(),
+    }
+}
+
+/// The maximum number of include or exclude patterns of one connection.
+pub const MAX_SCHEMA_PATTERNS: usize = 100;
+/// The maximum length of one schema pattern, in characters.
+pub const MAX_SCHEMA_PATTERN: usize = 256;
+
+/// The valid automatic refresh periods, in minutes (5 minutes to 7 days).
+pub const CATALOG_REFRESH_MINUTES: std::ops::RangeInclusive<u32> = 5..=10_080;
+/// The valid refresh timeouts, in minutes (1 minute to 1 day).
+pub const CATALOG_TIMEOUT_MINUTES: std::ops::RangeInclusive<u32> = 1..=1_440;
+
+/// Whether Qrow reads the catalog of a connection, and when.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CatalogRefresh {
+    /// Qrow does not read or show the schemas of the connection. New
+    /// connections use it.
+    #[default]
+    Disabled,
+    /// Only an explicit Refresh, or the expansion of an unread row while
+    /// connected, reads the catalog.
+    Manual,
+    /// As `Manual`, and read the connection again after each refresh
+    /// period, but only while a tab of the connection has a live session.
+    WhileConnected,
+}
+
+impl CatalogRefresh {
+    /// Settings saved before this choice existed keep their behavior: the
+    /// schema tree with refreshes on request.
+    fn saved_before_choice() -> Self {
+        Self::Manual
+    }
+}
+
+/// Which schemas the schema tree and the assistant show for a connection,
+/// and when Qrow reads them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct CatalogSettings {
+    /// Glob patterns of the schemas to show. Empty shows all schemas.
+    pub include: Vec<String>,
+    /// Glob patterns of the schemas to hide, also when an include matches.
+    pub exclude: Vec<String>,
+    #[serde(default = "CatalogRefresh::saved_before_choice")]
+    pub refresh: CatalogRefresh,
+    /// The period of [`CatalogRefresh::WhileConnected`]. The other choices
+    /// keep it for a later change back.
+    pub refresh_minutes: u32,
+    /// The longest time of one refresh, manual or automatic.
+    pub timeout_minutes: u32,
+}
+
+impl Default for CatalogSettings {
+    fn default() -> Self {
+        Self {
+            include: Vec::new(),
+            exclude: Vec::new(),
+            refresh: CatalogRefresh::default(),
+            refresh_minutes: 60,
+            timeout_minutes: 30,
+        }
+    }
+}
+
+impl CatalogSettings {
+    /// Whether Qrow reads and shows the schemas of the connection.
+    pub fn browses(&self) -> bool {
+        self.refresh != CatalogRefresh::Disabled
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            CATALOG_REFRESH_MINUTES.contains(&self.refresh_minutes),
+            "Refresh period must be between {} and {} minutes.",
+            CATALOG_REFRESH_MINUTES.start(),
+            CATALOG_REFRESH_MINUTES.end()
+        );
+        anyhow::ensure!(
+            CATALOG_TIMEOUT_MINUTES.contains(&self.timeout_minutes),
+            "Refresh timeout must be between {} and {} minutes.",
+            CATALOG_TIMEOUT_MINUTES.start(),
+            CATALOG_TIMEOUT_MINUTES.end()
+        );
+        for patterns in [&self.include, &self.exclude] {
+            anyhow::ensure!(
+                patterns.len() <= MAX_SCHEMA_PATTERNS,
+                "Enter {MAX_SCHEMA_PATTERNS} schema patterns or fewer."
+            );
+            for pattern in patterns {
+                anyhow::ensure!(
+                    !pattern.trim().is_empty(),
+                    "Schema patterns cannot be empty."
+                );
+                anyhow::ensure!(
+                    pattern.chars().count() <= MAX_SCHEMA_PATTERN,
+                    "Each schema pattern must be {MAX_SCHEMA_PATTERN} characters or fewer."
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Return whether the schema tree shows `schema`. `*` matches any text and
+    /// `?` matches one character. Letter case does not matter.
+    pub fn shows(&self, schema: &str) -> bool {
+        (self.include.is_empty() || self.include.iter().any(|p| glob_match(p, schema)))
+            && !self.exclude.iter().any(|p| glob_match(p, schema))
+    }
+}
+
+pub(crate) fn glob_match(pattern: &str, text: &str) -> bool {
+    let pattern: Vec<char> = pattern.trim().to_lowercase().chars().collect();
+    let text: Vec<char> = text.to_lowercase().chars().collect();
+    // Iterative matching with one backtrack point keeps the cost linear in practice.
+    let (mut p, mut t) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while t < text.len() {
+        match pattern.get(p) {
+            Some('*') => {
+                star = Some((p, t));
+                p += 1;
+            }
+            Some(&c) if c == '?' || c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some((star_p, star_t)) => {
+                    p = star_p + 1;
+                    t = star_t + 1;
+                    star = Some((star_p, star_t + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    pattern[p..].iter().all(|&c| c == '*')
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -180,7 +895,13 @@ pub struct ConnectionLifecycle {
     /// Zero disables keep-alive and enables idle disconnection.
     pub keep_alive_seconds: u64,
     pub keep_alive_sql: String,
+    /// The longest wait for one answer from Kyuubi. The first statement of
+    /// a session can wait while Kyuubi starts an engine.
+    pub response_timeout_seconds: u64,
 }
+
+/// The valid response timeouts, in seconds (10 seconds to 1 hour).
+pub const RESPONSE_TIMEOUT_SECONDS: std::ops::RangeInclusive<u64> = 10..=3_600;
 
 impl Default for ConnectionLifecycle {
     fn default() -> Self {
@@ -188,11 +909,16 @@ impl Default for ConnectionLifecycle {
             idle_seconds: 900,
             keep_alive_seconds: 0,
             keep_alive_sql: "SELECT 1".into(),
+            response_timeout_seconds: 300,
         }
     }
 }
 
 impl ConnectionLifecycle {
+    pub fn response_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.response_timeout_seconds)
+    }
+
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             (1..=604_800).contains(&self.idle_seconds),
@@ -201,6 +927,12 @@ impl ConnectionLifecycle {
         anyhow::ensure!(
             self.keep_alive_seconds <= 604_800,
             "Keep-alive interval must be between 0 and 604800 seconds."
+        );
+        anyhow::ensure!(
+            RESPONSE_TIMEOUT_SECONDS.contains(&self.response_timeout_seconds),
+            "Response timeout must be between {} and {} seconds.",
+            RESPONSE_TIMEOUT_SECONDS.start(),
+            RESPONSE_TIMEOUT_SECONDS.end()
         );
         if self.keep_alive_seconds > 0 {
             crate::sql::validate_single(&self.keep_alive_sql)?;
@@ -212,19 +944,38 @@ impl ConnectionLifecycle {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            database_type: DatabaseType::default(),
             id: Uuid::new_v4(),
             name: "Spark".into(),
             host: String::new(),
             port: 10009,
             username: String::new(),
             database: "avia".into(),
+            trino_schema: String::new(),
             parameters: BTreeMap::new(),
             lifecycle: ConnectionLifecycle::default(),
+            catalog: CatalogSettings::default(),
+            catalog_column_reads: CatalogColumnReads::default(),
+            shared_catalog: None,
+            tls: false,
+            postgres_ssl_mode: None,
+            authentication: Authentication::Password,
+            assistant_notes: String::new(),
+            dbt: None,
         }
     }
 }
 
 impl Profile {
+    /// Resolve saved profiles that predate explicit Postgres TLS modes.
+    pub fn postgres_ssl_mode(&self) -> PostgresSslMode {
+        self.postgres_ssl_mode.unwrap_or(if self.tls {
+            PostgresSslMode::VerifyFull
+        } else {
+            PostgresSslMode::Disable
+        })
+    }
+
     /// Return whether two profiles open the same authenticated session.
     ///
     /// The display name and idle policy can change while a session remains
@@ -232,11 +983,20 @@ impl Profile {
     /// the stored password.
     pub fn connection_identity_eq(&self, other: &Self) -> bool {
         self.id == other.id
+            && self.database_type == other.database_type
             && self.host == other.host
             && self.port == other.port
             && self.username == other.username
             && self.database == other.database
+            && (self.database_type != DatabaseType::Trino
+                || self.trino_schema == other.trino_schema)
             && self.parameters == other.parameters
+            && if self.database_type == DatabaseType::Postgres {
+                self.postgres_ssl_mode() == other.postgres_ssl_mode()
+            } else {
+                self.tls == other.tls
+            }
+            && self.authentication == other.authentication
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -256,8 +1016,333 @@ impl Profile {
             !self.database.trim().is_empty(),
             "Enter an initial database."
         );
-        self.lifecycle.validate()
+        anyhow::ensure!(
+            self.assistant_notes.len() <= MAX_ASSISTANT_NOTES_BYTES,
+            "Assistant notes must be {} KB or less.",
+            MAX_ASSISTANT_NOTES_BYTES / 1024
+        );
+        anyhow::ensure!(
+            self.database_type != DatabaseType::Postgres
+                || self.authentication == Authentication::Password,
+            "Postgres connections use password authentication."
+        );
+        anyhow::ensure!(
+            self.database_type != DatabaseType::Trino
+                || self.authentication == Authentication::Password
+                || self.tls,
+            "Trino sign-ins require TLS."
+        );
+        anyhow::ensure!(
+            !matches!(self.authentication, Authentication::TrinoExternal)
+                || self.database_type == DatabaseType::Trino,
+            "Browser sign-in through Trino requires a Trino connection."
+        );
+        self.lifecycle.validate()?;
+        if let Some(dbt) = &self.dbt {
+            dbt.validate()?;
+        }
+        self.catalog.validate()
     }
+
+    /// Repair a profile that an edited file made invalid: notes above the
+    /// limit lose their end, and the schema mapping loses its invalid rules.
+    fn sanitize(&mut self) {
+        if let Some(dbt) = &mut self.dbt {
+            dbt.schema_mapping.retain(|rule| {
+                DbtProject {
+                    manifest: "/".into(),
+                    refresh: DbtRefresh::Manual,
+                    schema_mapping: vec![rule.clone()],
+                }
+                .validate()
+                .is_ok()
+            });
+            dbt.schema_mapping.truncate(MAX_SCHEMA_RULES);
+        }
+        if self.assistant_notes.len() > MAX_ASSISTANT_NOTES_BYTES {
+            let end = self
+                .assistant_notes
+                .floor_char_boundary(MAX_ASSISTANT_NOTES_BYTES);
+            self.assistant_notes.truncate(end);
+        }
+    }
+}
+
+/// The protocol used by a reusable sign-in.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignInProvider {
+    #[default]
+    Oidc,
+    /// Legacy workspace records, migrated to connection authentication.
+    TrinoExternal,
+}
+impl SignInProvider {
+    fn is_oidc(&self) -> bool {
+        *self == Self::Oidc
+    }
+}
+
+/// A reusable sign-in. Each connection keeps its database username. Direct
+/// OIDC tokens use Keychain. Tokens are never stored in the workspace.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SignIn {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(default)]
+    pub provider: SignInProvider,
+    /// The issuer identifier of the provider, for example a Keycloak realm URL.
+    #[serde(default)]
+    pub issuer: String,
+    /// The public client registered for Qrow. Qrow uses no client secret.
+    #[serde(default)]
+    pub client_id: String,
+    /// Scopes in addition to [`BASE_SCOPES`].
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    /// An optional RFC 8707 resource indicator for the access tokens.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The loopback ports of the callback, in the order to try them. An
+    /// empty list selects an available port.
+    #[serde(default, alias = "callback_port", deserialize_with = "callback_ports")]
+    pub callback_ports: Vec<u16>,
+    /// The signed-in account. `None` until the first sign-in.
+    #[serde(default)]
+    pub identity: Option<Identity>,
+}
+
+/// An account at a provider. The issuer and the subject identify it. The
+/// name and email are for display only.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Identity {
+    pub issuer: String,
+    pub subject: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+}
+
+impl Identity {
+    /// The name, the email, or the subject, in that order.
+    pub fn display(&self) -> &str {
+        self.email
+            .as_deref()
+            .or(self.name.as_deref())
+            .unwrap_or(&self.subject)
+    }
+}
+
+impl Default for SignIn {
+    fn default() -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: String::new(),
+            provider: SignInProvider::Oidc,
+            issuer: String::new(),
+            client_id: String::new(),
+            scopes: vec![],
+            resource: None,
+            callback_ports: vec![],
+            identity: None,
+        }
+    }
+}
+
+impl SignIn {
+    /// Return whether two configurations need the same tokens. A change to
+    /// any of these fields makes the stored tokens unusable.
+    pub fn token_requirements_eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.provider == other.provider
+            && self.issuer == other.issuer
+            && self.client_id == other.client_id
+            && extra_scopes(&self.scopes) == extra_scopes(&other.scopes)
+            && self.resource == other.resource
+    }
+
+    /// The scopes of an authorization request: [`BASE_SCOPES`], then the
+    /// other scopes of the sign-in.
+    pub fn requested_scopes(&self) -> Vec<&str> {
+        let mut scopes = BASE_SCOPES.to_vec();
+        scopes.extend(extra_scopes(&self.scopes));
+        scopes
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.name.trim().is_empty(), "Give this sign-in a name.");
+        anyhow::ensure!(
+            self.name.chars().count() <= MAX_SIGN_IN_NAME,
+            "Sign-in name must be {MAX_SIGN_IN_NAME} characters or fewer."
+        );
+        if self.provider == SignInProvider::Oidc {
+            let issuer = url::Url::parse(&self.issuer)
+                .map_err(|_| anyhow::anyhow!("Enter the issuer as an HTTPS URL."))?;
+            anyhow::ensure!(
+                issuer.scheme() == "https"
+                    && issuer.host_str().is_some()
+                    && issuer.query().is_none()
+                    && issuer.fragment().is_none()
+                    && issuer.username().is_empty()
+                    && issuer.password().is_none(),
+                "Enter the issuer as an HTTPS URL without a query or fragment."
+            );
+            anyhow::ensure!(!self.client_id.trim().is_empty(), "Enter a client ID.");
+            anyhow::ensure!(
+                self.client_id.chars().all(|c| (' '..='~').contains(&c)),
+                "The client ID can contain only printable ASCII characters."
+            );
+            for scope in &self.scopes {
+                anyhow::ensure!(
+                    !scope.is_empty()
+                        && scope.chars().all(|c| c == '!'
+                            || ('#'..='[').contains(&c)
+                            || (']'..='~').contains(&c)),
+                    "Scope \"{scope}\" contains a character that a scope cannot contain."
+                );
+            }
+            if let Some(resource) = &self.resource {
+                let parsed = url::Url::parse(resource)
+                    .map_err(|_| anyhow::anyhow!("Enter the resource as an absolute URI."))?;
+                anyhow::ensure!(
+                    parsed.fragment().is_none(),
+                    "The resource cannot contain a fragment."
+                );
+            }
+        }
+        anyhow::ensure!(
+            self.callback_ports.len() <= MAX_CALLBACK_PORTS,
+            "Enter {MAX_CALLBACK_PORTS} callback ports or fewer."
+        );
+        anyhow::ensure!(
+            !self.callback_ports.contains(&0),
+            "Callback ports must be numbers from 1 to 65535."
+        );
+        Ok(())
+    }
+}
+
+/// Reads the callback ports of a sign-in. Workspaces before this list kept
+/// one port, where zero selected an available port.
+fn callback_ports<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u16>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Ports {
+        One(u16),
+        Many(Vec<u16>),
+    }
+    Ok(match Ports::deserialize(deserializer)? {
+        Ports::One(0) => vec![],
+        Ports::One(port) => vec![port],
+        Ports::Many(ports) => ports,
+    })
+}
+
+/// The format version of shared sign-in settings.
+pub const SHARED_SIGN_IN_VERSION: u32 = 2;
+/// The longest text that Qrow reads as shared sign-in settings.
+const MAX_SHARED_SIGN_IN_BYTES: usize = 64 * 1024;
+
+/// The settings of a sign-in that one user gives to another as text. It has
+/// no identifier, account, or tokens.
+#[derive(Deserialize, Serialize)]
+struct SharedSignIn {
+    /// Marks the text as sign-in settings and gives the format version.
+    qrow_sign_in: u32,
+    name: String,
+    #[serde(default, skip_serializing_if = "SignInProvider::is_oidc")]
+    provider: SignInProvider,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    issuer: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    client_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    scopes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    callback_ports: Vec<u16>,
+}
+
+impl SignIn {
+    /// The settings of this sign-in as text that another user can paste.
+    pub fn to_shared_text(&self) -> String {
+        let shared = SharedSignIn {
+            qrow_sign_in: if self.provider == SignInProvider::Oidc {
+                1
+            } else {
+                SHARED_SIGN_IN_VERSION
+            },
+            name: self.name.clone(),
+            provider: self.provider,
+            issuer: self.issuer.clone(),
+            client_id: self.client_id.clone(),
+            scopes: extra_scopes(&self.scopes)
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            resource: self.resource.clone(),
+            callback_ports: self.callback_ports.clone(),
+        };
+        serde_json::to_string_pretty(&shared).expect("sign-in settings serialize")
+    }
+
+    /// Reads settings from [`Self::to_shared_text`] into a new sign-in with
+    /// no account. Text around the settings, like the rest of a chat
+    /// message, and typographic quotes are accepted.
+    pub fn from_shared_text(text: &str) -> anyhow::Result<Self> {
+        const NOT_A_SIGN_IN: &str = "The clipboard does not contain sign-in settings. Use Copy Settings on a sign-in, then try again.";
+        anyhow::ensure!(text.len() <= MAX_SHARED_SIGN_IN_BYTES, NOT_A_SIGN_IN);
+        let value = shared_sign_in_object(text)
+            .or_else(|| shared_sign_in_object(&text.replace(['\u{201C}', '\u{201D}'], "\"")))
+            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        let version = value
+            .get("qrow_sign_in")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| anyhow::anyhow!(NOT_A_SIGN_IN))?;
+        anyhow::ensure!(
+            version <= u64::from(SHARED_SIGN_IN_VERSION),
+            "These sign-in settings come from a newer version of Qrow. Update Qrow, then try again."
+        );
+        let shared: SharedSignIn = serde_json::from_value(value)
+            .map_err(|error| anyhow::anyhow!("The sign-in settings are not complete: {error}."))?;
+        let sign_in = Self {
+            name: shared.name.trim().to_owned(),
+            provider: shared.provider,
+            issuer: shared.issuer.trim().to_owned(),
+            client_id: shared.client_id.trim().to_owned(),
+            scopes: shared.scopes,
+            resource: shared
+                .resource
+                .filter(|resource| !resource.trim().is_empty()),
+            callback_ports: shared.callback_ports,
+            ..Self::default()
+        };
+        sign_in.validate()?;
+        Ok(sign_in)
+    }
+}
+
+/// The first JSON object in `text` that has the `qrow_sign_in` marker. Other
+/// text, also text with braces, can come before and after it.
+fn shared_sign_in_object(text: &str) -> Option<serde_json::Value> {
+    // The object starts at one of the nearest braces before a marker. A few
+    // tries for each marker keep the work linear in the length of the text.
+    const STARTS_PER_MARKER: usize = 4;
+    text.match_indices("\"qrow_sign_in\"")
+        .find_map(|(marker, _)| {
+            text[..marker]
+                .rmatch_indices('{')
+                .take(STARTS_PER_MARKER)
+                .find_map(|(start, _)| {
+                    serde_json::Deserializer::from_str(&text[start..])
+                        .into_iter::<serde_json::Value>()
+                        .next()?
+                        .ok()
+                        .filter(|value| value.get("qrow_sign_in").is_some())
+                })
+        })
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -279,6 +1364,174 @@ impl SavedTab {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantTitleSource {
+    #[default]
+    Temporary,
+    /// The harness generated the title. Earlier workspaces call it `codex`.
+    #[serde(rename = "codex", alias = "generated")]
+    Generated,
+    User,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct AssistantConversation {
+    pub thread_id: String,
+    /// The harness that keeps the conversation. Earlier workspaces have only
+    /// Codex conversations.
+    #[serde(default)]
+    pub harness: AssistantHarness,
+    pub title: String,
+    pub title_source: AssistantTitleSource,
+    /// A tab opened by New Conversation follows its conversation title.
+    #[serde(default)]
+    pub title_follows_conversation: bool,
+    pub last_activity: u64,
+    pub execution_mode: AssistantExecutionMode,
+    /// The query tab of the conversation. The tab supplies the connection.
+    #[serde(default)]
+    pub tab_id: Option<Uuid>,
+    /// The connection for the next tab of a conversation whose tab closed.
+    #[serde(default)]
+    pub detached_profile: Option<Uuid>,
+    /// The connection notes that the conversation has, so a message sends
+    /// them again only after a change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sent_notes: Option<SentNotes>,
+}
+
+/// The connection notes that Qrow last sent in a conversation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SentNotes {
+    /// The connection of the conversation tab when Qrow sent the notes.
+    pub connection: Option<Uuid>,
+    /// The SHA-256 digest of the notes, in lowercase hexadecimal.
+    pub digest: String,
+}
+
+impl AssistantConversation {
+    pub fn new(thread_id: impl Into<String>, execution_mode: AssistantExecutionMode) -> Self {
+        Self {
+            thread_id: thread_id.into(),
+            harness: AssistantHarness::default(),
+            title: "New conversation".into(),
+            title_source: AssistantTitleSource::Temporary,
+            title_follows_conversation: false,
+            last_activity: 0,
+            execution_mode,
+            tab_id: None,
+            detached_profile: None,
+            sent_notes: None,
+        }
+    }
+
+    fn sanitize(&mut self) {
+        self.thread_id = self.thread_id.trim().to_owned();
+        self.title = self.title.trim().to_owned();
+        if self.title.is_empty() {
+            self.title = "New conversation".into();
+            self.title_source = AssistantTitleSource::Temporary;
+        }
+        self.title = self
+            .title
+            .chars()
+            .take(MAX_ASSISTANT_CONVERSATION_TITLE)
+            .collect();
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+#[serde(default)]
+pub struct AssistantWorkspace {
+    pub conversations: Vec<AssistantConversation>,
+    /// The conversation that a version 3 workspace showed. Loading moves it
+    /// to the active tab. Qrow does not save it.
+    #[serde(rename = "selected_thread", skip_serializing)]
+    legacy_selected_thread: Option<String>,
+}
+
+impl AssistantWorkspace {
+    pub fn sanitize(&mut self) {
+        let mut thread_ids = BTreeSet::new();
+        self.conversations.retain_mut(|conversation| {
+            conversation.sanitize();
+            !conversation.thread_id.is_empty() && thread_ids.insert(conversation.thread_id.clone())
+        });
+    }
+
+    pub fn conversation(&self, thread_id: &str) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    pub fn conversation_mut(&mut self, thread_id: &str) -> Option<&mut AssistantConversation> {
+        self.conversations
+            .iter_mut()
+            .find(|conversation| conversation.thread_id == thread_id)
+    }
+
+    /// The conversation that owns a query tab.
+    pub fn conversation_for_tab(&self, tab_id: Uuid) -> Option<&AssistantConversation> {
+        self.conversations
+            .iter()
+            .find(|conversation| conversation.tab_id == Some(tab_id))
+    }
+
+    /// Detach the conversation of a closed tab. It keeps the connection for
+    /// its next tab.
+    pub fn detach_tab(&mut self, tab_id: Uuid, profile: Option<Uuid>) {
+        for conversation in &mut self.conversations {
+            if conversation.tab_id == Some(tab_id) {
+                conversation.tab_id = None;
+                conversation.detached_profile = profile;
+            }
+        }
+    }
+
+    /// Give each tab at most one conversation, and detach conversations whose
+    /// tab is missing. The most recent conversation keeps a shared tab. A
+    /// detached conversation keeps the connection of its last tab.
+    fn link_tabs(&mut self, tabs: &[SavedTab], profiles: &[Profile]) {
+        let mut order: Vec<usize> = (0..self.conversations.len()).collect();
+        order.sort_by_key(|&index| std::cmp::Reverse(self.conversations[index].last_activity));
+        let mut claimed = BTreeSet::new();
+        for index in order {
+            let conversation = &mut self.conversations[index];
+            let Some(tab_id) = conversation.tab_id else {
+                continue;
+            };
+            let tab = tabs.iter().find(|tab| tab.id == tab_id);
+            if tab.is_some() && claimed.insert(tab_id) {
+                conversation.detached_profile = None;
+                continue;
+            }
+            conversation.tab_id = None;
+            if let Some(tab) = tab {
+                conversation.detached_profile = tab.profile;
+            }
+        }
+        for conversation in &mut self.conversations {
+            if conversation
+                .detached_profile
+                .is_some_and(|id| !profiles.iter().any(|profile| profile.id == id))
+            {
+                conversation.detached_profile = None;
+            }
+        }
+    }
+
+    /// Remove conversations without a turn. Codex keeps them only in the
+    /// memory of its current process, so another process cannot resume them.
+    pub fn remove_unstarted(&mut self, unstarted: &BTreeSet<String>) {
+        self.conversations
+            .retain(|conversation| !unstarted.contains(&conversation.thread_id));
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Workspace {
     pub version: u32,
@@ -289,6 +1542,49 @@ pub struct Workspace {
     pub active_tab: usize,
     #[serde(default)]
     pub active_tabs: BTreeMap<Uuid, Uuid>,
+    #[serde(default)]
+    pub assistant: AssistantWorkspace,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_catalogs: Vec<SharedCatalog>,
+    #[serde(default)]
+    pub sign_ins: Vec<SignIn>,
+}
+
+/// Remove the shared catalogs without members, and the references to
+/// catalogs or members that do not exist. Returns the IDs of the removed
+/// shared catalogs, whose cache files can go.
+pub fn prune_shared_catalogs(
+    profiles: &mut [Profile],
+    shared: &mut Vec<SharedCatalog>,
+) -> Vec<Uuid> {
+    for profile in profiles.iter_mut() {
+        if profile
+            .shared_catalog
+            .is_some_and(|id| !shared.iter().any(|catalog| catalog.id == id))
+        {
+            profile.shared_catalog = None;
+        }
+    }
+    let mut removed = Vec::new();
+    shared.retain(|catalog| {
+        let used = profiles
+            .iter()
+            .any(|profile| profile.shared_catalog == Some(catalog.id));
+        if !used {
+            removed.push(catalog.id);
+        }
+        used
+    });
+    for catalog in shared.iter_mut() {
+        if catalog.preferred.is_some_and(|preferred| {
+            !profiles
+                .iter()
+                .any(|p| p.id == preferred && p.shared_catalog == Some(catalog.id))
+        }) {
+            catalog.preferred = None;
+        }
+    }
+    removed
 }
 
 impl Workspace {
@@ -296,6 +1592,30 @@ impl Workspace {
     /// still use one list in storage, but every tab is normalized to an owned
     /// connection and each connection gets an active tab.
     pub fn normalize(&mut self) {
+        // Older Trino profiles referred to a reusable sign-in. The coordinator
+        // now owns authentication directly; legacy records have no credentials.
+        let legacy_external: BTreeSet<_> = self
+            .sign_ins
+            .iter()
+            .filter(|sign_in| sign_in.provider == SignInProvider::TrinoExternal)
+            .map(|sign_in| sign_in.id)
+            .collect();
+        for profile in &mut self.profiles {
+            if profile.database_type == DatabaseType::Trino
+                && profile
+                    .authentication
+                    .sign_in()
+                    .is_some_and(|id| legacy_external.contains(&id))
+            {
+                profile.authentication = Authentication::TrinoExternal;
+            }
+        }
+        self.sign_ins
+            .retain(|sign_in| sign_in.provider != SignInProvider::TrinoExternal);
+        let conversations_without_tabs = self.version < 4;
+        for profile in &mut self.profiles {
+            profile.sanitize();
+        }
         let active_profile = self.tabs.get(self.active_tab).and_then(|tab| tab.profile);
         let fallback = active_profile.filter(|id| self.profiles.iter().any(|p| p.id == *id));
         let fallback = fallback.or_else(|| self.profiles.first().map(|p| p.id));
@@ -359,19 +1679,47 @@ impl Workspace {
             tab.title = unique_tab_title(&title, |candidate| used.contains(candidate));
             used.insert(tab.title.clone());
         }
-        self.version = 2;
+        self.assistant.sanitize();
+        let selected = self
+            .assistant
+            .legacy_selected_thread
+            .take()
+            .map(|thread| thread.trim().to_owned());
+        if conversations_without_tabs {
+            // Earlier conversations used the selected tab. The conversation
+            // that was open keeps the active tab. The others are detached
+            // under the connection that was active.
+            let tab = self.tabs.get(self.active_tab);
+            let profile = tab.and_then(|tab| tab.profile);
+            for conversation in &mut self.assistant.conversations {
+                conversation.detached_profile = profile;
+                conversation.tab_id = None;
+                if selected.as_deref() == Some(conversation.thread_id.as_str()) {
+                    conversation.tab_id = tab.map(|tab| tab.id);
+                }
+            }
+        }
+        self.assistant.link_tabs(&self.tabs, &self.profiles);
+        for catalog in &mut self.shared_catalogs {
+            catalog.sanitize();
+        }
+        prune_shared_catalogs(&mut self.profiles, &mut self.shared_catalogs);
+        self.version = WORKSPACE_VERSION;
     }
 }
 
 impl Default for Workspace {
     fn default() -> Self {
         Self {
-            version: 2,
+            version: WORKSPACE_VERSION,
             settings: Settings::default(),
             profiles: vec![],
             tabs: vec![SavedTab::new(1, None)],
             active_tab: 0,
             active_tabs: BTreeMap::new(),
+            assistant: AssistantWorkspace::default(),
+            shared_catalogs: Vec::new(),
+            sign_ins: vec![],
         }
     }
 }
@@ -387,12 +1735,275 @@ pub type Row = Vec<Option<String>>;
 #[derive(Default, Debug)]
 pub struct Batch {
     pub rows: Vec<Row>,
-    pub more: bool,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_patterns_match_globs_without_case_and_exclude_wins() {
+        let settings = CatalogSettings {
+            include: vec!["sales_*".into(), "o?s".into()],
+            exclude: vec!["*_tmp".into()],
+            ..CatalogSettings::default()
+        };
+        assert!(settings.shows("Sales_EU"));
+        assert!(settings.shows("ops"));
+        assert!(!settings.shows("sales_eu_tmp"));
+        assert!(!settings.shows("oops"));
+        assert!(!settings.shows("hr"));
+        assert!(CatalogSettings::default().shows("anything"));
+        assert!(glob_match("a*b*c", "axxbyyc"));
+        assert!(glob_match("*", ""));
+        assert!(!glob_match("a*b", "a"));
+        assert!(!glob_match("?", ""));
+    }
+
+    #[test]
+    fn schema_patterns_must_be_bounded_and_not_blank() {
+        let mut settings = CatalogSettings {
+            include: vec![" ".into()],
+            exclude: vec![],
+            ..CatalogSettings::default()
+        };
+        assert!(settings.validate().is_err());
+        settings.include = vec!["x".repeat(MAX_SCHEMA_PATTERN + 1)];
+        assert!(settings.validate().is_err());
+        settings.include = vec!["a".into(); MAX_SCHEMA_PATTERNS + 1];
+        assert!(settings.validate().is_err());
+        settings.include = vec!["a*".into()];
+        assert!(settings.validate().is_ok());
+        let restored: Profile =
+            serde_json::from_str(r#"{"id":"00000000-0000-0000-0000-000000000001","name":"a","host":"h","port":1,"username":"u","database":"d","parameters":{}}"#)
+                .unwrap();
+        // A connection saved before the schema tree existed did not browse
+        // schemas, and it still does not.
+        assert_eq!(restored.catalog, CatalogSettings::default());
+    }
+
+    #[test]
+    fn column_reads_default_for_saved_connections_and_round_trip_both_modes() {
+        let profile = Profile::default();
+        assert_eq!(profile.catalog_column_reads, CatalogColumnReads::Table);
+        let mut saved = serde_json::to_value(&profile).unwrap();
+        saved
+            .as_object_mut()
+            .unwrap()
+            .remove("catalog_column_reads");
+        let restored: Profile = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.catalog_column_reads, CatalogColumnReads::Table);
+        for mode in [CatalogColumnReads::Table, CatalogColumnReads::Schema] {
+            let mut profile = profile.clone();
+            profile.catalog_column_reads = mode;
+            let text = serde_json::to_string(&profile).unwrap();
+            assert_eq!(serde_json::from_str::<Profile>(&text).unwrap(), profile);
+        }
+    }
+
+    #[test]
+    fn schema_refresh_policy_defaults_and_bounds() {
+        // New connections do not browse schemas.
+        let defaults = CatalogSettings::default();
+        assert_eq!(defaults.refresh, CatalogRefresh::Disabled);
+        assert!(!defaults.browses());
+        assert_eq!(defaults.timeout_minutes, 30);
+        // Settings saved with the schema tree but without a refresh choice
+        // keep the tree with refreshes on request. Qrow ignores the removed
+        // Logs option of older files, and the next save drops it.
+        let restored: CatalogSettings =
+            serde_json::from_str(r#"{"include":["a"],"exclude":[],"log_refreshes":true}"#).unwrap();
+        let saved = serde_json::to_string(&restored).unwrap();
+        assert!(!saved.contains("log_refreshes"), "{saved}");
+        assert_eq!(restored.refresh, CatalogRefresh::Manual);
+        assert!(restored.browses());
+        assert_eq!(restored.timeout_minutes, 30);
+        let text = serde_json::to_string(&defaults).unwrap();
+        assert!(text.contains(r#""refresh":{"mode":"disabled"}"#), "{text}");
+        assert_eq!(
+            serde_json::from_str::<CatalogSettings>(&text).unwrap(),
+            defaults
+        );
+
+        // Settings of an earlier build kept the period in the choice. They
+        // still load, with the default period.
+        let earlier: CatalogSettings =
+            serde_json::from_str(r#"{"refresh":{"mode":"while_connected","minutes":15}}"#).unwrap();
+        assert_eq!(earlier.refresh, CatalogRefresh::WhileConnected);
+        assert_eq!(earlier.refresh_minutes, 60);
+
+        for (minutes, valid) in [(4, false), (5, true), (10_080, true), (10_081, false)] {
+            let settings = CatalogSettings {
+                refresh: CatalogRefresh::WhileConnected,
+                refresh_minutes: minutes,
+                ..defaults.clone()
+            };
+            assert_eq!(settings.validate().is_ok(), valid, "{minutes}");
+        }
+        for (minutes, valid) in [(0, false), (1, true), (1_440, true), (1_441, false)] {
+            let settings = CatalogSettings {
+                timeout_minutes: minutes,
+                ..defaults.clone()
+            };
+            assert_eq!(settings.validate().is_ok(), valid, "{minutes}");
+        }
+    }
+
+    #[test]
+    fn assistant_notes_are_optional_bounded_and_repaired() {
+        let mut profile = Profile {
+            host: "localhost".into(),
+            username: "user".into(),
+            ..Profile::default()
+        };
+        // Profiles without notes do not save the field, and earlier files load.
+        let json = serde_json::to_value(&profile).unwrap();
+        assert!(json.get("assistant_notes").is_none(), "{json}");
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.assistant_notes, "");
+
+        profile.assistant_notes = "é".repeat(MAX_ASSISTANT_NOTES_BYTES / 2);
+        assert!(profile.validate().is_ok());
+        profile.assistant_notes.push('x');
+        assert!(profile.validate().is_err());
+
+        // An edited file with notes above the limit loses their end, on a
+        // character boundary.
+        profile.assistant_notes = format!("x{}", "é".repeat(MAX_ASSISTANT_NOTES_BYTES / 2));
+        let mut workspace = Workspace {
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        let notes = &workspace.profiles[0].assistant_notes;
+        assert_eq!(notes.len(), MAX_ASSISTANT_NOTES_BYTES - 1);
+        assert!(workspace.profiles[0].validate().is_ok());
+    }
+
+    fn rule(kind: SchemaRuleKind, from: &str, to: &str) -> SchemaRule {
+        SchemaRule {
+            kind,
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+
+    #[test]
+    fn a_dbt_project_is_optional_and_valid_with_an_absolute_manifest() {
+        let mut profile = Profile {
+            host: "localhost".into(),
+            username: "user".into(),
+            ..Profile::default()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert!(json.get("dbt").is_none(), "{json}");
+
+        profile.dbt = Some(DbtProject {
+            manifest: "/projects/lake/target/manifest.json".into(),
+            refresh: DbtRefresh::default(),
+            schema_mapping: vec![],
+        });
+        assert!(profile.validate().is_ok());
+        // A saved project without the optional fields loads with defaults.
+        let json = serde_json::json!({"manifest": "/projects/lake/target/manifest.json"});
+        let project: DbtProject = serde_json::from_value(json).unwrap();
+        assert_eq!(project.refresh, DbtRefresh::Automatic);
+        assert!(project.schema_mapping.is_empty());
+
+        profile.dbt.as_mut().unwrap().manifest = "target/manifest.json".into();
+        assert!(profile.validate().is_err());
+        let dbt = profile.dbt.as_mut().unwrap();
+        dbt.manifest = "/projects/lake/target/manifest.json".into();
+        dbt.schema_mapping = vec![rule(SchemaRuleKind::Exact, "analytics", "")];
+        assert!(profile.validate().is_err());
+
+        // An edited file keeps only the valid rules.
+        let dbt = profile.dbt.as_mut().unwrap();
+        dbt.schema_mapping = vec![
+            rule(SchemaRuleKind::Prefix, "", "x"),
+            rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+        ];
+        let mut workspace = Workspace {
+            profiles: vec![profile],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        let dbt = workspace.profiles[0].dbt.as_ref().unwrap();
+        assert_eq!(
+            dbt.schema_mapping,
+            [rule(SchemaRuleKind::Prefix, "dbt_dev_", "")]
+        );
+    }
+
+    #[test]
+    fn the_first_matching_rule_maps_a_dbt_schema() {
+        let project = DbtProject {
+            manifest: "/manifest.json".into(),
+            refresh: DbtRefresh::Manual,
+            schema_mapping: vec![
+                rule(SchemaRuleKind::Exact, "Analytics", "prod_analytics"),
+                rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+                rule(SchemaRuleKind::Prefix, "dbt_", "warehouse_"),
+            ],
+        };
+        assert_eq!(project.map_schema("analytics"), "prod_analytics");
+        assert_eq!(project.map_schema("DBT_DEV_core"), "core");
+        assert_eq!(project.map_schema("dbt_finance"), "warehouse_finance");
+        assert_eq!(project.map_schema("staging"), "staging");
+        // A prefix that ends inside a character does not match.
+        assert_eq!(project.map_schema("db"), "db");
+        assert_eq!(project.map_schema("dbé"), "dbé");
+    }
+
+    #[test]
+    fn schema_rules_are_lines_of_text() {
+        let rules = parse_schema_rules(
+            "dbt_dev_* = *\n\n  analytics = prod_analytics  \nstg_*=staging_*\n",
+        )
+        .unwrap();
+        assert_eq!(
+            rules,
+            [
+                rule(SchemaRuleKind::Prefix, "dbt_dev_", ""),
+                rule(SchemaRuleKind::Exact, "analytics", "prod_analytics"),
+                rule(SchemaRuleKind::Prefix, "stg_", "staging_"),
+            ]
+        );
+        assert_eq!(
+            format_schema_rules(&rules),
+            "dbt_dev_* = *\nanalytics = prod_analytics\nstg_* = staging_*"
+        );
+        assert_eq!(
+            parse_schema_rules(&format_schema_rules(&rules)).unwrap(),
+            rules
+        );
+        assert!(parse_schema_rules("").unwrap().is_empty());
+        for invalid in [
+            "analytics",
+            "dbt_* = core",
+            "* = *",
+            "analytics = ",
+            "a b = c",
+        ] {
+            let error = parse_schema_rules(&format!("x = y\n{invalid}")).unwrap_err();
+            assert!(error.to_string().contains("line 2"), "{invalid}: {error}");
+        }
+    }
+
+    #[test]
+    fn conversations_keep_the_record_of_sent_notes() {
+        let mut conversation =
+            AssistantConversation::new("thread", AssistantExecutionMode::AskBeforeRunning);
+        let json = serde_json::to_value(&conversation).unwrap();
+        assert!(json.get("sent_notes").is_none(), "{json}");
+        conversation.sent_notes = Some(SentNotes {
+            connection: Some(Uuid::new_v4()),
+            digest: "00".into(),
+        });
+        let restored: AssistantConversation =
+            serde_json::from_value(serde_json::to_value(&conversation).unwrap()).unwrap();
+        assert_eq!(restored, conversation);
+    }
 
     #[test]
     fn default_profile_uses_a_neutral_spark_name() {
@@ -424,6 +2035,21 @@ mod tests {
     }
 
     #[test]
+    fn a_lifecycle_without_a_response_timeout_waits_five_minutes() {
+        // Lifecycles saved before the setting existed get the default.
+        let restored: ConnectionLifecycle = serde_json::from_str(
+            r#"{"idle_seconds":900,"keep_alive_seconds":0,"keep_alive_sql":"SELECT 1"}"#,
+        )
+        .unwrap();
+        assert_eq!(restored.response_timeout_seconds, 300);
+        let mut policy = ConnectionLifecycle::default();
+        for (seconds, valid) in [(9, false), (10, true), (3_600, true), (3_601, false)] {
+            policy.response_timeout_seconds = seconds;
+            assert_eq!(policy.validate().is_ok(), valid, "{seconds}");
+        }
+    }
+
+    #[test]
     fn lifecycle_rejects_invalid_timers_and_multiple_heartbeat_statements() {
         let mut policy = ConnectionLifecycle {
             idle_seconds: 0,
@@ -443,6 +2069,333 @@ mod tests {
         let restored: ConnectionLifecycle =
             serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
         assert_eq!(restored, policy);
+    }
+
+    #[test]
+    fn old_profiles_restore_with_password_authentication_and_plain_tcp() {
+        let original = Profile::default();
+        let mut json = serde_json::to_value(&original).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("tls");
+        object.remove("authentication");
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.id, original.id);
+        assert_eq!(restored.authentication, Authentication::Password);
+        assert!(!restored.tls);
+        let workspace: Workspace = serde_json::from_value(serde_json::json!({
+            "version": 5, "profiles": [], "tabs": [], "active_tab": 0,
+        }))
+        .unwrap();
+        assert!(workspace.sign_ins.is_empty());
+    }
+
+    #[test]
+    fn a_saved_callback_port_loads_as_a_list() {
+        let mut json = serde_json::to_value(SignIn::default()).unwrap();
+        let object = json.as_object_mut().unwrap();
+        object.remove("callback_ports");
+        object.insert("callback_port".into(), serde_json::json!(8765));
+        let restored: SignIn = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(restored.callback_ports, vec![8765]);
+        json["callback_port"] = serde_json::json!(0);
+        let restored: SignIn = serde_json::from_value(json).unwrap();
+        assert!(restored.callback_ports.is_empty());
+        let saved = serde_json::to_value(&restored).unwrap();
+        assert_eq!(saved["callback_ports"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn authentication_is_saved_with_the_sign_in_reference_only() {
+        let sign_in = Uuid::new_v4();
+        let profile = Profile {
+            tls: true,
+            authentication: Authentication::Oidc { sign_in },
+            ..Profile::default()
+        };
+        let json = serde_json::to_value(&profile).unwrap();
+        assert_eq!(
+            json["authentication"],
+            serde_json::json!({"method": "oidc", "sign_in": sign_in})
+        );
+        let restored: Profile = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, profile);
+    }
+
+    #[test]
+    fn sign_in_authentication_works_with_and_without_tls() {
+        let mut profile = Profile {
+            host: "kyuubi.example.test".into(),
+            username: "analytics".into(),
+            authentication: Authentication::Oidc {
+                sign_in: Uuid::new_v4(),
+            },
+            ..Profile::default()
+        };
+        assert!(profile.validate().is_ok());
+        profile.tls = true;
+        assert!(profile.validate().is_ok());
+    }
+
+    #[test]
+    fn authentication_and_tls_are_part_of_the_session_identity() {
+        let original = Profile::default();
+        let mut updated = original.clone();
+        updated.tls = true;
+        assert!(!original.connection_identity_eq(&updated));
+        let mut updated = original.clone();
+        updated.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(!original.connection_identity_eq(&updated));
+    }
+
+    fn sign_in() -> SignIn {
+        SignIn {
+            name: "Company".into(),
+            issuer: "https://id.example.test/realms/data".into(),
+            client_id: "qrow-desktop".into(),
+            scopes: vec!["kyuubi".into(), "offline_access".into()],
+            ..SignIn::default()
+        }
+    }
+
+    #[test]
+    fn sign_in_validation_requires_https_and_a_client() {
+        assert!(sign_in().validate().is_ok());
+        let invalid: [fn(&mut SignIn); 7] = [
+            |s| s.name = " ".into(),
+            |s| s.issuer = "http://id.example.test".into(),
+            |s| s.issuer = "https://id.example.test/?realm=x".into(),
+            |s| s.issuer = "not a url".into(),
+            |s| s.client_id = "".into(),
+            |s| s.scopes = vec!["two words".into()],
+            |s| s.resource = Some("relative".into()),
+        ];
+        for change in invalid {
+            let mut value = sign_in();
+            change(&mut value);
+            assert!(value.validate().is_err(), "{value:?}");
+        }
+    }
+
+    #[test]
+    fn legacy_oidc_database_hosts_are_ignored_and_removed_from_saved_settings() {
+        let original = sign_in();
+        let mut json = serde_json::to_value(&original).unwrap();
+        json["allowed_hosts"] = serde_json::json!(["legacy.example.test"]);
+        let restored: SignIn = serde_json::from_value(json).unwrap();
+        assert_eq!(restored, original);
+        assert!(
+            serde_json::to_value(&restored)
+                .unwrap()
+                .get("allowed_hosts")
+                .is_none()
+        );
+        let mut shared: serde_json::Value =
+            serde_json::from_str(&original.to_shared_text()).unwrap();
+        shared["database_hosts"] = serde_json::json!(["legacy.example.test"]);
+        let pasted = SignIn::from_shared_text(&shared.to_string()).unwrap();
+        pasted.validate().unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&pasted.to_shared_text())
+                .unwrap()
+                .get("database_hosts")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn shared_sign_in_text_has_the_settings_only() {
+        let mut value = sign_in();
+        value.scopes.push("profile".into());
+        value.resource = Some("https://kyuubi.example.test".into());
+        value.callback_ports = vec![8765, 8766];
+        value.identity = Some(Identity {
+            issuer: value.issuer.clone(),
+            subject: "subject-1".into(),
+            name: Some("Alice".into()),
+            email: Some("alice@example.test".into()),
+        });
+        let text = value.to_shared_text();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "qrow_sign_in": 1,
+                "name": "Company",
+                "issuer": "https://id.example.test/realms/data",
+                "client_id": "qrow-desktop",
+                "scopes": ["kyuubi", "offline_access"],
+                "resource": "https://kyuubi.example.test",
+                "callback_ports": [8765, 8766],
+            })
+        );
+        let pasted = SignIn::from_shared_text(&text).unwrap();
+        assert_ne!(pasted.id, value.id);
+        assert_eq!(pasted.identity, None);
+        assert_eq!(pasted.scopes, vec!["kyuubi", "offline_access"]);
+        assert_eq!(pasted.resource, value.resource);
+        assert_eq!(pasted.callback_ports, value.callback_ports);
+        // Empty optional settings stay out of the text.
+        let json: serde_json::Value = serde_json::from_str(
+            &SignIn {
+                scopes: vec![],
+                ..sign_in()
+            }
+            .to_shared_text(),
+        )
+        .unwrap();
+        for key in ["scopes", "resource", "callback_ports"] {
+            assert!(json.get(key).is_none(), "{key}");
+        }
+    }
+
+    #[test]
+    fn shared_sign_in_text_survives_a_chat_message() {
+        let text = sign_in().to_shared_text();
+        let message = format!("Our sign-in:\n```\n{text}\n```\nThanks!");
+        assert_eq!(SignIn::from_shared_text(&message).unwrap().name, "Company");
+        let braces = format!("Use {{your_username}} in the connection:\n{text}\nSee {{docs}}.");
+        assert_eq!(SignIn::from_shared_text(&braces).unwrap().name, "Company");
+        let compact =
+            serde_json::to_string(&serde_json::from_str::<serde_json::Value>(&text).unwrap())
+                .unwrap();
+        assert_eq!(SignIn::from_shared_text(&compact).unwrap().name, "Company");
+        let typographic = text.replace('"', "\u{201C}");
+        assert_eq!(
+            SignIn::from_shared_text(&typographic).unwrap().client_id,
+            "qrow-desktop"
+        );
+        // Unknown fields from a later version of the same format are ignored.
+        let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json["future"] = serde_json::json!(true);
+        assert!(SignIn::from_shared_text(&json.to_string()).is_ok());
+    }
+
+    #[test]
+    fn shared_sign_in_text_rejects_other_or_invalid_content() {
+        let not_a_sign_in = |text: &str| {
+            let error = SignIn::from_shared_text(text).unwrap_err().to_string();
+            assert!(
+                error.contains("does not contain sign-in settings"),
+                "{text}: {error}"
+            );
+        };
+        not_a_sign_in("");
+        not_a_sign_in("SELECT 1");
+        not_a_sign_in("} {");
+        not_a_sign_in(r#"{"name": "Company"}"#);
+        not_a_sign_in(&format!(
+            "{{\"qrow_sign_in\": 1, \"x\": \"{}\"}}",
+            "x".repeat(70_000)
+        ));
+        let mut json: serde_json::Value =
+            serde_json::from_str(&sign_in().to_shared_text()).unwrap();
+        json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION + 1);
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("newer version"), "{error}");
+        json["qrow_sign_in"] = serde_json::json!(SHARED_SIGN_IN_VERSION);
+        json.as_object_mut().unwrap().remove("client_id");
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("client ID"), "{error}");
+        // The settings pass the same checks as Sign-in Settings.
+        json["client_id"] = serde_json::json!("qrow-desktop");
+        json["issuer"] = serde_json::json!("http://id.example.test");
+        let error = SignIn::from_shared_text(&json.to_string()).unwrap_err();
+        assert!(error.to_string().contains("HTTPS"), "{error}");
+    }
+
+    #[test]
+    fn pasted_sign_in_names_stay_unique_and_within_limit() {
+        let used = ["Company", "Company copy"];
+        assert_eq!(
+            unique_sign_in_name("Other", |name| used.contains(&name)),
+            "Other"
+        );
+        assert_eq!(
+            unique_sign_in_name("Company", |name| used.contains(&name)),
+            "Company copy 2"
+        );
+        let long = "x".repeat(MAX_SIGN_IN_NAME);
+        let copy = unique_sign_in_name(&long, |name| name == long);
+        assert!(copy.ends_with(" copy"));
+        assert_eq!(copy.chars().count(), MAX_SIGN_IN_NAME);
+    }
+
+    #[test]
+    fn sign_in_scopes_and_requirements() {
+        let value = sign_in();
+        assert_eq!(
+            value.requested_scopes(),
+            vec!["openid", "profile", "email", "kyuubi", "offline_access"]
+        );
+        let mut renamed = value.clone();
+        renamed.name = "Renamed".into();
+        assert!(value.token_requirements_eq(&renamed));
+        // The base scopes are always requested, so naming them changes
+        // nothing.
+        let mut same = value.clone();
+        same.scopes.push("profile".into());
+        assert!(value.token_requirements_eq(&same));
+        let mut changed = value.clone();
+        changed.scopes.push("groups".into());
+        assert!(!value.token_requirements_eq(&changed));
+    }
+
+    #[test]
+    fn identity_display_prefers_email_then_name_then_subject() {
+        let mut identity = Identity {
+            issuer: "https://id.example.test".into(),
+            subject: "s-1".into(),
+            name: Some("Ada".into()),
+            email: Some("ada@example.test".into()),
+        };
+        assert_eq!(identity.display(), "ada@example.test");
+        identity.email = None;
+        assert_eq!(identity.display(), "Ada");
+        identity.name = None;
+        assert_eq!(identity.display(), "s-1");
+    }
+
+    #[test]
+    fn postgres_tls_modes_preserve_legacy_profiles_and_session_identity() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Postgres,
+            ..Profile::default()
+        };
+        for (tls, expected) in [
+            (false, PostgresSslMode::Disable),
+            (true, PostgresSslMode::VerifyFull),
+        ] {
+            profile.tls = tls;
+            let json = serde_json::to_string(&profile).unwrap();
+            assert!(!json.contains("postgres_ssl_mode"));
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), expected);
+        }
+        let legacy = profile.clone();
+        profile.postgres_ssl_mode = Some(PostgresSslMode::VerifyFull);
+        assert!(legacy.connection_identity_eq(&profile));
+        for mode in [
+            PostgresSslMode::Disable,
+            PostgresSslMode::Require,
+            PostgresSslMode::VerifyFull,
+        ] {
+            profile.postgres_ssl_mode = Some(mode);
+            let json = serde_json::to_string(&profile).unwrap();
+            let restored: Profile = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored.postgres_ssl_mode(), mode);
+            assert_eq!(
+                legacy.connection_identity_eq(&restored),
+                mode == PostgresSslMode::VerifyFull
+            );
+        }
+        profile.database_type = DatabaseType::Kyuubi;
+        let mut changed = profile.clone();
+        changed.postgres_ssl_mode = Some(PostgresSslMode::Require);
+        assert!(profile.connection_identity_eq(&changed));
+        changed.tls = false;
+        assert!(!profile.connection_identity_eq(&changed));
     }
 
     #[test]
@@ -475,7 +2428,7 @@ mod tests {
             ..Workspace::default()
         };
         workspace.normalize();
-        assert_eq!(workspace.version, 2);
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
         assert_eq!(workspace.tabs[0].profile, Some(first.id));
         assert!(
             workspace
@@ -500,6 +2453,16 @@ mod tests {
 
         let long = copied_tab_title(&"x".repeat(MAX_TAB_TITLE), |_| false);
         assert_eq!(long, format!("{} (Copy)", "x".repeat(MAX_TAB_TITLE - 7)));
+    }
+
+    #[test]
+    fn conversation_titles_fit_tabs_and_keep_connection_names_unique() {
+        let long = "航".repeat(MAX_ASSISTANT_CONVERSATION_TITLE);
+        let first = conversation_tab_title(&long, |_| false).unwrap();
+        assert_eq!(first.chars().count(), MAX_TAB_TITLE);
+        let second = conversation_tab_title(&long, |title| title == first).unwrap();
+        assert_eq!(second, format!("{} (Copy)", "航".repeat(MAX_TAB_TITLE - 7)));
+        assert_eq!(conversation_tab_title("  ", |_| false), None);
     }
 
     #[test]
@@ -529,7 +2492,7 @@ mod tests {
         let mut other_connection = SavedTab::new(1, Some(second_id));
         other_connection.title = "Shared".into();
         let mut workspace = Workspace {
-            version: 2,
+            version: WORKSPACE_VERSION,
             profiles: vec![first, second],
             tabs: vec![first_tab, duplicate, other_connection],
             active_tab: 0,
@@ -550,14 +2513,20 @@ mod tests {
         assert_eq!(restored, Settings::default());
 
         let mut settings = Settings {
+            theme: String::new(),
             ui_scale: f32::INFINITY,
             ui_font_family: "   ".into(),
             editor_font_family: "   ".into(),
             editor_font_size: f32::NAN,
             editor_line_height: f32::NAN,
+            editor_tab_size: 0,
             logs_font_family: "   ".into(),
             logs_font_size: f32::NAN,
             logs_line_height: f32::NAN,
+            assistant_font_family: "   ".into(),
+            assistant_font_size: f32::NAN,
+            assistant_line_height: f32::NAN,
+            assistant: AssistantSettings::default(),
         };
         settings.sanitize();
         assert_eq!(settings, Settings::default());
@@ -567,12 +2536,18 @@ mod tests {
         settings.editor_line_height = 2.1;
         settings.logs_font_size = 33.;
         settings.logs_line_height = 2.1;
+        settings.assistant_font_size = 33.;
+        settings.assistant_line_height = 2.1;
+        settings.editor_tab_size = 9;
         settings.sanitize();
         assert_eq!(settings.ui_scale, 1.46);
         assert_eq!(settings.editor_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.editor_line_height, MAX_LINE_HEIGHT);
         assert_eq!(settings.logs_font_size, MAX_EDITOR_FONT_SIZE);
         assert_eq!(settings.logs_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.assistant_font_size, MAX_EDITOR_FONT_SIZE);
+        assert_eq!(settings.assistant_line_height, MAX_LINE_HEIGHT);
+        assert_eq!(settings.editor_tab_size, MAX_TAB_SIZE);
         let encoded = serde_json::to_string(&settings).unwrap();
         let mut restored: Settings = serde_json::from_str(&encoded).unwrap();
         restored.sanitize();
@@ -606,6 +2581,18 @@ mod tests {
             Settings::default().logs_line_height
         );
         assert_eq!(settings.ui_scale, 1.2);
+        assert_eq!(
+            settings.assistant_font_family,
+            Settings::default().assistant_font_family
+        );
+        assert_eq!(
+            settings.assistant_font_size,
+            Settings::default().assistant_font_size
+        );
+        assert_eq!(
+            settings.assistant_line_height,
+            Settings::default().assistant_line_height
+        );
 
         settings.ui_font_family = " Helvetica ".into();
         settings.sanitize();
@@ -625,5 +2612,542 @@ mod tests {
         assert_eq!(settings.editor_font_size, 16.);
         let saved = serde_json::to_value(&settings).unwrap();
         assert!(saved.get("ui_font_size").is_none());
+    }
+
+    #[test]
+    fn assistant_settings_restore_safe_defaults_and_sanitize_values() {
+        let restored: AssistantSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored, AssistantSettings::default());
+        assert!(!restored.enabled);
+        assert_eq!(
+            restored.default_execution_mode,
+            AssistantExecutionMode::AskBeforeRunning
+        );
+        assert_eq!(restored.sql_keyword_case, KeywordCase::Uppercase);
+        let lowercase: AssistantSettings =
+            serde_json::from_str(r#"{"sql_keyword_case":"lowercase"}"#).unwrap();
+        assert_eq!(lowercase.sql_keyword_case, KeywordCase::Lowercase);
+
+        let mut settings = AssistantSettings {
+            enabled: true,
+            panel_width: f32::NAN,
+            codex_executable: Some("   ".into()),
+            claude_executable: Some(" ".into()),
+            codex: AssistantModelChoice {
+                model: Some(" gpt-test ".into()),
+                reasoning_effort: Some(" high ".into()),
+                service_tier: Some(" fast ".into()),
+            },
+            claude: AssistantModelChoice {
+                model: Some(" opus ".into()),
+                ..AssistantModelChoice::default()
+            },
+            ..AssistantSettings::default()
+        };
+        settings.sanitize();
+        assert_eq!(settings.panel_width, DEFAULT_ASSISTANT_PANEL_WIDTH);
+        assert!(!settings.enabled);
+        assert_eq!(settings.data_sharing_notice_version, 0);
+        assert_eq!(settings.codex_executable, None);
+        assert_eq!(settings.claude_executable, None);
+        assert_eq!(settings.codex.model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.codex.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(settings.codex.service_tier.as_deref(), Some("fast"));
+        assert_eq!(settings.claude.model.as_deref(), Some("opus"));
+
+        settings.panel_width = MAX_ASSISTANT_PANEL_WIDTH + 1.;
+        settings.enabled = true;
+        settings.data_sharing_notice_version = ASSISTANT_DATA_SHARING_NOTICE_VERSION;
+        settings.sanitize();
+        assert_eq!(settings.panel_width, MAX_ASSISTANT_PANEL_WIDTH);
+        assert!(settings.enabled);
+    }
+
+    #[test]
+    fn earlier_assistant_settings_and_conversations_load_as_codex() {
+        let settings: AssistantSettings = serde_json::from_str(
+            r#"{"model":"gpt-test","reasoning_effort":"high","service_tier":"fast"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.harness, AssistantHarness::Codex);
+        assert_eq!(settings.choice().model.as_deref(), Some("gpt-test"));
+        assert_eq!(settings.choice().service_tier.as_deref(), Some("fast"));
+        assert_eq!(settings.claude, AssistantModelChoice::default());
+        // The Codex choices keep their field names, so an earlier Qrow reads them.
+        let saved = serde_json::to_value(&settings).unwrap();
+        assert_eq!(saved["model"], "gpt-test");
+        assert_eq!(saved["claude"]["model"], serde_json::Value::Null);
+
+        let mut claude = settings;
+        claude.harness = AssistantHarness::Claude;
+        claude.choice_mut().model = Some("opus".into());
+        assert_eq!(claude.codex.model.as_deref(), Some("gpt-test"));
+        assert_eq!(claude.choice().model.as_deref(), Some("opus"));
+
+        let conversation: AssistantConversation = serde_json::from_str(
+            r#"{"thread_id":"thread-1","title":"Old","title_source":"codex","last_activity":1,"execution_mode":"ask_before_running"}"#,
+        )
+        .unwrap();
+        assert_eq!(conversation.harness, AssistantHarness::Codex);
+        assert_eq!(conversation.title_source, AssistantTitleSource::Generated);
+        assert_eq!(
+            serde_json::to_value(&conversation).unwrap()["title_source"],
+            "codex"
+        );
+    }
+
+    #[test]
+    fn assistant_workspace_removes_invalid_threads() {
+        let mut first =
+            AssistantConversation::new(" thread-1 ", AssistantExecutionMode::RunAutomatically);
+        first.title = format!("  {}  ", "x".repeat(MAX_ASSISTANT_CONVERSATION_TITLE + 5));
+        let mut duplicate =
+            AssistantConversation::new("thread-1", AssistantExecutionMode::AskBeforeRunning);
+        duplicate.title = "Duplicate".into();
+        let blank = AssistantConversation::new("   ", AssistantExecutionMode::AskBeforeRunning);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![first, duplicate, blank],
+            ..AssistantWorkspace::default()
+        };
+
+        assistant.sanitize();
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "thread-1");
+        assert_eq!(
+            assistant.conversations[0].title.chars().count(),
+            MAX_ASSISTANT_CONVERSATION_TITLE
+        );
+        assert_eq!(
+            assistant.conversations[0].execution_mode,
+            AssistantExecutionMode::RunAutomatically
+        );
+    }
+
+    #[test]
+    fn normalize_gives_each_tab_one_conversation_and_detaches_missing_tabs() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let conversation = |id: &str, tab: Option<Uuid>, activity: u64| {
+            let mut conversation =
+                AssistantConversation::new(id, AssistantExecutionMode::AskBeforeRunning);
+            conversation.tab_id = tab;
+            conversation.last_activity = activity;
+            conversation
+        };
+        let mut linked = conversation("linked", Some(second_tab.id), 1);
+        linked.detached_profile = Some(first.id);
+        let mut missing = conversation("missing", Some(Uuid::new_v4()), 1);
+        missing.detached_profile = Some(first.id);
+        let mut gone_profile = conversation("gone-profile", None, 1);
+        gone_profile.detached_profile = Some(Uuid::new_v4());
+        let mut workspace = Workspace {
+            version: WORKSPACE_VERSION,
+            profiles: vec![first.clone(), second],
+            tabs: vec![first_tab.clone(), second_tab.clone()],
+            assistant: AssistantWorkspace {
+                conversations: vec![
+                    conversation("older", Some(first_tab.id), 1),
+                    conversation("newer", Some(first_tab.id), 2),
+                    linked,
+                    missing,
+                    gone_profile,
+                ],
+                ..AssistantWorkspace::default()
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let find = |id: &str| {
+            workspace
+                .assistant
+                .conversations
+                .iter()
+                .find(|conversation| conversation.thread_id == id)
+                .unwrap()
+        };
+        assert_eq!(find("newer").tab_id, Some(first_tab.id));
+        assert_eq!(find("older").tab_id, None);
+        assert_eq!(find("older").detached_profile, Some(first.id));
+        assert_eq!(find("linked").tab_id, Some(second_tab.id));
+        assert_eq!(find("linked").detached_profile, None);
+        assert_eq!(find("missing").tab_id, None);
+        assert_eq!(find("missing").detached_profile, Some(first.id));
+        assert_eq!(find("gone-profile").detached_profile, None);
+    }
+
+    #[test]
+    fn version_three_selected_conversation_keeps_the_active_tab() {
+        let first = Profile::default();
+        let second = Profile::default();
+        let first_tab = SavedTab::new(1, Some(first.id));
+        let second_tab = SavedTab::new(1, Some(second.id));
+        let mut open = AssistantConversation::new("open", AssistantExecutionMode::AskBeforeRunning);
+        open.tab_id = Some(first_tab.id);
+        let other = AssistantConversation::new("other", AssistantExecutionMode::AskBeforeRunning);
+        let mut workspace = Workspace {
+            version: 3,
+            profiles: vec![first, second.clone()],
+            tabs: vec![first_tab, second_tab.clone()],
+            active_tab: 1,
+            assistant: AssistantWorkspace {
+                conversations: vec![open, other],
+                legacy_selected_thread: Some(" open ".into()),
+            },
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        let open = workspace.assistant.conversation("open").unwrap();
+        let other = workspace.assistant.conversation("other").unwrap();
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
+        assert_eq!(open.tab_id, Some(second_tab.id));
+        assert_eq!(open.detached_profile, None);
+        assert_eq!(other.tab_id, None);
+        assert_eq!(other.detached_profile, Some(second.id));
+        assert_eq!(workspace.assistant.legacy_selected_thread, None);
+        let saved = serde_json::to_value(&workspace.assistant).unwrap();
+        assert!(saved.get("selected_thread").is_none());
+    }
+
+    #[test]
+    fn closing_a_tab_detaches_its_conversation() {
+        let profile = Uuid::new_v4();
+        let tab = Uuid::new_v4();
+        let mut conversation =
+            AssistantConversation::new("thread", AssistantExecutionMode::AskBeforeRunning);
+        conversation.tab_id = Some(tab);
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![conversation],
+            ..AssistantWorkspace::default()
+        };
+        assert_eq!(
+            assistant
+                .conversation_for_tab(tab)
+                .map(|c| c.thread_id.as_str()),
+            Some("thread")
+        );
+
+        assistant.detach_tab(tab, Some(profile));
+
+        assert!(assistant.conversation_for_tab(tab).is_none());
+        let conversation = assistant.conversation("thread").unwrap();
+        assert_eq!(conversation.tab_id, None);
+        assert_eq!(conversation.detached_profile, Some(profile));
+    }
+
+    #[test]
+    fn assistant_workspace_removes_unstarted_threads() {
+        let mut assistant = AssistantWorkspace {
+            conversations: vec![
+                AssistantConversation::new("used", AssistantExecutionMode::AskBeforeRunning),
+                AssistantConversation::new("new", AssistantExecutionMode::AskBeforeRunning),
+            ],
+            ..AssistantWorkspace::default()
+        };
+        let unstarted = BTreeSet::from(["new".to_owned()]);
+
+        assistant.remove_unstarted(&unstarted);
+
+        assert_eq!(assistant.conversations.len(), 1);
+        assert_eq!(assistant.conversations[0].thread_id, "used");
+    }
+
+    fn shared(settings: CatalogSettings) -> SharedCatalog {
+        SharedCatalog {
+            id: Uuid::new_v4(),
+            name: "Lake".into(),
+            settings,
+            preferred: None,
+        }
+    }
+
+    #[test]
+    fn a_member_uses_the_shared_settings() {
+        let catalog = shared(CatalogSettings {
+            refresh: CatalogRefresh::WhileConnected,
+            include: vec!["sales_*".into()],
+            ..CatalogSettings::default()
+        });
+        let mut profile = Profile {
+            catalog: CatalogSettings {
+                refresh: CatalogRefresh::Manual,
+                include: vec!["hr".into()],
+                ..CatalogSettings::default()
+            },
+            shared_catalog: Some(catalog.id),
+            ..Profile::default()
+        };
+        let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));
+        assert_eq!(effective.include, ["sales_*"]);
+        assert_eq!(effective.refresh, CatalogRefresh::WhileConnected);
+        // A member with browsing off stays off.
+        profile.catalog.refresh = CatalogRefresh::Disabled;
+        let effective = effective_catalog(&profile, std::slice::from_ref(&catalog));
+        assert!(!effective.browses());
+        // A missing shared catalog leaves the settings of the connection.
+        profile.catalog.refresh = CatalogRefresh::Manual;
+        assert_eq!(effective_catalog(&profile, &[]), profile.catalog);
+    }
+
+    #[test]
+    fn normalize_repairs_shared_catalogs_and_drops_stale_references() {
+        let mut used = shared(CatalogSettings {
+            refresh: CatalogRefresh::Disabled,
+            refresh_minutes: 0,
+            ..CatalogSettings::default()
+        });
+        used.name = " ".into();
+        let unused = shared(CatalogSettings::default());
+        let member = Profile {
+            name: "a".into(),
+            shared_catalog: Some(used.id),
+            ..Profile::default()
+        };
+        let other = Profile {
+            name: "b".into(),
+            shared_catalog: Some(Uuid::new_v4()),
+            ..Profile::default()
+        };
+        used.preferred = Some(other.id);
+        let mut workspace = Workspace {
+            version: 4,
+            profiles: vec![member, other],
+            shared_catalogs: vec![used.clone(), unused],
+            ..Workspace::default()
+        };
+
+        workspace.normalize();
+
+        assert_eq!(workspace.version, WORKSPACE_VERSION);
+        assert_eq!(workspace.shared_catalogs.len(), 1);
+        let repaired = &workspace.shared_catalogs[0];
+        assert_eq!(repaired.id, used.id);
+        assert_eq!(repaired.name, "Shared catalog");
+        // A shared catalog always browses, and invalid bounds get defaults.
+        assert_eq!(repaired.settings.refresh, CatalogRefresh::Manual);
+        assert_eq!(
+            repaired.settings.refresh_minutes,
+            CatalogSettings::default().refresh_minutes
+        );
+        // The preferred connection must be a member.
+        assert_eq!(repaired.preferred, None);
+        assert_eq!(workspace.profiles[0].shared_catalog, Some(used.id));
+        assert_eq!(workspace.profiles[1].shared_catalog, None);
+    }
+
+    #[test]
+    fn shared_catalogs_round_trip_and_old_workspaces_have_none() {
+        let catalog = shared(CatalogSettings::default());
+        let profile = Profile {
+            shared_catalog: Some(catalog.id),
+            ..Profile::default()
+        };
+        let workspace = Workspace {
+            profiles: vec![profile],
+            shared_catalogs: vec![catalog],
+            ..Workspace::default()
+        };
+        let json = serde_json::to_string(&workspace).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.shared_catalogs, workspace.shared_catalogs);
+        assert_eq!(
+            restored.profiles[0].shared_catalog,
+            workspace.profiles[0].shared_catalog
+        );
+        // Version 4 files have no shared catalogs, and private catalogs do
+        // not write the field.
+        let private = serde_json::to_string(&Workspace::default()).unwrap();
+        assert!(!private.contains("shared_catalog"));
+        let restored: Workspace = serde_json::from_str(&private).unwrap();
+        assert!(restored.shared_catalogs.is_empty());
+    }
+
+    #[test]
+    fn shared_catalog_names_are_required_and_bounded() {
+        let mut catalog = shared(CatalogSettings::default());
+        assert!(catalog.validate().is_ok());
+        catalog.name = " ".into();
+        assert!(catalog.validate().is_err());
+        catalog.name = "x".repeat(MAX_SHARED_CATALOG_NAME + 1);
+        assert!(catalog.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod database_type_tests {
+    use super::*;
+
+    #[test]
+    fn old_profiles_use_kyuubi_and_postgres_profiles_round_trip() {
+        let mut json = serde_json::to_value(Profile::default()).unwrap();
+        json.as_object_mut().unwrap().remove("database_type");
+        assert_eq!(
+            serde_json::from_value::<Profile>(json)
+                .unwrap()
+                .database_type,
+            DatabaseType::Kyuubi
+        );
+        let mut profile = Profile {
+            database_type: DatabaseType::Postgres,
+            host: "localhost".into(),
+            username: "qrow".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Profile>(&serde_json::to_string(&profile).unwrap()).unwrap(),
+            profile
+        );
+        let old = profile.clone();
+        profile.database_type = DatabaseType::Kyuubi;
+        assert!(!profile.connection_identity_eq(&old));
+        profile.database_type = DatabaseType::Postgres;
+        profile.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(
+            profile
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("password authentication")
+        );
+    }
+
+    #[test]
+    fn each_database_quotes_identifiers_in_its_dialect() {
+        assert_eq!(
+            DatabaseType::Postgres.quote_identifier("odd\"name"),
+            "\"odd\"\"name\""
+        );
+        assert_eq!(
+            DatabaseType::Kyuubi.quote_identifier("odd`name"),
+            "`odd``name`"
+        );
+    }
+}
+
+#[cfg(test)]
+mod trino_tests {
+    use super::*;
+    #[test]
+    fn profiles_round_trip_and_schema_changes_replace_the_session() {
+        let mut profile = Profile {
+            database_type: DatabaseType::Trino,
+            host: "localhost".into(),
+            username: "qrow".into(),
+            database: "tpch".into(),
+            trino_schema: "tiny".into(),
+            ..Profile::default()
+        };
+        assert_eq!(
+            serde_json::from_str::<Profile>(&serde_json::to_string(&profile).unwrap()).unwrap(),
+            profile
+        );
+        let old = profile.clone();
+        profile.trino_schema = "sf1".into();
+        assert!(!profile.connection_identity_eq(&old));
+        profile.authentication = Authentication::Oidc {
+            sign_in: Uuid::new_v4(),
+        };
+        assert!(profile.validate().is_err());
+        profile.tls = true;
+        profile.validate().unwrap();
+        assert_eq!(
+            DatabaseType::Trino.quote_identifier("odd\"name"),
+            "\"odd\"\"name\""
+        );
+        assert_eq!(DatabaseType::Trino.default_port(), 8080);
+    }
+}
+
+#[cfg(test)]
+mod external_auth_tests {
+    use super::*;
+    #[test]
+    fn legacy_trino_references_migrate_without_changing_oidc_or_connection_identity() {
+        let external = SignIn {
+            name: "Legacy Trino".into(),
+            provider: SignInProvider::TrinoExternal,
+            ..SignIn::default()
+        };
+        let oidc = SignIn {
+            name: "OIDC".into(),
+            ..SignIn::default()
+        };
+        let legacy_auth = serde_json::json!({"method": "trino_external", "sign_in": external.id});
+        let authentication: Authentication = serde_json::from_value(legacy_auth).unwrap();
+        assert_eq!(authentication, Authentication::TrinoExternal);
+        let external_profile = Profile {
+            database_type: DatabaseType::Trino,
+            host: "trino.example".into(),
+            username: "alice".into(),
+            tls: true,
+            authentication,
+            ..Profile::default()
+        };
+        let oidc_profile = Profile {
+            database_type: DatabaseType::Trino,
+            authentication: Authentication::Oidc { sign_in: oidc.id },
+            ..Profile::default()
+        };
+        let mut workspace = Workspace {
+            profiles: vec![external_profile.clone(), oidc_profile.clone()],
+            sign_ins: vec![external, oidc.clone()],
+            ..Workspace::default()
+        };
+        workspace.normalize();
+        assert_eq!(workspace.profiles, vec![external_profile, oidc_profile]);
+        assert_eq!(workspace.sign_ins, vec![oidc]);
+        let serialized = serde_json::to_value(workspace.profiles[0].authentication).unwrap();
+        assert_eq!(serialized, serde_json::json!({"method":"trino_external"}));
+        assert!(workspace.profiles[0].authentication.sign_in().is_none());
+    }
+    #[test]
+    fn legacy_oidc_and_external_sign_ins_round_trip_without_client_settings() {
+        let old = SignIn {
+            name: "OIDC".into(),
+            issuer: "https://id.example".into(),
+            client_id: "desktop".into(),
+            ..SignIn::default()
+        };
+        let mut value = serde_json::to_value(&old).unwrap();
+        value.as_object_mut().unwrap().remove("provider");
+        let restored: SignIn = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.provider, SignInProvider::Oidc);
+        restored.validate().unwrap();
+        let external = SignIn {
+            name: "Trino".into(),
+            provider: SignInProvider::TrinoExternal,
+            ..SignIn::default()
+        };
+        external.validate().unwrap();
+        let shared = external.to_shared_text();
+        assert!(!shared.contains("client_id") && !shared.contains("issuer"));
+        let restored = SignIn::from_shared_text(&shared).unwrap();
+        assert_eq!(restored.provider, SignInProvider::TrinoExternal);
+        let profile = Profile {
+            name: "Trino".into(),
+            host: "trino.example".into(),
+            username: "alice".into(),
+            database_type: DatabaseType::Trino,
+            tls: true,
+            authentication: Authentication::TrinoExternal,
+            ..Profile::default()
+        };
+        profile.validate().unwrap();
+        let restored: Profile =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(restored.authentication, profile.authentication);
+        let unsupported = Profile {
+            database_type: DatabaseType::Kyuubi,
+            ..profile
+        };
+        assert!(unsupported.validate().is_err());
     }
 }

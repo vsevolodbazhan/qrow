@@ -1,16 +1,15 @@
-use gpui_kit::component::{
-    ActiveTheme, Sizable,
-    menu::{PopupMenu, PopupMenuItem},
-    scroll::Scrollbar,
-    table::{Column, DataTable, TableDelegate, TableState},
-};
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::*;
-use qrow::{
+use crate::{
     model::{Column as DataColumn, Row},
     pagination::Pagination,
     worker::Event,
 };
+use gpui_kit::component::{
+    ActiveTheme, Sizable,
+    menu::{PopupMenu, PopupMenuItem},
+    table::{Column, DataTable, TableDelegate, TableState},
+};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
 
 pub struct Results {
     pub columns: Vec<DataColumn>,
@@ -38,10 +37,12 @@ impl Results {
     fn px(&self, value: f32) -> Pixels {
         px(self.ui_scale * value)
     }
-    pub fn set_ui_scale(&mut self, scale: f32) {
+    /// Set the interface scale and size the columns again. Call this also
+    /// after a change of the interface font.
+    pub fn set_ui_scale(&mut self, scale: f32, cx: &App) {
         self.ui_scale = scale;
         if !self.columns.is_empty() {
-            self.schema(self.columns.clone());
+            self.schema(self.columns.clone(), cx);
         }
     }
     pub fn query_event(&mut self, event: &Event, cancelling: bool) -> bool {
@@ -63,8 +64,9 @@ impl Results {
         false
     }
 
-    pub fn schema(&mut self, columns: Vec<DataColumn>) {
+    pub fn schema(&mut self, columns: Vec<DataColumn>, cx: &App) {
         let scale = self.ui_scale;
+        let header = HeaderMeasure::new(scale, cx);
         // At 100% scale, the inner 4px inset keeps the original 6px text offset.
         let padding = Edges {
             top: self.px(3.),
@@ -87,7 +89,7 @@ impl Results {
                     _ => 120.,
                 };
                 Column::new(i.to_string(), c.name.clone())
-                    .width(px(scale * width))
+                    .width(px(scale * width).max(header.width(c)))
                     .paddings(padding)
                     .movable(false)
             }));
@@ -108,6 +110,51 @@ impl Results {
         )
     }
 }
+/// Measures the name and the data type of a column header, so that a narrow
+/// default width does not cut the data type.
+struct HeaderMeasure {
+    // A cache of its own, because the measure runs outside a window.
+    text: WindowTextSystem,
+    font: Font,
+    rem: Pixels,
+    scale: f32,
+}
+impl HeaderMeasure {
+    fn new(scale: f32, cx: &App) -> Self {
+        Self {
+            text: WindowTextSystem::new(cx.text_system().clone()),
+            font: font(cx.theme().font_family.clone()),
+            rem: px(14. * scale),
+            scale,
+        }
+    }
+    /// The width of the text at 12/14 rem, or at 10/14 rem when `small`.
+    fn text(&self, text: &str, small: bool) -> Pixels {
+        let size = self.rem * if small { 10. / 14. } else { 12. / 14. };
+        let run = TextRun {
+            len: text.len(),
+            font: self.font.clone(),
+            color: Hsla::default(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        self.text.layout_line(text, size, &[run], None).width
+    }
+    /// The column width that shows the full header, including the paddings
+    /// of the table cell and of `render_th`.
+    fn width(&self, column: &DataColumn) -> Pixels {
+        let scale = self.scale;
+        let name = self.text(&column.name, false);
+        let data_type = self.text(&column.data_type, true);
+        // Two `px_1` insets and one `gap_2` are 1 rem, the column paddings
+        // are 4px, and the table keeps 6px less the right padding for its
+        // sort icon. Two more pixels absorb the cell border and rounding.
+        let cell = px(scale * 4.) + (px(6.) - px(scale * 2.)).max(px(0.)) + px(2.);
+        name + data_type + self.rem + cell
+    }
+}
+
 impl TableDelegate for Results {
     fn columns_count(&self, _: &App) -> usize {
         self.headers.len()
@@ -136,6 +183,7 @@ impl TableDelegate for Results {
     ) -> impl IntoElement {
         div()
             .id(("column-header", c))
+            .test_support()
             .role(Role::ColumnHeader)
             .flex()
             .items_center()
@@ -173,6 +221,7 @@ impl TableDelegate for Results {
         let display: String = value.unwrap_or("NULL").chars().take(500).collect();
         div()
             .id(("cell", c))
+            .test_support()
             .role(Role::Cell)
             .aria_label(display.clone())
             .size_full()
@@ -187,9 +236,10 @@ impl TableDelegate for Results {
                 el.text_color(cx.theme().muted_foreground)
             })
             .when(self.selected == Some((r, c)), |el| {
-                el.bg(cx.theme().selection).text_color(rgb(0xf0f4fc))
+                el.bg(cx.theme().selection)
+                    .text_color(cx.theme().foreground)
             })
-            .child(div().line_height(relative(1.)).truncate().child(display))
+            .child(div().truncate().child(display))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |s, _, _, cx| {
@@ -228,11 +278,11 @@ impl TableDelegate for Results {
             .collect::<Vec<_>>()
             .join("\t");
         menu.when_some(cell, |menu, text| {
-            menu.item(PopupMenuItem::new("Copy Cell").on_click(move |_, _, cx| {
+            menu.item(PopupMenuItem::new("Copy cell").on_click(move |_, _, cx| {
                 cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
             }))
         })
-        .item(PopupMenuItem::new("Copy Row").on_click(move |_, _, cx| {
+        .item(PopupMenuItem::new("Copy row").on_click(move |_, _, cx| {
             cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
         }))
     }
@@ -294,8 +344,6 @@ pub fn horizontal_scroll(table: &Entity<TableState<Results>>, scale: f32) -> imp
     .inset_0()
 }
 
-/// Reserve a scrollbar lane inside the results viewport. An overlay track can
-/// otherwise fall outside the table's clipped container in the Kit layout.
 pub(super) fn view(
     table: &Entity<TableState<Results>>,
     modal: bool,
@@ -308,30 +356,19 @@ pub(super) fn view(
     }
 
     div()
-        .flex()
-        .flex_col()
         .size_full()
         .min_h_0()
         .min_w_0()
+        .relative()
+        .overflow_hidden()
         .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .relative()
-                .overflow_hidden()
-                .child(
-                    DataTable::new(table)
-                        .small()
-                        .stripe(true)
-                        .bordered(false)
-                        .scrollbar_visible(true, false),
-                )
-                .when(!modal, |el| el.child(horizontal_scroll(table, scale))),
+            DataTable::new(table)
+                .small()
+                .stripe(true)
+                .bordered(false)
+                .scrollbar_visible(true, true),
         )
-        .child(div().h_3().w_full().flex_shrink_0().relative().child(
-            Scrollbar::horizontal(&table.read(cx).horizontal_scroll_handle).viewport_from_layout(),
-        ))
+        .when(!modal, |el| el.child(horizontal_scroll(table, scale)))
         .into_any_element()
 }
 
@@ -351,34 +388,69 @@ pub fn select_page(table: &Entity<TableState<Results>>, page: usize, cx: &mut Ap
 #[cfg(test)]
 mod tests {
     use super::{DataColumn, Event, Results};
-    use gpui_kit::px;
+    use gpui_kit::{TestAppContext, px};
 
-    #[test]
-    fn scaling_preserves_page_and_query_state_and_clear_preserves_scale() {
-        let mut results = Results::default();
-        results.schema(vec![DataColumn {
-            name: "value".into(),
-            data_type: "STRING".into(),
-        }]);
-        results.rows = vec![vec![Some("value".into())]; 1250];
-        assert!(results.pagination.select(1, results.rows.len()));
-        results.selected = Some((1000, 1));
-        results.query_event(&Event::Cancelled, false);
+    fn column(name: &str, data_type: &str) -> DataColumn {
+        DataColumn {
+            name: name.into(),
+            data_type: data_type.into(),
+        }
+    }
 
-        results.set_ui_scale(1.5);
-        assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
-        assert_eq!(results.selected, Some((1000, 1)));
-        assert_eq!(
-            results.empty_message,
-            Some("Query cancelled before any rows arrived")
-        );
-        assert_eq!(results.px(48.), px(72.));
+    #[gpui_kit::test]
+    fn scaling_preserves_page_and_query_state_and_clear_preserves_scale(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results::default();
+            results.schema(vec![column("value", "STRING")], cx);
+            results.rows = vec![vec![Some("value".into())]; 1250];
+            assert!(results.pagination.select(1, results.rows.len()));
+            results.selected = Some((1000, 1));
+            results.query_event(&Event::Cancelled, false);
 
-        results.clear();
-        assert_eq!(results.ui_scale, 1.5);
-        assert_eq!(results.pagination.page(), 0);
-        assert!(results.rows.is_empty());
-        assert!(results.empty_message.is_none());
-        assert!(results.selected.is_none());
+            results.set_ui_scale(1.5, cx);
+            assert_eq!(results.pagination.range(results.rows.len()), 1000..1250);
+            assert_eq!(results.selected, Some((1000, 1)));
+            assert_eq!(
+                results.empty_message,
+                Some("Query cancelled before any rows arrived")
+            );
+            assert_eq!(results.px(48.), px(72.));
+
+            results.clear();
+            assert_eq!(results.ui_scale, 1.5);
+            assert_eq!(results.pagination.page(), 0);
+            assert!(results.rows.is_empty());
+            assert!(results.empty_message.is_none());
+            assert!(results.selected.is_none());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn columns_widen_to_show_the_full_header(cx: &mut TestAppContext) {
+        cx.update(crate::ui::init);
+        cx.update(|cx| {
+            let mut results = Results::default();
+            results.schema(
+                vec![
+                    column("id", "INT"),
+                    column("paid_bookings", "BIGINT"),
+                    column("a_much_longer_column_name", "BIGINT"),
+                ],
+                cx,
+            );
+            let widths: Vec<_> = results.headers.iter().map(|c| c.width).collect();
+            assert_eq!(widths[1], px(120.));
+            assert!(widths[2] > px(120.));
+            assert!(widths[3] > widths[2]);
+
+            let header = super::HeaderMeasure::new(1., cx);
+            let text =
+                header.text("a_much_longer_column_name", false) + header.text("BIGINT", true);
+            assert!(widths[3] > text);
+
+            results.set_ui_scale(2., cx);
+            assert!(results.headers[3].width > widths[3] * 1.5);
+        });
     }
 }

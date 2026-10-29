@@ -36,7 +36,7 @@ impl Qrow {
     }
 
     fn about_content(&self, cx: &mut Context<Self>) -> AnyElement {
-        let version = qrow::build_info::version_label();
+        let version = crate::build_info::version_label();
         v_flex()
             .size_full()
             .items_center()
@@ -52,6 +52,7 @@ impl Qrow {
             .child(
                 div()
                     .id("about-name")
+                    .test_support()
                     .role(Role::Label)
                     .text_size(rems(16. / 14.))
                     .font_semibold()
@@ -61,6 +62,7 @@ impl Qrow {
             .child(
                 div()
                     .id("about-version")
+                    .test_support()
                     .role(Role::Label)
                     .text_size(rems(12. / 14.))
                     .text_color(cx.theme().muted_foreground)
@@ -71,12 +73,13 @@ impl Qrow {
             .child(
                 div()
                     .id("about-copyright")
+                    .test_support()
                     .role(Role::Label)
                     .mt_2()
                     .text_size(rems(11. / 14.))
                     .text_color(cx.theme().muted_foreground)
-                    .aria_label(qrow::build_info::COPYRIGHT)
-                    .child(qrow::build_info::COPYRIGHT),
+                    .aria_label(crate::build_info::COPYRIGHT)
+                    .child(crate::build_info::COPYRIGHT),
             )
             .into_any_element()
     }

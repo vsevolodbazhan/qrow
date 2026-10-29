@@ -10,9 +10,48 @@ Copyright The Apache Software Foundation. Licensed under the Apache License 2.0.
 src/connector/t_c_l_i_service.rs is generated from that interface using Apache
 Thrift 0.24.0, with reproducible generator corrections in scripts/generate/thrift.sh.
 
+The theme definitions in themes/ are bundled from the GPUI Kit themes directory:
+https://github.com/longbridge/gpui-kit/tree/main/themes
+GPUI Kit is licensed under Apache-2.0. Each theme file retains its author and
+source URL metadata.
+
 The connection protocol follows the publicly documented HiveServer2 protocol and
 the behavior of Apache Kyuubi's PyHive client. Qrow does not bundle Python or Java.
 
 Rust dependencies retain their respective open-source licenses. See Cargo.lock
 for the resolved dependency list and each package's license metadata. This build
 is a personal prototype, not a prepared public distribution.
+
+The Postgres icon in assets/connection-type-icons/postgres.svg is from Devicon:
+https://github.com/devicons/devicon/blob/d98a72cb9a6d8e543ddbddc32bac231572349e96/icons/postgresql/postgresql-plain.svg
+Its fill color is changed to black. The interface applies the theme icon color.
+For the 16 px icon size, the thin outer outline is removed and the gaps between
+the ears and the head are wider.
+
+The MIT License (MIT)
+
+Copyright (c) 2015 konpa
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The Trino icon in assets/connection-type-icons/trino.svg is from Simple Icons:
+https://github.com/simple-icons/simple-icons/blob/98820a4dc8c363ca72fa2c0d294ea4a0a9bba75d/icons/trino.svg
+Simple Icons distributes the icon under CC0 1.0 Universal.
+https://creativecommons.org/publicdomain/zero/1.0/
+For the 16 px icon size, only the outline, eyes, nose, and mouth of the bunny
+are kept.

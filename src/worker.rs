@@ -1,8 +1,9 @@
 use crate::{
-    activity::{ActivityEvent, ActivityKind, ExecutionId, Severity},
-    connector::{Cancellation, Connector, QueryError, QueryState, Session, hive::HiveConnector},
+    connector::{
+        Cancellation, Completion, Connector, QueryError, Secret, Session, wait_for_completion,
+    },
+    logs::{ExecutionId, LogEvent, LogKind, Severity},
     model::{Column, MAX_RESULT_BYTES, MAX_RESULT_ROWS, PREVIEW_ROWS, Profile, Row},
-    storage,
 };
 use anyhow::{Context, Result};
 use std::{
@@ -14,7 +15,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime},
 };
-use zeroize::Zeroizing;
 
 mod lifecycle;
 
@@ -27,13 +27,22 @@ pub enum Command {
 }
 pub enum Event {
     Connecting,
+    Authenticating(bool),
     Connected,
     Running,
     Columns(Vec<Column>),
     Rows(Vec<Row>),
-    Ready { more: bool, limited: bool },
+    Ready {
+        more: bool,
+        limited: bool,
+    },
     Cancelled,
-    Error { message: String, disconnected: bool },
+    Error {
+        message: String,
+        disconnected: bool,
+        /// The connection needs a new browser sign-in.
+        sign_in_required: bool,
+    },
     CancelError(String),
     Disconnected,
     IdleDisconnected,
@@ -42,12 +51,16 @@ pub enum Event {
 }
 
 type Target = Arc<Mutex<Option<Arc<dyn Cancellation>>>>;
-pub type PasswordProvider = Arc<dyn Fn(&Profile) -> Result<Zeroizing<String>> + Send + Sync>;
+/// Returns the password or the access tokens of a connection. It runs on the
+/// worker thread before each new session.
+pub type CredentialProvider = Arc<dyn Fn(&Profile) -> Result<Secret> + Send + Sync>;
+/// Reports the stable ID of active work that defers idle disconnection.
+pub type IdleGuard = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
 
 pub struct Worker {
     tx: mpsc::Sender<Command>,
     pub events: mpsc::Receiver<Event>,
-    pub activities: mpsc::Receiver<ActivityEvent>,
+    pub logs: mpsc::Receiver<LogEvent>,
     event_tx: mpsc::Sender<Event>,
     cancelled: Arc<AtomicBool>,
     target: Target,
@@ -56,29 +69,24 @@ pub struct Worker {
     next_execution: Arc<AtomicU64>,
     stopped: Arc<AtomicBool>,
     done: mpsc::Receiver<()>,
+    idle_guard: Arc<Mutex<Option<IdleGuard>>>,
 }
 
 impl Worker {
-    pub fn new(wake: Arc<dyn Fn() + Send + Sync>) -> Self {
-        Self::with_connector(
-            wake,
-            Arc::new(HiveConnector),
-            Arc::new(|profile| storage::password(profile.id)),
-        )
-    }
     pub fn with_connector(
         wake: Arc<dyn Fn() + Send + Sync>,
         connector: Arc<dyn Connector>,
-        passwords: PasswordProvider,
+        credentials: CredentialProvider,
     ) -> Self {
         let (tx, rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
-        let (activity_tx, activities) = mpsc::channel();
+        let (log_tx, logs) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let target = Arc::new(Mutex::new(None));
         let generation = Arc::new(AtomicU64::new(0));
         let (done_tx, done) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
+        let idle_guard = Arc::new(Mutex::new(None));
         let mut runner = Runner {
             session: None,
             profile: None,
@@ -88,20 +96,36 @@ impl Worker {
             cancelled: cancelled.clone(),
             target: target.clone(),
             tx: event_tx.clone(),
-            activity_tx,
+            log_tx,
             wake: wake.clone(),
             connector,
-            passwords,
+            credentials,
             stopped: stopped.clone(),
             execution: None,
+            idle_guard: idle_guard.clone(),
         };
         thread::spawn(move || {
+            let mut idle_started = Instant::now();
+            let mut idle_refresh = None;
             loop {
                 let command = match runner.idle_interval() {
-                    Some(interval) => match rx.recv_timeout(interval) {
+                    Some(interval) => match rx.recv_timeout({
+                        let remaining = interval.saturating_sub(idle_started.elapsed());
+                        if remaining.is_zero() && runner.idle_disconnect_deferred(&mut idle_refresh)
+                        {
+                            Duration::from_millis(100)
+                        } else {
+                            remaining
+                        }
+                    }) {
                         Ok(command) => command,
                         Err(mpsc::RecvTimeoutError::Timeout) => {
+                            if runner.idle_disconnect_deferred(&mut idle_refresh) {
+                                continue;
+                            }
                             runner.maintain();
+                            idle_started = Instant::now();
+                            idle_refresh = None;
                             continue;
                         }
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -122,10 +146,10 @@ impl Worker {
                     Command::More => runner.fetch_preview(),
                     Command::Disconnect => {
                         runner.disconnect();
-                        runner.activity(
+                        runner.log(
                             None,
                             Severity::Info,
-                            ActivityKind::Disconnected,
+                            LogKind::Disconnected,
                             "Disconnected",
                             None,
                         );
@@ -135,6 +159,14 @@ impl Worker {
                     Command::Shutdown => break,
                 };
                 if let Err(error) = result {
+                    if error.is::<crate::external_auth::Cancelled>() {
+                        runner.disconnect();
+                        *runner.target.lock().unwrap() = None;
+                        runner.emit(Event::Disconnected);
+                        runner.emit(Event::Cancelled);
+                        idle_started = Instant::now();
+                        continue;
+                    }
                     let message = crate::connector::error_message(&error);
                     let execution_completed = runner
                         .execution
@@ -152,27 +184,32 @@ impl Worker {
                         runner.disconnect();
                     }
                     *runner.target.lock().unwrap() = None;
-                    runner.activity(
+                    runner.log(
                         runner.execution_id(),
                         Severity::Error,
-                        ActivityKind::Error,
+                        LogKind::Error,
                         message.clone(),
                         runner.execution_duration(),
                     );
                     if !execution_completed {
-                        runner.activity(
+                        runner.log(
                             runner.execution_id(),
                             Severity::Info,
-                            ActivityKind::ExecutionCompleted,
+                            LogKind::ExecutionCompleted,
                             format_execution_failure(runner.execution_duration()),
                             runner.execution_duration(),
                         );
                     }
+                    let sign_in_required =
+                        crate::oidc::failure(&error) == crate::oidc::Failure::SignInRequired;
                     runner.emit(Event::Error {
                         message,
                         disconnected,
+                        sign_in_required,
                     });
                 }
+                idle_started = Instant::now();
+                idle_refresh = None;
             }
             runner.disconnect();
             let _ = done_tx.send(());
@@ -180,7 +217,7 @@ impl Worker {
         Self {
             tx,
             events,
-            activities,
+            logs,
             event_tx,
             cancelled,
             target,
@@ -189,6 +226,7 @@ impl Worker {
             next_execution: Arc::new(AtomicU64::new(1)),
             stopped,
             done,
+            idle_guard,
         }
     }
 
@@ -218,6 +256,11 @@ impl Worker {
         profile.lifecycle.validate()?;
         let _ = self.tx.send(Command::UpdateProfile(Box::new(profile)));
         Ok(())
+    }
+    /// Change idle protection without restarting the idle timer.
+    /// Explicit disconnection and keep-alive queries do not use this guard.
+    pub fn set_idle_guard(&self, guard: Option<IdleGuard>) {
+        *self.idle_guard.lock().unwrap() = guard;
     }
     pub fn disconnect(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -261,6 +304,7 @@ impl Drop for Worker {
 }
 
 struct Runner {
+    idle_guard: Arc<Mutex<Option<IdleGuard>>>,
     stopped: Arc<AtomicBool>,
     session: Option<Box<dyn Session>>,
     profile: Option<Profile>,
@@ -271,10 +315,10 @@ struct Runner {
     cancelled: Arc<AtomicBool>,
     target: Target,
     tx: mpsc::Sender<Event>,
-    activity_tx: mpsc::Sender<ActivityEvent>,
+    log_tx: mpsc::Sender<LogEvent>,
     wake: Arc<dyn Fn() + Send + Sync>,
     connector: Arc<dyn Connector>,
-    passwords: PasswordProvider,
+    credentials: CredentialProvider,
 }
 
 struct ExecutionTiming {
@@ -299,20 +343,20 @@ impl Runner {
         let _ = self.tx.send(event);
         (self.wake)();
     }
-    fn activity(
+    fn log(
         &self,
         execution_id: Option<ExecutionId>,
         severity: Severity,
-        kind: ActivityKind,
+        kind: LogKind,
         text: impl Into<String>,
         duration: Option<Duration>,
     ) {
-        let mut event = ActivityEvent::at(SystemTime::now(), execution_id, severity, kind, text);
+        let mut event = LogEvent::at(SystemTime::now(), execution_id, severity, kind, text);
         event.duration = duration;
-        self.emit_activity(event);
+        self.emit_log(event);
     }
-    fn emit_activity(&self, event: ActivityEvent) {
-        let _ = self.activity_tx.send(event);
+    fn emit_log(&self, event: LogEvent) {
+        let _ = self.log_tx.send(event);
         (self.wake)();
     }
     fn execution_id(&self) -> Option<ExecutionId> {
@@ -333,10 +377,10 @@ impl Runner {
         execution.execution_completed = true;
         let duration = execution.started.elapsed();
         let execution_id = execution.id;
-        self.activity(
+        self.log(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::ExecutionCompleted,
+            LogKind::ExecutionCompleted,
             format!(
                 "Execution completed on the server, result set: {has_results} (client measurement: {})",
                 format_duration(duration)
@@ -376,13 +420,23 @@ impl Runner {
             self.disconnect();
             let connect_started = Instant::now();
             self.emit(Event::Connecting);
-            let password = (self.passwords)(&profile)?;
-            self.session = Some(self.connector.connect(&profile, password)?);
+            let cancelled = self.cancelled.clone();
+            let events = self.tx.clone();
+            let wake = self.wake.clone();
+            let secret =
+                (self.credentials)(&profile)?.with_control(crate::external_auth::Control::new(
+                    Arc::new(move || cancelled.load(Ordering::SeqCst)),
+                    Arc::new(move |waiting| {
+                        let _ = events.send(Event::Authenticating(waiting));
+                        wake();
+                    }),
+                ));
+            self.session = Some(self.connector.connect(&profile, secret)?);
             self.profile = Some(profile);
-            self.activity(
+            self.log(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Connected,
+                LogKind::Connected,
                 format!(
                     "Connected to {} (client measurement: {})",
                     self.profile.as_ref().unwrap().name,
@@ -395,10 +449,10 @@ impl Runner {
             self.profile = Some(profile);
         }
         if self.cancelled.load(Ordering::SeqCst) {
-            self.activity(
+            self.log(
                 Some(execution_id),
                 Severity::Info,
-                ActivityKind::Cancelled,
+                LogKind::Cancelled,
                 "Execution cancelled before submission",
                 self.execution_duration(),
             );
@@ -415,10 +469,10 @@ impl Runner {
         *self.target.lock().unwrap() = None;
         let cancellation = self.session.as_mut().unwrap().execute(&sql)?;
         *self.target.lock().unwrap() = Some(cancellation.clone());
-        self.activity(
+        self.log(
             Some(execution_id),
             Severity::Info,
-            ActivityKind::ExecutionStarted,
+            LogKind::ExecutionStarted,
             "SQL accepted by the server",
             None,
         );
@@ -426,54 +480,51 @@ impl Runner {
         if self.cancelled.load(Ordering::SeqCst) {
             cancellation.cancel()?;
         }
-        loop {
-            match self.session.as_mut().unwrap().poll()? {
-                QueryState::Running => thread::sleep(Duration::from_millis(100)),
-                QueryState::Cancelled => {
+        match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
+            Completion::Cancelled => {
+                self.session.as_mut().unwrap().close_operation()?;
+                *self.target.lock().unwrap() = None;
+                self.log(
+                    Some(execution_id),
+                    Severity::Info,
+                    LogKind::Cancelled,
+                    "Query cancelled by the server",
+                    self.execution_duration(),
+                );
+                self.emit(Event::Cancelled);
+                Ok(())
+            }
+            Completion::Finished { has_results } => {
+                if self.cancelled.load(Ordering::SeqCst) {
                     self.session.as_mut().unwrap().close_operation()?;
                     *self.target.lock().unwrap() = None;
-                    self.activity(
+                    self.log(
                         Some(execution_id),
                         Severity::Info,
-                        ActivityKind::Cancelled,
-                        "Query cancelled by the server",
+                        LogKind::Cancelled,
+                        "Query finished after cancellation was requested",
                         self.execution_duration(),
                     );
-                    self.emit(Event::Cancelled);
+                    self.emit(Event::Ready {
+                        more: false,
+                        limited: false,
+                    });
                     return Ok(());
                 }
-                QueryState::Finished { has_results } => {
-                    if self.cancelled.load(Ordering::SeqCst) {
-                        self.session.as_mut().unwrap().close_operation()?;
-                        *self.target.lock().unwrap() = None;
-                        self.activity(
-                            Some(execution_id),
-                            Severity::Info,
-                            ActivityKind::Cancelled,
-                            "Query finished after cancellation was requested",
-                            self.execution_duration(),
-                        );
-                        self.emit(Event::Ready {
-                            more: false,
-                            limited: false,
-                        });
-                        return Ok(());
-                    }
-                    if !has_results {
-                        self.session.as_mut().unwrap().close_operation()?;
-                        *self.target.lock().unwrap() = None;
-                        self.complete_execution(false);
-                        self.emit(Event::Ready {
-                            more: false,
-                            limited: false,
-                        });
-                        return Ok(());
-                    }
-                    let columns = self.session.as_mut().unwrap().columns()?;
-                    self.complete_execution(true);
-                    self.emit(Event::Columns(columns));
-                    return self.fetch_preview();
+                if !has_results {
+                    self.session.as_mut().unwrap().close_operation()?;
+                    *self.target.lock().unwrap() = None;
+                    self.complete_execution(false);
+                    self.emit(Event::Ready {
+                        more: false,
+                        limited: false,
+                    });
+                    return Ok(());
                 }
+                let columns = self.session.as_mut().unwrap().columns()?;
+                self.complete_execution(true);
+                self.emit(Event::Columns(columns));
+                self.fetch_preview()
             }
         }
     }
@@ -489,10 +540,10 @@ impl Runner {
                 execution.fetch_page
             })
             .unwrap_or(1);
-        self.activity(
+        self.log(
             execution_id,
             Severity::Info,
-            ActivityKind::FetchStarted,
+            LogKind::FetchStarted,
             format!("Fetching preview page {page}"),
             None,
         );
@@ -506,14 +557,14 @@ impl Runner {
                 .session
                 .as_mut()
                 .context("Session is disconnected")?
-                .fetch((PREVIEW_ROWS - fetched).min(250))?;
+                .fetch(PREVIEW_ROWS - fetched)?;
             // A blocked fetch may return after Cancel was requested.
             if self.finish_cancelled_fetch()? {
                 return Ok(());
             }
             let count = batch.rows.len();
             anyhow::ensure!(
-                count <= (PREVIEW_ROWS - fetched).min(250),
+                count <= PREVIEW_ROWS - fetched,
                 "Connector returned more rows than requested"
             );
             let bytes: usize = batch
@@ -524,7 +575,8 @@ impl Runner {
                         + row.iter().flatten().map(String::capacity).sum::<usize>()
                 })
                 .sum();
-            let limited = self.rows + count > MAX_RESULT_ROWS
+            let limited = self.session.as_ref().unwrap().result_limited()
+                || self.rows + count > MAX_RESULT_ROWS
                 || self.bytes.saturating_add(bytes) > MAX_RESULT_BYTES;
             if limited || count == 0 {
                 self.session.as_mut().unwrap().close_operation()?;
@@ -548,24 +600,6 @@ impl Runner {
             self.rows += count;
             self.bytes += bytes;
             self.emit(Event::Rows(batch.rows));
-            if !batch.more {
-                self.session.as_mut().unwrap().close_operation()?;
-                *self.target.lock().unwrap() = None;
-                self.fetch_completed(FetchSummary {
-                    execution_id,
-                    started: fetch_started,
-                    page,
-                    start_row,
-                    fetched,
-                    more: false,
-                    limited: false,
-                });
-                self.emit(Event::Ready {
-                    more: false,
-                    limited: false,
-                });
-                return Ok(());
-            }
         }
         self.fetch_completed(FetchSummary {
             execution_id,
@@ -598,10 +632,10 @@ impl Runner {
         } else {
             format!("rows {}–{}", start_row + 1, start_row + fetched)
         };
-        self.activity(
+        self.log(
             execution_id,
             Severity::Info,
-            ActivityKind::FetchCompleted,
+            LogKind::FetchCompleted,
             format!(
                 "Fetched preview page {page}: {range}, {fetched} rows, {} retained, more rows: {more}, preview limit: {limited} (client measurement: {})",
                 self.rows,
@@ -621,10 +655,10 @@ impl Runner {
             .context("Session is disconnected")?
             .close_operation()?;
         *self.target.lock().unwrap() = None;
-        self.activity(
+        self.log(
             self.execution_id(),
             Severity::Info,
-            ActivityKind::Cancelled,
+            LogKind::Cancelled,
             "Preview fetch cancelled; downloaded rows retained",
             self.execution_duration(),
         );

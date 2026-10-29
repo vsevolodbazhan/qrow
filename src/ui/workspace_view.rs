@@ -1,60 +1,27 @@
+use super::assistant_view::ThreadStatus;
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::component::{
-    Icon, Selectable, TitleBar,
+    Icon, Selectable as _, TitleBar,
     alert::Alert,
     h_flex,
     input::Editor,
-    spinner::Spinner,
+    shimmer::ShimmerText,
     status_bar::StatusBar,
     tab::{Tab as QueryTab, TabBar},
     v_flex,
 };
-use qrow::model::copied_profile_name;
-use std::rc::Rc;
 
-const TAB_BAR_HEIGHT: f32 = 36.;
+pub(super) const TAB_BAR_HEIGHT: f32 = 36.;
 
 fn connection_name(profiles: &[Profile], id: Option<Uuid>) -> &str {
     id.and_then(|id| profiles.iter().find(|profile| profile.id == id))
         .map_or("No connection", |profile| profile.name.as_str())
 }
 
-fn connection_tooltip(profile: &Profile) -> String {
-    format!("{} · {}", profile.host, profile.username)
-}
-
-fn query_status_label(status: &str, elapsed: Option<Duration>) -> String {
-    let status = capitalize_status_details(status);
-    match elapsed {
-        Some(elapsed) => format!("{status} · {:.2} s", elapsed.as_secs_f64()),
-        None => status,
-    }
-}
-
-fn capitalize_status_details(status: &str) -> String {
-    let mut capitalized = false;
-    let mut label = String::with_capacity(status.len());
-
-    for character in status.chars() {
-        if capitalized && !character.is_whitespace() {
-            label.extend(character.to_uppercase());
-            capitalized = false;
-        } else {
-            label.push(character);
-        }
-
-        if character == '·' {
-            capitalized = true;
-        }
-    }
-
-    label
-}
-
 fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static str {
     if demo {
-        "Demo · Nothing is saved"
+        "Demo changes are not saved"
     } else if !saving_enabled {
         "Workspace saving disabled"
     } else if dirty {
@@ -65,175 +32,39 @@ fn workspace_status(demo: bool, saving_enabled: bool, dirty: bool) -> &'static s
 }
 
 impl Qrow {
-    fn connections(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.active_profile();
-        let action_size = self.ui_px(28.);
-        v_flex()
-            .size_full()
-            .bg(cx.theme().sidebar)
+    pub(super) fn sidebar_header(
+        &self,
+        title: &'static str,
+        cx: &App,
+    ) -> impl IntoElement + ParentElement {
+        h_flex()
+            .id("sidebar-header")
+            .test_support()
+            .relative()
+            .h(self.ui_px(TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .pl_3()
+            .pr_2()
+            .gap_1()
+            // Match TabBar's painted separator without reducing the content height.
             .child(
-                h_flex()
-                    .h(self.ui_px(TAB_BAR_HEIGHT))
-                    .flex_shrink_0()
-                    .items_center()
-                    .pl_3()
-                    .pr_2()
-                    .gap_2()
+                div()
+                    .id("sidebar-header-border")
+                    .test_support()
+                    .absolute()
+                    .inset_0()
                     .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_base()
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Connections"),
-                    )
-                    .child(
-                        Button::new("add-connection")
-                            .ghost()
-                            .small()
-                            .w(action_size)
-                            .h(action_size)
-                            .flex_shrink_0()
-                            .icon(IconName::Plus)
-                            .accessibility_label("New Connection")
-                            .tooltip("New Connection…")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.edit_profile(Profile::default(), true, window, cx)
-                            })),
-                    ),
+                    .border_color(cx.theme().border),
             )
             .child(
-                v_flex()
-                    .id("connections-list")
+                div()
+                    .id("sidebar-title")
+                    .test_support()
                     .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pt_2()
-                    .gap_1()
-                    .children(self.profiles.iter().map(|profile| {
-                        let id = profile.id;
-                        let busy = self.profile_busy(id);
-                        let unread_error = self
-                            .tabs
-                            .iter()
-                            .any(|tab| tab.saved.profile == Some(id) && tab.panel.unread_error);
-                        let accessibility_label = format!(
-                            "{}{}{}",
-                            profile.name,
-                            if busy { ", running" } else { "" },
-                            if unread_error { ", unread error" } else { "" }
-                        );
-                        let restore = self.tabs[self.active].input.read(cx).focus_handle(cx);
-                        let edited = profile.clone();
-                        let duplicated = profile.clone();
-                        let edit = Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                            this.edit_profile(edited.clone(), false, window, cx)
-                        }));
-                        let duplicate =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                let mut profile = duplicated.clone();
-                                profile.id = Uuid::new_v4();
-                                profile.name = copied_profile_name(&profile.name, |name| {
-                                    this.profiles.iter().any(|existing| existing.name == name)
-                                });
-                                this.edit_profile(profile, true, window, cx);
-                            }));
-                        let delete =
-                            Rc::new(cx.listener(move |this, _: &ClickEvent, window, cx| {
-                                this.confirm_delete_profile(id, window, cx)
-                            }));
-                        let button = Button::new(SharedString::from(format!("profile-{id}")))
-                            .ghost()
-                            .small()
-                            .h_full()
-                            .flex_1()
-                            .min_w_0()
-                            .accessibility_label(accessibility_label)
-                            .child(
-                                h_flex()
-                                    .h_full()
-                                    .w_full()
-                                    .min_w_0()
-                                    .text_base()
-                                    .line_height(relative(1.25))
-                                    .items_center()
-                                    .gap_2()
-                                    .child(
-                                        gpui_kit::component::Icon::default()
-                                            .path(crate::assets::SPARK_ICON)
-                                            .size_4()
-                                            .flex_shrink_0(),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .truncate()
-                                            .child(profile.name.clone()),
-                                    )
-                                    .when(busy, |el| {
-                                        el.child(
-                                            div()
-                                                // Keep the loading glyph on the header action's centerline.
-                                                .mr_0p5()
-                                                .child(
-                                                    Spinner::new()
-                                                        .xsmall()
-                                                        .color(cx.theme().muted_foreground),
-                                                ),
-                                        )
-                                    })
-                                    .when(unread_error, |el| {
-                                        el.child(
-                                            Icon::new(AssetIconName::TriangleAlert)
-                                                .small()
-                                                .text_color(cx.theme().danger),
-                                        )
-                                    }),
-                            )
-                            .selected(active == Some(id))
-                            .text_color(cx.theme().sidebar_foreground)
-                            .when(active == Some(id), |button| {
-                                button
-                                    .bg(cx.theme().sidebar_accent)
-                                    .text_color(cx.theme().sidebar_accent_foreground)
-                            })
-                            .tooltip(connection_tooltip(profile))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.switch_profile(id, window, cx)
-                            }));
-                        h_flex()
-                            .id(SharedString::from(format!("connection-{id}")))
-                            .h(self.ui_px(32.))
-                            .flex_shrink_0()
-                            .child(button)
-                            .context_menu(move |menu, _, _| {
-                                menu.action_context(restore.clone())
-                                    .item(
-                                        PopupMenuItem::new("Edit Connection…")
-                                            .on_click({
-                                                let edit = edit.clone();
-                                                move |event, window, cx| edit(event, window, cx)
-                                            })
-                                            .disabled(busy),
-                                    )
-                                    .item(PopupMenuItem::new("Duplicate").on_click({
-                                        let duplicate = duplicate.clone();
-                                        move |event, window, cx| duplicate(event, window, cx)
-                                    }))
-                                    .separator()
-                                    .item(
-                                        PopupMenuItem::new("Delete")
-                                            .on_click({
-                                                let delete = delete.clone();
-                                                move |event, window, cx| delete(event, window, cx)
-                                            })
-                                            .disabled(busy),
-                                    )
-                            })
-                    })),
+                    .text_base()
+                    .line_height(relative(1.25))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(title),
             )
     }
 
@@ -241,6 +72,7 @@ impl Qrow {
         let tab_height = self.ui_px(TAB_BAR_HEIGHT);
         let visible = self.visible_tab_indices();
         TabBar::new("query-tabs")
+            .track_scroll(&self.tab_scroll)
             .selected_index(
                 visible
                     .iter()
@@ -251,32 +83,39 @@ impl Qrow {
             .h(tab_height)
             .min_h(tab_height)
             .max_h(tab_height)
-            .prefix(
-                h_flex().h(tab_height).px_2().flex_shrink_0().child(
-                    Button::new("sidebar-toggle")
-                        .ghost()
-                        .small()
-                        .w(self.ui_px(28.))
-                        .h(self.ui_px(28.))
-                        .flex_shrink_0()
-                        .icon(IconName::PanelLeft)
-                        .accessibility_label("Toggle Sidebar")
-                        .tooltip("Toggle Sidebar · ⌘B")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.sidebar = !this.sidebar;
-                            cx.notify();
-                        })),
-                ),
-            )
             .children(visible.iter().map(|index| {
                 let index = *index;
                 let tab = &self.tabs[index];
                 let id = tab.saved.id;
+                let assistant_busy = self.settings.assistant.enabled && self.assistant_tab_busy(id);
+                let title_generating =
+                    self.assistant
+                        .conversation_for_tab(id)
+                        .is_some_and(|conversation| {
+                            conversation.title_follows_conversation
+                                && self.assistant_title_generating(&conversation.thread_id)
+                        });
                 QueryTab::new()
                     // Kit's large tab uses a fixed 36px height internally.
                     // Constrain it to the same scaled height as the bar and its tools.
                     .min_h(tab_height)
                     .max_h(tab_height)
+                    // A tab without a dot shows its status on the tab itself.
+                    .when(tab.dot_status().is_none(), |query_tab| {
+                        query_tab.map(|mut query_tab| {
+                            query_tab.interactivity().tooltip(StatusTooltip::live(
+                                cx.entity().downgrade(),
+                                None,
+                                move |qrow, _| {
+                                    qrow.tabs
+                                        .iter()
+                                        .find(|tab| tab.saved.id == id)
+                                        .map(Tab::status_tooltip)
+                                },
+                            ));
+                            query_tab
+                        })
+                    })
                     // Right click does not activate the tab; the menu names its target.
                     .on_mouse_down(
                         MouseButton::Right,
@@ -287,13 +126,33 @@ impl Qrow {
                             });
                         }),
                     )
-                    .label(tab.saved.title.clone())
+                    .label(if title_generating {
+                        String::new()
+                    } else {
+                        tab.saved.title.clone()
+                    })
+                    .when(title_generating, |query_tab| {
+                        query_tab.child(
+                            ShimmerText::new(tab.saved.title.clone())
+                                .id(format!("assistant-tab-title-{id}")),
+                        )
+                    })
                     .aria_label(format!(
-                        "{}{}{}",
+                        "{}{}{}{}{}",
                         tab.saved.title,
-                        if tab.busy { ", running" } else { "" },
+                        tab.work_suffix(),
                         if tab.panel.unread_error {
                             ", unread error"
+                        } else {
+                            ""
+                        },
+                        if tab.panel.has_unread_success() {
+                            ", unread query result"
+                        } else {
+                            ""
+                        },
+                        if title_generating {
+                            ", generating title"
                         } else {
                             ""
                         },
@@ -302,14 +161,26 @@ impl Qrow {
                         h_flex()
                             .gap_1()
                             .pr_2()
-                            .when(tab.busy, |el| {
-                                el.child(Spinner::new().xsmall().color(cx.theme().muted_foreground))
-                            })
-                            .when(tab.panel.unread_error, |el| {
+                            .when_some(tab.dot_status(), |el, status| {
+                                let label = format!("{}{}", tab.saved.title, tab.status_suffix());
+                                let tooltip = StatusTooltip::live(
+                                    cx.entity().downgrade(),
+                                    None,
+                                    move |qrow, _| {
+                                        qrow.tabs
+                                            .iter()
+                                            .find(|tab| tab.saved.id == id)
+                                            .map(Tab::status_tooltip)
+                                    },
+                                );
                                 el.child(
-                                    Icon::new(AssetIconName::TriangleAlert)
-                                        .small()
-                                        .text_color(cx.theme().danger),
+                                    div()
+                                        .id(SharedString::from(format!("query-status-{id}")))
+                                        .test_support()
+                                        .role(Role::Status)
+                                        .aria_label(label)
+                                        .tooltip(tooltip)
+                                        .child(status.dot(cx)),
                                 )
                             })
                             .child(
@@ -321,8 +192,14 @@ impl Qrow {
                                 .small()
                                 .icon(IconName::Close)
                                 .accessibility_label(format!("Close {}", tab.saved.title))
-                                .tooltip("Close Tab · ⌘W")
-                                .disabled(tab.busy)
+                                .map(|mut button| {
+                                    button.interactivity().tooltip(
+                                        StatusTooltip::new("Close tab", "")
+                                            .for_action(&CloseTab, None),
+                                    );
+                                    button
+                                })
+                                .disabled(tab.busy || assistant_busy)
                                 .on_click(cx.listener(
                                     move |this, _, window, cx| {
                                         cx.stop_propagation();
@@ -338,7 +215,7 @@ impl Qrow {
                 }
             }))
             .suffix(
-                h_flex().h(tab_height).px_2().flex_shrink_0().child(
+                h_flex().h(tab_height).px_2().gap_1().flex_shrink_0().child(
                     Button::new("new-tab")
                         .ghost()
                         .small()
@@ -346,8 +223,13 @@ impl Qrow {
                         .h(self.ui_px(28.))
                         .icon(IconName::Plus)
                         .disabled(self.active_profile().is_none())
-                        .accessibility_label("New Tab")
-                        .tooltip("New Tab · ⌘T")
+                        .accessibility_label("New tab")
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("New tab", "").for_action(&NewTab, None),
+                            );
+                            button
+                        })
                         .on_click(
                             cx.listener(|this, _, window, cx| this.new_tab(&NewTab, window, cx)),
                         ),
@@ -358,27 +240,37 @@ impl Qrow {
     fn query_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = &self.tabs[self.active];
         let active = tab.saved.profile;
+        let authenticating = active.is_some_and(|id| self.external_authentication_pending(id));
         h_flex()
+            .id("query-toolbar")
+            .test_support()
             .h_12()
             .px_3()
             .gap_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .when(!tab.busy, |el| {
+            .when(!tab.busy && !authenticating, |el| {
                 el.child(
                     Button::new("run")
                         .primary()
                         .small()
                         .icon(IconName::ArrowRight)
                         .label("Run")
-                        .tooltip("Run SQL selection, or editor contents if nothing is selected. One statement only · ⌘Enter")
+                        .map(|mut button| {
+                            button.interactivity().tooltip(
+                                StatusTooltip::new("Run query", "")
+                                    .detail("Run the selected SQL or the statement at the cursor.")
+                                    .for_action(&RunQuery, None),
+                            );
+                            button
+                        })
                         .disabled(active.is_none() && !self.demo)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.run(&RunQuery, window, cx)),
                         ),
                 )
             })
-            .when(tab.busy, |el| {
+            .when(tab.busy || authenticating, |el| {
                 el.child(
                     Button::new("cancel")
                         .small()
@@ -399,6 +291,19 @@ impl Qrow {
                     .disabled(!tab.can_disconnect())
                     .on_click(cx.listener(|this, _, _, cx| this.disconnect(cx))),
             )
+            .when(authenticating, |el| {
+                el.child(
+                    div()
+                        .id("connection-authentication-progress")
+                        .test_support()
+                        .role(Role::Status)
+                        .aria_label("Waiting for Trino authentication")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Waiting for Trino authentication…"),
+                )
+            })
+            .child(div().flex_1())
     }
 
     fn query_panel(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -406,70 +311,12 @@ impl Qrow {
             return self.output_panel(cx);
         }
         let tab = &self.tabs[self.active];
-        let data = tab.table.read(cx).delegate();
-        let page = data.pagination.page();
-        let pages = data.pagination.pages(data.rows.len());
-        let range = data.pagination.range(data.rows.len());
-        let count = if range.is_empty() {
-            format!("0 rows · {} columns", data.columns.len())
-        } else {
-            format!(
-                "Rows {}–{} · {} loaded · {} columns",
-                range.start + 1,
-                range.end,
-                data.rows.len(),
-                data.columns.len()
-            )
-        };
-        let page_label = format!("Page {}", page + 1);
         results::selection_boundary(&tab.table)
             .size_full()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .h_10()
-                    .flex_shrink_0()
-                    .px_3()
-                    .gap_2()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(self.panel_switcher(cx))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(count),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("page-label")
-                            .role(Role::Label)
-                            .text_xs()
-                            .aria_label(page_label.clone())
-                            .child(page_label),
-                    )
-                    .child(button_pair::button_pair(
-                        "pagination-buttons",
-                        Button::new("previous-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Previous")
-                            .disabled(page == 0)
-                            .on_click(cx.listener(|this, _, _, cx| this.previous_page(cx))),
-                        Button::new("next-page")
-                            .small()
-                            .ghost()
-                            .w_24()
-                            .label("Next")
-                            .disabled(page + 1 >= pages && (!tab.more || tab.busy))
-                            .on_click(cx.listener(|this, _, _, cx| this.next_page(cx))),
-                        cx,
-                    )),
-            )
+            .child(self.result_toolbar(cx))
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
                 self.dialog_open(),
@@ -479,82 +326,308 @@ impl Qrow {
             .into_any_element()
     }
 
-    fn status_bar(&self) -> impl IntoElement {
-        let tab = &self.tabs[self.active];
-        let connection_name = connection_name(&self.profiles, tab.saved.profile);
-        let status_label = query_status_label(&tab.status, tab.elapsed);
-        let workspace_status =
-            workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
+    /// The Assistant button of the status bar. Its dot shows the most urgent
+    /// state of all conversations.
+    fn assistant_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let status = self.assistant_status();
+        let accessibility_label = match status {
+            ThreadStatus::Failed => "Toggle assistant, reply failed",
+            ThreadStatus::Ready => "Toggle assistant, reply ready",
+            ThreadStatus::Approval => "Toggle assistant, waiting for approval",
+            ThreadStatus::Working => "Toggle assistant, working",
+            _ => "Toggle assistant",
+        };
+        let toggle = Button::new("toggle-assistant")
+            .ghost()
+            .small()
+            .selected(self.assistant_state.open)
+            .accessibility_label(accessibility_label)
+            .icon(Icon::new(AssetIconName::Bot).small())
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_assistant(window, cx)));
+        div()
+            .id("assistant-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                Some(&ToggleAssistant),
+                |qrow, _| {
+                    Some(StatusTooltip::new(
+                        "Assistant",
+                        qrow.assistant_status().tooltip_status(),
+                    ))
+                },
+            ))
+            .child(DotStatus::on_button(status.dot_status(), toggle, cx))
+    }
 
-        StatusBar::new()
+    /// The dot, the accessibility label, and the tooltip of the Sign-ins
+    /// button. The dot shows sign-ins that need attention, then browser
+    /// sign-ins that run.
+    fn sign_ins_status(&self) -> (Option<DotStatus>, String, StatusTooltip) {
+        let attention = self.sign_ins_needing_attention();
+        let working = self.sign_ins_working();
+        let mut label = String::from("Sign-Ins");
+        let mut statuses = Vec::new();
+        if working {
+            label.push_str(", sign-in in progress");
+            statuses.push("Sign-in running".to_owned());
+        }
+        match attention {
+            0 => {}
+            1 => {
+                label.push_str(", 1 sign-in needs attention");
+                statuses.insert(0, "1 needs attention".to_owned());
+            }
+            count => {
+                label.push_str(&format!(", {count} sign-ins need attention"));
+                statuses.insert(0, format!("{count} need attention"));
+            }
+        }
+        let status = if attention > 0 {
+            Some(DotStatus::Attention)
+        } else if working {
+            Some(DotStatus::Working)
+        } else {
+            None
+        };
+        (
+            status,
+            label,
+            StatusTooltip::new("Sign-Ins", statuses.join("\n")),
+        )
+    }
+
+    /// The buttons of the status bar that choose the panel of the sidebar.
+    /// The button of the visible panel hides the sidebar.
+    fn sidebar_buttons(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let shown = |panel| self.sidebar && self.sidebar_panel == panel;
+        let (status, label, _) = self.sign_ins_status();
+        let connections = Button::new("show-connections")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::Connections))
+            .icon(Icon::new(AssetIconName::Plug).small())
+            .accessibility_label("Connections")
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
+            }));
+        let sign_ins = Button::new("show-sign-ins")
+            .ghost()
+            .small()
+            .selected(shown(SidebarPanel::SignIns))
+            .icon(Icon::new(AssetIconName::KeyRound).small())
+            .accessibility_label(label)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
+            }));
+        h_flex()
             .flex_shrink_0()
-            .left(
+            .gap_1()
+            .child(
                 div()
-                    .id("query-status")
-                    .role(Role::Status)
-                    .min_w_0()
-                    .truncate()
-                    .aria_label(status_label.clone())
-                    .child(status_label),
+                    .id("connections-tooltip-trigger")
+                    .tooltip(
+                        StatusTooltip::new("Connections", "").for_action(&ShowConnections, None),
+                    )
+                    .child(connections),
             )
             .child(
                 div()
+                    .id("sign-ins-tooltip-trigger")
+                    .tooltip(StatusTooltip::live(
+                        cx.entity().downgrade(),
+                        Some(&ShowSignIns),
+                        |qrow, _| Some(qrow.sign_ins_status().2),
+                    ))
+                    .child(DotStatus::on_button(status, sign_ins, cx)),
+            )
+    }
+
+    /// Shows `panel` in the sidebar, or hides the sidebar when it shows
+    /// `panel` already.
+    pub(super) fn show_sidebar_panel(
+        &mut self,
+        panel: SidebarPanel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = !(self.sidebar && self.sidebar_panel == panel);
+        if self.sidebar_panel != panel {
+            self.catalog
+                .state
+                .update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        }
+        self.sidebar_panel = panel;
+        self.set_sidebar(shown, window, cx);
+    }
+
+    /// Shows or hides the sidebar. A hidden sidebar gives its focus to the
+    /// SQL editor: without a focused element, shortcuts like ⌘B reach no
+    /// handler. A focus outside the sidebar, like in Activity, stays.
+    pub(super) fn set_sidebar(&mut self, shown: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let had_focus = self.sidebar && self.sidebar_focus.contains_focused(window, cx);
+        self.sidebar = shown;
+        if !shown {
+            self.catalog
+                .state
+                .update(cx, |tree, cx| tree.set_selected_index(None, cx));
+        }
+        if !shown && had_focus {
+            let editor = self.tabs[self.active].input.clone();
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    /// Activity keeps its icon, with a dot for unread errors or current work.
+    fn activity_status(&self, cx: &App) -> (Option<DotStatus>, String, StatusTooltip) {
+        let view = self.activity.read(cx);
+        let unseen = view.activity().unseen_errors();
+        let in_use = self
+            .profiles
+            .iter()
+            .any(|profile| self.connection_dot_status(profile.id, cx) == Some(DotStatus::Working));
+        let unseen = unseen
+            + self
+                .tabs
+                .iter()
+                .filter(|tab| tab.panel.unread_error)
+                .count();
+        let status = if unseen > 0 {
+            Some(DotStatus::Error)
+        } else if in_use {
+            Some(DotStatus::Working)
+        } else {
+            None
+        };
+        let mut label = String::from("Activity");
+        let mut statuses = Vec::new();
+        if unseen > 0 {
+            statuses.push(format!(
+                "{unseen} unread {}",
+                if unseen == 1 { "error" } else { "errors" }
+            ));
+        }
+        if in_use {
+            label.push_str(", in use");
+            statuses.push("In use".into());
+        }
+        match unseen {
+            0 => {}
+            1 => label.push_str(", 1 unseen error"),
+            count => label.push_str(&format!(", {count} unseen errors")),
+        }
+        let tooltip = StatusTooltip::new(
+            "Activity",
+            if statuses.is_empty() {
+                "Idle".into()
+            } else {
+                statuses.join("\n")
+            },
+        );
+        (status, label, tooltip)
+    }
+
+    fn activity_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let (status, label, _) = self.activity_status(cx);
+        let button = Button::new("toggle-activity")
+            .ghost()
+            .small()
+            .selected(self.activity.read(cx).is_open())
+            .icon(Icon::new(AssetIconName::Activity).small())
+            .accessibility_label(label)
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)));
+        div()
+            .id("activity-tooltip-trigger")
+            .tooltip(StatusTooltip::live(
+                cx.entity().downgrade(),
+                Some(&ToggleActivity),
+                |qrow, cx| Some(qrow.activity_status(cx).2),
+            ))
+            .child(DotStatus::on_button(status, button, cx))
+    }
+
+    /// The status of the last work of the active tab, like "Complete" or
+    /// "Error: Connection failed". The dot tooltip of the tab shows it.
+    pub fn active_tab_status(&self) -> String {
+        self.tabs[self.active].status_label()
+    }
+
+    fn status_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab = &self.tabs[self.active];
+        let connection_name = connection_name(&self.profiles, tab.saved.profile);
+        let workspace_status =
+            workspace_status(self.demo, self.saver.is_some(), self.dirty.is_some());
+
+        // Equal-width columns keep the connection name at the window center.
+        // StatusBar centers its middle region only between the left and right
+        // items, so labels of different widths would move it off center.
+        StatusBar::new()
+            .flex_shrink_0()
+            // The default padding is a quarter rem, 3.5 pixels, which rounds
+            // to an uneven space above and below the Activity button.
+            .py(self.ui_px(4.))
+            .child(h_flex().flex_1().min_w_0().child(self.sidebar_buttons(cx)))
+            .child(
+                div()
                     .id("current-connection")
+                    .test_support()
                     .role(Role::Label)
+                    .flex_1()
                     .min_w_0()
                     .truncate()
+                    .text_center()
                     .aria_label(format!("Current connection: {connection_name}"))
                     .child(connection_name.to_owned()),
             )
-            .right(
-                div()
-                    .id("workspace-status")
-                    .role(Role::Status)
+            .child(
+                h_flex()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .aria_label(workspace_status)
-                    .child(workspace_status),
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("workspace-status")
+                            .test_support()
+                            .role(Role::Status)
+                            .min_w_0()
+                            .truncate()
+                            .aria_label(workspace_status)
+                            .child(workspace_status),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .when(self.settings.assistant.enabled, |el| {
+                                el.child(self.assistant_button(cx))
+                            })
+                            .child(self.activity_button(cx)),
+                    ),
             )
     }
 
     fn splitter(&self, horizontal: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        let handle = div()
             .id(if horizontal {
                 "sidebar-splitter"
             } else {
                 "editor-splitter"
             })
-            .relative()
-            .flex_shrink_0()
+            .test_support()
+            .absolute()
             .when(horizontal, |el| {
-                el.w(self.ui_px(5.))
-                    .mx(self.ui_px(-2.))
+                el.left(self.ui_px(-2.))
+                    .w(self.ui_px(5.))
                     .h_full()
                     .cursor(CursorStyle::ResizeLeftRight)
             })
             .when(!horizontal, |el| {
-                el.h(self.ui_px(5.))
-                    .my(self.ui_px(-2.))
+                el.top(self.ui_px(-2.))
+                    .h(self.ui_px(5.))
                     .w_full()
                     .cursor(CursorStyle::ResizeUpDown)
             })
-            .child(
-                div()
-                    .absolute()
-                    .bg(
-                        if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
-                            cx.theme().primary
-                        } else {
-                            cx.theme().border
-                        },
-                    )
-                    .when(horizontal, |el| {
-                        el.left(self.ui_px(2.)).w(self.ui_px(1.)).h_full()
-                    })
-                    .when(!horizontal, |el| {
-                        el.top(self.ui_px(2.)).h(self.ui_px(1.)).w_full()
-                    }),
-            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _, cx| {
@@ -569,17 +642,122 @@ impl Qrow {
                     ));
                     cx.stop_propagation();
                 }),
+            );
+        // Reserve exactly the painted divider's width. The wider drag target
+        // stays out of layout so separately rounded margins cannot leave a gap.
+        div()
+            .id(if horizontal {
+                "sidebar-divider"
+            } else {
+                "editor-divider"
+            })
+            .test_support()
+            .relative()
+            .flex_shrink_0()
+            .bg(
+                if self.resize.is_some_and(|(axis, _, _)| axis == horizontal) {
+                    cx.theme().primary
+                } else {
+                    cx.theme().border
+                },
+            )
+            .when(horizontal, |el| el.w(self.ui_px(1.)).h_full())
+            .when(!horizontal, |el| el.h(self.ui_px(1.)).w_full())
+            .child(handle)
+    }
+
+    fn assistant_splitter(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("assistant-splitter")
+            .relative()
+            .flex_shrink_0()
+            .w(self.ui_px(5.))
+            .mx(self.ui_px(-2.))
+            .h_full()
+            .cursor(CursorStyle::ResizeLeftRight)
+            // The backing starts under the divider to avoid a rounded gap.
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(3.))
+                    .h_full()
+                    .bg(cx.theme().sidebar),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(3.))
+                    .top_0()
+                    .h(self.ui_px(TAB_BAR_HEIGHT))
+                    .border_b_1()
+                    .border_color(cx.theme().border),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(self.ui_px(2.))
+                    .w(self.ui_px(1.))
+                    .h_full()
+                    .bg(if self.assistant_state.resizing.is_some() {
+                        cx.theme().primary
+                    } else {
+                        cx.theme().border
+                    }),
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                    this.assistant_state.resizing = Some((
+                        event.position,
+                        this.ui_px(this.settings.assistant.panel_width),
+                    ));
+                    cx.stop_propagation();
+                }),
             )
     }
 }
 
-impl Render for Qrow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Split positions are measured window geometry. Clamp without mutating retained state during render.
-        let editor_height = self
-            .editor_height
-            .min(window.viewport_size().height - self.ui_px(294.))
-            .max(self.ui_px(100.));
+/// A view that renders again only when it changes. GPUI does not keep the
+/// accessibility nodes of a view that it does not render again, so the view
+/// renders in each frame while an accessibility client, like VoiceOver, reads
+/// the window.
+fn changed_view(view: AnyView, window: &Window) -> AnyElement {
+    if window.is_a11y_active() {
+        view.into_any_element()
+    } else {
+        view.cached(StyleRefinement::default().size_full())
+            .into_any_element()
+    }
+}
+
+impl Qrow {
+    /// The width of the assistant pane in a window that is `viewport` wide.
+    pub(super) fn assistant_width(&self, viewport: Pixels) -> Pixels {
+        let available = viewport
+            - self.ui_px(420.)
+            - if self.sidebar {
+                self.sidebar_width
+            } else {
+                px(0.)
+            };
+        self.ui_px(self.settings.assistant.panel_width)
+            .min(available)
+            .max(self.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH))
+    }
+
+    /// The window around the workspace and the assistant pane: the title bar,
+    /// the menus, the status bar, and the commands of the window. The window
+    /// renders it for each frame. The workspace and the pane are views of
+    /// their own, so each renders again only when it changes.
+    pub(super) fn render_shell(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let assistant_width = self.assistant_width(window.viewport_size().width);
+        let activity_open = self.activity.read(cx).is_open();
         v_flex()
             .relative()
             .size_full()
@@ -595,15 +773,53 @@ impl Render for Qrow {
                     this.close_tab(this.active, window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                this.sidebar = !this.sidebar;
-                cx.notify();
+            .on_action(cx.listener(|this, _: &ToggleSidebar, window, cx| {
+                this.set_sidebar(!this.sidebar, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowConnections, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::Connections, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowSignIns, window, cx| {
+                this.show_sidebar_panel(SidebarPanel::SignIns, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleAssistant, window, cx| {
+                this.toggle_assistant(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ToggleActivity, window, cx| {
+                    this.toggle_activity(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &SendAssistantMessage, window, cx| {
+                this.send_assistant(window, cx)
             }))
             .on_action(cx.listener(Self::open_about))
             .on_action(cx.listener(Self::open_settings))
             .on_action(cx.listener(Self::increase_ui_scale))
             .on_action(cx.listener(Self::decrease_ui_scale))
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {
+                if let Some((start, initial)) = this.assistant_state.resizing {
+                    if e.pressed_button != Some(MouseButton::Left) {
+                        this.assistant_state.resizing = None;
+                        return;
+                    }
+                    let available = window.viewport_size().width
+                        - this.ui_px(420.)
+                        - if this.sidebar {
+                            this.sidebar_width
+                        } else {
+                            px(0.)
+                        };
+                    let width = (initial + start.x - e.position.x).clamp(
+                        this.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH),
+                        this.ui_px(crate::model::MAX_ASSISTANT_PANEL_WIDTH)
+                            .min(available)
+                            .max(this.ui_px(crate::model::MIN_ASSISTANT_PANEL_WIDTH)),
+                    );
+                    this.settings.assistant.panel_width = f32::from(width) / this.settings.ui_scale;
+                    this.changed(cx);
+                    return;
+                }
                 let Some((horizontal, start, initial)) = this.resize else {
                     return;
                 };
@@ -624,59 +840,58 @@ impl Render for Qrow {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, _| this.resize = None),
+                cx.listener(|this, _, _, _| {
+                    this.resize = None;
+                    this.assistant_state.resizing = None;
+                }),
             )
             .child(
                 TitleBar::new().bg(cx.theme().title_bar).child(
+                    // Balance TitleBar's fixed 80 px traffic-light inset. It
+                    // does not follow the UI scale, so this padding must not.
                     div()
                         .flex_1()
-                        .pr(self.ui_px(80.))
+                        .pr(px(80.))
                         .text_center()
                         .font_weight(FontWeight::MEDIUM)
-                        .child(if self.demo { "Qrow · Demo" } else { "Qrow" }),
+                        .child(if self.demo { "Qrow (Demo)" } else { "Qrow" }),
                 ),
             )
-            .child(
-                h_flex()
-                    .items_stretch()
-                    .flex_1()
-                    .min_h_0()
-                    .when(self.sidebar, |el| {
-                        el.child(
+            // Activity covers the workspace and the assistant pane while it
+            // is open.
+            .when(activity_open, |el| {
+                el.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(changed_view(self.activity.clone().into(), window)),
+                )
+            })
+            .when(!activity_open, |el| {
+                el.child(
+                    h_flex()
+                        .items_stretch()
+                        .flex_1()
+                        .min_h_0()
+                        .child(
                             div()
-                                .w(self.sidebar_width)
-                                .flex_shrink_0()
-                                .child(self.connections(cx)),
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .child(changed_view(cx.entity().into(), window)),
                         )
-                        .child(self.splitter(true, cx))
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .overflow_hidden()
-                            .child(self.query_tabs(cx))
-                            .child(self.query_toolbar(cx))
-                            .child(
-                                div()
-                                    .h(editor_height)
-                                    .flex_shrink_0()
-                                    .min_w_0()
-                                    .line_height(relative(self.settings.editor_line_height))
-                                    .child(
-                                        Editor::new(&self.tabs[self.active].input)
-                                            .appearance(false)
-                                            .font_family(self.settings.editor_font_family.clone())
-                                            .text_size(self.ui_px(self.settings.editor_font_size))
-                                            .size_full()
-                                            .aria_label("SQL Editor"),
+                        .when(
+                            self.settings.assistant.enabled && self.assistant_state.open,
+                            |el| {
+                                el.child(self.assistant_splitter(cx)).child(
+                                    div().w(assistant_width).flex_shrink_0().min_h_0().child(
+                                        changed_view(self.assistant_pane.clone().into(), window),
                                     ),
-                            )
-                            .child(self.splitter(false, cx))
-                            .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
-                    ),
-            )
+                                )
+                            },
+                        ),
+                )
+            })
             .when_some(self.menu.as_ref(), |el, menu| {
                 el.child(
                     deferred(
@@ -689,24 +904,94 @@ impl Render for Qrow {
                 )
             })
             .when_some(self.message.clone(), |el, message| {
-                el.child(Alert::warning("workspace-message", message).banner())
+                el.child(
+                    div()
+                        .id("workspace-message")
+                        .test_support()
+                        .aria_label(message.clone())
+                        .child(Alert::warning("workspace-alert", message).banner()),
+                )
             })
-            .child(self.status_bar())
+            .child(self.status_bar(cx))
+    }
+}
+impl Render for Qrow {
+    /// The workspace: the connections, the query tabs, the editor, and the
+    /// results. The window shell around it has the assistant pane.
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Split positions are measured window geometry. Clamp without mutating retained state during render.
+        let editor_height = self
+            .editor_height
+            .min(window.viewport_size().height - self.ui_px(294.))
+            .max(self.ui_px(100.));
+        h_flex()
+            .size_full()
+            .items_stretch()
+            .when(self.sidebar, |el| {
+                el.child(
+                    div()
+                        .track_focus(&self.sidebar_focus)
+                        .w(self.sidebar_width)
+                        .flex_shrink_0()
+                        .map(|el| match self.sidebar_panel {
+                            SidebarPanel::Connections => {
+                                el.child(self.connections(window, cx).into_any_element())
+                            }
+                            SidebarPanel::SignIns => {
+                                el.child(self.sign_ins_sidebar(cx).into_any_element())
+                            }
+                        }),
+                )
+                .child(self.splitter(true, cx))
+            })
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.query_tabs(cx))
+                    .child(self.query_toolbar(cx))
+                    .child(
+                        // GPUI Kit's Editor has no ID setter; tests find the
+                        // editor through its container.
+                        div()
+                            .id("sql-editor")
+                            .test_support()
+                            .h(editor_height)
+                            .flex_shrink_0()
+                            .min_w_0()
+                            .line_height(relative(self.settings.editor_line_height))
+                            .child(
+                                Editor::new(&self.tabs[self.active].input)
+                                    .appearance(false)
+                                    .font_family(self.settings.editor_font_family.clone())
+                                    .text_size(self.ui_px(self.settings.editor_font_size))
+                                    .size_full()
+                                    .aria_label("SQL Editor"),
+                            ),
+                    )
+                    .child(self.splitter(false, cx))
+                    .child(div().flex_1().min_h_0().child(self.query_panel(cx))),
+            )
     }
 }
 
 /// Own window overlays outside Qrow so their builders can read its retained state.
-pub(crate) struct WindowView {
+pub struct WindowView {
     content: Entity<Qrow>,
 }
 impl WindowView {
-    pub(crate) fn new(content: Entity<Qrow>) -> Self {
+    pub fn new(content: Entity<Qrow>) -> Self {
         Self { content }
     }
 }
 impl Render for WindowView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use gpui_kit::component::Root;
+        let shell = self.content.update(cx, |content, cx| {
+            content.render_shell(window, cx).into_any_element()
+        });
         div()
             .size_full()
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
@@ -730,7 +1015,7 @@ impl Render for WindowView {
                 cx.stop_propagation();
                 window.prevent_default();
             }))
-            .child(self.content.clone())
+            .child(shell)
             .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
@@ -756,28 +1041,9 @@ mod tests {
             connection_name(&[profile], Some(Uuid::new_v4())),
             "No connection"
         );
-        let tooltip_profile = Profile {
-            host: "kyuubi.example.com".into(),
-            username: "aviaservice".into(),
-            database: "initial_database".into(),
-            ..Profile::default()
-        };
-        assert_eq!(
-            connection_tooltip(&tooltip_profile),
-            "kyuubi.example.com · aviaservice"
-        );
-        assert_eq!(query_status_label("Executing…", None), "Executing…");
-        assert_eq!(
-            query_status_label("Complete · demo data", Some(Duration::from_millis(842))),
-            "Complete · Demo data · 0.84 s"
-        );
-        assert_eq!(
-            query_status_label("Error · connection lost · retry later", None),
-            "Error · Connection lost · Retry later"
-        );
         assert_eq!(
             workspace_status(true, true, false),
-            "Demo · Nothing is saved"
+            "Demo changes are not saved"
         );
         assert_eq!(
             workspace_status(false, false, false),

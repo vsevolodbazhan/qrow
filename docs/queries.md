@@ -9,24 +9,42 @@ concurrently.
 1. Select a [connection profile](connections.md). Qrow shows that connection's tabs.
 2. Select or create a tab under that connection.
 3. Enter SQL in the editor.
-4. Select the text to run, if you want to run only part of the editor.
+4. Put the cursor in the statement to run, or select SQL text.
 5. Click **Run** or press **⌘Enter**.
 
-Without a selection, Qrow submits the full editor contents. It does not select
-the statement under the cursor. Each execution must contain one SQL statement.
-Qrow rejects multiple statements before sending them to the server.
+Without a selection, Qrow runs the full SQL statement at the cursor.
+The statement can extend across several lines. Semicolons in quoted text
+or comments do not end a statement. Spaces before or after a statement on
+the same line belong to that statement.
 
-A new accepted execution clears the previous preview and the previous Error
-badge. The badge stays clear while the execution runs unless that execution
-fails. Results appear as Qrow fetches them. Switching connections does not clear
-the preview or close the tab's session.
+If the cursor is on a blank line or a comment between statements, Qrow does
+not run SQL. Move the cursor into a statement, or select SQL text.
+Blank lines and comments inside a statement belong to that statement.
+
+If you select text, Qrow runs that text. Each execution must contain one SQL
+statement. Qrow rejects a selection with multiple statements before it sends
+SQL to the server.
+
+The dot of a tab shows the state of its work. Point to the dot to read the
+tab name and a short status. The tooltip has no query detail line. The bar
+above Results shows neutral tags for the visible rows, loaded rows, columns,
+and duration of the last query. At small widths, **Result Details** shows
+the values in a popover. See [Results](results.md#browse-and-copy) for the
+controls and keyboard use. Action tooltips show
+the command name and its keyboard shortcut on one line. The name and shortcut
+share a vertical center.
+
+A new accepted execution clears the previous preview and the unread outcome
+of that tab. The blue dot shows that the execution continues. Results appear
+as Qrow fetches them. Switching connections does not clear the preview or
+close the tab's session.
 The Logs panel remains across executions in the tab. A successful execution
-also clears the badge, even if you selected Logs after the failure. See
+also clears the unread error, even if you selected Logs after the failure. See
 [Results](results.md) for paging and storage limits.
 
 ## Logs
 
-Select **Logs** beside **Results** to inspect Qrow activity. The history shows
+Select **Logs** beside **Results** to inspect the work of the tab. The history shows
 connection and session events, the exact SQL submitted to the tab's owning
 connection, execution completion, preview page fetches, cancellation, and
 errors. Selecting a connection or query tab does not add a log entry. Each
@@ -36,27 +54,71 @@ Errors use the error color. Durations are client measurements.
 Use **Font Family**, **Font Size**, and **Line Height** in the Logs section of
 Settings to change the Logs text. The default line-height multiplier is 1.2.
 
-The Logs panel also shows each keep-alive query, its outcome, and its duration.
-Successful keep-alive queries do not change the selected panel or query results.
-Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
+Logs show only the work that changes something for the tab. A failed
+keep-alive shows with its SQL and the error, because it closed the session.
+Select **Show activity** on that line to see the other work of the connection.
+Successful keep-alives and schema refreshes show only in
+[Activity](activity.md). Qrow does not retrieve Kyuubi or Spark logs. It does not show individual row
 batches.
 
 Qrow keeps Logs history in memory. Closing the query tab or quitting Qrow
-deletes that history. **Clear** deletes the current history. **Copy All** and
-**Copy Error** copy the stored text. Text selection and copying preserve
-multiline and Unicode error details.
+deletes that history. **Clear** deletes the current history. **Copy all** copies
+all stored entries with the timestamps that Logs shows. **Copy error** copies
+the latest error with its timestamp. Text selection and both copy commands
+preserve multiline text and Unicode error details.
 
 Qrow selects Logs when a query fails. It selects Results when a query succeeds,
 after the first preview fetch or completion without a result set. This applies
 even if you selected Logs before completion. You can select either panel again
 after completion. Background queries update their own panel without changing
-the active query tab. A failed background query shows an unread error indicator
-on its tab.
+the active query tab. A failed background query shows a red dot on its tab.
+A successful background query shows a green dot until its Results show.
 
-Qrow limits history to 100 activity groups and 8 MiB per query tab. Qrow
-removes complete old groups when a limit is reached. The latest execution and
-its complete error are kept. A single latest execution can exceed 8 MiB. Qrow
-shows a retention notice when it removes old groups.
+## Query tab state
+
+Each query tab has one status dot before its close button:
+
+| Dot | State |
+| --- | --- |
+| Dim blue | The session is connected and idle. The dot uses 40% opacity. |
+| Faint blue | The session is connecting. The dot uses 20% opacity. |
+| Blue | Query or session work continues. |
+| Green | A query result is ready and unread. |
+| Red | A query or keep-alive error is unread. |
+| No dot | No live session, work, or unread result. |
+
+Point to the dot to see the tab name and a short status beside it. The status
+uses secondary text. The name and status share a vertical center. If the name
+wraps, the status stays beside its first line. The accessible name also gives
+the states in words.
+The dot shows SQL execution and session state. The priority is error, running
+work, connecting, unread success, then connected and idle. Assistant turns and
+approval requests use the
+[conversation indicators](assistant.md#conversation-state). SQL that the
+assistant runs uses the same query dot.
+
+Results and errors that finish behind [Activity](activity.md) stay unread.
+Show the Results to read a successful query. Show Logs to read an error.
+A new execution clears the unread outcome of that tab. Reading one tab does
+not read the other tabs of its connection. When you read the outcome, the
+dot returns to dim blue if the session stays open. Otherwise, it disappears.
+
+## Logs history
+
+Qrow puts Logs entries into history groups. One group holds all entries of
+one query execution. An entry without an execution has its own group. Examples
+are a failed keep-alive, a disconnect, and rejected SQL.
+
+Qrow limits the history of each query tab to 100 execution groups, 50 other
+groups, and 8 MiB of text. When one type of group is more than its limit, Qrow
+removes the oldest complete groups of that type. Thus disconnects and rejected
+SQL do not remove query history. When the text is more than 8 MiB, Qrow removes the oldest
+complete groups of any type. Qrow keeps the latest execution and the group
+of the latest error. A single latest execution can be more than 8 MiB. Qrow
+adds an `Older log entries were removed` line at the start of Logs history when it
+removes old groups. The line marks the boundary before the retained entries.
+It has no timestamp because it does not describe a timed event. The line
+appears in the entry count and **Copy all** output.
 
 ## Manage tabs
 
@@ -71,8 +133,9 @@ Right-click a tab and choose **Rename…**. Enter a unique name, or leave the
 field empty to keep the current name. Renaming preserves the SQL, connection,
 and downloaded results.
 
-A busy tab cannot close. Switching connections or tabs does not stop work in
-another tab. See [Connections](connections.md) for session behavior.
+A busy tab cannot close. A tab also cannot close while its [assistant
+conversation](assistant.md#conversations-and-query-tabs) works or waits for
+approval. Switching connections or tabs does not stop work in another tab. See [Connections](connections.md) for session behavior.
 
 ## Cancel work
 
@@ -84,13 +147,20 @@ the user's SQL after setup returns. It does not immediately interrupt every
 setup step. During result fetching, cancellation releases the cursor and keeps
 rows that Qrow has already downloaded.
 
-Individual network reads have a 120-second timeout. This is not a limit on the
-total query duration. A failed cancellation request is reported as an error.
+For Kyuubi, each network read waits up to the
+[response timeout](connections.md#authentication-and-connection-failures) of
+the connection, 300 seconds by default. This is not a limit on the total query
+duration. A read that times out fails with `Kyuubi did not answer within 300
+seconds`, with the timeout of the connection. A failed cancellation request is reported as an error.
 
-On application exit, Qrow follows the [workspace save flow](workspace.md#load-and-save-failures)
-and requests cancellation and session cleanup. It waits up to one second for worker shutdown. If the server
-cannot be reached, server idle and session timeouts remain responsible for
-abandoned resources.
+For Postgres, see [Postgres limits](connections.md#postgres-limits) for timeout
+and transaction behavior. For Trino, see [Trino limits](connections.md#trino-limits).
+
+On application exit, Qrow uses the [workspace close
+confirmation](workspace.md#quit-and-save) if a query is active, then requests
+cancellation and session cleanup. It waits up to one second for worker
+shutdown. If the server cannot be reached, server idle and session timeouts
+remain responsible for abandoned resources.
 
 ## Errors and limitations
 
@@ -100,7 +170,8 @@ session settings from earlier SQL statements.
 
 ## Syntax
 
-The editor provides syntax generic SQL syntax highlighting. Autocomplete, schema exploration, and LSPs are not implemented.
+The editor highlights SQL syntax and the full width of the active line.
+Autocomplete, schema exploration, and language server features are not available.
 
 ## Design
 
@@ -115,6 +186,6 @@ a separate authenticated transport. This prevents cancellation from waiting
 behind a blocked fetch on the query transport.
 
 Cancellation depends on the server accepting the operation handle on that
-transport. The [end-to-end suite](end-to-end-testing.md) checks server-side
+transport. The [E2E tests](testing.md#suites) check server-side
 cancellation in its reference configuration. This evidence does not prove
 transaction rollback or cancellation compatibility with every Kyuubi deployment.

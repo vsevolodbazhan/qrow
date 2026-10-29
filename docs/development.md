@@ -1,8 +1,8 @@
 # Development
 
 Use local checks to verify code, scripts, and dependency policy before a commit.
-These checks do not start Kyuubi or exercise the native UI. Real-server and
-native UI tests have a separate [end-to-end testing guide](end-to-end-testing.md).
+[Testing](testing.md) describes `./qtest`, the command for all checks and
+tests, including the suites with real servers and the desktop suite.
 
 For application prerequisites, builds, packaging, and demo launch commands, see
 the [project README](../README.md). Run the commands below from the repository
@@ -10,57 +10,30 @@ root. The full local suite requires macOS.
 
 ## Set up check tools
 
-Install the script linters:
+Install the script linters and the pinned Cargo check tools, then the
+repository hooks:
 
 ```sh
 brew install shellcheck actionlint
-```
-
-Ruff is installed by `uv` from the locked development dependency group.
-
-Install the pinned Cargo check tools:
-
-```sh
-sh scripts/core/install.sh
-```
-
-Install the repository hooks:
-
-```sh
+./qtest install
 sh scripts/hooks/install.sh
+./qtest doctor
 ```
 
 [rust-toolchain.toml](../rust-toolchain.toml) selects Rust, rustfmt, and Clippy.
-The [tool installer](../scripts/core/install.sh) selects the dependency and
-coverage tools. Cargo checks use the lockfile. Python scripts use `uv`, the
-repository's pinned environment, and Ruff.
+The [qtest catalog](../scripts/qtest/catalog.py) pins cargo-nextest, the
+dependency tools, and the coverage tool. Cargo checks use the lockfile. Python
+scripts use `uv`, the repository's pinned environment, and Ruff.
 
 ## Run checks
 
-Use [scripts/check.sh](../scripts/check.sh) as the check entry point:
-
-| Command | Purpose |
-| --- | --- |
-| `sh scripts/check.sh` | Full local suite, excluding packaging and end-to-end tests. |
-| `sh scripts/check.sh core/backend` | Formatting, core lint, core tests, and Rust API documentation. |
-| `sh scripts/check.sh core/macos` | Full application lint and tests on macOS. |
-| `sh scripts/check.sh core/scripts` | ShellCheck, Actionlint, Ruff, and script unit tests. |
-| `sh scripts/check.sh core/dependencies` | Dependency audit, license policy, unused dependencies, and `policy.py`. |
-| `sh scripts/check.sh core/coverage` | Core line coverage with an enforced floor. |
-| `sh scripts/check.sh core/performance` | SQL validation benchmarks with enforced budgets. |
-| `sh scripts/check.sh hook` | Fast checks used by the pre-commit hook. |
-
-The `dependencies.sh` script owns the `policy.py` check. The `scripts.sh`
-script does not run `policy.py`.
-
-Use `core/backend` for backend changes, `core/macos` for UI changes, and
-`core/scripts` for automation changes. Run the full suite for dependency changes
-or changes that affect several components. Native lint and core coverage do not
-verify pointer, keyboard, or window behavior.
+Run `./qtest` for the fast local checks, and `./qtest run all` for the full
+local suite. [Testing](testing.md#suites) lists each suite. Use `./qtest run
+--changed` to run the suites that your changes affect. Core coverage does not
+include the UI.
 
 These checks do not run real Kyuubi queries or retrieve user credentials.
-The Keychain integration test remains opt-in. End-to-end tests are ignored in
-ordinary Cargo runs.
+The suites with servers run only when you select them.
 
 ## Check the native UI
 
@@ -87,84 +60,121 @@ Use release builds for performance measurements. `cargo build` does not update
 `dist/Qrow.app`. Follow the [packaging instructions](../README.md#release) when
 you need a new distributable. Do not replace the app while someone is testing it.
 
+### Interface text
+
+Use these rules for UI text:
+
+- Headings, panel names, and field labels are nouns in title case:
+  **Connection Settings**, **Initial Database**, **Sign-In**.
+- Buttons, menu items, and action tooltips are verbs in sentence case:
+  **Move to connection…**, **Copy qualified name**, **Show activity**. This rule
+  also applies to the macOS menu bar.
+- States, choices, placeholders, empty states, and messages use sentence
+  case: **Not connected**, **While connected**, **No connections**.
+- Dialog titles that are questions or conditions use sentence case:
+  **Delete assistant conversation?**
+- Product names and acronyms keep their case: **Qrow**, **Codex**, **SQL**.
+
+### Fields
+
+Text fields, text areas, selects, and comboboxes show their focus with a
+tinted border only. Call `.focus_ring(false)` on each new field. The ring of
+GPUI Kit is painted outside the border, so a list or a panel that clips its
+content cuts the ring off.
+
 ## Hooks and continuous integration
 
-Pre-commit checks the staged Git snapshot and selects checks by changed path.
-Pre-push checks each distinct revision being pushed with the full local suite.
-Hooks export snapshots into temporary directories and share a build cache under
-`target/hook-checks`. They do not stash, restage, or modify working files.
-They do not package the application.
+The pre-commit hook checks the staged Git snapshot. The pre-push hook checks
+the last commit of each pushed branch. Both select suites by changed path.
+[Testing](testing.md#hooks-and-continuous-integration) gives the suites of
+each hook and each CI job. Hooks export snapshots into temporary directories
+and share a build cache under `target/hook-checks`. They do not stash,
+restage, or modify working files. They do not package the application.
+
+The release profile favors size so the optional assistant stays within the
+macOS package budget.
 
 Stage required code and configuration together. A passing working-copy check
-does not prove that the staged snapshot passes. Markdown changes outside the
-script paths do not trigger pre-commit checks. Changes under `scripts/` trigger
-script checks, including changes to its README.
+does not prove that the staged snapshot passes. Changes under `scripts/`
+trigger script checks, including changes to its README. Changes to the
+Python and shell files in `tests/desktop/` also trigger script checks.
+Changes under `vendor/` trigger the Rust suites, including changes to its
+Markdown files, for example `QROW-PATCH.md`. Other Markdown changes, except
+`docs/testing.md`, do not trigger hook checks.
 
 The [test workflow](../.github/workflows/test.yml) checks pushes to `main`,
-manual dispatches, and pull requests with the
-`opened`, `reopened`, `synchronize`, `ready_for_review`, and
-`converted_to_draft` actions. It runs all jobs for a non-draft pull request. A
-draft pull request, including a `converted_to_draft` event, starts no jobs.
+manual dispatches, and pull requests into any branch with the `opened`,
+`reopened`, `synchronize`, `ready_for_review`, and `converted_to_draft`
+actions. Pull requests in a stack get checks before their base merges. The
+test workflow calls the [checks workflow](../.github/workflows/checks.yml),
+which has the check jobs. On `main`, the test workflow then deletes old Rust
+build caches. See [Testing](testing.md#hooks-and-continuous-integration). For a non-draft pull request, the `plan` job selects the
+jobs from the changed paths and always selects `static`. Pushes and manual
+runs start all jobs. [Testing](testing.md#hooks-and-continuous-integration)
+gives the paths that select each job. A draft pull request, including a
+`converted_to_draft` event, starts no jobs. To run the checks of a draft pull
+request, mark it as ready for review.
 
-The workflow runs one job at a time in this order:
+Every job checks out the same commit: the pull request merge result, or the
+pushed commit. A newer run cancels an older run for the same pull request or
+branch, including manual runs.
 
-```text
-core-dependencies -> core-scripts -> core-backend -> core-macos ->
-e2e-backend -> e2e-macos
-```
-
-A failed job skips all jobs that follow it. Every job checks out the same pull
-request merge result. Core jobs run for fork pull requests. E2E jobs run for
-pushes, manual dispatches, and pull requests from this repository. They skip
-fork pull requests because they execute repository code in Docker and through
-macOS accessibility APIs. A newer run cancels an older run for the same pull
-request or branch, including manual runs.
-
-The `e2e-macos` job reuses the package from `core-macos` by default. A manual
-dispatch has the `reuse_macos_package` input. Set it to `false` to build the
-package in the E2E job. Native fixture archives use a checksum-keyed Actions
-cache. A failed download can save progress for a later run.
-
-The workflow retains `core-coverage`, `macos-package-and-performance`,
-`backend-evidence`, and `macos-evidence` for one day. Configure these individual
-checks as required branch-protection checks:
+Configure these individual checks as required checks of the `main` ruleset:
 
 ```text
-test / core-dependencies
-test / core-scripts
-test / core-backend
-test / core-macos
-test / e2e-backend
-test / e2e-macos
+checks / plan
+checks / static
+checks / core
+checks / ui
+checks / package
+checks / backend
+checks / e2e
+checks / perf
 ```
 
-There is no aggregate CI gate. The [release workflow](../.github/workflows/release.yml)
-is manual. Use it to publish a nightly or stable release after the core and E2E
-checks pass.
+Do not require the Intel checks. Pull requests skip them, and the run on
+`main` after a merge reports their failures.
 
-The release workflow accepts an optional commit SHA or ref. Leave the field
-blank to use the latest commit on the branch selected for the workflow run. It
-reads the application version from `Cargo.toml`. The stable tag is
-`v<version>`. The nightly tag is
+There is no aggregate CI gate. A skipped job counts as passed: a job that the
+plan does not select, and a server job of a fork pull request. The `plan`
+check must be required, because the other jobs skip when it fails. Do not
+require the `checks` check. Only a skipped draft run reports it.
+
+The [release workflow](../.github/workflows/release.yml) is manual. Use it to
+publish a nightly or stable release. It accepts an optional commit SHA or ref.
+Leave the field blank to use the latest commit on the branch selected for the
+workflow run. It reads the application version from `Cargo.toml`. The stable
+tag is `v<version>`. The nightly tag is
 `v<version>-nightly.<UTC date>.<workflow run number>`.
-
-The workflow runs `sh scripts/check.sh core/backend`,
-`sh scripts/check.sh core/macos`, `sh scripts/check.sh e2e/backend`, and
-`sh scripts/check.sh e2e/macos`. The E2E jobs run before packaging. The macOS
-package job builds the application bundle, creates a DMG, and publishes it as
-the GitHub Release asset. The workflow uses the latest non-draft release on the
-selected channel as the changelog start tag. If the channel has no previous
-release, it writes the target commit history as the changelog.
 
 The jobs run in this order:
 
 ```text
-resolve-target -> test-core-backend -> test-core-macos -> test-e2e-backend ->
-test-e2e-macos -> package -> publish
+resolve-target -> checks -> dmg -> publish
 ```
 
-The publish job creates the release tag before it creates the GitHub Release.
-The first release on a channel can run without a previous release or tag.
+`resolve-target` finds the commit and the release version. `checks` is the
+checks workflow with all jobs. Its `package` job builds the package with the
+release version, and its `e2e` job tests that package. `package-intel` and
+`e2e-intel` do the same for Intel. `dmg` puts each tested package in a DMG
+with `arm64` or `x86_64` in its name. It runs
+[`scripts/package/dmg.py`](../scripts/package/dmg.py). When the DMG mounts,
+Finder shows the app icon, an Applications shortcut, and an arrow between
+them. The background is light because Finder draws the icon labels in black on
+a background picture, also in the dark appearance. The background has a 1x and
+a 2x version, so it stays sharp on Retina displays.
+During packaging, the writable image uses a temporary mount that Finder does
+not show. The script ejects the image before it creates the compressed DMG.
+If macOS reports that the image is busy, the script makes at most 10 eject
+attempts. After three attempts, it uses forced ejection. A persistent error
+fails packaging.
+The publish job creates the release
+tag, and then the GitHub Release with both DMGs as its assets. It also
+keeps the unsuffixed DMG as an ARM64 alias for the existing tap updater. The
+workflow uses the latest non-draft release on the selected channel as the
+changelog start tag. If the channel has no previous release, it writes the
+target commit history as the changelog. The first release on a channel can
+run without a previous release or tag.
 
 The packaged application shows the channel-specific release version in the
 About dialog. The macOS bundle metadata keeps the numeric version from
@@ -193,40 +203,8 @@ The current release package uses ad hoc code signing. Homebrew can install the
 custom cask, but macOS Gatekeeper may warn until the app is signed and notarized
 with Apple Developer ID.
 
-See
-[End-to-end testing](end-to-end-testing.md#continuous-integration) for the
-real-server and native UI details. Local checks cannot verify GitHub event
-filters, run cancellation, artifact transfer, or branch protection settings.
-
-## Test boundaries and budgets
-
-Local protocol fixtures test the connector without a real Spark deployment.
-Worker tests exercise session coordination and bounded fetching. Property tests
-exercise SQL validation with arbitrary Unicode and quoting. Preserve generated
-Proptest regression seeds when fixing a discovered failure.
-
-The core library must build with `--no-default-features`. Core coverage excludes
-the GPUI frontend and generated bindings. The line-coverage floor is 80%.
-Generated bindings are also excluded from normal style lint. Qrow forbids unsafe
-code in its own sources, including generated bindings. Third-party dependencies
-can contain unsafe code.
-
-The [SQL benchmark](../benches/sql.rs) measures validation after warmup and reports
-the median of 21 samples. Budgets are 5 ms at 10 KB, 25 ms at 100 KB, and 250 ms
-at 1 MB. These are regression thresholds, not rendering or Spark latency targets.
-
-After packaging, check the release size:
-
-```sh
-uv run --locked python scripts/core/size.py
-```
-
-The [size checker](../scripts/core/size.py) allows 24 MiB for the executable and
-10 MiB for the zipped bundle. Investigate growth before changing a budget.
-
-The startup log measures UI initialization. It does not measure cold launch to
-the first visible frame. Report the build, hardware, measurement method, and
-verification gaps when publishing performance results.
+Local checks cannot verify GitHub event filters, run cancellation, artifact
+transfer, or ruleset settings.
 
 ## Dependency maintenance
 
@@ -238,13 +216,19 @@ intact when fixing a failure. Investigate the cause instead of weakening checks.
 exceptions. [dependency-reviews.toml](../dependency-reviews.toml) records the scoped
 license review. These files are authoritative for exact versions and review dates.
 The [policy checker](../scripts/core/policy.py) rejects expired or mismatched
-exceptions and unpinned GitHub Actions. The dependency audit targets macOS ARM64.
+exceptions and unpinned GitHub Actions. The dependency audit targets macOS ARM64 and x86_64.
 
 GPUI brings some incompatible transitive versions. Duplicate versions produce
 warnings. Advisory and license exceptions must remain specific and justified.
 Packaging includes third-party license notices. Upgrade GPUI Kit and its
 framework components as a compatible set. Preserve runtime Metal shaders unless
 the build requirements deliberately change.
+
+`vendor/` contains patched copies of some GPUI crates, and
+[Cargo.toml](../Cargo.toml) uses them in place of the crates.io releases. The
+`QROW-PATCH.md` file of each crate lists the changes. When you upgrade GPUI Kit,
+apply the changes to the new release again, or remove a patch when the release
+includes its fix.
 
 ## Build identity
 
@@ -286,8 +270,10 @@ sh scripts/generate/thrift.sh
 
 The [generation script](../scripts/generate/thrift.sh) uses the
 [vendored interface](../vendor/TCLIService.thrift) and applies corrections to the
-Rust generator output. Change the interface and script when needed. Do not make
-binding edits that cannot be reproduced by generation.
+Rust generator output. It also removes the server processor, because Qrow is
+only a client. Thus Qrow uses the `thrift` crate without its default `server`
+feature. Change the interface and script when needed. Do not make binding edits
+that cannot be reproduced by generation.
 
 ## Probe an existing connection
 

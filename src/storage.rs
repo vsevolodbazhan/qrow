@@ -1,4 +1,7 @@
-use crate::model::Workspace;
+use crate::{
+    catalog::{CATALOG_VERSION, Catalog},
+    model::{WORKSPACE_VERSION, Workspace},
+};
 use anyhow::{Context, Result};
 use std::{
     fs,
@@ -30,7 +33,7 @@ pub fn load(path: &Path) -> Result<Workspace> {
     let mut workspace: Workspace = serde_json::from_slice(&data)
         .context("Saved workspace is invalid; the original file has been left untouched")?;
     anyhow::ensure!(
-        (1..=2).contains(&workspace.version),
+        (1..=WORKSPACE_VERSION).contains(&workspace.version),
         "Unsupported workspace version {}; the file has been left untouched",
         workspace.version
     );
@@ -82,31 +85,79 @@ impl WorkspaceFile {
     }
 
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
-        let parent = self.path.parent().context("Invalid workspace path")?;
-        let temporary =
-            TemporaryWorkspace(self.path.with_extension(format!("{}.tmp", Uuid::new_v4())));
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary.0)?;
-        serde_json::to_writer_pretty(&mut file, workspace)?;
-        file.flush()?;
-        file.sync_all()?;
-        fs::rename(&temporary.0, &self.path)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
+        write_atomically(&self.path, &serde_json::to_vec_pretty(workspace)?)
     }
 }
 
-struct TemporaryWorkspace(PathBuf);
-impl Drop for TemporaryWorkspace {
+/// Replace `path` with `data` so that a crash leaves the old or the new file,
+/// never a partial one. Only the owner can read the file.
+pub(crate) fn write_atomically(path: &Path, data: &[u8]) -> Result<()> {
+    let parent = path.parent().context("Invalid file path")?;
+    let temporary = TemporaryFile(path.with_extension(format!("{}.tmp", Uuid::new_v4())));
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary.0)?;
+    file.write_all(data)?;
+    file.sync_all()?;
+    fs::rename(&temporary.0, path)?;
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+struct TemporaryFile(PathBuf);
+impl Drop for TemporaryFile {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
     }
+}
+
+/// The schema cache of a profile, next to the workspace file. The workspace
+/// lock also protects this directory.
+pub fn catalog_path(workspace: &Path, profile: Uuid) -> PathBuf {
+    workspace
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("catalog")
+        .join(format!("{profile}.json"))
+}
+
+/// The folder of the saved dbt indexes, next to the workspace file. The
+/// workspace lock also protects this folder.
+pub fn dbt_directory(workspace: &Path) -> PathBuf {
+    workspace.parent().unwrap_or(Path::new(".")).join("dbt")
+}
+
+/// The folder of the saved assistant transcripts, next to the workspace
+/// file. The workspace lock also protects this folder.
+pub fn assistant_transcripts_directory(workspace: &Path) -> PathBuf {
+    workspace
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join("assistant")
+        .join("transcripts")
+}
+
+/// Read a schema cache. A missing, unreadable, or outdated file gives `None`,
+/// because Qrow can read the schemas from the server again.
+pub fn load_catalog(path: &Path) -> Option<Catalog> {
+    let data = fs::read(path).ok()?;
+    let catalog: Catalog = serde_json::from_slice(&data).ok()?;
+    (catalog.version == CATALOG_VERSION).then_some(catalog)
+}
+
+pub fn save_catalog(path: &Path, catalog: &Catalog) -> Result<()> {
+    fs::create_dir_all(path.parent().context("Invalid schema cache path")?)
+        .context("Could not create the schema cache directory")?;
+    write_atomically(path, &serde_json::to_vec(catalog)?).context("Could not save the schema cache")
+}
+
+pub fn delete_catalog(path: &Path) {
+    let _ = fs::remove_file(path);
 }
 
 pub type SaveResult = std::result::Result<(), String>;
@@ -211,40 +262,292 @@ impl Drop for Saver {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub fn password(id: Uuid) -> Result<Zeroizing<String>> {
-    let bytes = Zeroizing::new(security_framework::passwords::get_generic_password("io.qrow.connection", &id.to_string())
-        .context("Could not read the password from macOS Keychain. Edit the connection to save a password")?);
-    Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
+/// Connection passwords, keyed by profile ID. The application uses
+/// [`Keychain`]; tests supply an in-memory store.
+pub trait Credentials: Send + Sync {
+    fn password(&self, id: Uuid) -> Result<Zeroizing<String>>;
+    fn set_password(&self, id: Uuid, password: &str) -> Result<()>;
+    /// Deleting a profile leaves its secret behind otherwise, keyed by a UUID
+    /// that nothing refers to any more.
+    fn delete_password(&self, id: Uuid) -> Result<()>;
 }
 
-#[cfg(target_os = "macos")]
-pub fn set_password(id: Uuid, password: &str) -> Result<()> {
-    security_framework::passwords::set_generic_password(
-        "io.qrow.connection",
-        &id.to_string(),
-        password.as_bytes(),
-    )
-    .context("Could not save the password in macOS Keychain")
+/// The tokens of reusable sign-ins, keyed by sign-in ID. Each record is one
+/// JSON document. The application uses [`Keychain`]; tests supply an
+/// in-memory store.
+pub trait TokenStore: Send + Sync {
+    /// `None` when no record exists.
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>>;
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()>;
+    /// Succeeds when no record exists.
+    fn delete_tokens(&self, id: Uuid) -> Result<()>;
 }
 
-/// Deleting a profile leaves its secret behind otherwise, keyed by a UUID that
-/// nothing refers to any more.
+/// Sign-in tokens in memory, for the demo and for tests. Nothing persists.
+#[derive(Default)]
+pub struct MemoryTokenStore(std::sync::Mutex<std::collections::HashMap<Uuid, Zeroizing<String>>>);
+
+impl TokenStore for MemoryTokenStore {
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        Ok(self.0.lock().unwrap().get(&id).cloned())
+    }
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(id, Zeroizing::new(record.to_owned()));
+        Ok(())
+    }
+    fn delete_tokens(&self, id: Uuid) -> Result<()> {
+        self.0.lock().unwrap().remove(&id);
+        Ok(())
+    }
+}
+
+/// Connection passwords and sign-in tokens in the macOS Keychain.
+pub struct Keychain;
+
+/// The Keychain service of connection passwords. Keep it stable: it gives
+/// access to the passwords of existing profiles.
+pub const PASSWORD_SERVICE: &str = "io.qrow.connection";
+/// The Keychain service of sign-in tokens.
+pub const TOKEN_SERVICE: &str = "io.qrow.sign-in";
+
 #[cfg(target_os = "macos")]
-pub fn delete_password(id: Uuid) -> Result<()> {
-    security_framework::passwords::delete_generic_password("io.qrow.connection", &id.to_string())
-        .context("Could not delete the password from macOS Keychain")
+const ITEM_NOT_FOUND: i32 = -25300;
+
+#[cfg(target_os = "macos")]
+impl TokenStore for Keychain {
+    fn load_tokens(&self, id: Uuid) -> Result<Option<Zeroizing<String>>> {
+        match security_framework::passwords::get_generic_password(TOKEN_SERVICE, &id.to_string()) {
+            Ok(bytes) => {
+                let bytes = Zeroizing::new(bytes);
+                Ok(Some(Zeroizing::new(
+                    String::from_utf8(bytes.to_vec()).context("The stored sign-in is invalid")?,
+                )))
+            }
+            Err(error) if error.code() == ITEM_NOT_FOUND => Ok(None),
+            Err(error) => {
+                Err(error).context("Could not read the sign-in tokens from macOS Keychain")
+            }
+        }
+    }
+
+    fn save_tokens(&self, id: Uuid, record: &str) -> Result<()> {
+        security_framework::passwords::set_generic_password(
+            TOKEN_SERVICE,
+            &id.to_string(),
+            record.as_bytes(),
+        )
+        .context("Could not save the sign-in tokens in macOS Keychain")
+    }
+
+    fn delete_tokens(&self, id: Uuid) -> Result<()> {
+        let mut items = security_framework::item::ItemSearchOptions::new();
+        items
+            .class(security_framework::item::ItemClass::generic_password())
+            .service(TOKEN_SERVICE)
+            .account(&id.to_string());
+        delete_keychain_tokens(items)
+            .context("Could not delete the sign-in tokens from macOS Keychain")
+    }
+}
+
+/// Recover from the legacy Keychain owner check without changing access rules.
+/// The reference API discards its result, so success requires verified absence.
+#[cfg(target_os = "macos")]
+fn delete_keychain_tokens(
+    mut items: security_framework::item::ItemSearchOptions,
+) -> security_framework::base::Result<()> {
+    use security_framework::item::{Limit, Reference, SearchResult};
+    const INVALID_OWNER_EDIT: i32 = -25244;
+    let original = match items.delete() {
+        Ok(()) => return Ok(()),
+        Err(error) if error.code() == ITEM_NOT_FOUND => return Ok(()),
+        Err(error) if error.code() == INVALID_OWNER_EDIT => error,
+        Err(error) => return Err(error),
+    };
+    // The caller supplies the exact generic-password service and UUID account.
+    // Request references only: deletion does not need to read token data.
+    items.load_refs(true).limit(Limit::All);
+    match items.search() {
+        Ok(found) => {
+            for item in found {
+                match item {
+                    SearchResult::Ref(Reference::KeychainItem(item)) => item.delete(),
+                    _ => return Err(original),
+                }
+            }
+        }
+        Err(error) if error.code() == ITEM_NOT_FOUND => return Ok(()),
+        Err(_) => return Err(original),
+    }
+    match items.search() {
+        Err(error) if error.code() == ITEM_NOT_FOUND => Ok(()),
+        Ok(found) if found.is_empty() => Ok(()),
+        _ => Err(original),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn password(_: Uuid) -> Result<Zeroizing<String>> {
-    anyhow::bail!("Keychain requires macOS")
+impl TokenStore for Keychain {
+    fn load_tokens(&self, _: Uuid) -> Result<Option<Zeroizing<String>>> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn save_tokens(&self, _: Uuid, _: &str) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn delete_tokens(&self, _: Uuid) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
 }
-#[cfg(not(target_os = "macos"))]
-pub fn set_password(_: Uuid, _: &str) -> Result<()> {
-    anyhow::bail!("Keychain requires macOS")
+
+#[cfg(target_os = "macos")]
+impl Credentials for Keychain {
+    fn password(&self, id: Uuid) -> Result<Zeroizing<String>> {
+        let bytes = Zeroizing::new(security_framework::passwords::get_generic_password(PASSWORD_SERVICE, &id.to_string())
+            .context("Could not read the password from macOS Keychain. Edit the connection to save a password")?);
+        Ok(Zeroizing::new(String::from_utf8(bytes.to_vec())?))
+    }
+
+    fn set_password(&self, id: Uuid, password: &str) -> Result<()> {
+        security_framework::passwords::set_generic_password(
+            PASSWORD_SERVICE,
+            &id.to_string(),
+            password.as_bytes(),
+        )
+        .context("Could not save the password in macOS Keychain")
+    }
+
+    fn delete_password(&self, id: Uuid) -> Result<()> {
+        security_framework::passwords::delete_generic_password(PASSWORD_SERVICE, &id.to_string())
+            .context("Could not delete the password from macOS Keychain")
+    }
 }
+
 #[cfg(not(target_os = "macos"))]
-pub fn delete_password(_: Uuid) -> Result<()> {
-    anyhow::bail!("Keychain requires macOS")
+impl Credentials for Keychain {
+    fn password(&self, _: Uuid) -> Result<Zeroizing<String>> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn set_password(&self, _: Uuid, _: &str) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+    fn delete_password(&self, _: Uuid) -> Result<()> {
+        anyhow::bail!("Keychain requires macOS")
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_tests {
+    use super::*;
+    use security_framework::{
+        item::{ItemClass, ItemSearchOptions},
+        os::macos::keychain::{CreateOptions, SecKeychain},
+    };
+
+    const TARGET: &str = "00000000-0000-4000-8000-000000000001";
+    const OTHER: &str = "00000000-0000-4000-8000-000000000002";
+    const OTHER_SERVICE: &str = "io.qrow.synthetic-other";
+    const PASSWORD: &str = "qrow-synthetic-test-only";
+
+    fn query(keychain: &SecKeychain, service: &str, account: &str) -> ItemSearchOptions {
+        let mut items = ItemSearchOptions::new();
+        items
+            .keychains(std::slice::from_ref(keychain))
+            .class(ItemClass::generic_password())
+            .service(service)
+            .account(account);
+        items
+    }
+
+    #[test]
+    #[ignore = "Child helper: the parent supplies an isolated keychain"]
+    fn create_foreign_token_items() {
+        let path = std::env::var_os("QROW_SYNTHETIC_KEYCHAIN").expect("isolated keychain path");
+        let mut keychain = SecKeychain::open(path).unwrap();
+        keychain.unlock(Some(PASSWORD)).unwrap();
+        for (service, account) in [
+            (TOKEN_SERVICE, TARGET),
+            (TOKEN_SERVICE, OTHER),
+            (OTHER_SERVICE, TARGET),
+        ] {
+            keychain
+                .add_generic_password(service, account, b"synthetic-token")
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn deletes_foreign_token_items_without_deleting_other_accounts_or_services() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("synthetic.keychain");
+        let keychain = CreateOptions::new()
+            .password(PASSWORD)
+            .create(&path)
+            .unwrap();
+        // An item's creator basename differs from this test executable. That
+        // reproduces SecItemDelete's owner-check error without user credentials.
+        let creator = temporary.path().join("qrow-synthetic-keychain-creator");
+        fs::copy(std::env::current_exe().unwrap(), &creator).unwrap();
+        let output = std::process::Command::new(creator)
+            .env("QROW_SYNTHETIC_KEYCHAIN", &path)
+            .args([
+                "--exact",
+                "storage::keychain_tests::create_foreign_token_items",
+                "--ignored",
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .delete()
+                .unwrap_err()
+                .code(),
+            -25244
+        );
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .load_refs(true)
+                .search()
+                .unwrap_err()
+                .code(),
+            ITEM_NOT_FOUND
+        );
+        for (service, account) in [(TOKEN_SERVICE, OTHER), (OTHER_SERVICE, TARGET)] {
+            assert_eq!(
+                query(&keychain, service, account)
+                    .load_refs(true)
+                    .search()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        // Repeated deletion of an absent token record succeeds.
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+    }
+
+    #[test]
+    fn deletes_token_items_created_by_the_current_executable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let keychain = CreateOptions::new()
+            .password(PASSWORD)
+            .create(temporary.path().join("synthetic.keychain"))
+            .unwrap();
+        keychain
+            .add_generic_password(TOKEN_SERVICE, TARGET, b"synthetic-token")
+            .unwrap();
+        delete_keychain_tokens(query(&keychain, TOKEN_SERVICE, TARGET)).unwrap();
+        assert_eq!(
+            query(&keychain, TOKEN_SERVICE, TARGET)
+                .load_refs(true)
+                .search()
+                .unwrap_err()
+                .code(),
+            ITEM_NOT_FOUND
+        );
+    }
 }

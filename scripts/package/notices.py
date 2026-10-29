@@ -1,15 +1,18 @@
-"""Collect license metadata and supplied license texts for the native build."""
+"""Collect license metadata and supplied license texts for the packaged build."""
 import json
+import os
 import pathlib
 import subprocess
 import sys
 
-target = subprocess.check_output(["rustc", "-vV"], text=True).split("host: ")[1].splitlines()[0]
+target = os.environ.get("CARGO_BUILD_TARGET")
+if not target:
+    target = subprocess.check_output(["rustc", "-vV"], text=True).split("host: ")[1].splitlines()[0]
 metadata = json.loads(subprocess.check_output(
     ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target], text=True
 ))
 resolved = {node["id"] for node in metadata["resolve"]["nodes"]}
-sections = ["Qrow: third-party license notices\n\nIncludes native dependencies and build/test dependencies.\n"]
+sections = ["Qrow: third-party license notices\n\nIncludes target dependencies and build/test dependencies.\n"]
 for package in sorted(metadata["packages"], key=lambda p: (p["name"], p["version"])):
     if package["id"] not in resolved or package["name"] == "qrow":
         continue

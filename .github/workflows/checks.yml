@@ -1,0 +1,431 @@
+# The checks of one commit. The test and release workflows call this workflow.
+# The qtest catalog (scripts/qtest/catalog.py) defines the suites of each job,
+# the jobs that it waits for, and the paths that select it; `./qtest ci` lists
+# them. This file sets up each runner and runs `./qtest ci JOB`.
+# The callers own the concurrency group: a group here would let a release run
+# cancel a test run of the same branch.
+name: checks
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to check.
+        required: true
+        type: string
+      release-version:
+        description: The version that the package shows. Blank uses Cargo.toml.
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          # The merge commit of a pull request and its first parent, the base.
+          fetch-depth: 2
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      # A pull request runs the jobs that its changes select. Pushes, manual
+      # runs, and releases run every job.
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            QROW_CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
+            export QROW_CHANGED_FILES
+            ./qtest ci plan --github-output "$GITHUB_OUTPUT"
+          else
+            ./qtest ci plan --all --github-output "$GITHUB_OUTPUT"
+          fi
+
+  static:
+    name: static
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: static
+          cache-all-crates: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install script linters
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: ./qtest ci static --install
+
+  core:
+    name: core
+    needs: plan
+    if: fromJSON(needs.plan.outputs.jobs).core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: core
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci core --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: success()
+        with:
+          name: core-coverage
+          path: target/coverage/core.lcov
+          retention-days: 1
+          if-no-files-found: error
+
+  # The jobs below wait for core: its compile and unit failures predict their
+  # failures, and it takes about 2 minutes.
+  ui:
+    name: ui
+    needs: [plan, core]
+    if: fromJSON(needs.plan.outputs.jobs).ui
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci ui --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ui-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  package:
+    name: package
+    needs: [plan, core]
+    if: fromJSON(needs.plan.outputs.jobs).package
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      # The package and the release build of perf-app use the same version,
+      # so perf-app does not build again.
+      QROW_RELEASE_VERSION: ${{ inputs.release-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci package --install
+      # The E2E job tests this package, and a release publishes it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-package
+          path: target/package/Qrow-macos.zip
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: package-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-package
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  backend:
+    name: backend
+    needs: [plan, core]
+    # E2E jobs run repository code in Docker and through macOS accessibility
+    # APIs, so they skip pull requests from forks.
+    if: >
+      fromJSON(needs.plan.outputs.jobs).backend &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: rustup show
+      # Core builds only under cargo-llvm-cov, so backend keeps its own build.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: backend
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: ./qtest ci backend --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: backend-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  e2e:
+    name: e2e
+    needs: [plan, package]
+    if: >
+      fromJSON(needs.plan.outputs.jobs).e2e &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-15
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      # The headless E2E tests compile in this job.
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native
+          save-if: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Select Java 17
+        run: |
+          qrow_java_home="$(/usr/libexec/java_home -v 17)"
+          echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
+          echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-package
+          path: target/macos-package
+      - run: ./qtest ci e2e --install
+        env:
+          QROW_E2E_REUSE_MACOS_PACKAGE: true
+          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-evidence
+          path: |
+            target/qtest/runs/
+            target/e2e-tools/preflight.log
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-e2e
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  perf:
+    name: perf
+    needs: [plan, core]
+    if: fromJSON(needs.plan.outputs.jobs).perf
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      # The perf profile has no LTO, so with this cache only Qrow builds again.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: perf
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci perf --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: perf-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-perf
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  ui-intel:
+    name: ui-intel
+    needs: [plan, core]
+    if: fromJSON(needs.plan.outputs.jobs)['ui-intel']
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-intel
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci ui-intel --install
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: ui-intel-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+
+  package-intel:
+    name: package-intel
+    needs: [plan, core]
+    if: fromJSON(needs.plan.outputs.jobs)['package-intel']
+    runs-on: macos-15-intel
+    timeout-minutes: 40
+    env:
+      # The package and the release build of perf-app use the same version,
+      # so perf-app does not build again.
+      QROW_RELEASE_VERSION: ${{ inputs.release-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: package-intel
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - run: ./qtest ci package-intel --install
+      # The E2E job tests this package, and a release publishes it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-package-x86_64
+          path: target/package/Qrow-macos.zip
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: package-intel-evidence
+          path: target/qtest/runs/
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-package-intel
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn
+
+  e2e-intel:
+    name: e2e-intel
+    needs: [plan, package-intel]
+    if: >
+      fromJSON(needs.plan.outputs.jobs)['e2e-intel'] &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-15-intel
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      # The headless E2E tests compile in this job.
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: native-intel
+          save-if: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          version: "0.12.10"
+      - name: Select Java 17
+        run: |
+          qrow_java_home="$(/usr/libexec/java_home -v 17)"
+          echo "JAVA_HOME=$qrow_java_home" >> "$GITHUB_ENV"
+          echo "$qrow_java_home/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: macos-package-x86_64
+          path: target/macos-package
+      - run: ./qtest ci e2e-intel --install
+        env:
+          QROW_E2E_REUSE_MACOS_PACKAGE: true
+          QROW_MACOS_PACKAGE: target/macos-package/Qrow-macos.zip
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-intel-evidence
+          path: |
+            target/qtest/runs/
+            target/e2e-tools/preflight.log
+          retention-days: 1
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: github.ref == 'refs/heads/main'
+        with:
+          name: performance-e2e-intel
+          path: target/qtest/runs/latest/perf.json
+          retention-days: 90
+          if-no-files-found: warn

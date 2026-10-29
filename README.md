@@ -6,7 +6,7 @@
 
 A native (no JVM, no Electron) SQL workbench for macOS. Built with Rust using [GPUI](https://gpui.rs/) and [GPUI Kit](https://github.com/longbridge/gpui-kit).
 
-![Qrow Demo Build Mode Screenshot](assets/screenshots/demo.png)
+![Qrow demo with the schema catalog](assets/screenshots/demo.png)
 
 ## Why
 
@@ -19,11 +19,103 @@ Building a whole new SQL client from scratch on top of a
 full-time job wasn't realistic for me — until AI models got good enough, that is.
 
 I'm not a Rust developer, so practically every line of code here is written by one
-model or the other. I bring in my direction, general coding expertise, and user sense. 
+model or the other. I bring in my direction, general coding expertise, and product sense.
 
 ## Inspiration
 
 Qrow is heavily inspired by DataGrip and [Zed](https://zed.dev/). It's built using [GPUI](https://gpui.rs/), which is a UI framework by Zed's creators.
+
+## Features
+
+### Connections
+
+Qrow connects directly to Kyuubi (Spark), Postgres, and Trino. It does not need
+a JVM, an ODBC driver, or a separately installed database driver.
+
+- **Kyuubi** uses HiveServer2 over SASL PLAIN, with a password or an OpenID
+  Connect access token.
+- **Postgres** uses password authentication with TLS encryption and optional
+  certificate verification.
+- **Trino** uses HTTP or HTTPS with a username, a password, or the browser
+  sign-in of the coordinator.
+
+Qrow keeps passwords in macOS Keychain. One OpenID Connect sign-in can
+authenticate several connections, and you can copy its settings to share them
+with a colleague. Drag connections to change their order. See
+[connections](docs/connections.md).
+
+### Queries and Results
+
+Each connection has its own query tabs, and each tab has its own session.
+Tabs run queries at the same time, also when you select another connection.
+Press **⌘Enter** to run the statement at the cursor or the selected SQL. A
+status dot on each tab and connection shows work, unread results, and errors.
+
+Results show in pages of 1,000 rows as they arrive. Copy a cell or a row with
+its full value. The Logs panel of each tab shows the SQL, the session events,
+and the errors. **Activity** (**⇧⌘U**) shows the background work of each
+connection: schema refreshes, keep-alives, sessions, and queries. See
+[queries](docs/queries.md), [results](docs/results.md), and
+[activity](docs/activity.md).
+
+### Schema Catalog
+
+The Connections sidebar is a tree of schemas, tables, views, and columns.
+Qrow keeps a copy of the catalog on your computer, so the tree shows it also
+when the connection has no session.
+
+- **Refresh** a connection, a schema, or a table manually, or automatically
+  after a period while the connection is connected. A refresh uses its own
+  session. The next refresh continues a refresh that stopped.
+- **Share** one catalog between connections that read the same database catalog.
+  A refresh of one connection fills the tree of all of them.
+- **Show or hide** schemas with glob patterns, for example `sales_*`.
+- **Search** tables and views in all connections, and copy or insert their
+  quoted names into the editor.
+
+See [browse schemas](docs/connections.md#browse-schemas).
+
+### Integrations with dbt
+
+Attach a dbt project to a connection. Qrow reads the `manifest.json` that dbt
+writes, and can read it again each time dbt changes it. Qrow does not run dbt.
+
+- Tables that dbt builds show their dbt kind in the schema tree, and their
+  description in a tooltip.
+- **Show dbt details** opens the description, columns, tests, lineage, and
+  the compiled and raw SQL of a model. Click a parent or a child to follow the
+  lineage.
+- A schema mapping, for example `dbt_dev_* = *`, matches development schemas
+  with catalog schemas. The form shows how many models match tables.
+
+See [attach a dbt project](docs/connections.md#attach-a-dbt-project).
+
+### Assistant
+
+Qrow can open an AI assistant beside your query tab. It runs on a separately
+installed Codex or Claude Code executable with your own sign-in, so you can
+use your OpenAI or Claude subscription. The assistant is off by default.
+Enable it in **Qrow → Settings… → Assistant**, then press **⌘J**.
+
+- Each conversation writes SQL in its own query tab, so you can work on it
+  together. Several conversations can work at the same time.
+- The assistant looks up tables and columns in the schema catalog, and reads
+  descriptions, tests, lineage, and model SQL from the dbt project.
+- Write **Assistant Notes** for a connection to give the assistant facts
+  about its data.
+- Qrow asks before an assistant query runs, or runs assistant queries
+  automatically. You select the mode for each conversation.
+- Qrow keeps a copy of each conversation on your computer. You can read
+  earlier conversations before the harness starts.
+
+See [assistant](docs/assistant.md) for setup, data sharing, and query safety.
+
+### Workspace
+
+Qrow saves your connections, tabs, and SQL automatically. Restored tabs do
+not connect until you run SQL. Select the theme, the interface scale, and the
+fonts of the interface, the editor, the Logs, and the assistant. See
+[workspace](docs/workspace.md).
 
 ## Metrics
 
@@ -39,12 +131,15 @@ Measured on MacBook Air M3 (macOS 15.7.7).
 
 Qrow is a personal tool, tailored to my setup and my needs, so:
 
-- **Kyuubi/Spark only.** The only connector implemented is HiveServer2 over
-  SASL PLAIN, matching the deployment I connect to daily. Trino, Postgres and DuckDB are planned.
-- **Apple Silicon macOS only.** That's the hardware I run every day; there's
-  no Intel or other-OS build.
-- **Core functionality first.** 90% percent of the work I do in such an app is choosing a connection, writing a query, running it, and seeing results. That is what Qrow is focused on.
-- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is a mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap, and macOS may show a Gatekeeper warning on first launch.
+- **Kyuubi/Spark, Postgres, and Trino only.** DuckDB is planned. Kerberos and
+  SSH tunnels are not supported. See [connections](docs/connections.md) for
+  connector limits.
+- **macOS 12 or later.** Apple Silicon and Intel builds need a Metal-capable GPU.
+  The Intel build uses `x86_64-apple-darwin` and needs SSE4.1. AVX is not required.
+  Other operating systems are not supported.
+- **Bring your own assistant.** The assistant needs a separately installed Codex
+  or Claude Code executable and your own subscription or API key.
+- **Not notarized**. Certification and notarization of macOS apps requires Apple Developer ID which is a paid membership. As Qrow is mostly a personal tool that is early in development, I'm not planning to pay for that membership yet. For now, releases are distributed through a custom Homebrew tap and GitHub releases, and macOS may show a Gatekeeper warning on first launch.
 
 ## Installation
 
@@ -84,11 +179,11 @@ with Apple Developer ID. To bypass the Gatekeeper:
 
 ### Prerequisites
 
-- A current stable Rust toolchain, including `cargo` and `rustc`.
+- Rust from [rustup](https://rustup.rs/). `rust-toolchain.toml` selects the pinned toolchain.
 - Xcode command-line tools. Install them with `xcode-select --install` if needed.
 - [uv](https://docs.astral.sh/uv/), which provisions the pinned Python 3.11+
-  toolchain used by the packaging, dependency-license, and code-generation
-  scripts. A separately installed Python is not required.
+  toolchain used by `./qtest` and by the packaging, dependency-license, and
+  code-generation scripts. A separately installed Python is not required.
 
 Check your tools:
 
@@ -128,18 +223,41 @@ For normal use, build the optimized application bundle and launch it:
 sh scripts/package/macos.sh
 open dist/Qrow.app
 ```
-The script builds for the current Mac's architecture and produces `dist/Qrow.app`
-and `dist/Qrow-macos.zip`. 
+The script builds for the current Mac's architecture and produces `dist/Qrow.app`,
+`dist/Qrow-macos.zip`, and the installer image `dist/Qrow-VERSION-ARCH.dmg`.
+Open the DMG and drag the app to Applications.
 
 You can also double-click `dist/Qrow.app` in Finder or copy it to Applications.
 After changing the source, quit Qrow, rerun the packaging script, and reopen the
 app. The packaged app does not update automatically when you run `cargo build`.
 
+The minimum macOS version is 12.0. [`.cargo/config.toml`](.cargo/config.toml)
+sets the build baseline, and packaging uses it for the app bundle. A higher
+`MACOSX_DEPLOYMENT_TARGET` raises both values. A lower value stops packaging.
+Do not use `target-cpu=native` for a package that you share with older Macs.
+
+To build for another Mac architecture, install its Rust target and set
+`CARGO_BUILD_TARGET` to `x86_64-apple-darwin` or `aarch64-apple-darwin`.
+Packaging reads the executable from the target's subdirectory and checks its
+architecture. The package includes license notices for the selected target.
+GitHub releases contain `Qrow-VERSION-arm64.dmg` for Apple
+Silicon and `Qrow-VERSION-x86_64.dmg` for Intel. Choose the file for your Mac.
+CI tests both builds on macOS 15. It does not test every macOS 12 driver.
+The file without an architecture suffix remains an ARM64 alias for older tap
+updaters. Until the tap update and a new release are published, use a local
+Intel build. Existing Homebrew releases contain only the ARM64 app.
+
 ## Preview
 
-Launch the demo to inspect syntax highlighting, tabs, and a populated results
-table. It does not connect to a server, access Keychain, or change the saved
-workspace:
+Launch the demo to inspect the SQL editor, results, schema catalog, and dbt
+details. The first connection opens with the columns of `avia.bookings`.
+Expand other tables or use **Search tables…** to inspect the catalog.
+In either Rivendell connection, right-click a table and select **Show dbt
+details** to read its description, columns, tests, lineage, and SQL.
+
+The demo uses synthetic data. It does not connect to a server, access Keychain,
+or change the saved workspace. It writes a temporary dbt manifest and removes
+the file when the window closes:
 
 ```sh
 cargo run --locked --bin qrow -- --demo

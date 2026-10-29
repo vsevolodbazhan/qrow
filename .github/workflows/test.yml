@@ -2,16 +2,10 @@ name: test
 on:
   push:
     branches: [main]
+  # Pull requests into any branch, so that stacked pull requests also get checks.
   pull_request:
-    branches: [main]
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
-    inputs:
-      reuse_macos_package:
-        description: Reuse the package from core-macos in native E2E tests.
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -21,234 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  core-dependencies:
-    name: core-dependencies
+  checks:
+    # A draft pull request starts no jobs. Its converted_to_draft event cancels
+    # the run in progress.
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    uses: ./.github/workflows/checks.yml
+    with:
+      ref: ${{ github.sha }}
+
+  # A run on main can save new Rust caches next to the caches that they
+  # replace. Delete the replaced caches to stay inside the repository limit.
+  cache-cleanup:
+    name: cache-cleanup
+    needs: checks
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: dependency-tools
-          cache-all-crates: true
-      - run: sh scripts/core/install.sh
-      - run: sh scripts/core/dependencies.sh
-
-  core-scripts:
-    name: core-scripts
-    needs: core-dependencies
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - name: Install script linters
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck
-          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - run: sh scripts/core/scripts.sh
-
-  core-backend:
-    name: core-backend
-    needs: core-scripts
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: core
-      - run: sh scripts/core/backend.sh
-      - name: Install coverage tooling
-        run: |
-          cargo install --locked cargo-llvm-cov --version 0.9.1
-          rustup component add llvm-tools-preview
-      - run: sh scripts/core/coverage.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: success()
-        with:
-          name: core-coverage
-          path: target/coverage/core.lcov
-          retention-days: 1
-          if-no-files-found: error
-
-  core-macos:
-    name: core-macos
-    needs: core-backend
-    if: success() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: native
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - run: sh scripts/core/macos.sh
-      - name: SQL performance budgets
-        shell: bash
-        run: |
-          set -o pipefail
-          sh scripts/core/performance.sh | tee performance.txt
-      - run: sh scripts/package/macos.sh
-      - run: uv run --locked python scripts/core/size.py
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: success()
-        with:
-          name: macos-package-and-performance
-          path: |
-            dist/Qrow-macos.zip
-            performance.txt
-          retention-days: 1
-          if-no-files-found: error
-
-  e2e-backend:
-    name: e2e-backend
-    needs: core-macos
-    if: >
-      success() &&
-      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: core
-      - run: sh scripts/e2e/backend.sh
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: backend-evidence
-          path: target/e2e/
-          retention-days: 1
-          if-no-files-found: error
-
-  e2e-macos:
-    name: e2e-macos
-    needs: e2e-backend
-    if: >
-      success() &&
-      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - run: rustup show
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: native
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-        with:
-          version: "0.12.10"
-      - name: Restore native E2E dependency cache
-        id: native-e2e-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
-      - name: Restore native E2E download progress
-        if: steps.native-e2e-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-
-      - name: Check native automation permissions
-        run: sh scripts/e2e/driver.sh --preflight
-      - name: Select Java 17
-        run: |
-          echo "JAVA_HOME=$JAVA_HOME_17_arm64" >> "$GITHUB_ENV"
-          echo "$JAVA_HOME_17_arm64/bin" >> "$GITHUB_PATH"
-      - name: Download macOS package
-        if: github.event_name != 'workflow_dispatch' || inputs.reuse_macos_package
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
-        with:
-          name: macos-package-and-performance
-          path: target/macos-package
-      - name: Run native E2E
-        run: sh scripts/e2e/macos.sh
+          sparse-checkout: scripts/ci
+      - run: python3 scripts/ci/rust_caches.py
         env:
-          QROW_E2E_REUSE_MACOS_PACKAGE: ${{ github.event_name != 'workflow_dispatch' || inputs.reuse_macos_package }}
-          QROW_MACOS_PACKAGE: target/macos-package/dist/Qrow-macos.zip
-      - name: Check native E2E dependency cache state
-        id: native-e2e-cache-state
-        if: always()
-        shell: bash
-        run: |
-          if [ -f target/e2e-downloads/.complete ]; then
-            echo "complete=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "complete=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ -d target/e2e-downloads ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Save completed native E2E dependency cache
-        if: >
-          always() && !cancelled() &&
-          steps.native-e2e-cache.outputs.cache-hit != 'true' &&
-          steps.native-e2e-cache-state.outputs.complete == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}
-      - name: Save native E2E download progress
-        if: >
-          always() && !cancelled() &&
-          steps.native-e2e-cache-state.outputs.present == 'true' &&
-          steps.native-e2e-cache-state.outputs.complete != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/e2e-downloads
-          key: native-e2e-download-progress-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/e2e/native-downloads.json') }}-${{ github.run_id }}-${{ github.run_attempt }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
-        with:
-          name: macos-evidence
-          path: |
-            target/e2e/
-            target/e2e-tools/preflight.log
-          retention-days: 1
-          if-no-files-found: error
+          GH_TOKEN: ${{ github.token }}

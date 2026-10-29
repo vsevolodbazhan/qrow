@@ -1,0 +1,91 @@
+//! The assistant pane of a window and its conversations with the harness:
+//! Codex or Claude Code.
+use super::*;
+use crate::{
+    assistant::{
+        AssistantEvent, HarnessSnapshot, HistoryTurn, MAX_MESSAGE_BYTES, TitleRequest, ToolCall,
+        TurnRequest,
+        broker::{
+            ActionTarget, ConnectionContext, ConnectionState, MAX_CONTEXT_SQL_BYTES, QueryState,
+            ResultSummary, SelectedTabContext, TabSummary, WorkspaceContext, bound_text,
+            sql_window,
+        },
+        history_item_text,
+        service::{
+            Command as AssistantCommand, Event as AssistantServiceEvent, Operation, Service,
+        },
+        tools,
+    },
+    model::{
+        AssistantConversation, AssistantExecutionMode, AssistantHarness, AssistantTitleSource,
+        MAX_ASSISTANT_CONVERSATION_TITLE,
+    },
+};
+use gpui_kit::assets::IconName as AssetIconName;
+use gpui_kit::base::SelectableText;
+use gpui_kit::component::{
+    Icon, Selectable,
+    alert::Alert,
+    bubble::{Bubble, BubbleContent, BubbleVariant},
+    button::ButtonRounded,
+    collapsible::Collapsible,
+    empty::{
+        Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant,
+        EmptyTitle,
+    },
+    h_flex,
+    input::{Textarea, TextareaState},
+    menu::DropdownMenu,
+    message::{Message, MessageAlignment, MessageContent},
+    shimmer::ShimmerText,
+    spinner::Spinner,
+    text::{TextView, TextViewStyle},
+    v_flex,
+};
+use serde_json::{Value, json};
+use std::ops::Range;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    path::PathBuf,
+    rc::Rc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+pub(super) fn unix_now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+mod conversations;
+mod events;
+mod harness;
+mod local;
+mod messages;
+mod pane;
+mod reveal;
+mod session;
+mod sign_in;
+mod thread_list;
+mod transcript;
+mod transcript_view;
+
+use conversations::*;
+use harness::*;
+use local::*;
+use pane::*;
+use reveal::*;
+use session::*;
+use transcript::*;
+use transcript_view::*;
+
+pub(super) use local::transcript_store;
+pub(super) use pane::AssistantPane;
+pub use session::CODEX_IDLE_TIMEOUT;
+pub(super) use session::{
+    AppendedQuery, AssistantState, ComposerTarget, PendingQuery, PendingQueryKind, Status,
+    ThreadStatus,
+};
+pub(super) use transcript::{ToolActivity, ToolKind, ToolState, TranscriptEntry};

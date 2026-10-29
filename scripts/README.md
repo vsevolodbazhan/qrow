@@ -1,16 +1,18 @@
 # Scripts
 
-See [Development](../docs/development.md) for local checks, hooks, dependency
-maintenance, and binding generation. See
-[End-to-end testing](../docs/end-to-end-testing.md) for real-server and native UI
-tests. Build and package commands are in the [project README](../README.md#build).
+See [Testing](../docs/testing.md) for `./qtest`, which runs all checks and tests.
+See [Development](../docs/development.md) for hooks, dependency
+maintenance, and binding generation. Build and package commands are in the
+[project README](../README.md#build).
 
 | Path | Purpose |
 | --- | --- |
-| `check.sh` | Select a local check or an explicit end-to-end suite. |
-| `core/` | Local checks, tool installation, coverage, performance, size, and dependency policy. |
-| `e2e/` | Disposable servers, test orchestration, native driver entry point, and synthetic credential cleanup. |
-| `package/` | macOS packaging, icon conversion, and dependency notices. |
+| `ci/` | CI maintenance: the deletion of Rust build caches that newer caches replaced. |
+| `qtest/` | The [`./qtest`](../docs/testing.md) command: suite catalog, runner, and command line. |
+| `core/` | Shared prerequisite checks, the size check, and the dependency policy check. `environment.py` finds the target directory, Docker, and the JDK for the Python scripts. |
+| `e2e/` | Disposable test servers and their downloads, the native driver entry point, and synthetic credential cleanup. |
+| `package/` | macOS packaging: the app bundle, the zip, the installer DMG and its background, the architecture and minimum-version reader, the version reader, icon conversion, and dependency notices. |
+| `perf/` | The launch time, idle memory, and idle CPU probe of the release app (the `perf-app` suite). |
 | `hooks/` | Hook installation and isolated Git snapshot checks. |
-| `generate/` | Reproducible Thrift binding generation. |
+| `generate/` | Reproducible generation of the Thrift bindings and the small application icon. |
 | `tests/` | Automation, fixture, policy, and hook tests. |

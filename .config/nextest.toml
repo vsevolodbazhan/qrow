@@ -1,0 +1,51 @@
+# cargo-nextest configuration. qtest runs Rust tests through these profiles;
+# see docs/testing.md.
+
+[profile.default]
+# A test either passes or fails. Retries hide instability.
+retries = 0
+fail-fast = false
+# Mark a test slow after 30 s and stop it after 4 periods (2 minutes).
+slow-timeout = { period = "30s", terminate-after = 4 }
+failure-output = "final"
+status-level = "slow"
+final-status-level = "fail"
+
+[profile.default.junit]
+path = "junit.xml"
+
+# Backend tests stop engines and restart Kyuubi, so they run one at a time.
+# They wait for real servers, which can take minutes after an engine restart.
+[test-groups]
+fixture-serial = { max-threads = 1 }
+fixture-catalog = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = "binary(integration) & test(/^backend::/)"
+test-group = "fixture-serial"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# E2E tests that hold executors with `qrow_block` would starve each other on
+# the two executor cores of the fixture.
+[[profile.default.overrides]]
+filter = "binary(e2e) & test(/^blocking::/)"
+test-group = "fixture-serial"
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+# GetSchemas lists every namespace before applying a connection's filter.
+# Creating or dropping another test's namespace during that listing can fail
+# the shared Spark catalog, even when every test uses a unique schema name.
+[[profile.default.overrides]]
+filter = "binary(e2e) & (test(/^catalog::/) | test(/^dbt::/) | test(/^assistant::the_assistant_reads_columns_/))"
+test-group = "fixture-catalog"
+
+[[profile.default.overrides]]
+filter = "binary(e2e)"
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+inherits = "default"
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"

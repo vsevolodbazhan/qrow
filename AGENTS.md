@@ -1,9 +1,9 @@
 - Consult relevant pages in [docs/](docs/) when needed. Do not read every page
   by default. Use the [README](README.md) for build and launch instructions.
 - Investigate disagreements between code and documentation before changing either.
-- Run the checks appropriate to the change. Follow
-  [Development](docs/development.md) for verification and maintenance procedures.
-  Do not weaken checks or bypass failing hooks.
+- Run the checks appropriate to the change with `./qtest` (see
+  [Testing](docs/testing.md)). Follow [Development](docs/development.md) for
+  maintenance procedures. Do not weaken checks or bypass failing hooks.
 - Use isolated workspaces and synthetic credentials for tests. Never overwrite
   the user's workspace or use their credentials as fixtures.
 - Preserve the user's working files and staged changes. Do not replace the
@@ -28,4 +28,8 @@
 - Prioritize running end-to-end tests using the Docker runtime; fall back to the native environment if needed.
 - If Docker is present on the machine but not running, ask the user to start it.
 - Use GPUI Kit components as much as possible.
+- Keep the help text of a form field to one line. Do not name the app in help
+  text.
 - Use your Computer Use capabilities to verify UI.
+- Commit often.
+- Request cross-code reviews on every commit or when you could benefit from a second opinion. Prefer `gpt-6.1-sol` for review.
