@@ -933,6 +933,11 @@ impl TestApp {
         panic!("{id} has no option {option}");
     }
 
+    pub fn select_json(&self, cx: &mut TestAppContext, style: &str) {
+        self.select(cx, "export-format", "JSON");
+        self.select(cx, "export-json-style", style);
+    }
+
     /// Runs the queued work of the UI, like deferred updates of a select.
     pub fn settle(&self, cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(50));

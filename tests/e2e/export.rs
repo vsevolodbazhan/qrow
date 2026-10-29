@@ -80,8 +80,12 @@ fn copy_downloads_all_rows_and_reuses_the_spool(cx: &mut TestAppContext) {
     assert!(markdown.contains("5999"));
     app.wait_gone(cx, "export-copy");
     app.wait_status(cx, "Preview: Export download complete");
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "1000");
+    app.click(cx, "previous-page");
+    app.wait_cell(cx, 0, 1, "0");
     app.click(cx, "export-results");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let text = copy_query(cx, &app);
     assert_eq!(text.lines().count(), 6000);
     for (index, line) in text.lines().enumerate() {
@@ -169,19 +173,15 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
     use gpui_kit::test::TestWindowExt;
     app.click(cx, "run");
     app.wait_status(cx, "Complete");
-    for format in ["JSON (array)", "JSON (lines)"] {
+    for style in ["Array", "Lines"] {
         app.click(cx, "export-results");
-        app.select(cx, "export-format", format);
+        app.select_json(cx, style);
         let text = copy_query(cx, app);
-        if format == "JSON (lines)" {
+        if style == "Lines" {
             assert_eq!(text.lines().count(), 1, "{text}");
         }
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let row = if format == "JSON (array)" {
-            &json[0]
-        } else {
-            &json
-        };
+        let row = if style == "Array" { &json[0] } else { &json };
         assert_eq!(row["text"], "a|b");
         assert!(row["absent"].is_null());
         assert_eq!(row["empty"], "");
@@ -199,7 +199,7 @@ pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
         );
     }
     app.click(cx, "export-results");
-    app.select(cx, "export-format", "JSON (array)");
+    app.select_json(cx, "Array");
     app.click(cx, "export-json-decimals");
     let text = copy_query(cx, app);
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -308,7 +308,7 @@ fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut T
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let path = directory.path().join("retried.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
@@ -350,7 +350,7 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
     }
     app.wait_status(cx, "Preview: Export download complete");
     app.click(cx, "export-results");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let path = directory.path().join("replay.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
@@ -484,7 +484,7 @@ fn kyuubi_all_rows_preserves_the_batch_that_crossed_the_preview_byte_limit(
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
-fn kyuubi_run_export_keeps_session_state_and_only_the_first_page(cx: &mut TestAppContext) {
+fn kyuubi_run_export_keeps_session_state_and_all_preview_pages(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
     let (workspace, credentials) = Kyuubi::get().workspace(
         "CREATE TEMPORARY VIEW qrow_direct_export AS SELECT id FROM range(2123)",
@@ -515,10 +515,16 @@ fn kyuubi_run_export_keeps_session_state_and_only_the_first_page(cx: &mut TestAp
         assert_eq!(&row[0], expected.to_string());
     }
     app.wait_until(cx, "the export preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("1000 loaded")
+        window.find("result-loaded").label() == Some("2123 loaded")
     });
     app.wait_cell(cx, 0, 1, "0");
     app.wait_status(cx, "Preview: Export download complete");
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "1000");
+    app.click(cx, "next-page");
+    app.wait_cell(cx, 0, 1, "2000");
+    app.click(cx, "previous-page");
+    app.wait_cell(cx, 0, 1, "1000");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
     assert_eq!(app.logs(cx).matches("Connected to").count(), 1);
     app.run_complete(cx, "SELECT COUNT(*) AS value FROM qrow_direct_export");
@@ -549,7 +555,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
     });
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
@@ -565,7 +571,7 @@ fn kyuubi_run_export_again_uses_result_sql_and_warns_after_disconnect(cx: &mut T
         );
     }
     app.wait_until(cx, "the rerun preview", QUERY_TIMEOUT, |window, _| {
-        window.find("result-loaded").label() == Some("1000 loaded")
+        window.find("result-loaded").label() == Some("2123 loaded")
     });
     app.wait_status(cx, "Preview: Export download complete");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 2);
@@ -673,7 +679,7 @@ fn kyuubi_run_export_explicit_rerun_refreshes_preview_and_retry_survives_tab_clo
     });
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let retry = directory.path().join("retry.jsonl");
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(retry.clone()));

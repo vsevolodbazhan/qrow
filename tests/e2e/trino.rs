@@ -106,9 +106,9 @@ fn run_export_keeps_settings_prepared_statements_and_the_transaction(cx: &mut Te
     app.wait_status(cx, "Preview: Export download complete");
     app.wait_until(
         cx,
-        "the first-page preview",
+        "the bounded preview",
         std::time::Duration::from_secs(5),
-        |window, _| window.find("result-loaded").label() == Some("1000 loaded"),
+        |window, _| window.find("result-loaded").label() == Some("100000 loaded"),
     );
     app.wait_cell(cx, 0, 1, "1");
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 5);
@@ -186,7 +186,7 @@ fn run_again_uses_result_sql_and_warns_after_disconnect(cx: &mut TestAppContext)
                 .contains("temporary tables")
         );
     });
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("again.jsonl");
     save_export(&app, cx, &output);
@@ -230,7 +230,7 @@ fn completed_spool_retry_survives_new_sql_and_tab_close(cx: &mut TestAppContext)
     );
     let reads = app.credentials.reads();
     app.click_labelled(cx, "Retry…");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     let retry = directory.path().join("retry.jsonl");
     save_export(&app, cx, &retry);
     let text = std::fs::read_to_string(retry).unwrap();

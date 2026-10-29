@@ -90,6 +90,7 @@ struct ExportDialog {
     started: Option<Instant>,
     output_path: Option<PathBuf>,
     progress_task: Option<Task<()>>,
+    notice_generation: u64,
     cancel: Arc<AtomicBool>,
     owner: WeakEntity<Qrow>,
     dialog: Option<FocusHandle>,
@@ -211,7 +212,7 @@ impl ExportDialog {
     #[allow(clippy::too_many_arguments)]
     fn new(
         source: Arc<Snapshot>,
-        settings: export::Settings,
+        mut settings: export::Settings,
         filename: String,
         incomplete: bool,
         result: ExportResult,
@@ -220,6 +221,9 @@ impl ExportDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        if matches!(settings.format, Format::Json | Format::JsonLines) {
+            settings.json.lines = settings.format == Format::JsonLines;
+        }
         let transfer = cx.new(|cx| {
             SelectState::new(
                 SearchableVec::new(transfer::choices(profile.as_ref())),
@@ -247,10 +251,12 @@ impl ExportDialog {
                 .map(|s| s.label().to_owned())
                 .chain(["Custom".into()])
                 .collect(),
-            Format::ALL
-                .iter()
-                .map(|format| format.label().to_owned())
-                .collect(),
+            vec![
+                "CSV / TSV".into(),
+                "Markdown".into(),
+                "JSON".into(),
+                "Parquet".into(),
+            ],
             vec!["Table".into(), "Code block".into()],
             export::parquet::Compression::ALL
                 .iter()
@@ -261,6 +267,7 @@ impl ExportDialog {
                 .iter()
                 .map(|value| value.label().to_owned())
                 .collect(),
+            vec!["Array".into(), "Lines".into()],
         ];
         let options = settings.csv.clone();
         let indices = option_indices(&settings);
@@ -313,7 +320,16 @@ impl ExportDialog {
                                     NullMarker::Custom(this.null_text.read(cx).value().to_string())
                                 })
                         }
-                        4 => this.settings.format = Format::ALL[choice],
+                        4 => {
+                            this.settings.format = match choice {
+                                0 => Format::Csv,
+                                1 => Format::Markdown,
+                                2 if this.settings.json.lines => Format::JsonLines,
+                                2 => Format::Json,
+                                3 => Format::Parquet,
+                                _ => unreachable!(),
+                            }
+                        }
                         5 => {
                             this.settings.markdown.style = if choice == 0 {
                                 export::markdown::Style::Table
@@ -333,6 +349,14 @@ impl ExportDialog {
                             }
                         }
                         8 => this.settings.parquet.numeric = export::parquet::Numeric::ALL[choice],
+                        9 => {
+                            this.settings.json.lines = choice == 1;
+                            this.settings.format = if choice == 1 {
+                                Format::JsonLines
+                            } else {
+                                Format::Json
+                            };
+                        }
                         _ => unreachable!(),
                     }
                     this.sync(window, cx);
@@ -398,6 +422,7 @@ impl ExportDialog {
             started: None,
             output_path: None,
             progress_task: None,
+            notice_generation: 0,
             cancel: Arc::new(AtomicBool::new(false)),
             owner,
             dialog: None,
@@ -788,7 +813,7 @@ impl ExportDialog {
                     .is_some_and(|inner| inner.is::<export::Cancelled>())
             })
         {
-            self.remove_background(cx);
+            self.remove_background(window, cx);
             cx.notify();
             return;
         }
@@ -840,7 +865,7 @@ impl ExportDialog {
                         cx,
                     );
                 }
-                self.remove_background(cx);
+                self.remove_background(window, cx);
             }
             Err(error) => {
                 if error
@@ -850,6 +875,9 @@ impl ExportDialog {
                     self.refresh_session_review(cx);
                 }
                 self.error = Some(error.to_string());
+                if self.background {
+                    self.show_progress_notification(window, cx);
+                }
             }
         }
         cx.notify();
@@ -866,7 +894,7 @@ fn writer_stopped(
     Err(error)
 }
 
-fn option_indices(settings: &export::Settings) -> [usize; 9] {
+fn option_indices(settings: &export::Settings) -> [usize; 10] {
     let options = &settings.csv;
     [
         preset_index(options),
@@ -882,10 +910,12 @@ fn option_indices(settings: &export::Settings) -> [usize; 9] {
             .iter()
             .position(|value| *value == options.null)
             .unwrap_or(3),
-        Format::ALL
-            .iter()
-            .position(|value| *value == settings.format)
-            .unwrap(),
+        match settings.format {
+            Format::Csv => 0,
+            Format::Markdown => 1,
+            Format::Json | Format::JsonLines => 2,
+            Format::Parquet => 3,
+        },
         usize::from(settings.markdown.style == export::markdown::Style::CodeBlock),
         export::parquet::Compression::ALL
             .iter()
@@ -896,6 +926,7 @@ fn option_indices(settings: &export::Settings) -> [usize; 9] {
             .iter()
             .position(|value| *value == settings.parquet.numeric)
             .unwrap(),
+        usize::from(settings.json.lines),
     ]
 }
 
@@ -941,6 +972,7 @@ impl Render for ExportDialog {
             "Compression",
             "Column Types",
             "Numeric As",
+            "Style",
         ];
         let ids = [
             "export-preset",
@@ -952,6 +984,7 @@ impl Render for ExportDialog {
             "export-parquet-compression",
             "export-parquet-types",
             "export-parquet-numeric",
+            "export-json-style",
         ];
         let options = &self.settings.csv;
         let flags = [
@@ -985,13 +1018,10 @@ impl Render for ExportDialog {
                 self.settings.json.decimals_as_numbers,
             ),
         ];
-        let one_column_null = format == Format::Csv
-            && self.source.table(None).column_indices.count() == 1
-            && options.null.as_str().is_empty();
         let custom_null = format == Format::Csv && matches!(options.null, NullMarker::Custom(_));
         v_flex().id("export-form").gap_4().w_full()
-            .child(v_form().columns(2).children([4,0,1,2,3,5,6,7,8].into_iter()
-                .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || format == Format::Parquet && (6..=8).contains(index))
+            .child(v_form().columns(2).children([4,0,1,2,3,5,9,6,7,8].into_iter()
+                .filter(|index| *index == 4 || format == Format::Csv && (0..=3).contains(index) || format == Format::Markdown && *index == 5 || matches!(format, Format::Json | Format::JsonLines) && *index == 9 || format == Format::Parquet && (6..=8).contains(index))
                 .map(|index| field().label(labels[index]).child(
                     Select::new(&self.controls[index]).id(ids[index]).focus_ring(false)
                         .disabled(busy || index == 8 && self.settings.parquet.column_types == export::parquet::ColumnTypes::Text).w_full().accessibility_label(labels[index])))))
@@ -1055,8 +1085,6 @@ impl Render for ExportDialog {
                     div().id("export-save-to-file-warning").test_support().role(Role::Alert)
                         .aria_label("saveToFile is enabled in this connection. It can change how incremental collect works.")
                         .text_sm().text_color(cx.theme().warning).child("saveToFile is enabled in this connection. It can change how incremental collect works."))))
-            .when(one_column_null, |view| view.child(div().text_sm().text_color(cx.theme().warning)
-                .child("Empty null rows can be skipped by CSV readers. Choose a non-empty null marker.")))
             .when(self.large_copy, |view| view.child(div().id("export-copy-warning").test_support().role(Role::Alert)
                 .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
                 .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
@@ -1086,7 +1114,7 @@ impl ExportDialog {
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.cancel.store(true, Ordering::Relaxed);
                         this.cancel_download();
-                        this.remove_background(cx);
+                        this.remove_background(window, cx);
                         window.close_dialog(cx);
                     })),
             )
@@ -1499,6 +1527,7 @@ mod tests {
         });
         let owner = owner.unwrap();
         let mut retained = None;
+        let mut notice_id = None;
         cx.update_window(window.into(), |_, window, cx| {
             let (source, mut result) = owner
                 .update(cx, |owner, cx| {
@@ -1605,7 +1634,7 @@ mod tests {
                 window
                     .find(SharedString::from(format!("export-details-{id}")))
                     .label(),
-                Some("Save")
+                Some("Retry…")
             );
             assert_eq!(
                 dialog.read(cx).error.as_deref(),
@@ -1625,10 +1654,22 @@ mod tests {
                     .contains("Ready to retry")
             );
             assert!(retained.as_ref().unwrap().upgrade().is_some());
+            notice_id = Some(id);
+        })
+        .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let id = notice_id.unwrap();
             window.click(SharedString::from(format!("export-stop-{id}")), cx);
             assert!(owner.upgrade().unwrap().read(cx).exports.is_empty());
         })
         .unwrap();
+        cx.executor().advance_clock(Duration::from_millis(500));
+        cx.run_until_parked();
+        cx.update_window(window.into(), |_, window, cx| window.render_frame(cx))
+            .unwrap();
         cx.run_until_parked();
         assert!(retained.unwrap().upgrade().is_none());
     }
@@ -1717,7 +1758,7 @@ mod tests {
             window.render_frame(cx);
             assert_eq!(
                 window.try_find("export-save").unwrap().label(),
-                Some("Retry…")
+                Some("Save")
             );
             let (failed, _producer) =
                 export::spool::Spool::new(&columns, &export::Context::default()).unwrap();

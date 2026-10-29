@@ -638,14 +638,14 @@ fn json_array_lines_and_text_values_include_all_rows(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
-    app.select(cx, "export-format", "JSON (array)");
+    app.select_json(cx, "Array");
     let text = copy(&app, cx);
     let json: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(json.as_array().unwrap().len(), 2250);
     assert_eq!(json[0]["route"], "BKK → SIN");
     assert_eq!(json[0]["departures"], 3821);
     open(&app, cx);
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     app.click(cx, "export-json-typed");
     let text = copy(&app, cx);
     assert_eq!(text.lines().count(), 2250);
@@ -653,10 +653,13 @@ fn json_array_lines_and_text_values_include_all_rows(cx: &mut TestAppContext) {
     assert_eq!(row["departures"], "3821");
     open(&app, cx);
     app.update(cx, |window, _| {
-        assert_eq!(
-            value(window, "export-format").as_deref(),
-            Some("JSON (lines)")
-        )
+        assert_eq!(value(window, "export-format").as_deref(), Some("JSON"));
+        assert_eq!(value(window, "export-json-style").as_deref(), Some("Lines"));
+    });
+    app.select(cx, "export-format", "CSV / TSV");
+    app.select(cx, "export-format", "JSON");
+    app.update(cx, |window, _| {
+        assert_eq!(value(window, "export-json-style").as_deref(), Some("Lines"));
     });
     app.click(cx, "export-cancel");
 }
@@ -668,9 +671,9 @@ fn export_shows_only_controls_that_apply_to_the_selected_format(cx: &mut TestApp
         assert!(window.try_find("run-options").is_none())
     });
     open(&app, cx);
-    app.select(cx, "export-format", "JSON (array)");
+    app.select_json(cx, "Array");
     app.wait_for(cx, "export-json-pretty");
-    app.select(cx, "export-format", "JSON (lines)");
+    app.select_json(cx, "Lines");
     app.update(cx, |window, _| {
         assert!(window.try_find("export-json-pretty").is_none());
         assert!(
@@ -794,19 +797,14 @@ fn export_has_no_row_choice_or_preview_in_any_format(cx: &mut TestAppContext) {
     let app = demo(cx);
     select(&app, cx);
     open(&app, cx);
-    for format in [
-        "CSV / TSV",
-        "Parquet",
-        "JSON (array)",
-        "Markdown",
-        "JSON (lines)",
-    ] {
+    for format in ["CSV / TSV", "Parquet", "JSON", "Markdown"] {
         app.select(cx, "export-format", format);
         app.update(cx, |window, _| {
             assert!(window.try_find("export-rows").is_none());
             assert!(window.try_find("export-preview").is_none());
         });
     }
+    app.select_json(cx, "Lines");
     let text = copy(&app, cx);
     assert_eq!(text.lines().count(), 2250);
     let first: serde_json::Value = serde_json::from_str(text.lines().next().unwrap()).unwrap();

@@ -828,8 +828,8 @@ fn worker_exports_its_same_session_table_and_replays_after_new_sql() -> Result<(
             _ => {}
         }
     }
-    assert_eq!(preview, 1000);
-    assert_eq!(last.as_deref(), Some("1000"));
+    assert_eq!(preview, 100_000);
+    assert_eq!(last.as_deref(), Some("100000"));
     assert_eq!(
         worker
             .logs

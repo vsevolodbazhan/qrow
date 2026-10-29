@@ -8,6 +8,65 @@ use crate::{
 use std::io;
 use uuid::Uuid;
 
+/// Retain export rows for the result grid within the normal preview limits.
+pub(super) struct ExportPreview {
+    pub rows: usize,
+    pub bytes: usize,
+    full: bool,
+}
+
+impl ExportPreview {
+    pub fn new(rows: usize, bytes: usize) -> Self {
+        Self {
+            rows,
+            bytes,
+            full: rows >= MAX_RESULT_ROWS || bytes >= MAX_RESULT_BYTES,
+        }
+    }
+
+    pub fn append(
+        &mut self,
+        runner: &Runner,
+        execution: ExecutionId,
+        rows: &mut Vec<Row>,
+        context: &export::Context,
+    ) -> Result<()> {
+        if self.full {
+            return Ok(());
+        }
+        let mut keep = 0usize;
+        let mut bytes = 512usize;
+        for row in rows.iter().take(MAX_RESULT_ROWS - self.rows) {
+            let row_bytes = budget::row_bytes(row)? + std::mem::size_of::<Row>();
+            if self.bytes.saturating_add(bytes).saturating_add(row_bytes) > MAX_RESULT_BYTES {
+                break;
+            }
+            bytes += row_bytes;
+            keep += 1;
+        }
+        self.full = keep < rows.len() || self.rows + keep == MAX_RESULT_ROWS;
+        if keep == 0 {
+            return Ok(());
+        }
+        let allocation = match budget::GLOBAL.acquire(bytes) {
+            Ok(allocation) => allocation,
+            Err(_) => {
+                // Preview retention must not make an otherwise valid export fail.
+                self.full = true;
+                return Ok(());
+            }
+        };
+        let kept = rows.drain(..keep).collect();
+        self.rows += keep;
+        self.bytes += bytes;
+        runner.emit(Event::PreviewRows {
+            execution,
+            rows: export::Rows::accounted(kept, allocation, context.clone()),
+        });
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct SessionChanged;
 impl std::fmt::Display for SessionChanged {
@@ -330,9 +389,7 @@ impl Runner {
         }
         self.set_cursor(Cursor::Draining);
         let mut count = 0usize;
-        let mut preview_rows = 0usize;
-        let mut preview_bytes = 0usize;
-        let mut preview_full = false;
+        let mut preview = ExportPreview::new(0, 0);
         let transfer_started = Instant::now();
         let initial_bytes = spool.bytes();
         let result = (|| -> Result<()> {
@@ -365,30 +422,7 @@ impl Runner {
                     .unwrap()
                     .commit_export_rows(batch.rows.len())?;
                 count += batch.rows.len();
-                if !preview_full {
-                    let mut keep = 0usize;
-                    let mut bytes = 512;
-                    for row in batch.rows.iter().take(PREVIEW_ROWS - preview_rows) {
-                        let row_bytes = budget::row_bytes(row)? + std::mem::size_of::<Row>();
-                        if preview_bytes + bytes + row_bytes > MAX_RESULT_BYTES {
-                            break;
-                        }
-                        bytes += row_bytes;
-                        keep += 1;
-                    }
-                    preview_full = keep < batch.rows.len() || preview_rows + keep == PREVIEW_ROWS;
-                    if keep > 0 {
-                        let allocation = budget::GLOBAL.acquire(bytes)?;
-                        let mut rows = Vec::with_capacity(keep);
-                        rows.extend(batch.rows.drain(..keep));
-                        preview_rows += keep;
-                        preview_bytes += bytes;
-                        self.emit(Event::PreviewRows {
-                            execution: request.execution,
-                            rows: export::Rows::accounted(rows, allocation, context.clone()),
-                        });
-                    }
-                }
+                preview.append(self, request.execution, &mut batch.rows, &context)?;
                 self.emit(Event::DownloadProgress {
                     execution: request.execution,
                     rows: count,
@@ -432,12 +466,12 @@ impl Runner {
         }
         result?;
         request.download.complete(producer)?;
-        self.rows = preview_rows;
-        self.bytes = preview_bytes;
+        self.rows = preview.rows;
+        self.bytes = preview.bytes;
         self.set_cursor(Cursor::Downloaded);
         self.emit(Event::PreviewComplete {
             execution: request.execution,
-            complete: count == preview_rows,
+            complete: count == preview.rows,
         });
         Ok(Event::Downloaded {
             execution: request.execution,

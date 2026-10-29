@@ -312,7 +312,6 @@ impl Qrow {
             .flex_col()
             .overflow_hidden()
             .child(self.result_toolbar(cx))
-            .child(self.export_status(cx))
             .child(div().flex_1().min_h_0().min_w_0().child(results::view(
                 &tab.table,
                 self.dialog_open(),

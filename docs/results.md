@@ -154,7 +154,7 @@ Some readers ignore quotes when they detect null values.
 
 With one column and the empty null marker, a null row is an empty line.
 Some CSV readers skip that line. Choose a non-empty marker to preserve the
-row count. The dialog shows this warning for a one-column export.
+row count.
 
 Formula escaping adds an apostrophe before text that starts with `=`, `+`,
 `-`, `@`, a tab, or a carriage return. It also applies to column names.
@@ -194,9 +194,9 @@ text in a `.md` file.
 
 ### JSON
 
-Choose **JSON (array)** for an array of row objects. **Pretty output** adds
-indentation. Choose **JSON (lines)** for one compact object on each line.
-Pretty output is available only for **JSON (array)**.
+Choose **JSON**, then choose **Array** for an array of row objects or **Lines**
+for one compact object on each line. **Pretty output** adds indentation to
+an array and is available only for **Array**.
 Files use `.json` or `.jsonl` respectively.
 
 **Typed values** writes Boolean, integer, and finite floating-point values
@@ -265,15 +265,17 @@ not submit the SQL again. A page fetched after the dialog opened can make
 its snapshot stale. Reopen Export in that case.
 
 The tab is busy during the download. **Run** and **Next page** are disabled.
-The form closes when saving starts. The results bar shows downloaded rows,
-bytes, average speed, and elapsed time. The format
+The form closes when saving starts. A progress notification shows downloaded
+rows, bytes, average speed, and elapsed time. The format
 writer reads committed spool batches. Parquet exact decimals, pretty Markdown tables, and Markdown
 code blocks need a complete first pass. After the download, you can run
 another query or close the tab while the file writer continues.
 
-**Cancel export** in the results bar stops the writer and the download.
+**Cancel export** in the notification stops the writer and the download.
 **Details…** opens the form without stopping the job. Closing that form
-leaves the job running. The worker sends cancellation
+leaves the job running. Closing the notification hides it while the job runs.
+An error shows the notification again. When multiple exports are active,
+**All exports…** opens a list of their controls. The worker sends cancellation
 to the operation that owns the download and completes protocol cleanup
 before the session can accept another query. Cleanup has a 2-second deadline.
 If cleanup fails or times out, the transport is interrupted and the session
@@ -285,8 +287,8 @@ until the producer and writer return. A stopped drain consumes its cursor. To
 get all rows after that, reopen Export and choose **Copy** or **Save**.
 
 After download completion, writer cancellation and errors affect only that
-file. They cannot cancel a later query. A writer error stays in the results
-bar and keeps the completed spool. **Retry…** opens the form and uses that
+file. They cannot cancel a later query. A writer error stays in a notification
+and keeps the completed spool. **Retry…** opens the form and uses that
 spool without running SQL. You can change the format or destination.
 **Dismiss** releases this job's handle.
 
@@ -309,9 +311,9 @@ saved without a new execution.
 
 The rerun uses the tab's session. Session settings, temporary views,
 and an open transaction still apply. The new execution replaces the result.
-The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
-and file receive all rows from the same fetch sequence. The preview is
-complete only when the whole result fits in it.
+The grid keeps up to 100,000 rows and 64 MiB. You can navigate between its
+pages after the download. The spool and file receive all rows from the same
+fetch sequence. The preview is complete only when the whole result fits in it.
 
 If the original session ended or its connection changed, the form explains
 that its settings, temporary tables, and open transaction are gone. The form
@@ -337,8 +339,7 @@ this rule before submission. It shows the result's DateStyle warning when
 that setting is known.
 
 Trino exports keep exact decimal text and the full server type. A separate
-heartbeat keeps an active query alive while the download pauses. The results
-bar and export details show downloaded rows, spool bytes, rows per second,
+heartbeat keeps an active query alive while the download pauses. The progress notification and export details show downloaded rows, spool bytes, rows per second,
 and elapsed time. They also show Trino query progress when the server sends
 it. Query progress is separate from download and file completion. See
 [Trino limits](connections.md#trino-limits) for heartbeat and transfer limits.

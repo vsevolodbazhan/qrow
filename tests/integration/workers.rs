@@ -1533,7 +1533,7 @@ fn run_and_export_publishes_query_progress_before_the_schema() {
 }
 
 #[test]
-fn run_and_export_has_one_fetch_sequence_and_keeps_only_the_first_page() {
+fn run_and_export_has_one_fetch_sequence_and_keeps_the_bounded_preview() {
     use qrow::{export, logs::ExecutionId};
     let fixture = Arc::new(Fixture {
         total_rows: 100123,
@@ -1592,9 +1592,9 @@ fn run_and_export_has_one_fetch_sequence_and_keeps_only_the_first_page() {
             _ => {}
         }
     }
-    assert_eq!(preview.len(), 1000);
+    assert_eq!(preview.len(), 100_000);
     assert_eq!(complete, Some(false));
-    assert_eq!(preview.get(999).unwrap()[0].as_deref(), Some("999"));
+    assert_eq!(preview.get(99_999).unwrap()[0].as_deref(), Some("99999"));
     assert_eq!(writer.join().unwrap(), 100123);
     for (expected, row) in csv::Reader::from_path(destination)
         .unwrap()
@@ -1650,8 +1650,8 @@ fn run_and_export_completeness_uses_eof_and_session_generation_is_from_execution
                 _ => {}
             }
         }
-        assert_eq!(rows, total.min(1000));
-        assert_eq!(complete, Some(total <= 1000));
+        assert_eq!(rows, total.min(100_000));
+        assert_eq!(complete, Some(total <= 100_000));
         assert_eq!(generation, worker.session_generation(&profile));
         assert!(generation.is_some());
         assert_eq!(download.spool().unwrap().row_count(), total as u64);
@@ -1856,7 +1856,7 @@ fn adaptive_exports_reuse_the_session_and_hold_the_profile_limit_until_publicati
             _ => {}
         }
     }
-    assert_eq!(preview, 1000);
+    assert_eq!(preview, 20_000);
     assert!(
         fixture
             .requested
