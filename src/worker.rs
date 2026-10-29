@@ -74,6 +74,7 @@ pub enum Event {
         rows: usize,
         bytes: u64,
         elapsed: Duration,
+        percentage: Option<f64>,
     },
     Downloaded {
         execution: ExecutionId,
@@ -968,6 +969,7 @@ impl Runner {
                         .expect("A cursor drain has a spool")
                         .bytes(),
                     elapsed: started.elapsed(),
+                    percentage: None,
                 });
             }
             self.session.as_mut().unwrap().close_operation()?;

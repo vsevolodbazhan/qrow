@@ -1,5 +1,6 @@
 //! Trino 483 external client authentication. See the upstream
 //! ExternalAuthenticator, ExternalAuthentication, and HttpTokenPoller.
+use super::transport::{Runtime, Transport};
 use crate::external_auth::{Browser, Cancelled, Failure};
 use anyhow::{Result, anyhow};
 use reqwest::{
@@ -27,6 +28,10 @@ pub(super) struct Challenge {
 }
 /// Every URL in this protocol must stay on the configured HTTPS coordinator.
 pub(super) fn safe_url(text: &str, coordinator: &Url) -> Result<Url> {
+    anyhow::ensure!(
+        text.len() <= 16 * 1024,
+        Failure("Trino sign-in URL exceeds 16 KiB")
+    );
     let url = Url::parse(text).map_err(|_| Failure("Trino returned an invalid sign-in URL"))?;
     let credentials = text.split_once("://").is_some_and(|(_, authority)| {
         authority
@@ -76,6 +81,10 @@ pub(super) fn challenge(headers: &HeaderMap, coordinator: &Url) -> Result<Challe
 /// current challenge; a scheme begins another challenge. Quoted-pairs are
 /// decoded after splitting, so commas and escaped quotes stay in the value.
 fn challenges(text: &str) -> Result<Vec<(String, HashMap<String, String>)>> {
+    anyhow::ensure!(
+        text.len() <= 64 * 1024,
+        Failure("Trino authentication challenge exceeds 64 KiB")
+    );
     let malformed = || {
         anyhow!(Failure(
             "Trino returned a malformed authentication challenge"
@@ -93,6 +102,7 @@ fn challenges(text: &str) -> Result<Vec<(String, HashMap<String, String>)>> {
         } else if byte == b'"' {
             quoted = !quoted;
         } else if byte == b',' && !quoted {
+            anyhow::ensure!(parts.len() < 1024, malformed());
             parts.push(&text[start..index]);
             start = index + 1;
         }
@@ -115,6 +125,7 @@ fn challenges(text: &str) -> Result<Vec<(String, HashMap<String, String>)>> {
         let param = if rest.starts_with('=') {
             part
         } else {
+            anyhow::ensure!(result.len() < 16, malformed());
             result.push((part[..token_end].to_owned(), HashMap::new()));
             rest
         };
@@ -127,6 +138,7 @@ fn challenges(text: &str) -> Result<Vec<(String, HashMap<String, String>)>> {
             continue;
         }
         let (name, value) = param.split_once('=').ok_or_else(malformed)?;
+        anyhow::ensure!(params.len() < 64, malformed());
         let name = name.trim();
         if name.is_empty() || !name.bytes().all(token_char) {
             return Err(malformed());
@@ -240,6 +252,7 @@ pub(super) fn authenticate(
     browser: Browser,
     cancel: Arc<AtomicBool>,
     timeout: Duration,
+    transport: Arc<Transport>,
 ) -> Result<Zeroizing<String>> {
     let deadline = Instant::now() + timeout;
     check(&cancel, deadline)?;
@@ -249,106 +262,111 @@ pub(super) fn authenticate(
         browser(redirect.as_str()).map_err(|_| Failure("Cannot open the sign-in browser"))?;
     }
     check(&cancel, deadline)?;
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?
-        .block_on(async {
-            let mut url = challenge.token;
-            loop {
-                check(&cancel, deadline)?;
-                let response = send(&client, Method::GET, &url, &cancel, deadline).await;
-                let mut response = match response {
-                    Ok(response) if transient(response.status()) => {
-                        pause(&cancel, deadline).await?;
-                        continue;
-                    }
-                    Ok(response) => response,
-                    Err(error) => {
-                        check(&cancel, deadline)?;
-                        if error.is::<Cancelled>() {
-                            return Err(error);
-                        }
-                        pause(&cancel, deadline).await?;
-                        continue;
-                    }
-                };
-                anyhow::ensure!(
-                    response.status().is_success(),
-                    Failure("Trino sign-in polling was rejected")
-                );
-                let body = cancellable(
-                    async {
-                        let mut bytes = Zeroizing::new(Vec::new());
-                        while let Some(chunk) = response
-                            .chunk()
-                            .await
-                            .map_err(|_| Failure("Trino sign-in polling response failed"))?
-                        {
-                            anyhow::ensure!(
-                                bytes.len().saturating_add(chunk.len()) <= MAX_POLL_BYTES,
-                                Failure("Trino sign-in response is too large")
-                            );
-                            bytes.extend_from_slice(&chunk);
-                        }
-                        Ok(bytes)
-                    },
-                    &cancel,
-                    deadline,
-                )
-                .await;
-                let bytes = match body {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        check(&cancel, deadline)?;
-                        if error.to_string() == "Trino sign-in polling response failed" {
-                            pause(&cancel, deadline).await?;
-                            continue;
-                        }
+    let runtime = Runtime::new()?;
+    struct Owned(Arc<Transport>);
+    impl Drop for Owned {
+        fn drop(&mut self) {
+            self.0.close_all();
+        }
+    }
+    let _owned = Owned(transport.clone());
+    runtime.block_on(transport.run(async {
+        let mut url = challenge.token;
+        loop {
+            check(&cancel, deadline)?;
+            let response = send(&client, Method::GET, &url, &cancel, deadline).await;
+            let mut response = match response {
+                Ok(response) if transient(response.status()) => {
+                    pause(&cancel, deadline).await?;
+                    continue;
+                }
+                Ok(response) => response,
+                Err(error) => {
+                    check(&cancel, deadline)?;
+                    if error.is::<Cancelled>() {
                         return Err(error);
                     }
-                };
-                let poll: Poll = serde_json::from_slice(&bytes)
-                    .map_err(|_| Failure("Trino returned an invalid sign-in response"))?;
-                if let Some(token) = poll.token {
-                    let token = Zeroizing::new(token);
-                    anyhow::ensure!(
-                        !token.is_empty()
-                            && reqwest::header::HeaderValue::from_str(&format!(
-                                "Bearer {}",
-                                token.as_str()
-                            ))
-                            .is_ok(),
-                        Failure("Trino returned an invalid authentication token")
-                    );
-                    // Acknowledge the current polling URL, not the initial URL.
-                    let ack_deadline = deadline.min(Instant::now() + Duration::from_secs(4));
-                    loop {
-                        match send(&client, Method::DELETE, &url, &cancel, ack_deadline).await {
-                            Ok(response) if response.status().is_success() => break,
-                            Ok(response) if transient(response.status()) => {
-                                pause(&cancel, ack_deadline).await?
-                            }
-                            Err(_) => {
-                                check(&cancel, ack_deadline)?;
-                                pause(&cancel, ack_deadline).await?;
-                            }
-                            _ => return Err(Failure("Trino sign-in acknowledgment failed").into()),
-                        }
+                    pause(&cancel, deadline).await?;
+                    continue;
+                }
+            };
+            anyhow::ensure!(
+                response.status().is_success(),
+                Failure("Trino sign-in polling was rejected")
+            );
+            let body = cancellable(
+                async {
+                    let mut bytes = Zeroizing::new(Vec::new());
+                    while let Some(chunk) = response
+                        .chunk()
+                        .await
+                        .map_err(|_| Failure("Trino sign-in polling response failed"))?
+                    {
+                        anyhow::ensure!(
+                            bytes.len().saturating_add(chunk.len()) <= MAX_POLL_BYTES,
+                            Failure("Trino sign-in response is too large")
+                        );
+                        bytes.extend_from_slice(&chunk);
                     }
-                    return Ok(token);
+                    Ok(bytes)
+                },
+                &cancel,
+                deadline,
+            )
+            .await;
+            let bytes = match body {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    check(&cancel, deadline)?;
+                    if error.to_string() == "Trino sign-in polling response failed" {
+                        pause(&cancel, deadline).await?;
+                        continue;
+                    }
+                    return Err(error);
                 }
-                if poll.error.is_some() {
-                    return Err(Failure("Trino rejected the browser sign-in").into());
+            };
+            let poll: Poll = serde_json::from_slice(&bytes)
+                .map_err(|_| Failure("Trino returned an invalid sign-in response"))?;
+            if let Some(token) = poll.token {
+                let token = Zeroizing::new(token);
+                anyhow::ensure!(
+                    !token.is_empty()
+                        && reqwest::header::HeaderValue::from_str(&format!(
+                            "Bearer {}",
+                            token.as_str()
+                        ))
+                        .is_ok(),
+                    Failure("Trino returned an invalid authentication token")
+                );
+                // Acknowledge the current polling URL, not the initial URL.
+                let ack_deadline = deadline.min(Instant::now() + Duration::from_secs(4));
+                loop {
+                    match send(&client, Method::DELETE, &url, &cancel, ack_deadline).await {
+                        Ok(response) if response.status().is_success() => break,
+                        Ok(response) if transient(response.status()) => {
+                            pause(&cancel, ack_deadline).await?
+                        }
+                        Err(_) => {
+                            check(&cancel, ack_deadline)?;
+                            pause(&cancel, ack_deadline).await?;
+                        }
+                        _ => return Err(Failure("Trino sign-in acknowledgment failed").into()),
+                    }
                 }
-                url = safe_url(
-                    poll.next_uri.as_deref().ok_or(Failure(
-                        "Trino sign-in response has no token or polling URL",
-                    ))?,
-                    &coordinator,
-                )?;
-                pause(&cancel, deadline).await?;
+                return Ok(token);
             }
-        })
+            if poll.error.is_some() {
+                return Err(Failure("Trino rejected the browser sign-in").into());
+            }
+            url = safe_url(
+                poll.next_uri.as_deref().ok_or(Failure(
+                    "Trino sign-in response has no token or polling URL",
+                ))?,
+                &coordinator,
+            )?;
+            pause(&cancel, deadline).await?;
+        }
+    }))
 }
 
 #[cfg(test)]
@@ -382,6 +400,27 @@ mod tests {
                 .redirect
                 .is_none()
         );
+    }
+    #[test]
+    fn authentication_ownership_is_bounded_before_parsing() {
+        assert!(challenges(&"a".repeat(64 * 1024 + 1)).is_err());
+        assert!(challenges(&vec!["Basic"; 17].join(",")).is_err());
+        assert!(
+            challenges(&format!(
+                "Bearer {}",
+                (0..65)
+                    .map(|i| format!("key{i}=value"))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ))
+            .is_err()
+        );
+        assert!(challenges(&",".repeat(1025)).is_err());
+        let coordinator = Url::parse("https://trino.example/").unwrap();
+        let oversized = format!("https://trino.example/{}", "x".repeat(16 * 1024));
+        let error = safe_url(&oversized, &coordinator).unwrap_err().to_string();
+        assert!(error.contains("16 KiB"));
+        assert!(!error.contains(&oversized));
     }
     #[test]
     fn malformed_and_unsafe_challenges_are_rejected_without_secret_details() {

@@ -1412,14 +1412,22 @@ impl Qrow {
                 rows,
                 bytes,
                 elapsed,
+                percentage,
             } => {
                 if tab.current_execution == Some(execution) {
                     let mib = bytes as f64 / (1024. * 1024.);
+                    let seconds = elapsed.as_secs_f64();
+                    let query =
+                        percentage.map_or(String::new(), |value| format!(", query {value:.0}%"));
                     tab.set_status_detail(
-                        "Downloading export…",
+                        if bytes == 0 {
+                            "Executing export…"
+                        } else {
+                            "Downloading export…"
+                        },
                         format!(
-                            "{rows} rows, {mib:.1} MiB, {:.1} MiB/s",
-                            mib / elapsed.as_secs_f64().max(0.001)
+                            "{rows} rows, {mib:.1} MiB, {:.0} rows/s, {seconds:.0}s{query}",
+                            rows as f64 / seconds.max(0.001)
                         ),
                     );
                 }

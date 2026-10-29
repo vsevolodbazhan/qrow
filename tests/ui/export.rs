@@ -104,6 +104,49 @@ fn run_export_captures_the_cursor_statement_and_cancelled_save_submits_nothing(
 }
 
 #[gpui_kit::test]
+fn trino_run_export_captures_unicode_sql_and_cancelled_save_reads_no_credentials(
+    cx: &mut TestAppContext,
+) {
+    let mut profile = offline_profile("Trino export");
+    profile.database_type = qrow::model::DatabaseType::Trino;
+    profile.port = 8080;
+    profile.database = "tpch".into();
+    profile.trino_schema = "tiny".into();
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT 'selected α; 😀'; SELECT must_not_run;".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("export-captured-sql").label(),
+            Some("SELECT 'selected α; 😀';")
+        );
+        assert_eq!(
+            window.find("export-captured-connection").label(),
+            Some("Trino export")
+        );
+    });
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| None);
+    app.settle(cx);
+    app.click(cx, "export-cancel");
+    app.wait_gone(cx, "export-save");
+    assert_eq!(app.credentials.reads(), 0);
+    assert!(!app.logs(cx).contains("Submitted query:"));
+}
+
+#[gpui_kit::test]
 fn run_export_menu_handles_a_window_without_editor_focus(cx: &mut TestAppContext) {
     let profile = crate::support::offline_profile("Unfocused export");
     let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));

@@ -208,7 +208,7 @@ impl ExportDialog {
         });
     }
 
-    fn status_text(&self) -> String {
+    pub(super) fn status_text(&self) -> String {
         let filename = self
             .output_path
             .as_deref()
@@ -227,8 +227,13 @@ impl ExportDialog {
         let elapsed = self
             .started
             .map_or(0., |start| start.elapsed().as_secs_f64());
+        let query = self
+            .download
+            .as_ref()
+            .and_then(|download| download.progress_percentage())
+            .map_or(String::new(), |value| format!(", query {value:.0}%"));
         if self.download.is_some() && self.retained.is_none() {
-            return format!("{filename}: Preparing export, {elapsed:.0}s");
+            return format!("{filename}: Preparing export, {elapsed:.0}s{query}");
         }
         if let Some(spool) = &self.retained
             && matches!(spool.status(), export::spool::Status::Downloading)
@@ -236,7 +241,7 @@ impl ExportDialog {
             let rows = spool.row_count();
             let mib = spool.bytes() as f64 / (1024. * 1024.);
             return format!(
-                "{filename}: Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s",
+                "{filename}: Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
                 rows as f64 / elapsed.max(0.001)
             );
         }
@@ -254,8 +259,146 @@ impl ExportDialog {
 
 #[cfg(test)]
 mod tests {
+    use crate::connector::{Cancellation, Connector, MetadataRequest, QueryState, Secret, Session};
+    use crate::model::Profile;
     use gpui_kit::TestAppContext;
     use gpui_kit::test::TestWindowExt;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    struct ProgressSession(Arc<AtomicBool>);
+    impl Cancellation for ProgressSession {
+        fn cancel(&self) -> anyhow::Result<()> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    impl Connector for ProgressSession {
+        fn connect(&self, _: &Profile, _: Secret) -> anyhow::Result<Box<dyn Session>> {
+            Ok(Box::new(Self(self.0.clone())))
+        }
+    }
+    impl Session for ProgressSession {
+        fn execute(&mut self, _: &str) -> anyhow::Result<Arc<dyn Cancellation>> {
+            Ok(Arc::new(Self(self.0.clone())))
+        }
+        fn execute_metadata(
+            &mut self,
+            _: &MetadataRequest,
+        ) -> anyhow::Result<Arc<dyn Cancellation>> {
+            unreachable!()
+        }
+        fn poll(&mut self) -> anyhow::Result<QueryState> {
+            Ok(if self.0.load(Ordering::SeqCst) {
+                QueryState::Cancelled
+            } else {
+                QueryState::Running
+            })
+        }
+        fn progress_percentage(&self) -> Option<f64> {
+            Some(42.)
+        }
+        fn columns(&mut self) -> anyhow::Result<Vec<crate::model::Column>> {
+            unreachable!()
+        }
+        fn fetch(&mut self, _: usize) -> anyhow::Result<crate::model::Batch> {
+            unreachable!()
+        }
+        fn close_operation(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn execute_keep_alive(&mut self, _: &str) -> anyhow::Result<Arc<dyn Cancellation>> {
+            unreachable!()
+        }
+        fn close_keep_alive(&mut self) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        fn close(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[gpui_kit::test]
+    fn details_exposes_wrapping_progress_before_and_after_the_schema(cx: &mut TestAppContext) {
+        use super::*;
+        let worker = crate::worker::Worker::with_connector(
+            Arc::new(|| {}),
+            Arc::new(ProgressSession(Arc::new(AtomicBool::new(false)))),
+            Arc::new(|_| Ok(Secret::password(""))),
+        );
+        let flag = Arc::new(AtomicBool::new(false));
+        let download = worker
+            .run_and_export(
+                Profile {
+                    host: "synthetic.invalid".into(),
+                    username: "synthetic".into(),
+                    ..Default::default()
+                },
+                "SELECT 1".into(),
+                ExecutionId(42),
+                None,
+                &export::Jobs::default(),
+                flag.clone(),
+            )
+            .unwrap();
+        loop {
+            if matches!(
+                worker.events.recv_timeout(Duration::from_secs(3)).unwrap(),
+                Event::DownloadProgress {
+                    percentage: Some(42.),
+                    ..
+                }
+            ) {
+                break;
+            }
+        }
+        cx.update(crate::ui::init);
+        let mut owner = None;
+        let window = cx.open_window(size(px(900.), px(760.)), |window, cx| {
+            let qrow = cx.new(|cx| Qrow::new(Environment::demo(), Instant::now(), window, cx));
+            owner = Some(qrow.downgrade());
+            crate::ui::root(qrow, window, cx)
+        });
+        let owner = owner.unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            let tab = owner.upgrade().unwrap().read(cx).tabs[0].saved.id;
+            let columns = [crate::model::Column { name: "n".into(), data_type: "INT".into() }];
+            let source = Arc::new(Snapshot::new(&columns, &export::Rows::default()).unwrap());
+            let view = cx.new(|cx| ExportDialog::new(source, None, export::Settings::default(),
+                "a-long-export-filename-with-many-words-to-force-a-second-line-of-progress-metrics.csv".into(), false,
+                ExportResult { tab, execution: Some(ExecutionId(42)), cursor: crate::worker::Cursor::Draining, replay: None },
+                owner, window, cx));
+            view.update(cx, |job, _| {
+                job.running = true;
+                job.download = Some(download.clone());
+                job.started = Some(Instant::now() - Duration::from_secs(10));
+            });
+            ExportDialog::open(&view, window, cx);
+            window.render_frame(cx);
+            let preparing = window.find("export-progress");
+            assert!(preparing.visible());
+            assert!(preparing.label().unwrap().contains("Preparing export, 10s, query 42%"));
+            assert!(preparing.bounds().size.height > window.rem_size() * 1.5);
+            let (spool, mut producer) = export::spool::Spool::new(&columns, &export::Context::default()).unwrap();
+            producer.append(&[vec![Some("1".into())]], &flag).unwrap();
+            view.update(cx, |job, cx| { job.retained = Some(spool); cx.notify(); });
+            window.render_frame(cx);
+            let downloading = window.find("export-progress");
+            assert!(downloading.label().unwrap().contains("Downloading 1 rows"));
+            assert!(downloading.label().unwrap().contains("MiB,"));
+            assert!(downloading.label().unwrap().contains("rows/s, 10s, query 42%"));
+            assert!(window.find("export-cancel").visible());
+            window.click("export-save", cx);
+            assert!(view.read(cx).running);
+            assert!(!flag.load(Ordering::Relaxed));
+            assert_eq!(view.read(cx).output_path, None);
+        }).unwrap();
+        download.cancel();
+        worker.shutdown();
+        worker.wait_for_shutdown(Duration::from_secs(3));
+    }
 
     #[gpui_kit::test]
     fn retained_jobs_scroll_to_their_retry_and_dismiss_controls(cx: &mut TestAppContext) {
