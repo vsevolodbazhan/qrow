@@ -1,9 +1,11 @@
 # Results
 
 Qrow displays a bounded preview of query results. Rows appear as they arrive.
-The preview does not change the SQL sent to the server. Postgres and Trino read the
-result stream before the first page. See [Postgres limits](connections.md#postgres-limits)
-and [Trino limits](connections.md#trino-limits).
+The preview does not change the SQL sent to the server. Postgres can show the
+first page while SQL runs. The tab stays busy until the server finishes.
+Trino reads the result stream before the first page.
+See [Postgres limits](connections.md#postgres-limits) and
+[Trino limits](connections.md#trino-limits).
 
 Select **Results** beside **Logs** to view the current preview. Qrow keeps
 one Results panel. A new execution replaces the preview. The [Queries](queries.md)
@@ -268,8 +270,8 @@ is discarded. The deadline starts when protocol cancellation begins.
 It does not limit credential lookup, token refresh, DNS lookup, or a TCP
 connection that has not yet returned a socket. Export jobs stay active until
 that work returns. A stopped drain consumes its cursor. To get all rows after
-that, run the query again. All-row exports from limited Postgres and Trino
-previews are not available yet.
+that, run the query again. All-row exports from a limited
+Trino preview are not available yet.
 
 After download completion, writer cancellation and errors affect only that
 file. They cannot cancel a later query. A writer error stays in the results
@@ -288,7 +290,7 @@ cursor.
 
 ## Run and export
 
-For Kyuubi, open the menu beside **Run**, then choose **Run and export…**. Select a format and
+For Kyuubi or Postgres, open the menu beside **Run**, then choose **Run and export…**. Select a format and
 destination. The form captures the selected SQL or the statement at the
 cursor, and its connection, before the save panel opens. It shows that SQL
 and connection for review. Cancelling the save panel submits no SQL.
@@ -299,7 +301,7 @@ The grid keeps up to 1,000 rows and 64 MiB from its first page. The spool
 and file receive all rows from the same fetch sequence. The preview is
 complete only when the whole result fits in it.
 
-For an incomplete Kyuubi result, choose **Run again and export (all rows)**
+For an incomplete Kyuubi or Postgres result, choose **Run again and export (all rows)**
 in the Rows list to submit its original SQL. Edited editor text does not
 change this choice. This is also the way to replace a consumed or closed
 cursor. A completed spool can still be saved without a new execution.
@@ -321,7 +323,10 @@ A result with columns and no rows produces a valid empty file. A successful
 statement with no result set shows a message and writes no file. It is not
 submitted again to obtain columns. A failed download requires an explicit
 rerun. A failed file write with a complete spool uses **Retry…** without SQL.
-Direct execution export for Postgres and Trino is not available yet.
+Postgres exports keep exact numeric text and the session's date settings.
+For typed Parquet, non-ISO dates and timestamps remain text. The form shows
+this rule before submission. It shows the result's DateStyle warning when
+that setting is known. Direct execution export for Trino is not available yet.
 
 ## Value representation
 

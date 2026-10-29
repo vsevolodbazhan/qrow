@@ -137,6 +137,47 @@ fn run_export_menu_handles_a_window_without_editor_focus(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn postgres_run_export_captures_a_dollar_quoted_statement_without_credentials(
+    cx: &mut TestAppContext,
+) {
+    let mut profile = crate::support::offline_profile("Postgres export");
+    profile.database_type = qrow::model::DatabaseType::Postgres;
+    let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));
+    tab.sql = "SELECT $$selected 😀; still one statement$$; SELECT must_not_run;".into();
+    let app = TestApp::launch(
+        cx,
+        qrow::model::Workspace {
+            profiles: vec![profile],
+            tabs: vec![tab],
+            ..Default::default()
+        },
+    );
+    app.click(cx, "sql-editor");
+    app.press(cx, "cmd-a");
+    app.press(cx, "left");
+    app.run_export(cx);
+    app.wait_for(cx, "export-save");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("export-captured-sql").label(),
+            Some("SELECT $$selected 😀; still one statement$$;")
+        );
+        assert_eq!(
+            window.find("export-captured-connection").label(),
+            Some("Postgres export")
+        );
+    });
+    app.select(cx, "export-format", "Parquet");
+    app.wait_for(cx, "export-session-date-style");
+    app.click(cx, "export-save");
+    cx.simulate_new_path_selection(|_| None);
+    app.settle(cx);
+    app.click(cx, "export-cancel");
+    assert_eq!(app.credentials.reads(), 0);
+    assert!(!app.logs(cx).contains("Submitted query:"));
+}
+
+#[gpui_kit::test]
 fn run_export_rejects_multiple_selected_statements_without_starting_work(cx: &mut TestAppContext) {
     let profile = crate::support::offline_profile("Captured export");
     let mut tab = qrow::model::SavedTab::new(1, Some(profile.id));

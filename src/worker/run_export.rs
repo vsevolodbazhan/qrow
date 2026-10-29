@@ -70,7 +70,15 @@ impl Worker {
     ) -> io::Result<Arc<Download>> {
         profile.validate().map_err(io::Error::other)?;
         crate::sql::validate_single_for(&sql, profile.database_type).map_err(io::Error::other)?;
-        if profile.database_type != DatabaseType::Kyuubi {
+        if profile.database_type == DatabaseType::Postgres && sql.len() > 1024 * 1024 {
+            return Err(io::Error::other(
+                "Postgres export SQL exceeds the 1 MiB limit",
+            ));
+        }
+        if !matches!(
+            profile.database_type,
+            DatabaseType::Kyuubi | DatabaseType::Postgres
+        ) {
             return Err(io::Error::other(
                 "Run and export is not available for this connector yet.",
             ));
@@ -81,7 +89,13 @@ impl Worker {
             return Err(io::Error::other(SessionChanged));
         }
         let memory = budget::GLOBAL.allowance(export::spool::PRODUCER_MEMORY)?;
-        let transport = budget::GLOBAL.allowance(64 * budget::MIB)?;
+        let transport = budget::GLOBAL.allowance(
+            if profile.database_type == DatabaseType::Postgres {
+                192
+            } else {
+                64
+            } * budget::MIB,
+        )?;
         let download = Download::pending(cancel.clone());
         let weak = Arc::downgrade(&download);
         let guard = jobs.register_with_cancel(
@@ -219,7 +233,7 @@ impl Runner {
             execution_completed: false,
         });
         *self.target.lock().unwrap() = None;
-        let target = match self.session.as_mut().unwrap().execute(&request.sql) {
+        let target = match self.session.as_mut().unwrap().execute_export(&request.sql) {
             Ok(target) => target,
             Err(error) => {
                 if error.is::<QueryError>() {
@@ -240,10 +254,18 @@ impl Runner {
             "SQL accepted by the server",
             None,
         );
-        match wait_for_completion(self.session.as_mut().unwrap().as_mut(), None)? {
-            Completion::Cancelled => return Err(export::Cancelled.into()),
-            Completion::Finished { has_results: false } => {
+        let state = wait_for_result(self.session.as_mut().unwrap().as_mut(), None)?;
+        let finished = matches!(state, QueryState::Finished { .. });
+        match state {
+            QueryState::Cancelled => return Err(export::Cancelled.into()),
+            QueryState::Finished { has_results: false }
+            | QueryState::Streaming { has_results: false } => {
                 export::check_cancelled(request.download.cancelled())?;
+                if !finished
+                    && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
+                {
+                    return Err(export::Cancelled.into());
+                }
                 self.session.as_mut().unwrap().close_operation()?;
                 request.download.finish_without_spool(
                     "The statement completed without a result set. No export file was written."
@@ -257,7 +279,9 @@ impl Runner {
                 });
                 return Ok(());
             }
-            Completion::Finished { has_results: true } => {}
+            QueryState::Finished { has_results: true }
+            | QueryState::Streaming { has_results: true } => {}
+            QueryState::Running => anyhow::bail!("The query result is not ready"),
         }
         export::check_cancelled(request.download.cancelled())?;
         let columns = self.session.as_mut().unwrap().columns()?;
@@ -267,59 +291,79 @@ impl Runner {
         request.download.publish_spool(spool.clone())?;
         self.emit(Event::Columns(columns));
         self.emit(Event::ExportContext(context.clone()));
-        self.complete_execution(true);
+        if finished {
+            self.complete_execution(true);
+        }
         self.set_cursor(Cursor::Draining);
         let mut count = 0usize;
         let mut preview_rows = 0usize;
         let mut preview_bytes = 0usize;
         let mut preview_full = false;
         let started = Instant::now();
-        loop {
-            export::check_cancelled(request.download.cancelled())?;
-            let _fetch_memory = producer.reserve_fetch()?;
-            let mut batch = self.session.as_mut().unwrap().fetch(PREVIEW_ROWS)?;
-            export::check_cancelled(request.download.cancelled())?;
-            anyhow::ensure!(
-                batch.rows.len() <= PREVIEW_ROWS,
-                "Connector returned more rows than requested"
-            );
-            if batch.rows.is_empty() {
-                break;
-            }
-            producer.append(&batch.rows, request.download.cancelled())?;
-            count += batch.rows.len();
-            if !preview_full {
-                let mut keep = 0usize;
-                let mut bytes = 512;
-                for row in batch.rows.iter().take(PREVIEW_ROWS - preview_rows) {
-                    let row_bytes = budget::row_bytes(row)? + std::mem::size_of::<Row>();
-                    if preview_bytes + bytes + row_bytes > MAX_RESULT_BYTES {
-                        break;
+        let result = (|| -> Result<()> {
+            loop {
+                export::check_cancelled(request.download.cancelled())?;
+                let _fetch_memory = producer.reserve_fetch()?;
+                let mut batch = self.session.as_mut().unwrap().fetch(PREVIEW_ROWS)?;
+                export::check_cancelled(request.download.cancelled())?;
+                anyhow::ensure!(
+                    batch.rows.len() <= PREVIEW_ROWS,
+                    "Connector returned more rows than requested"
+                );
+                if batch.rows.is_empty() {
+                    break;
+                }
+                producer.append(&batch.rows, request.download.cancelled())?;
+                count += batch.rows.len();
+                if !preview_full {
+                    let mut keep = 0usize;
+                    let mut bytes = 512;
+                    for row in batch.rows.iter().take(PREVIEW_ROWS - preview_rows) {
+                        let row_bytes = budget::row_bytes(row)? + std::mem::size_of::<Row>();
+                        if preview_bytes + bytes + row_bytes > MAX_RESULT_BYTES {
+                            break;
+                        }
+                        bytes += row_bytes;
+                        keep += 1;
                     }
-                    bytes += row_bytes;
-                    keep += 1;
+                    preview_full = keep < batch.rows.len() || preview_rows + keep == PREVIEW_ROWS;
+                    if keep > 0 {
+                        let allocation = budget::GLOBAL.acquire(bytes)?;
+                        let mut rows = Vec::with_capacity(keep);
+                        rows.extend(batch.rows.drain(..keep));
+                        preview_rows += keep;
+                        preview_bytes += bytes;
+                        self.emit(Event::PreviewRows {
+                            execution: request.execution,
+                            rows: export::Rows::accounted(rows, allocation, context.clone()),
+                        });
+                    }
                 }
-                preview_full = keep < batch.rows.len() || preview_rows + keep == PREVIEW_ROWS;
-                if keep > 0 {
-                    let allocation = budget::GLOBAL.acquire(bytes)?;
-                    let mut rows = Vec::with_capacity(keep);
-                    rows.extend(batch.rows.drain(..keep));
-                    preview_rows += keep;
-                    preview_bytes += bytes;
-                    self.emit(Event::PreviewRows {
-                        execution: request.execution,
-                        rows: export::Rows::accounted(rows, allocation, context.clone()),
-                    });
-                }
+                self.emit(Event::DownloadProgress {
+                    execution: request.execution,
+                    rows: count,
+                    bytes: spool.bytes(),
+                    elapsed: started.elapsed(),
+                });
             }
-            self.emit(Event::DownloadProgress {
-                execution: request.execution,
-                rows: count,
-                bytes: spool.bytes(),
-                elapsed: started.elapsed(),
-            });
+            if !finished
+                && self.session.as_mut().unwrap().finish_execution()? == Completion::Cancelled
+            {
+                return Err(export::Cancelled.into());
+            }
+            export::check_cancelled(request.download.cancelled())?;
+            self.complete_execution(true);
+            self.session.as_mut().unwrap().close_operation()?;
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            if error.is::<export::Cancelled>() {
+                spool.cancel();
+            } else {
+                spool.fail(crate::connector::error_message(error));
+            }
         }
-        self.session.as_mut().unwrap().close_operation()?;
+        result?;
         request.download.complete(producer)?;
         self.rows = preview_rows;
         self.bytes = preview_bytes;
