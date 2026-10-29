@@ -40,6 +40,7 @@ fn pages_use_the_latest_cursor_and_preserve_values_and_session_headers() -> Resu
     assert!(requests[2].starts_with("GET /next/1 "));
     assert!(requests[3].starts_with("GET /next/2 "));
     let last = requests.last().unwrap().to_lowercase();
+    assert!(last.contains("x-trino-client-capabilities: parametric_datetime\r\n"));
     assert!(last.contains("x-trino-schema: new_schema\r\n"));
     assert!(last.contains("x-trino-session: name=a%2cb%3dc\r\n"));
     assert!(

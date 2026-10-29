@@ -1433,6 +1433,11 @@ impl Qrow {
                     results::select_page(&tab.table, page, cx);
                 }
             }
+            Event::ExportContext(context) => {
+                tab.table.update(cx, |table, _| {
+                    table.delegate_mut().rows.set_context(context)
+                });
+            }
             Event::Ready { more, limited } => {
                 let was_cancelling = tab.cancelling;
                 tab.more = more;

@@ -112,6 +112,7 @@ impl Http {
             .request(method, url.clone())
             .headers(headers.request()?)
             .header("X-Trino-Source", "Qrow")
+            .header("X-Trino-Client-Capabilities", "PARAMETRIC_DATETIME")
             .header("X-Trino-User", &self.username)
             .header("Accept", "application/json");
         match &self.secret {
