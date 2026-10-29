@@ -14,9 +14,9 @@ use gpui_kit::InputEvent as _;
 use gpui_kit::test::ElementSnapshot;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
-    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext, WeakEntity,
-    Window, point, px, size,
+    Action, AnyWindowHandle, App, AppContext, Bounds, ClipboardItem, ElementId, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, TestAppContext,
+    WeakEntity, Window, point, px, size,
 };
 use qrow::{
     model::{Profile, WORKSPACE_VERSION, Workspace},
@@ -535,13 +535,25 @@ pub fn pointer_click(
     button: MouseButton,
     cx: &mut App,
 ) {
+    pointer_click_with(window, element, button, Modifiers::default(), cx);
+}
+
+/// Presses and releases `button` with `modifiers` held, at the center of an
+/// observed element.
+pub fn pointer_click_with(
+    window: &mut Window,
+    element: &ElementSnapshot,
+    button: MouseButton,
+    modifiers: Modifiers,
+    cx: &mut App,
+) {
     assert!(element.visible(), "{:?} is not visible", element.path());
     let position = element.bounds().center();
     window.dispatch_event(
         MouseMoveEvent {
             position,
             pressed_button: None,
-            modifiers: Default::default(),
+            modifiers,
         }
         .to_platform_input(),
         cx,
@@ -550,7 +562,7 @@ pub fn pointer_click(
         MouseDownEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
             click_count: 1,
             first_mouse: false,
         }
@@ -561,7 +573,7 @@ pub fn pointer_click(
         MouseUpEvent {
             button,
             position,
-            modifiers: Default::default(),
+            modifiers,
             click_count: 1,
         }
         .to_platform_input(),

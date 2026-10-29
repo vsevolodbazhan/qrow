@@ -46,10 +46,37 @@ The scrollbars overlay the right and bottom edges of the table.
 Drag a column boundary to change its width. Drag the divider above Results
 to change the editor height.
 
-Right-click a cell to use **Copy cell** or **Copy row**. Copy actions use full
-stored values from the displayed page. Long cells show a shortened preview,
-but their stored and copied values are not shortened. File export is not
-implemented.
+### Select and copy cells
+
+Select a rectangle of cells on the current page, then press ⌘C to copy it.
+
+| Action | Selects |
+| --- | --- |
+| Click a cell | That cell. |
+| Shift-click a cell | The rectangle from the first selected cell to the clicked cell. |
+| Click a column header | That column on the current page. Shift-click another header to add the columns between. |
+| Click a row number | That row. Shift-click another row number to add the rows between. |
+| Click the `#` header, or press ⌘A in the table | All cells of the current page. |
+| Arrow keys | The next cell. Shift with an arrow key extends the rectangle. |
+| Home, End | The first or last cell of the row. |
+| Page Up, Page Down | The cell one screen up or down. |
+
+The selected cells use the selection color. In a rectangle, the cell that the
+keys move also has a focus outline. Escape clears the selection. A click
+outside the results area or a page change also clears it.
+
+⌘C copies one cell as its value. It copies a rectangle as tab-separated text
+without column names, one line for each row, so it pastes into a spreadsheet as
+cells. A value that contains a tab, a line break, or a double quote is quoted,
+and its double quotes are doubled. A null copies as `NULL`.
+
+Right-click a cell for **Copy cell**, **Copy selection**, or **Copy row**. A
+right-click inside the selection keeps it. A right-click outside selects that
+cell. **Copy row** copies the whole row, even when the selection is narrower.
+
+Copy actions use full stored values from the displayed page. Long cells show
+a shortened preview, but their stored and copied values are not shortened.
+File export is not implemented.
 
 ## Value representation
 
