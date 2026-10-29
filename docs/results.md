@@ -53,6 +53,7 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 | Action | Selects |
 | --- | --- |
 | Click a cell | That cell. |
+| Drag from a cell | The rectangle from that cell to the pointer. |
 | Shift-click a cell | The rectangle from the first selected cell to the clicked cell. |
 | Click a column header | That column on the current page. Shift-click another header to add the columns between. |
 | Click a row number | That row. Shift-click another row number to add the rows between. |
@@ -64,6 +65,10 @@ Select a rectangle of cells on the current page, then press ⌘C to copy it.
 The selected cells use the selection color. In a rectangle, the cell that the
 keys move also has a focus outline. Escape clears the selection. A click
 outside the results area or a page change also clears it.
+
+During a drag, keep the pointer at an edge to scroll rows or columns.
+Release the mouse button to finish the selection, including outside the table.
+The rectangle stays on the current page and excludes the row numbers.
 
 ⌘C copies one cell as its value. It copies a rectangle as tab-separated text
 without column names, one line for each row, so it pastes into a spreadsheet as

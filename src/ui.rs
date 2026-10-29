@@ -1763,6 +1763,9 @@ impl Qrow {
         {
             return;
         }
+        if index == self.active {
+            window.release_pointer();
+        }
         // The menu names a tab that is about to disappear.
         self.menu = None;
         if let Some(w) = &self.tabs[index].worker {

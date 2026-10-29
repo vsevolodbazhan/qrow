@@ -152,3 +152,31 @@ fn csv_copy_limit_keeps_the_clipboard_and_allows_save_after_an_error(cx: &mut Te
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
 }
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn drag_selection_exports_only_the_selected_real_query_cells(cx: &mut TestAppContext) {
+    let (workspace, credentials) = Kyuubi::get().workspace(
+        "SELECT id, concat('row-', id) AS label, id * 10 AS amount FROM range(5) ORDER BY id",
+        PASSWORD,
+    );
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.wait_cell(cx, 3, 1, "3");
+    app.update(cx, |window, cx| {
+        let from = find_in(window, ("row", 1usize), ("cell", 1usize)).unwrap();
+        let to = find_in(window, ("row", 3usize), ("cell", 2usize)).unwrap();
+        pointer_drag(window, &from, &to, cx);
+    });
+    app.settle(cx);
+    app.click(cx, "export-results");
+    let text = copy_query(cx, &app);
+    assert_eq!(text, "id,label\r\n1,row-1\r\n2,row-2\r\n3,row-3\r\n");
+    assert_reader_rows(
+        &text,
+        "",
+        serde_json::json!([["1", "row-1"], ["2", "row-2"], ["3", "row-3"]]),
+    );
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
