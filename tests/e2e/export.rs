@@ -396,6 +396,7 @@ fn kyuubi_all_rows_and_export_again_use_one_cursor_in_order(cx: &mut TestAppCont
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
     let (mut workspace, credentials) = Kyuubi::get().workspace(
         "SELECT id AS value FROM range(1000123) ORDER BY id",
         PASSWORD,
@@ -415,6 +416,12 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     app.wait_gone(cx, "export-save");
     app.wait_until(cx, "the blocked export response", QUERY_TIMEOUT, |_, _| {
         gate.blocked()
+    });
+    app.wait_for(cx, "export-progress-actions");
+    app.update(cx, |window, _| {
+        let heading = window.find("export-notification-filename");
+        let actions = window.find("export-progress-actions");
+        assert!(actions.bounds().left() >= heading.bounds().right());
     });
     app.click_labelled(cx, "Cancel");
     gate.resume();

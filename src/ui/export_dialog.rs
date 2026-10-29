@@ -1623,6 +1623,10 @@ mod tests {
             assert_eq!(heading.label(), Some("a-very-long-export-filename-that-needs-to-be-truncated-in-the-progress-notification.csv"));
             let status = notice.find("status");
             let detail = status.label().unwrap();
+            let cancel_button = notice.find(SharedString::from(format!("export-stop-{id}")));
+            assert!(cancel_button.bounds().left() >= status.bounds().right());
+            assert!(cancel_button.bounds().center().y >= heading.bounds().top());
+            assert!(cancel_button.bounds().center().y <= status.bounds().bottom());
             assert!(detail.starts_with("Writing 3 rows"));
             assert!(!detail.contains(".csv"));
             assert!(

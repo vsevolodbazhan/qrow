@@ -103,30 +103,43 @@ impl Render for ProgressNotice {
         let multiple = owner
             .upgrade()
             .is_some_and(|owner| owner.read(cx).exports.len() > 1);
-        v_flex()
+        h_flex()
             .id(SharedString::from(format!("export-job-{id}")))
             .test_support()
+            .w_full()
             .min_w_0()
-            .gap_2()
-            .child(notification_heading(filename))
+            .items_center()
+            .gap_3()
             .child(
-                div()
-                    .id("status")
-                    .test_support()
-                    .role(Role::Status)
-                    .aria_label(message.clone())
-                    .text_sm()
-                    .whitespace_normal()
-                    .text_color(if error {
-                        cx.theme().danger
-                    } else {
-                        cx.theme().foreground
-                    })
-                    .child(message),
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .child(notification_heading(filename))
+                    .child(
+                        div()
+                            .id("status")
+                            .test_support()
+                            .role(Role::Status)
+                            .aria_label(message.clone())
+                            .text_sm()
+                            .whitespace_normal()
+                            .text_color(if error {
+                                cx.theme().danger
+                            } else {
+                                cx.theme().foreground
+                            })
+                            .child(message),
+                    ),
             )
             .child(
-                h_flex()
-                    .gap_2()
+                v_flex()
+                    .id("export-progress-actions")
+                    .test_support()
+                    .flex_shrink_0()
+                    .items_end()
+                    .mr_3p5()
+                    .gap_1()
                     .when(!running, |view| {
                         view.child(
                             Button::new(SharedString::from(format!("export-details-{id}")))
@@ -649,8 +662,23 @@ mod tests {
             last_id = Some(last);
             let details = SharedString::from(format!("export-details-{last}"));
             let dismiss = SharedString::from(format!("export-stop-{last}"));
+            window.set_rem_size(px(21.));
             window.render_frame(cx);
             assert!(window.try_find("export-jobs").is_none());
+            let notice = window.within(SharedString::from(format!("export-job-{last}")));
+            let text = notice.find("status");
+            let actions = notice.find("export-progress-actions");
+            assert!(text.bounds().size.width > px(50.));
+            assert!(text.bounds().right() <= actions.bounds().left());
+            for id in [
+                details.clone(),
+                dismiss.clone(),
+                SharedString::from(format!("export-all-jobs-{last}")),
+            ] {
+                let button = window.find(id);
+                assert!(button.bounds().left() >= actions.bounds().left());
+                assert!(button.bounds().right() <= actions.bounds().right());
+            }
             assert_eq!(window.find(details).label(), Some("Retry…"));
             assert_eq!(window.find(dismiss).label(), Some("Dismiss"));
             assert_eq!(owner.upgrade().unwrap().read(cx).exports.len(), 8);
