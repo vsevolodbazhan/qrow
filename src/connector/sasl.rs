@@ -115,10 +115,29 @@ impl Abort {
     }
 }
 
+impl super::Cancellation for Abort {
+    fn cancel(&self) -> Result<()> {
+        self.shutdown();
+        Ok(())
+    }
+    fn abort_transport(&self) {
+        self.shutdown();
+    }
+}
+
 pub fn connect_controlled(
     endpoint: &Endpoint<'_>,
     username: &str,
     password: &str,
+) -> Result<(Client, Arc<Abort>)> {
+    connect_registered(endpoint, username, password, |_| Ok(()))
+}
+
+pub(crate) fn connect_registered(
+    endpoint: &Endpoint<'_>,
+    username: &str,
+    password: &str,
+    register: impl FnOnce(Arc<Abort>) -> Result<()>,
 ) -> Result<(Client, Arc<Abort>)> {
     let stream = connect_tcp(endpoint.host, endpoint.port)?;
     connect_socket(
@@ -128,7 +147,7 @@ pub fn connect_controlled(
         stream,
         WRITE_TIMEOUT,
         MAX_FRAME,
-        |_| Ok(()),
+        register,
     )
 }
 

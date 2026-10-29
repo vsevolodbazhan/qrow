@@ -21,7 +21,7 @@ use std::{
 const MAGIC: &[u8; 8] = b"QROWSP\0\x01";
 const MAX_COLUMNS: usize = 4096;
 const MAX_BATCH_ROWS: usize = 1000;
-const PRODUCER_MEMORY: usize = 128 * budget::MIB;
+pub(crate) const PRODUCER_MEMORY: usize = 128 * budget::MIB;
 const READER_MEMORY: usize = 160 * budget::MIB;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,13 +86,32 @@ impl Batch {
 
 impl Spool {
     pub fn new(columns: &[Column], context: &Context) -> io::Result<(Arc<Self>, Producer)> {
-        Self::new_in(columns, context, budget::GLOBAL.clone())
+        Self::new_prepared(columns, context, budget::GLOBAL.allowance(PRODUCER_MEMORY)?)
     }
 
+    pub(crate) fn new_prepared(
+        columns: &[Column],
+        context: &Context,
+        memory: Arc<Allowance>,
+    ) -> io::Result<(Arc<Self>, Producer)> {
+        Self::new_with_memory(columns, context, budget::GLOBAL.clone(), memory)
+    }
+
+    #[cfg(test)]
     fn new_in(
         columns: &[Column],
         context: &Context,
         budget: Arc<budget::Budget>,
+    ) -> io::Result<(Arc<Self>, Producer)> {
+        let memory = budget.allowance(PRODUCER_MEMORY)?;
+        Self::new_with_memory(columns, context, budget, memory)
+    }
+
+    fn new_with_memory(
+        columns: &[Column],
+        context: &Context,
+        budget: Arc<budget::Budget>,
+        memory: Arc<Allowance>,
     ) -> io::Result<(Arc<Self>, Producer)> {
         if columns.is_empty() || columns.len() > MAX_COLUMNS {
             return Err(invalid("Invalid spool column count."));
@@ -116,7 +135,6 @@ impl Spool {
             context.date_style.len() + context.interval_style.len() + context.time_zone.len()
         });
         let metadata = budget.acquire(metadata_bytes + context_bytes + 512)?;
-        let memory = budget.allowance(PRODUCER_MEMORY)?;
         let buffer = memory.acquire(8192)?;
         let file = tempfile::tempfile()?;
         let mut out = BufWriter::new(DiskWriter::new(file.try_clone()?, &std::env::temp_dir())?);

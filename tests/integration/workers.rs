@@ -22,6 +22,8 @@ struct Fixture {
     second_fetch: Option<Arc<Barrier>>,
     fail_fetch: Option<usize>,
     total_rows: usize,
+    empty: bool,
+    no_result: bool,
     value_bytes: usize,
     /// The most rows that one fetch returns, like a server limit. 0 has no limit.
     max_batch: usize,
@@ -36,6 +38,7 @@ struct FakeSession {
     fail_fetch: Option<usize>,
     preview_offset: Option<usize>,
     total_rows: usize,
+    no_result: bool,
     value_bytes: usize,
     max_batch: usize,
     requested: Arc<Mutex<Vec<usize>>>,
@@ -62,12 +65,15 @@ impl Connector for Fixture {
             second_fetch: self.second_fetch.clone(),
             fail_fetch: self.fail_fetch,
             preview_offset: None,
-            total_rows: if self.total_rows == 0 {
+            total_rows: if self.empty {
+                0
+            } else if self.total_rows == 0 {
                 1250
             } else {
                 self.total_rows
             },
             value_bytes: self.value_bytes,
+            no_result: self.no_result,
             max_batch: self.max_batch,
             requested: self.requested.clone(),
             offset: 0,
@@ -108,7 +114,9 @@ impl Session for FakeSession {
         } else if self.slow {
             QueryState::Running
         } else {
-            QueryState::Finished { has_results: true }
+            QueryState::Finished {
+                has_results: !self.no_result,
+            }
         })
     }
     fn columns(&mut self) -> Result<Vec<Column>> {
@@ -313,7 +321,7 @@ fn a_stale_prefix_or_execution_is_rejected_before_fetching_or_cancelling() {
         }
     ));
     assert!(matches!(
-        rejected.spool().status(),
+        rejected.spool().unwrap().status(),
         export::spool::Status::Failed(_)
     ));
     assert_eq!(fixture.fetches.load(Ordering::SeqCst), fetches);
@@ -383,7 +391,10 @@ fn cancellation_during_a_blocked_drain_consumes_only_the_old_cursor() {
             _ => {}
         }
     }
-    assert_eq!(download.spool().status(), export::spool::Status::Cancelled);
+    assert_eq!(
+        download.spool().unwrap().status(),
+        export::spool::Status::Cancelled
+    );
     assert_eq!(fixture.cancels.load(Ordering::SeqCst), 1);
     worker.run(profile, "select again".into());
     assert_eq!(ready(&worker), (1000, true));
@@ -831,7 +842,7 @@ fn active_queries_are_not_interrupted_by_idle_timeout_or_heartbeat() {
         profile.lifecycle.idle_seconds = 1;
         profile.lifecycle.keep_alive_seconds = keep_alive_seconds;
         worker.run(profile, "slow".into());
-        while !matches!(next(&worker), Event::Running) {}
+        while !matches!(next(&worker), Event::Session { .. }) {}
         assert!(
             worker
                 .events
@@ -996,7 +1007,7 @@ fn cancelling_a_query_does_not_disable_future_heartbeats() {
     let mut profile = Profile::default();
     profile.lifecycle.keep_alive_seconds = 1;
     worker.run(profile, "slow".into());
-    while !matches!(next(&worker), Event::Running) {}
+    while !matches!(next(&worker), Event::Session { .. }) {}
     worker.cancel();
     assert!(matches!(next(&worker), Event::Cancelled));
     assert!(matches!(next(&worker), Event::KeepAliveStarted));
@@ -1197,4 +1208,299 @@ fn each_new_session_asks_for_credentials_and_receives_them() {
     worker.run(profile, "select".into());
     ready(&worker);
     assert_eq!(asked.load(Ordering::SeqCst), 2);
+}
+
+fn export_profile() -> Profile {
+    Profile {
+        host: "127.0.0.1".into(),
+        username: "synthetic-export".into(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn run_and_export_has_one_fetch_sequence_and_keeps_only_the_first_page() {
+    use qrow::{export, logs::ExecutionId};
+    let fixture = Arc::new(Fixture {
+        total_rows: 100123,
+        max_batch: 333,
+        ..Default::default()
+    });
+    let worker = worker(fixture.clone());
+    let profile = export_profile();
+    let jobs = export::Jobs::default();
+    let flag = Arc::new(AtomicBool::new(false));
+    let download = worker
+        .run_and_export(
+            profile.clone(),
+            "SELECT n".into(),
+            ExecutionId(101),
+            None,
+            &jobs,
+            flag.clone(),
+        )
+        .unwrap();
+    let writer_guard = jobs.register(flag.clone());
+    let source = download.clone();
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("all.csv");
+    let output = destination.clone();
+    let writer = std::thread::spawn(move || {
+        let _guard = writer_guard;
+        let spool = source.wait_spool().unwrap();
+        export::save(&output, &flag, |out| {
+            export::stream::write(out, &spool, &export::Settings::default(), &flag)
+        })
+        .unwrap()
+    });
+    let mut preview = export::Rows::default();
+    let mut complete = None;
+    loop {
+        match next(&worker) {
+            Event::PreviewRows { rows, .. } => {
+                preview.extend(
+                    (0..rows.len())
+                        .map(|index| rows.get(index).unwrap().clone())
+                        .collect(),
+                );
+            }
+            Event::PreviewComplete {
+                complete: value, ..
+            } => complete = Some(value),
+            Event::Downloaded { spool, .. } => {
+                assert_eq!(
+                    spool.status(),
+                    export::spool::Status::Complete { rows: 100123 }
+                );
+                break;
+            }
+            Event::DownloadFailed { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert_eq!(preview.len(), 1000);
+    assert_eq!(complete, Some(false));
+    assert_eq!(preview.get(999).unwrap()[0].as_deref(), Some("999"));
+    assert_eq!(writer.join().unwrap(), 100123);
+    for (expected, row) in csv::Reader::from_path(destination)
+        .unwrap()
+        .records()
+        .enumerate()
+    {
+        assert_eq!(&row.unwrap()[0], expected.to_string());
+    }
+    assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    assert_eq!(jobs.active_count(), 0);
+    worker.run(profile, "SELECT newer".into());
+    assert_eq!(ready(&worker), (1000, true));
+    download.fail("late writer failure".into());
+    download.cancel();
+    assert_eq!(fixture.cancels.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn run_and_export_completeness_uses_eof_and_session_generation_is_from_execution() {
+    use qrow::{export, logs::ExecutionId};
+    for total in [1, 1000, 1001] {
+        let fixture = Arc::new(Fixture {
+            total_rows: total,
+            ..Default::default()
+        });
+        let worker = worker(fixture.clone());
+        let profile = export_profile();
+        assert!(worker.session_generation(&profile).is_none());
+        let download = worker
+            .run_and_export(
+                profile.clone(),
+                "SELECT n".into(),
+                ExecutionId(102),
+                None,
+                &export::Jobs::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        let mut generation = None;
+        let mut rows = 0;
+        let mut complete = None;
+        loop {
+            match next(&worker) {
+                Event::Session {
+                    generation: value, ..
+                } => generation = Some(value),
+                Event::PreviewRows { rows: value, .. } => rows += value.len(),
+                Event::PreviewComplete {
+                    complete: value, ..
+                } => complete = Some(value),
+                Event::Downloaded { .. } => break,
+                Event::DownloadFailed { message, .. } => panic!("{message}"),
+                _ => {}
+            }
+        }
+        assert_eq!(rows, total.min(1000));
+        assert_eq!(complete, Some(total <= 1000));
+        assert_eq!(generation, worker.session_generation(&profile));
+        assert!(generation.is_some());
+        assert_eq!(download.spool().unwrap().row_count(), total as u64);
+        worker.disconnect();
+        while !matches!(next(&worker), Event::Disconnected) {}
+        assert!(worker.session_generation(&profile).is_none());
+        let rejected = worker
+            .run_and_export(
+                profile,
+                "SELECT n".into(),
+                ExecutionId(103),
+                generation,
+                &export::Jobs::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .err()
+            .unwrap();
+        assert!(
+            rejected
+                .get_ref()
+                .unwrap()
+                .is::<qrow::worker::SessionChanged>()
+        );
+        assert_eq!(*fixture.executions.lock().unwrap(), ["SELECT n"]);
+    }
+}
+
+#[test]
+fn run_and_export_empty_result_has_a_schema_but_a_command_writes_no_file() {
+    use qrow::{export, logs::ExecutionId};
+    for command in [false, true] {
+        let fixture = Arc::new(Fixture {
+            empty: true,
+            no_result: command,
+            ..Default::default()
+        });
+        let worker = worker(fixture.clone());
+        let download = worker
+            .run_and_export(
+                export_profile(),
+                "SELECT n".into(),
+                ExecutionId(107),
+                None,
+                &export::Jobs::default(),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        if command {
+            ready(&worker);
+            let message = download.wait_spool().err().unwrap().to_string();
+            assert!(message.contains("No export file was written"));
+            download.cancel();
+            assert_eq!(fixture.cancels.load(Ordering::SeqCst), 0);
+        } else {
+            wait_download(&worker);
+            let spool = download.wait_spool().unwrap();
+            let mut output = Vec::new();
+            assert_eq!(
+                export::stream::write(
+                    &mut output,
+                    &spool,
+                    &export::Settings::default(),
+                    &AtomicBool::new(false)
+                )
+                .unwrap(),
+                0
+            );
+            assert_eq!(output, b"n\r\n");
+        }
+        assert_eq!(fixture.executions.lock().unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn run_again_reuses_the_expected_session_and_rejects_profile_identity_changes() {
+    use qrow::{export, logs::ExecutionId};
+    let fixture = Arc::new(Fixture::default());
+    let worker = worker(fixture.clone());
+    let profile = export_profile();
+    worker.run(profile.clone(), "SELECT setup".into());
+    ready(&worker);
+    let generation = worker.session_generation(&profile).unwrap();
+    let mut renamed = profile.clone();
+    renamed.name = "Renamed display".into();
+    worker
+        .run_and_export(
+            renamed,
+            "SELECT original result SQL".into(),
+            ExecutionId(104),
+            Some(generation),
+            &export::Jobs::default(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+    wait_download(&worker);
+    assert_eq!(fixture.connects.load(Ordering::SeqCst), 1);
+    let mut changed = profile;
+    changed.username = "different-account".into();
+    assert!(
+        worker
+            .run_and_export(
+                changed,
+                "SELECT must_not_execute".into(),
+                ExecutionId(105),
+                Some(generation),
+                &export::Jobs::default(),
+                Arc::new(AtomicBool::new(false))
+            )
+            .is_err()
+    );
+    assert_eq!(
+        *fixture.executions.lock().unwrap(),
+        ["SELECT setup", "SELECT original result SQL"]
+    );
+}
+
+#[test]
+fn cancel_and_writer_failure_before_schema_wake_the_writer_without_submitting_sql() {
+    use qrow::{export, logs::ExecutionId};
+    for fail in [false, true] {
+        let fixture = Arc::new(Fixture::default());
+        let gate = Arc::new(Barrier::new(2));
+        let blocked = gate.clone();
+        let worker = Worker::with_connector(
+            Arc::new(|| {}),
+            fixture.clone(),
+            Arc::new(move |_| {
+                blocked.wait();
+                blocked.wait();
+                Ok(Secret::password("synthetic"))
+            }),
+        );
+        let jobs = export::Jobs::default();
+        let download = worker
+            .run_and_export(
+                export_profile(),
+                "SELECT n".into(),
+                ExecutionId(106),
+                None,
+                &jobs,
+                Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+        gate.wait();
+        assert_eq!(jobs.active_count(), 1);
+        assert!(download.spool().is_none());
+        let source = download.clone();
+        let reader = std::thread::spawn(move || source.wait_spool().err().unwrap());
+        if fail {
+            download.fail("Output failed before schema".into());
+        } else {
+            worker.cancel();
+        }
+        let error = reader.join().unwrap();
+        if fail {
+            assert_eq!(error.to_string(), "Output failed before schema");
+        } else {
+            assert!(error.get_ref().unwrap().is::<export::Cancelled>());
+        }
+        gate.wait();
+        while !matches!(next(&worker), Event::DownloadFailed { .. }) {}
+        assert!(jobs.cancel_and_wait(Duration::from_secs(3)));
+        assert_eq!(fixture.connects.load(Ordering::SeqCst), 0);
+        assert!(fixture.executions.lock().unwrap().is_empty());
+    }
 }
