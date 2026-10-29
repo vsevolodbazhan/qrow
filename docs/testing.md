@@ -511,7 +511,7 @@ After you package the app, check its size:
 uv run --locked python scripts/core/size.py
 ```
 
-The [size check](../scripts/core/size.py) allows 30 MiB for the executable
+The [size check](../scripts/core/size.py) allows 40 MiB for the executable
 and 12 MiB for the zipped bundle. Find the cause of an increase before you
 change a budget.
 
