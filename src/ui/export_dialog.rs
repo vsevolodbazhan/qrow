@@ -8,6 +8,7 @@ use crate::export::{
 };
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
+    alert::Alert,
     checkbox::Checkbox,
     form::{field, v_form},
     notification::Notification,
@@ -1106,7 +1107,7 @@ impl Render for ExportDialog {
                 .aria_label("Markdown exceeds 40,000 characters. It can exceed message limits.")
                 .text_sm().text_color(cx.theme().warning).child("Markdown exceeds 40,000 characters. It can exceed message limits.")))
             .when_some(self.error.clone(), |view,error| view.child(div().id("export-error").test_support().role(Role::Alert)
-                .aria_label(error.clone()).text_sm().text_color(cx.theme().danger).child(error)))
+                .aria_label(error.clone()).child(Alert::error("export-error-alert", error))))
             .when(busy, |view| view.child(div().id("export-progress").test_support().role(Role::Status)
                 .aria_label(self.status_text()).w_full().text_sm().text_color(cx.theme().muted_foreground).child(self.status_text())))
     }

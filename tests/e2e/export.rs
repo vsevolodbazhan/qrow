@@ -469,6 +469,7 @@ fn failed_cursor_download_retry_offers_a_reviewed_rerun(cx: &mut TestAppContext)
     app.wait_for(cx, "export-error");
     app.wait_for(cx, "export-session-warning");
     app.update(cx, |window, _| {
+        assert!(window.find("export-error").bounds().size.height > window.rem_size() * 1.5);
         assert_eq!(window.find("export-save").label(), Some("Save"));
         assert!(window.try_find("export-rows").is_none());
         assert!(window.try_find("export-preview").is_none());

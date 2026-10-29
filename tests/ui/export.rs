@@ -522,6 +522,12 @@ fn custom_null_validation_and_saved_value_follow_the_separator(cx: &mut TestAppC
     app.fill(cx, "export-null-text", "a,b");
     app.settle(cx);
     app.wait_for(cx, "export-error");
+    app.update(cx, |window, _| {
+        let alert = window.find("export-error");
+        assert_eq!(alert.role(), Some(gpui_kit::Role::Alert));
+        assert!(alert.label().is_some_and(|text| !text.is_empty()));
+        assert!(alert.bounds().size.height > window.rem_size() * 1.5);
+    });
     cx.write_to_clipboard(ClipboardItem::new_string("preserved".into()));
     app.click(cx, "export-save");
     assert!(!cx.did_prompt_for_new_path());
