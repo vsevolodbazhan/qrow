@@ -276,7 +276,9 @@ fn postgres_run_export_captures_a_dollar_quoted_statement_without_credentials(
     app.run_export(cx);
     app.wait_for(cx, "export-save");
     app.select(cx, "export-format", "Parquet");
-    app.wait_for(cx, "export-session-date-style");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-date-style").is_none());
+    });
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| None);
     app.settle(cx);

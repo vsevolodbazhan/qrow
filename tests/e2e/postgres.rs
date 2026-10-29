@@ -180,6 +180,9 @@ fn run_export_keeps_temp_tables_uncommitted_rows_and_exact_values(cx: &mut TestA
     // All rows reuses the completed spool and its captured DateStyle.
     app.click(cx, "export-results");
     app.select(cx, "export-format", "Parquet");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-session-date-style").is_none());
+    });
     app.wait_for(cx, "export-date-style-warning");
     let replay = directory.path().join("replay.parquet");
     save_export(&app, cx, &replay);

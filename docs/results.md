@@ -336,8 +336,7 @@ submitted again to obtain columns. A failed download requires an explicit
 rerun. A failed file write with a complete spool uses **Retry…** without SQL.
 Postgres exports keep exact numeric text and the session's date settings.
 For typed Parquet, non-ISO dates and timestamps remain text. The form shows
-this rule before submission. It shows the result's DateStyle warning when
-that setting is known.
+the result's DateStyle warning when that setting is known.
 
 Trino exports keep exact decimal text and the full server type. A separate
 heartbeat keeps an active query alive while the download pauses. The progress notification and export details show downloaded rows, spool bytes, rows per second,

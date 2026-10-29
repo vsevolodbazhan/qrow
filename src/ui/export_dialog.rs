@@ -1069,10 +1069,6 @@ impl Render for ExportDialog {
             .when(format == Format::Parquet && !self.source.table(None).rows.context().iso_dates(), |view| view.child(div().id("export-date-style-warning").test_support().role(Role::Label)
                 .aria_label("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")
                 .text_sm().text_color(cx.theme().muted_foreground).child("The result uses a non-ISO DateStyle. Dates and timestamps remain text.")))
-            .when(format == Format::Parquet && self.scope.executes() && self.source.table(None).rows.context().iso_dates()
-                && self.run.as_ref().is_some_and(|intent| intent.profile.database_type == crate::model::DatabaseType::Postgres), |view| view.child(div().id("export-session-date-style").test_support().role(Role::Label)
-                .aria_label("Non-ISO session dates and timestamps remain text.")
-                .text_sm().text_color(cx.theme().muted_foreground).child("Non-ISO session dates and timestamps remain text.")))
             .when(self.scope.executes(), |view| view
                 .when_some(self.run.as_ref(), |view, intent| view
                     .when(intent.warning, |view| view.child(div().id("export-session-warning").test_support().role(Role::Alert)
