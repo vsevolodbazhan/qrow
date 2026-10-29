@@ -109,12 +109,14 @@ gpui-pre-macos = { path = "vendor/gpui-pre-macos" }
 inherits = "release"
 lto = false
 incremental = false
+codegen-units = 16
 
 [profile.release]
 # Keep the optional GPUI assistant inside the macOS package size budget.
 opt-level = "s"
 lto = "thin"
 strip = true
+codegen-units = 1
 
 [lints.rust]
 unsafe_code = "forbid"
