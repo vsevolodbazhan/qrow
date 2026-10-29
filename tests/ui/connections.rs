@@ -71,6 +71,17 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
         },
     );
     app.fill(cx, "connection-transfer-request", "7");
+    app.fill(cx, "connection-transfer-count", "256");
+    app.click(cx, "save-profile");
+    app.wait_until(
+        cx,
+        "invalid export count",
+        Duration::from_secs(5),
+        |window, _| {
+            label(window, "connection-form-error-accessibility")
+                .is_some_and(|error| error.contains("0 to 255"))
+        },
+    );
     app.fill(cx, "connection-transfer-speed", "12");
     app.update(cx, |window, cx| {
         window.press("cmd-a", cx);
@@ -117,7 +128,7 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
         }
     });
     app.select(cx, "connection-transfer-incremental", "Off");
-    app.select(cx, "connection-transfer-count", "2");
+    app.fill(cx, "connection-transfer-count", "3");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
     app.wait_until(
@@ -130,7 +141,7 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     assert_eq!(transfer.custom.request_mib, 7);
     assert_eq!(transfer.custom.speed_limit_mb, 12);
     assert_eq!(transfer.custom.incremental_collect, IncrementalCollect::Off);
-    assert_eq!(transfer.custom.concurrent_exports, 2);
+    assert_eq!(transfer.custom.concurrent_exports, 3);
     app.context_menu(cx, connection_row(id));
     app.choose(cx, "popup-menu", "Edit");
     app.connection_page(cx, "Export");
@@ -164,7 +175,7 @@ fn preset_values_keep_readonly_fields_and_preserve_unsaved_custom_values(cx: &mu
         app.choose(cx, "popup-menu", "Edit");
         app.connection_page(cx, "Export");
         app.select(cx, "connection-transfer-preset", "Custom");
-        app.select(cx, "connection-transfer-count", "2");
+        app.fill(cx, "connection-transfer-count", "2");
         if engine == qrow::model::DatabaseType::Kyuubi {
             app.fill(cx, "connection-transfer-request", "7");
             app.fill(cx, "connection-transfer-speed", "12");
@@ -266,7 +277,7 @@ fn postgres_export_count_preserves_existing_preset_and_saves_changes(cx: &mut Te
     app.context_menu(cx, connection_row(id));
     app.choose(cx, "popup-menu", "Edit");
     app.connection_page(cx, "Export");
-    app.select(cx, "connection-transfer-count", "1");
+    app.fill(cx, "connection-transfer-count", "0");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
     app.wait_until(
@@ -278,17 +289,17 @@ fn postgres_export_count_preserves_existing_preset_and_saves_changes(cx: &mut Te
                 .transfer
                 .settings()
                 .concurrent_exports
-                == 1
+                == 0
         },
     );
     let mut expected = original.settings();
-    expected.concurrent_exports = 1;
+    expected.concurrent_exports = 0;
     assert_eq!(app.saved().profiles[0].transfer.settings(), expected);
     app.context_menu(cx, connection_row(id));
     app.choose(cx, "popup-menu", "Edit");
     app.connection_page(cx, "Export");
     app.update(cx, |window, _| {
-        assert_eq!(window.find("connection-transfer-count").value(), Some("1"));
+        assert_eq!(window.find("connection-transfer-count").value(), Some("0"));
     });
     cancel_form(&app, cx);
 }
@@ -308,7 +319,20 @@ fn switching_connection_types_preserves_export_count_edits(cx: &mut TestAppConte
     app.update(cx, |window, _| {
         assert_eq!(window.find("connection-transfer-count").value(), Some("2"))
     });
-    app.select(cx, "connection-transfer-count", "1");
+    app.fill(cx, "connection-transfer-count", "02");
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Spark (HiveServer2)");
+    app.connection_page(cx, "Export");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window.find("connection-transfer-preset").value(),
+            Some("Fast")
+        )
+    });
+    app.connection_page(cx, "General");
+    app.select(cx, "connection-database-type", "Postgres");
+    app.connection_page(cx, "Export");
+    app.fill(cx, "connection-transfer-count", "1");
     app.connection_page(cx, "General");
     app.select(cx, "connection-database-type", "Spark (HiveServer2)");
     app.connection_page(cx, "Export");
@@ -319,7 +343,7 @@ fn switching_connection_types_preserves_export_count_edits(cx: &mut TestAppConte
         );
         assert_eq!(window.find("connection-transfer-count").value(), Some("1"));
     });
-    app.select(cx, "connection-transfer-count", "2");
+    app.fill(cx, "connection-transfer-count", "2");
     app.connection_page(cx, "General");
     app.select(cx, "connection-database-type", "Postgres");
     app.connection_page(cx, "Export");

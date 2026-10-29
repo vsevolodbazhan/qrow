@@ -120,10 +120,6 @@ impl TransferSettings {
             self.speed_limit_mb <= 1000,
             "Speed limit must be from 0 to 1000 MB/s."
         );
-        anyhow::ensure!(
-            (1..=2).contains(&self.concurrent_exports),
-            "Exports at the same time must be 1 or 2."
-        );
         Ok(())
     }
 
@@ -267,7 +263,7 @@ mod tests {
         assert!(invalid.validate().is_err());
         invalid.request_mib = 16;
         invalid.concurrent_exports = 0;
-        assert!(invalid.validate().is_err());
+        assert!(invalid.validate().is_ok());
     }
 
     #[test]

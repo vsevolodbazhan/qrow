@@ -22,8 +22,8 @@ pub(in crate::ui) struct TransferForm {
     incremental: RowSelect,
     request: Entity<InputState>,
     speed: Entity<InputState>,
-    count: RowSelect,
-    postgres_count: RowSelect,
+    count: Entity<InputState>,
+    postgres_count: Entity<InputState>,
     spooling: RowSelect,
     readonly: [Entity<InputState>; 5],
     _subscriptions: Vec<Subscription>,
@@ -46,9 +46,6 @@ fn spooling_choices() -> Vec<(TrinoSpooling, String)> {
         .into_iter()
         .map(|value| (value, value.label().into()))
         .collect()
-}
-fn counts() -> Vec<(u8, String)> {
-    vec![(1, "1".into()), (2, "2".into())]
 }
 
 fn readonly_values(settings: TransferSettings) -> [String; 5] {
@@ -78,13 +75,14 @@ impl TransferForm {
             window,
             cx,
         );
-        let count = choice_select(&counts(), &transfer.custom.concurrent_exports, window, cx);
-        let postgres_count = choice_select(
-            &counts(),
-            &transfer.settings().concurrent_exports,
-            window,
-            cx,
-        );
+        let count = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(transfer.custom.concurrent_exports.to_string())
+        });
+        let postgres_count = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(transfer.settings().concurrent_exports.to_string())
+        });
         let spooling = choice_select(
             &spooling_choices(),
             &transfer.custom.trino_spooling,
@@ -97,7 +95,7 @@ impl TransferForm {
         let speed = cx.new(|cx| {
             InputState::new(window, cx).default_value(transfer.custom.speed_limit_mb.to_string())
         });
-        let mut subscriptions: Vec<_> = [&preset, &incremental, &count, &postgres_count, &spooling]
+        let mut subscriptions: Vec<_> = [&preset, &incremental, &spooling]
             .into_iter()
             .map(|select| {
                 cx.subscribe_in(select, window, |this, _, event, window, cx| {
@@ -110,7 +108,7 @@ impl TransferForm {
                 })
             })
             .collect();
-        for input in [&request, &speed] {
+        for input in [&request, &speed, &count, &postgres_count] {
             subscriptions.push(cx.subscribe_in(input, window, |_, _, event, _, cx| {
                 if matches!(
                     event,
@@ -142,7 +140,7 @@ impl TransferForm {
     ) {
         let preset = chosen(&self.preset, &presets(), cx);
         let count = if preset == TransferPreset::Custom {
-            chosen(&self.count, &counts(), cx)
+            self.count.read(cx).value().to_string()
         } else {
             Transfer {
                 preset,
@@ -150,16 +148,24 @@ impl TransferForm {
             }
             .settings()
             .concurrent_exports
+            .to_string()
         };
         if next == DatabaseType::Postgres && previous != DatabaseType::Postgres {
-            self.postgres_count.update(cx, |select, cx| {
-                select.set_selected_value(&usize::from(count - 1), window, cx);
+            self.postgres_count.update(cx, |input, cx| {
+                input.set_value(count, window, cx);
             });
         } else if previous == DatabaseType::Postgres && next != DatabaseType::Postgres {
-            let postgres_count = chosen(&self.postgres_count, &counts(), cx);
-            if postgres_count != count {
-                self.count.update(cx, |select, cx| {
-                    select.set_selected_value(&usize::from(postgres_count - 1), window, cx);
+            let postgres_count = self.postgres_count.read(cx).value().to_string();
+            let same_count = match (
+                postgres_count.trim().parse::<u8>(),
+                count.trim().parse::<u8>(),
+            ) {
+                (Ok(left), Ok(right)) => left == right,
+                _ => postgres_count == count,
+            };
+            if !same_count {
+                self.count.update(cx, |input, cx| {
+                    input.set_value(postgres_count, window, cx);
                 });
                 self.preset.update(cx, |select, cx| {
                     select.set_selected_value(&3usize, window, cx);
@@ -185,7 +191,7 @@ impl TransferForm {
     ) -> anyhow::Result<Transfer> {
         let mut transfer = previous.clone();
         if engine == DatabaseType::Postgres {
-            let count = chosen(&self.postgres_count, &counts(), cx);
+            let count = parse_count(&self.postgres_count, cx)?;
             if count != previous.settings().concurrent_exports {
                 transfer.custom = previous.settings();
                 transfer.preset = TransferPreset::Custom;
@@ -196,7 +202,7 @@ impl TransferForm {
         }
         transfer.preset = chosen(&self.preset, &presets(), cx);
         if transfer.preset == TransferPreset::Custom {
-            transfer.custom.concurrent_exports = chosen(&self.count, &counts(), cx);
+            transfer.custom.concurrent_exports = parse_count(&self.count, cx)?;
             if engine == DatabaseType::Trino {
                 transfer.custom.trino_spooling = chosen(&self.spooling, &spooling_choices(), cx);
             }
@@ -216,6 +222,22 @@ impl TransferForm {
         transfer.validate()?;
         Ok(transfer)
     }
+}
+
+fn parse_count(input: &Entity<InputState>, cx: &App) -> anyhow::Result<u8> {
+    input.read(cx).value().trim().parse().map_err(|_| {
+        anyhow::anyhow!("Exports at the same time must be a whole number from 0 to 255.")
+    })
+}
+
+fn count_input(input: &Entity<InputState>, form: &ProfileEditor) -> AnyElement {
+    Input::new(input)
+        .focus_ring(false)
+        .id("connection-transfer-count")
+        .w_full()
+        .disabled(form.saving.is_some())
+        .aria_label("Exports at the Same Time")
+        .into_any_element()
 }
 
 fn select(
@@ -443,24 +465,14 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
     group = group.item(connection_row(
         owner,
         "Exports at the Same Time",
-        "Maximum per connection, including file publication.",
+        "Maximum per connection; 0 disables the limit.",
         &["export", "concurrent", "limit"],
         false,
         move |_, form, _, _| {
             if postgres {
-                select(
-                    &form.transfer.postgres_count,
-                    form,
-                    "connection-transfer-count",
-                    "Exports at the Same Time",
-                )
+                count_input(&form.transfer.postgres_count, form)
             } else if custom {
-                select(
-                    &form.transfer.count,
-                    form,
-                    "connection-transfer-count",
-                    "Exports at the Same Time",
-                )
+                count_input(&form.transfer.count, form)
             } else {
                 readonly(
                     &form.transfer.readonly[4],

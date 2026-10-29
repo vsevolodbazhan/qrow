@@ -91,7 +91,7 @@ fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
     app.update(cx, |window, _| {
         assert!(window.try_find("connection-transfer-preset").is_none());
     });
-    app.select(cx, "connection-transfer-count", "2");
+    app.fill(cx, "connection-transfer-count", "0");
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");
     app.wait_until(
@@ -103,7 +103,7 @@ fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
                 .transfer
                 .settings()
                 .concurrent_exports
-                == 2
+                == 0
         },
     );
     app.click(cx, "run");
