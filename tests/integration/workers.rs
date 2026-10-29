@@ -1952,6 +1952,15 @@ fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
     assert_eq!(rows.len(), 1000);
     assert_eq!(*fixture.requested.lock().unwrap(), [1000]);
     let generation = worker.session_generation(&profile).unwrap();
+    // The export form captures the then-current connection policy. A later
+    // profile edit must not change that download's transfer policy.
+    let captured = Transfer {
+        preset: TransferPreset::Conservative,
+        ..profile.transfer.clone()
+    };
+    let mut later = profile.clone();
+    later.transfer.preset = TransferPreset::Fast;
+    worker.update_profile(later).unwrap();
     let jobs = export::Jobs::default();
     let cancel = Arc::new(AtomicBool::new(false));
     let publication = jobs
@@ -1963,10 +1972,7 @@ fn a_cursor_transfer_override_keeps_preview_sizing_and_does_not_resubmit_sql() {
             Arc::new(Snapshot::new(&columns, &rows).unwrap()),
             &jobs,
             cancel,
-            Some(Transfer {
-                preset: TransferPreset::Conservative,
-                ..Default::default()
-            }),
+            Some(captured),
         )
         .unwrap();
     loop {

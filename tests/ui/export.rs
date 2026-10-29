@@ -433,7 +433,11 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
             window.find("export-complete-detail").label(),
             Some("Exported 2250 rows")
         );
-        assert!(window.find("reveal-export").visible());
+        let detail = window.find("export-complete-detail");
+        let reveal = window.find("reveal-export");
+        assert!(reveal.visible());
+        assert!(reveal.bounds().top() >= detail.bounds().bottom());
+        assert_eq!(reveal.bounds().right(), notice.bounds().right());
     });
     let text = std::fs::read(&path).unwrap();
     assert_eq!(

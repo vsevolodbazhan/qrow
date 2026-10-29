@@ -129,8 +129,8 @@ and 1 MiB of decoded configuration text.
 **Inherit** makes no configuration requests. SET, RESET, and SQL with
 `${...}` substitution also inherit, to preserve their session behavior.
 An **All rows** export of a live cursor keeps the execution strategy that
-was selected when the original query started. For Kyuubi and Trino, its
-**Transfer Preset** field can override the transfer settings for that download. The connection's export count stays unchanged.
+was selected when the original query started. The download uses the
+connection's transfer settings.
 
 Incremental collect can reduce Spark driver result memory. It can also
 increase execution time. Server policy can override profile settings.

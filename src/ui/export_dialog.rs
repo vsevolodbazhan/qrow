@@ -74,7 +74,6 @@ struct ExportDialog {
     download: Option<Arc<crate::worker::Download>>,
     run: Option<run::Intent>,
     profile: Option<Profile>,
-    transfer: Choice,
     settings: export::Settings,
     filename: String,
     incomplete: bool,
@@ -225,14 +224,6 @@ impl ExportDialog {
         if matches!(settings.format, Format::Json | Format::JsonLines) {
             settings.json.lines = settings.format == Format::JsonLines;
         }
-        let transfer = cx.new(|cx| {
-            SelectState::new(
-                SearchableVec::new(transfer::choices(profile.as_ref())),
-                Some(gpui_kit::component::IndexPath::default().row(0)),
-                window,
-                cx,
-            )
-        });
         let choices = vec![
             Preset::ALL
                 .iter()
@@ -387,11 +378,6 @@ impl ExportDialog {
                 }
             },
         ));
-        subscriptions.push(cx.subscribe_in(&transfer, window, |_, _, event, _, cx| {
-            if matches!(event, SelectEvent::Confirm(Some(_))) {
-                cx.notify();
-            }
-        }));
         Self {
             source,
             scope: if result.replay.is_some() {
@@ -406,7 +392,6 @@ impl ExportDialog {
             download: None,
             run: None,
             profile,
-            transfer,
             settings,
             filename,
             incomplete,
@@ -724,7 +709,10 @@ impl ExportDialog {
         let result = self.result.clone();
         let source = self.source.clone();
         let cancel = self.cancel.clone();
-        let transfer = self.transfer_override(cx);
+        let transfer = self
+            .profile
+            .as_ref()
+            .map(|profile| profile.transfer.clone());
         let download = self
             .owner
             .update(cx, |owner, cx| -> std::io::Result<_> {
@@ -859,31 +847,33 @@ impl ExportDialog {
                         .to_string_lossy()
                         .into_owned();
                     window.push_notification(
-                        Notification::new()
-                            .content(move |_, _, _| {
-                                v_flex()
-                                    .id("export-complete-notice")
-                                    .test_support()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(background::notification_heading(filename.clone()))
-                                    .child(
-                                        div()
-                                            .id("export-complete-detail")
-                                            .test_support()
-                                            .role(Role::Status)
-                                            .aria_label(format!("Exported {count} rows"))
-                                            .text_sm()
-                                            .child(format!("Exported {count} rows")),
-                                    )
-                                    .into_any_element()
-                            })
-                            .action(move |_, _, _| {
-                                let path = path.clone();
-                                Button::new("reveal-export")
-                                    .label("Reveal in Finder")
-                                    .on_click(move |_, _, cx| cx.reveal_path(&path))
-                            }),
+                        Notification::new().autohide(false).content(move |_, _, _| {
+                            let path = path.clone();
+                            v_flex()
+                                .id("export-complete-notice")
+                                .test_support()
+                                .min_w_0()
+                                .gap_1()
+                                .child(background::notification_heading(filename.clone()))
+                                .child(
+                                    div()
+                                        .id("export-complete-detail")
+                                        .test_support()
+                                        .role(Role::Status)
+                                        .aria_label(format!("Exported {count} rows"))
+                                        .text_sm()
+                                        .child(format!("Exported {count} rows")),
+                                )
+                                .child(
+                                    gpui_kit::component::h_flex().w_full().justify_end().child(
+                                        Button::new("reveal-export")
+                                            .small()
+                                            .label("Reveal in Finder")
+                                            .on_click(move |_, _, cx| cx.reveal_path(&path)),
+                                    ),
+                                )
+                                .into_any_element()
+                        }),
                         cx,
                     );
                 }
@@ -1050,15 +1040,6 @@ impl Render for ExportDialog {
             .when(custom_null, |view| view.child(field().label("Null Marker")
                 .description("Exclude separators, quotes, and line breaks.")
                 .child(Input::new(&self.null_text).id("export-null-text").focus_ring(false).disabled(busy).aria_label("Null Marker"))))
-            .when(matches!(self.scope, Scope::All) && self.incomplete && self.result.cursor == crate::worker::Cursor::Available && self.profile.as_ref().is_some_and(|profile| profile.database_type != crate::model::DatabaseType::Postgres) && self.retained.is_none() && self.result.replay.is_none(), |view| view.child(
-                field().label("Transfer Preset").description("Request size and speed only; collection mode stays.")
-                    .child(Select::new(&self.transfer).id("export-transfer-preset").focus_ring(false).disabled(busy).w_full().accessibility_label("Transfer Preset"))
-                    .children(self.transfer_override(cx).map(|policy| {
-                        let settings = policy.settings();
-                        let speed = if settings.speed_limit_mb == 0 { "no speed limit".into() } else { format!("{} MB/s", settings.speed_limit_mb) };
-                        div().text_xs().text_color(cx.theme().muted_foreground)
-                            .child(format!("{} MiB estimate, {speed}, export limit {}", settings.request_mib, settings.concurrent_exports))
-                    }))))
             .when(format == Format::Csv, |view| view.child(v_flex().gap_2().children(
                 flags.into_iter().enumerate().map(|(index,(id,label,checked))|
                     Checkbox::new(id).small().label(label).checked(checked).disabled(busy)
@@ -1625,9 +1606,9 @@ mod tests {
             let status = notice.find("status");
             let detail = status.label().unwrap();
             let cancel_button = notice.find(SharedString::from(format!("export-stop-{id}")));
-            assert!(cancel_button.bounds().left() >= status.bounds().right());
-            assert!(cancel_button.bounds().center().y >= heading.bounds().top());
-            assert!(cancel_button.bounds().center().y <= status.bounds().bottom());
+            assert!(cancel_button.bounds().top() >= status.bounds().bottom());
+            let actions = notice.find("export-progress-actions");
+            assert_eq!(cancel_button.bounds().right(), actions.bounds().right());
             assert!(detail.starts_with("Writing 3 rows"));
             assert!(!detail.contains(".csv"));
             assert!(

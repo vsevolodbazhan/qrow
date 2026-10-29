@@ -368,10 +368,9 @@ A file export holds its slot until publication or temporary-file cleanup ends.
 The count uses the connection captured when the export form opens. Retry
 keeps that connection after you close the result tab.
 
-For an export with a live Kyuubi cursor, choose **Transfer Preset** to
-override the fetch estimate and speed limit for that download. This choice
-does not change the saved connection, its export count, or the collection
-mode of the original query. A retained spool needs no server transfer.
+Exports use the connection's transfer settings. A live Kyuubi cursor keeps
+the collection mode of the original query. A retained spool needs no server
+transfer.
 
 An oversized Kyuubi response stops the export. Qrow does not retry an
 advancing fetch. The target file is not published, and the cursor becomes

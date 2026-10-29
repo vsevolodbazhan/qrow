@@ -103,43 +103,36 @@ impl Render for ProgressNotice {
         let multiple = owner
             .upgrade()
             .is_some_and(|owner| owner.read(cx).exports.len() > 1);
-        h_flex()
+        v_flex()
             .id(SharedString::from(format!("export-job-{id}")))
             .test_support()
             .w_full()
             .min_w_0()
-            .items_center()
-            .gap_3()
+            .gap_1()
+            .child(notification_heading(filename))
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .gap_1()
-                    .child(notification_heading(filename))
-                    .child(
-                        div()
-                            .id("status")
-                            .test_support()
-                            .role(Role::Status)
-                            .aria_label(message.clone())
-                            .text_sm()
-                            .whitespace_normal()
-                            .text_color(if error {
-                                cx.theme().danger
-                            } else {
-                                cx.theme().foreground
-                            })
-                            .child(message),
-                    ),
+                div()
+                    .id("status")
+                    .test_support()
+                    .role(Role::Status)
+                    .aria_label(message.clone())
+                    .text_sm()
+                    .whitespace_normal()
+                    .text_color(if error {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().foreground
+                    })
+                    .child(message),
             )
             .child(
-                v_flex()
+                h_flex()
                     .id("export-progress-actions")
                     .test_support()
-                    .flex_shrink_0()
-                    .items_end()
-                    .mr_3p5()
-                    .gap_1()
+                    .w_full()
+                    .justify_end()
+                    .flex_wrap()
+                    .gap_2()
                     .when(!running, |view| {
                         view.child(
                             Button::new(SharedString::from(format!("export-details-{id}")))
@@ -669,15 +662,33 @@ mod tests {
             let text = notice.find("status");
             let actions = notice.find("export-progress-actions");
             assert!(text.bounds().size.width > px(50.));
-            assert!(text.bounds().right() <= actions.bounds().left());
+            assert!(text.bounds().bottom() <= actions.bounds().top());
+            let notice_bounds = window
+                .find(SharedString::from(format!("export-job-{last}")))
+                .bounds();
+            let mut buttons = Vec::new();
             for id in [
                 details.clone(),
                 dismiss.clone(),
                 SharedString::from(format!("export-all-jobs-{last}")),
             ] {
                 let button = window.find(id);
-                assert!(button.bounds().left() >= actions.bounds().left());
-                assert!(button.bounds().right() <= actions.bounds().right());
+                assert!(button.visible());
+                let bounds = button.bounds();
+                assert!(bounds.left() >= actions.bounds().left());
+                assert!(bounds.right() <= actions.bounds().right());
+                assert!(bounds.top() >= notice_bounds.top());
+                assert!(bounds.bottom() <= notice_bounds.bottom());
+                for other in &buttons {
+                    let other: &Bounds<Pixels> = other;
+                    assert!(
+                        bounds.right() <= other.left()
+                            || bounds.left() >= other.right()
+                            || bounds.bottom() <= other.top()
+                            || bounds.top() >= other.bottom()
+                    );
+                }
+                buttons.push(bounds);
             }
             assert_eq!(window.find(details).label(), Some("Retry…"));
             assert_eq!(window.find(dismiss).label(), Some("Dismiss"));

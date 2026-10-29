@@ -82,6 +82,9 @@ fn custom_transfer_units_stay_visible_and_values_work(cx: &mut TestAppContext) {
     app.click(cx, "run");
     app.wait_status(cx, "Preview: More rows available");
     app.click(cx, "export-results");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-transfer-preset").is_none());
+    });
     let output = copy_query(cx, &app);
     assert_eq!(output.lines().count(), 2124);
     assert!(output.contains("2122"));
@@ -425,6 +428,9 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     std::fs::write(&path, "original").unwrap();
     gate.pause();
     app.click(cx, "export-results");
+    app.update(cx, |window, _| {
+        assert!(window.try_find("export-transfer-preset").is_none());
+    });
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
     app.wait_gone(cx, "export-save");
@@ -435,7 +441,7 @@ fn kyuubi_all_rows_cancel_removes_the_output_and_releases_the_session(cx: &mut T
     app.update(cx, |window, _| {
         let heading = window.find("export-notification-filename");
         let actions = window.find("export-progress-actions");
-        assert!(actions.bounds().left() >= heading.bounds().right());
+        assert!(actions.bounds().top() >= heading.bounds().bottom());
     });
     app.click_labelled(cx, "Cancel");
     gate.resume();
