@@ -45,6 +45,66 @@ pub(super) fn copy_query(cx: &mut TestAppContext, app: &TestApp) -> String {
     cx.read_from_clipboard().unwrap().text().unwrap()
 }
 
+pub(super) fn assert_markdown_json(cx: &mut TestAppContext, app: &TestApp) {
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    for format in ["JSON array", "JSON Lines"] {
+        app.click(cx, "export-results");
+        app.select(cx, "export-format", format);
+        let text = copy_query(cx, app);
+        if format == "JSON Lines" {
+            assert_eq!(text.lines().count(), 1, "{text}");
+        }
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let row = if format == "JSON array" {
+            &json[0]
+        } else {
+            &json
+        };
+        assert_eq!(row["text"], "a|b");
+        assert!(row["absent"].is_null());
+        assert_eq!(row["empty"], "");
+        assert_eq!(row["amount"], "123.45");
+        assert_eq!(row["id"].as_i64(), Some(i64::MAX));
+        assert_eq!(row["ok"], true);
+        assert_eq!(row["bytes"], "AFz/");
+        assert_eq!(row["items"], serde_json::json!([1, 2]));
+        assert_eq!(row["day"], "2026-10-09");
+        assert!(
+            row["moment"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026-10-09 01:02:03")
+        );
+    }
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "JSON array");
+    app.click(cx, "export-json-decimals");
+    let text = copy_query(cx, app);
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json[0]["amount"].as_number().unwrap().to_string(), "123.45");
+    app.click(cx, "export-results");
+    app.select(cx, "export-format", "Markdown");
+    let text = copy_query(cx, app);
+    assert!(text.contains("a\\|b | NULL |  | 123.45 |"), "{text}");
+    assert_eq!(text.lines().count(), 3);
+    app.click(cx, "export-results");
+    app.select(cx, "export-markdown-style", "Code block");
+    let text = copy_query(cx, app);
+    assert!(text.starts_with("```\n"));
+    assert!(text.ends_with("```\n"));
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
+fn markdown_json_export_normalizes_real_kyuubi_values(cx: &mut TestAppContext) {
+    let (workspace, credentials)=Kyuubi::get().workspace(
+        "SELECT 'a|b' AS text, CAST(NULL AS STRING) AS absent, '' AS empty, CAST(123.45 AS DECIMAL(10,2)) AS amount, CAST(9223372036854775807 AS BIGINT) AS id, TRUE AS ok, unhex('005cff') AS bytes, array(1,2) AS items, DATE '2026-10-09' AS day, TIMESTAMP '2026-10-09 01:02:03.123456' AS moment", PASSWORD);
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    assert_markdown_json(cx, &app);
+}
+
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn csv_export_of_real_query_preserves_null_empty_quotes_and_unicode(cx: &mut TestAppContext) {

@@ -84,12 +84,13 @@ a shortened preview, but their stored and copied values are not shortened.
 Use **Copy as → CSV** to copy the selection with column names and the saved
 CSV options. A saved tab separator changes to a comma for this action.
 Use **Copy as → TSV** to copy it with tab separators and column names.
+Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
 These actions run in the background. Text above 10 MiB must be saved to a file.
 
-## Export CSV or TSV
+## Export downloaded rows
 
 Click **Export results…** in the Results toolbar. The button is available
-when the result has columns. Choose **Selection** or **Downloaded rows**.
+when the result has columns. Choose a format, then **Selection** or **Downloaded rows**.
 The selection includes only the selected rows and columns. Downloaded rows
 includes all pages that the preview has stored.
 
@@ -97,9 +98,10 @@ The dialog takes a snapshot when it opens. A later page fetch or query does
 not change this export. Export does not run SQL or fetch rows from the server.
 If the preview is incomplete, the dialog shows a message.
 
-Choose a preset, then adjust the separator, line ending, null marker,
+For CSV or TSV, choose a preset, then adjust the separator, line ending, null marker,
 column names, quoting, byte-order mark, and formula escaping. A change to
-these options selects **Custom**. The preview shows up to five rows.
+these options selects **Custom**. The preview shows up to five rows. During a preview update, the dialog shows
+**Preparing preview…**.
 
 | Preset | Separator | Line ending | UTF-8 byte-order mark | Formula escaping |
 | --- | --- | --- | --- | --- |
@@ -148,8 +150,42 @@ to 512 MiB of source row storage. Shared batches count once. Encoding writes
 cell slices directly; it does not copy a wide cell into an escape buffer.
 The clipboard limit applies while text is written.
 
-Only CSV and TSV from downloaded rows are available. Markdown, JSON,
-Parquet, and export of all server rows are not available yet.
+Parquet and export of all server rows are not available yet.
+
+### Markdown
+
+Choose **Table** for a Markdown table. Numeric columns align to the right.
+The writer escapes pipes and backslashes. It changes line breaks to `<br>`.
+Null values use `NULL`. Empty strings stay empty.
+
+Choose **Code block** for a padded text table in a fence. Set **Maximum Cell
+Width** from 1 to 1000 display columns. Longer cells end with an ellipsis. Line
+breaks and other control characters become spaces. This changes only the
+exported text. **Include row numbers** adds the result row numbers.
+
+Markdown above 40,000 characters can exceed message limits. Copy asks you
+to choose **Copy anyway** before it changes the clipboard. Save keeps the
+text in a `.md` file.
+
+### JSON
+
+Choose **JSON array** for an array of row objects. **Pretty output** adds
+indentation. Choose **JSON Lines** for one compact object on each line.
+Files use `.json` or `.jsonl` respectively.
+
+**Typed values** writes Boolean, integer, and finite floating-point values
+as JSON values. Null stays `null`. Non-finite floating-point values stay
+strings. Decimal values stay exact strings by default. **Decimals as numbers**
+writes their exact digits as JSON numbers. Some readers change those numbers
+to floating-point values. Keep decimals as strings for those readers.
+
+Dates and timestamps keep the server text. Binary values use base64.
+Nested values become JSON when their server text is valid JSON. Other nested
+values stay strings. Turn off **Typed values** to keep all non-null values
+as server text strings.
+
+Repeated column names get numeric suffixes, such as `id_2`. Existing names
+keep their names. Suffixes do not overwrite an existing column.
 
 ## Value representation
 

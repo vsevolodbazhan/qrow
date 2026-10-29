@@ -74,7 +74,7 @@ pub struct Results {
     pub columns: Vec<DataColumn>,
     pub rows: crate::export::Rows,
     pub pagination: Pagination,
-    pub csv: crate::export::csv::CsvOptions,
+    pub export: crate::export::Settings,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selection: Option<Selection>,
@@ -89,7 +89,7 @@ impl Default for Results {
             columns: vec![],
             rows: crate::export::Rows::default(),
             pagination: Pagination::default(),
-            csv: crate::export::csv::CsvOptions::default(),
+            export: crate::export::Settings::default(),
             empty_message: None,
             headers: vec![],
             selection: None,
@@ -167,7 +167,7 @@ impl Results {
         let drag_task = self.drag_task.take();
         *self = Self {
             ui_scale: self.ui_scale,
-            csv: self.csv.clone(),
+            export: self.export.clone(),
             drag_task,
             ..Self::default()
         };
@@ -515,23 +515,51 @@ impl TableDelegate for Results {
                 selection.columns(),
             )
         });
-        let mut csv = self.csv.clone();
+        let mut csv = self.export.csv.clone();
         csv.header = true;
         if csv.separator == crate::export::csv::Separator::Tab {
             csv.separator = crate::export::csv::Separator::Comma;
         }
+        let settings = self.export.clone();
         let menu = if let Ok(source) = source {
             let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
                 [
-                    ("CSV", csv),
-                    ("TSV", crate::export::csv::Preset::Tsv.options()),
+                    (
+                        "CSV",
+                        crate::export::Settings {
+                            format: crate::export::Format::Csv,
+                            csv: csv.clone(),
+                            ..settings.clone()
+                        },
+                    ),
+                    (
+                        "TSV",
+                        crate::export::Settings {
+                            csv: crate::export::csv::Preset::Tsv.options(),
+                            ..crate::export::Settings::default()
+                        },
+                    ),
+                    (
+                        "Markdown",
+                        crate::export::Settings {
+                            format: crate::export::Format::Markdown,
+                            ..settings.clone()
+                        },
+                    ),
+                    (
+                        "JSON",
+                        crate::export::Settings {
+                            format: crate::export::Format::Json,
+                            ..settings.clone()
+                        },
+                    ),
                 ]
                 .into_iter()
                 .fold(menu, |menu, (label, options)| {
                     let source = source.clone();
                     let range = range.clone();
                     menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
-                        super::export_dialog::copy_csv(
+                        super::export_dialog::copy_format(
                             source.clone(),
                             range.clone(),
                             options.clone(),
