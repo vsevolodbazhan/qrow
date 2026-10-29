@@ -318,6 +318,7 @@ fn kyuubi_transfer_preset_save_keeps_the_session_and_exports_all_rows(cx: &mut T
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
 fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
     let (mut workspace, credentials) = Kyuubi::get().workspace(
         "SELECT id AS value FROM range(100123) ORDER BY id",
         PASSWORD,
@@ -352,7 +353,25 @@ fn kyuubi_all_rows_retries_from_the_completed_spool_after_a_new_query(cx: &mut T
     assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
     app.run_complete(cx, "SELECT 42 AS value");
     app.wait_cell(cx, 0, 1, "42");
+    // The completed export is the front toast. Hover it to expand the stack
+    // before clicking the older failed export behind it.
+    app.hover_labelled(cx, "Exported 100123 rows");
+    app.wait_until(
+        cx,
+        "the expanded retry notification",
+        QUERY_TIMEOUT,
+        |window, _| {
+            let Some(retry) = labelled(window, "Retry…") else {
+                return false;
+            };
+            let Some(completed) = window.try_find("export-complete-notice") else {
+                return false;
+            };
+            retry.bounds().top() >= completed.bounds().bottom()
+        },
+    );
     app.click_labelled(cx, "Retry…");
+    app.wait_for(cx, "export-format");
     app.select_json(cx, "Lines");
     let path = directory.path().join("retried.jsonl");
     app.click(cx, "export-save");
