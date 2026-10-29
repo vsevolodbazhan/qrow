@@ -72,9 +72,49 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     );
     app.fill(cx, "connection-transfer-request", "7");
     app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, cx| {
+        window.press("cmd-a", cx);
+        // Clicking the blank right side of the full input puts the caret at the end.
+        window.click("connection-transfer-speed", cx);
+        window.input("3", cx);
+        assert_eq!(
+            window.find("connection-transfer-speed").value(),
+            Some("123")
+        );
+    });
+    app.fill(cx, "connection-transfer-speed", "12345");
     app.update(cx, |window, _| {
-        assert!(window.find("connection-transfer-request-unit").visible());
+        let field = window.find("connection-transfer-speed");
+        let unit = window.find("connection-transfer-speed-unit");
+        assert!(unit.visible());
+        assert!(unit.bounds().left() - field.bounds().left() < window.rem_size() * 7.);
+    });
+    app.fill(
+        cx,
+        "connection-transfer-speed",
+        "1234567890123456789012345678901234567890",
+    );
+    app.update(cx, |window, _| {
         assert!(window.find("connection-transfer-speed-unit").visible());
+    });
+    app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, _| {
+        for (field, unit) in [
+            (
+                "connection-transfer-request",
+                "connection-transfer-request-unit",
+            ),
+            (
+                "connection-transfer-speed",
+                "connection-transfer-speed-unit",
+            ),
+        ] {
+            let field = window.find(field);
+            let unit = window.find(unit);
+            assert!(unit.visible());
+            assert!(unit.bounds().left() > field.bounds().left());
+            assert!(unit.bounds().left() - field.bounds().left() < window.rem_size() * 4.);
+        }
     });
     app.select(cx, "connection-transfer-incremental", "Off");
     app.select(cx, "connection-transfer-count", "2");

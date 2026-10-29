@@ -60,8 +60,22 @@ fn custom_transfer_units_stay_visible_and_values_work(cx: &mut TestAppContext) {
     app.fill(cx, "connection-transfer-request", "7");
     app.fill(cx, "connection-transfer-speed", "12");
     app.update(cx, |window, _| {
-        assert!(window.find("connection-transfer-request-unit").visible());
-        assert!(window.find("connection-transfer-speed-unit").visible());
+        for (field, unit) in [
+            (
+                "connection-transfer-request",
+                "connection-transfer-request-unit",
+            ),
+            (
+                "connection-transfer-speed",
+                "connection-transfer-speed-unit",
+            ),
+        ] {
+            let field = window.find(field);
+            let unit = window.find(unit);
+            assert!(unit.visible());
+            assert!(unit.bounds().left() > field.bounds().left());
+            assert!(unit.bounds().left() - field.bounds().left() < window.rem_size() * 4.);
+        }
     });
     app.click(cx, "save-profile");
     app.wait_gone(cx, "save-profile");

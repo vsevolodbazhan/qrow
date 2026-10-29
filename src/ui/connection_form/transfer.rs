@@ -9,10 +9,12 @@ use crate::{
 };
 use gpui_kit::base::FocusableExt as _;
 use gpui_kit::component::{
-    input::{Input, InputState},
+    ActiveTheme,
+    input::{Input, InputEvent, InputState},
     select::{Select, SelectEvent},
     setting::{SettingGroup, SettingPage},
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 pub(in crate::ui) struct TransferForm {
@@ -89,7 +91,13 @@ impl TransferForm {
             window,
             cx,
         );
-        let subscriptions = [&preset, &incremental, &count, &postgres_count, &spooling]
+        let request = cx.new(|cx| {
+            InputState::new(window, cx).default_value(transfer.custom.request_mib.to_string())
+        });
+        let speed = cx.new(|cx| {
+            InputState::new(window, cx).default_value(transfer.custom.speed_limit_mb.to_string())
+        });
+        let mut subscriptions: Vec<_> = [&preset, &incremental, &count, &postgres_count, &spooling]
             .into_iter()
             .map(|select| {
                 cx.subscribe_in(select, window, |this, _, event, window, cx| {
@@ -102,6 +110,16 @@ impl TransferForm {
                 })
             })
             .collect();
+        for input in [&request, &speed] {
+            subscriptions.push(cx.subscribe_in(input, window, |_, _, event, _, cx| {
+                if matches!(
+                    event,
+                    InputEvent::Change | InputEvent::Focus | InputEvent::Blur
+                ) {
+                    cx.notify();
+                }
+            }));
+        }
         Self {
             preset,
             incremental,
@@ -110,13 +128,8 @@ impl TransferForm {
             spooling,
             readonly: readonly_values(transfer.settings())
                 .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value))),
-            request: cx.new(|cx| {
-                InputState::new(window, cx).default_value(transfer.custom.request_mib.to_string())
-            }),
-            speed: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .default_value(transfer.custom.speed_limit_mb.to_string())
-            }),
+            request,
+            speed,
             _subscriptions: subscriptions,
         }
     }
@@ -224,16 +237,61 @@ fn input(
     form: &ProfileEditor,
     id: &'static str,
     label: &'static str,
-    unit: &'static str,
-    unit_id: &'static str,
+    unit: (&'static str, &'static str),
+    window: &Window,
+    cx: &App,
 ) -> AnyElement {
-    Input::new(input)
-        .suffix(div().id(unit_id).test_support().child(unit))
-        .focus_ring(false)
-        .id(id)
+    let (unit, unit_id) = unit;
+    let value = input.read(cx).value();
+    // Bound the measurement for invalid paste data. Long input uses the
+    // regular suffix so that the unit cannot cover the text or caret.
+    let measured: String = value.chars().take(32).collect();
+    let complete = measured.len() == value.len();
+    let font_size = window.rem_size() * 0.875;
+    let run = TextRun {
+        len: measured.len(),
+        font: window.text_style().font(),
+        color: cx.theme().foreground,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let width = window
+        .text_system()
+        .shape_line(measured.into(), font_size, &[run], None)
+        .width;
+    let adjacent = complete && width <= window.rem_size() * 7.;
+    let disabled = form.saving.is_some();
+    div()
+        .relative()
         .w_full()
-        .disabled(form.saving.is_some())
-        .aria_label(label)
+        .child(
+            Input::new(input)
+                .focus_ring(false)
+                .id(id)
+                .w_full()
+                .disabled(disabled)
+                .aria_label(label)
+                .when(!adjacent, |view| {
+                    view.suffix(div().id(unit_id).test_support().child(unit))
+                }),
+        )
+        .when(adjacent, |view| {
+            view.child(
+                div()
+                    .id(unit_id)
+                    .test_support()
+                    .absolute()
+                    .left(px(14.) + width)
+                    .top_0()
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .text_size(font_size)
+                    .when(disabled, |view| view.opacity(0.5))
+                    .child(unit),
+            )
+        })
         .into_any_element()
 }
 
@@ -307,15 +365,16 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
             "Estimate from 1 to 32 MiB; wider rows can exceed it.",
             &["export", "fetch", "request", "size"],
             false,
-            move |_, form, _, _| {
+            move |_, form, window, cx| {
                 if custom {
                     input(
                         &form.transfer.request,
                         form,
                         "connection-transfer-request",
                         "Data per Request in MiB",
-                        "MiB",
-                        "connection-transfer-request-unit",
+                        ("MiB", "connection-transfer-request-unit"),
+                        window,
+                        cx,
                     )
                 } else {
                     readonly(
@@ -333,15 +392,16 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
             "Spool MB/s from 0 to 1000; zero disables the limit.",
             &["export", "speed", "rate"],
             false,
-            move |_, form, _, _| {
+            move |_, form, window, cx| {
                 if custom {
                     input(
                         &form.transfer.speed,
                         form,
                         "connection-transfer-speed",
                         "Speed Limit in MB per Second",
-                        "MB/s",
-                        "connection-transfer-speed-unit",
+                        ("MB/s", "connection-transfer-speed-unit"),
+                        window,
+                        cx,
                     )
                 } else {
                     readonly(
