@@ -64,6 +64,24 @@ impl Qrow {
     }
 }
 
+pub(super) fn notification_heading(filename: String) -> impl IntoElement {
+    let tooltip = filename.clone();
+    div()
+        .id("export-notification-filename")
+        .test_support()
+        .role(Role::Label)
+        .aria_label(filename.clone())
+        .w_full()
+        .min_w_0()
+        .text_sm()
+        .font_weight(FontWeight::SEMIBOLD)
+        .tooltip(move |window, cx| {
+            gpui_kit::component::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+        })
+        .truncate()
+        .child(filename)
+}
+
 struct ProgressNotice {
     job: WeakEntity<ExportDialog>,
     _subscription: Subscription,
@@ -76,7 +94,8 @@ impl Render for ProgressNotice {
         };
         let state = job.read(cx);
         let id = state.id;
-        let message = state.status_text();
+        let message = state.status_detail();
+        let filename = state.output_filename();
         let error = state.error.is_some();
         let running = state.running;
         let cancel = job.downgrade();
@@ -89,6 +108,7 @@ impl Render for ProgressNotice {
             .test_support()
             .min_w_0()
             .gap_2()
+            .child(notification_heading(filename))
             .child(
                 div()
                     .id("status")
@@ -340,21 +360,32 @@ impl ExportDialog {
         });
     }
 
-    pub(super) fn status_text(&self) -> String {
-        let prefix = self
-            .output_path
+    fn output_filename(&self) -> String {
+        self.output_path
             .as_deref()
             .and_then(|path| path.file_name())
-            .map(|name| format!("{}: ", name.to_string_lossy()))
-            .unwrap_or_default();
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.filename.clone())
+    }
+
+    pub(super) fn status_text(&self) -> String {
+        let detail = self.status_detail();
+        if self.output_path.is_some() {
+            format!("{}: {detail}", self.output_filename())
+        } else {
+            detail
+        }
+    }
+
+    fn status_detail(&self) -> String {
         if let Some(error) = &self.error {
-            return format!("{prefix}{error}");
+            return error.clone();
         }
         if !self.running {
-            return format!("{prefix}Ready to retry");
+            return "Ready to retry".into();
         }
         if self.cancel.load(Ordering::Relaxed) {
-            return format!("{prefix}Stopping export…");
+            return "Stopping export…".into();
         }
         let elapsed = self
             .started
@@ -365,7 +396,7 @@ impl ExportDialog {
             .and_then(|download| download.progress_percentage())
             .map_or(String::new(), |value| format!(", query {value:.0}%"));
         if self.download.is_some() && self.retained.is_none() {
-            return format!("{prefix}Preparing export, {elapsed:.0}s{query}");
+            return format!("Preparing export, {elapsed:.0}s{query}");
         }
         if let Some(spool) = &self.retained
             && matches!(spool.status(), export::spool::Status::Downloading)
@@ -373,7 +404,7 @@ impl ExportDialog {
             let rows = spool.row_count();
             let mib = spool.bytes() as f64 / (1024. * 1024.);
             return format!(
-                "{prefix}Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
+                "Downloading {rows} rows, {mib:.1} MiB, {:.0} rows/s, {elapsed:.0}s{query}",
                 rows as f64 / elapsed.max(0.001)
             );
         }
@@ -385,7 +416,7 @@ impl ExportDialog {
             });
         let mib = self.output_bytes.load(Ordering::Relaxed) as f64 / (1024. * 1024.);
         format!(
-            "{prefix}Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
+            "Writing {rows} rows, {mib:.1} MiB, {:.1} MiB/s, {elapsed:.0}s",
             mib / elapsed.max(0.001)
         )
     }

@@ -852,10 +852,31 @@ impl ExportDialog {
                     });
                 }
                 if let Some(path) = path {
-                    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+                    let filename = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned();
                     window.push_notification(
                         Notification::new()
-                            .message(format!("Exported {count} rows to {filename}"))
+                            .content(move |_, _, _| {
+                                v_flex()
+                                    .id("export-complete-notice")
+                                    .test_support()
+                                    .min_w_0()
+                                    .gap_1()
+                                    .child(background::notification_heading(filename.clone()))
+                                    .child(
+                                        div()
+                                            .id("export-complete-detail")
+                                            .test_support()
+                                            .role(Role::Status)
+                                            .aria_label(format!("Exported {count} rows"))
+                                            .text_sm()
+                                            .child(format!("Exported {count} rows")),
+                                    )
+                                    .into_any_element()
+                            })
                             .action(move |_, _, _| {
                                 let path = path.clone();
                                 Button::new("reveal-export")
@@ -1577,6 +1598,7 @@ mod tests {
             ExportDialog::open(&dialog, window, cx);
             dialog.update(cx, |dialog, cx| {
                 dialog.running = true;
+                dialog.output_path = Some(PathBuf::from("a-very-long-export-filename-that-needs-to-be-truncated-in-the-progress-notification.csv"));
                 dialog.scope = Scope::Replay;
                 dialog.result.replay = Some(spool);
                 let jobs = cx.global::<export::Jobs>().clone();
@@ -1596,6 +1618,13 @@ mod tests {
             assert!(!dialog.read(cx).cancel.load(Ordering::Relaxed));
             let id = dialog.read(cx).id;
             window.render_frame(cx);
+            let notice = window.within(SharedString::from(format!("export-job-{id}")));
+            let heading = notice.find("export-notification-filename");
+            assert_eq!(heading.label(), Some("a-very-long-export-filename-that-needs-to-be-truncated-in-the-progress-notification.csv"));
+            let status = notice.find("status");
+            let detail = status.label().unwrap();
+            assert!(detail.starts_with("Writing 3 rows"));
+            assert!(!detail.contains(".csv"));
             assert!(
                 window
                     .within(SharedString::from(format!("export-job-{id}")))

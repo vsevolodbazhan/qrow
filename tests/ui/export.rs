@@ -408,7 +408,9 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
     let app = demo(cx);
     let before = app.logs(cx).matches("Submitted query:").count();
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("all.csv");
+    let filename =
+        "a-very-long-export-filename-that-needs-to-be-truncated-in-the-completion-notification.csv";
+    let path = directory.path().join(filename);
     open(&app, cx);
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(path.clone()));
@@ -419,6 +421,20 @@ fn all_rows_from_a_complete_preview_saves_without_a_worker(cx: &mut TestAppConte
         Duration::from_secs(10),
         |_, _| path.exists(),
     );
+    app.wait_for(cx, "export-complete-detail");
+    app.update(cx, |window, _| {
+        let notice = window.find("export-complete-notice");
+        let heading = window
+            .within("export-complete-notice")
+            .find("export-notification-filename");
+        assert_eq!(heading.label(), Some(filename));
+        assert!(heading.bounds().right() <= notice.bounds().right());
+        assert_eq!(
+            window.find("export-complete-detail").label(),
+            Some("Exported 2250 rows")
+        );
+        assert!(window.find("reveal-export").visible());
+    });
     let text = std::fs::read(&path).unwrap();
     assert_eq!(
         csv::Reader::from_reader(text.as_slice()).records().count(),

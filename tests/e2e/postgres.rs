@@ -115,6 +115,21 @@ fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("postgres.csv");
     save_export(&app, cx, &output);
+    app.wait_for(cx, "export-complete-detail");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            window
+                .within("export-complete-notice")
+                .find("export-notification-filename")
+                .label(),
+            Some("postgres.csv")
+        );
+        assert_eq!(
+            window.find("export-complete-detail").label(),
+            Some("Exported 1001 rows")
+        );
+        assert!(window.find("reveal-export").visible());
+    });
     assert_eq!(
         csv::Reader::from_path(output).unwrap().records().count(),
         1001
@@ -326,9 +341,10 @@ fn empty_export_writes_a_header_and_a_statement_without_results_preserves_output
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_label(cx, "preserved.csv");
     app.wait_label(
         cx,
-        "preserved.csv: The statement completed without a result set. No export file was written.",
+        "The statement completed without a result set. No export file was written.",
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "previous output");
     app.run_complete(cx, "SELECT count(*) AS value FROM qrow_no_export");

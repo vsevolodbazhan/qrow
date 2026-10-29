@@ -261,9 +261,10 @@ fn empty_export_writes_a_header_and_no_result_preserves_output(cx: &mut TestAppC
     app.click(cx, "export-save");
     cx.simulate_new_path_selection(|_| Some(output.clone()));
     app.wait_gone(cx, "export-save");
+    app.wait_label(cx, "preserved.csv");
     app.wait_label(
         cx,
-        "preserved.csv: The statement completed without a result set. No export file was written.",
+        "The statement completed without a result set. No export file was written.",
     );
     assert_eq!(std::fs::read_to_string(output).unwrap(), "previous output");
     app.run_complete(cx, "SELECT current_schema AS value");

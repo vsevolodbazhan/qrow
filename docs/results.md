@@ -266,8 +266,8 @@ not submit the SQL again. A page fetched after the dialog opened can make
 its snapshot stale. Reopen Export in that case.
 
 The tab is busy during the download. **Run** and **Next page** are disabled.
-The form closes when saving starts. A progress notification shows downloaded
-rows, bytes, average speed, and elapsed time. The format
+The form closes when saving starts. A progress notification shows the filename,
+downloaded rows, bytes, average speed, and elapsed time. The format
 writer reads committed spool batches. Parquet exact decimals, pretty Markdown tables, and Markdown
 code blocks need a complete first pass. After the download, you can run
 another query or close the tab while the file writer continues.
