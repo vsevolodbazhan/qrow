@@ -925,8 +925,37 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
             if !table_keys(window) {
                 return;
             }
-            if let Some(text) = copy.read(cx).delegate().selection_text() {
-                super::export_dialog::copy_text(text, cx);
+            let data = copy.read(cx).delegate();
+            let Some(selection) = data.selection else {
+                return;
+            };
+            let source = crate::export::Snapshot::new(&data.columns, &data.rows);
+            let profile = data.export_profile;
+            let range = Some((
+                *selection.rows().start()..selection.rows().end() + 1,
+                selection.columns(),
+            ));
+            cx.stop_propagation();
+            match source {
+                Ok(source) => {
+                    let options = crate::export::Settings {
+                        format: crate::export::Format::Markdown,
+                        markdown: crate::export::markdown::Options {
+                            pretty: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    super::export_dialog::copy_format(
+                        std::sync::Arc::new(source),
+                        range,
+                        options,
+                        profile,
+                        window,
+                        cx,
+                    );
+                }
+                Err(error) => window.push_notification(error.to_string(), cx),
             }
         })
         .on_action(move |_: &SelectAll, window, cx| {

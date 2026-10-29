@@ -447,12 +447,15 @@ fn cancelled_save_prompt_keeps_options_and_escape_restores_table_focus(cx: &mut 
     );
     // Copy after dismissal still acts on the selected cells.
     app.press(cx, "cmd-c");
-    assert!(
-        cx.read_from_clipboard()
-            .unwrap()
-            .text()
-            .unwrap()
-            .starts_with("LHR → JFK\t")
+    app.wait_until(
+        cx,
+        "copied Markdown selection",
+        Duration::from_secs(5),
+        |_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.starts_with("| route") && text.contains("LHR → JFK"))
+        },
     );
 }
 

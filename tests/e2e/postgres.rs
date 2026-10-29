@@ -51,6 +51,36 @@ fn save_export(app: &TestApp, cx: &mut TestAppContext, path: &std::path::Path) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContext) {
+    use crate::support::{find_in, pointer_click_with};
+    use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
+    let (workspace, credentials) =
+        workspace("SELECT i AS id, 'row ' || i AS name FROM generate_series(1,2) i");
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_cell(cx, 0, 1, "1");
+    app.update(cx, |window, cx| {
+        let cell = find_in(window, ("row", 0usize), ("cell", 1usize)).unwrap();
+        pointer_click_with(window, &cell, MouseButton::Left, Modifiers::default(), cx);
+    });
+    app.press(cx, "shift-right");
+    app.press(cx, "shift-down");
+    cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+    app.press(cx, "cmd-c");
+    app.wait_until(
+        cx,
+        "Markdown selection",
+        std::time::Duration::from_secs(10),
+        |_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text.starts_with("| id ") && text.contains("row 2"))
+        },
+    );
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
     let id = workspace.profiles[0].id;

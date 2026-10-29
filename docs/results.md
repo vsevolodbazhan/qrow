@@ -72,13 +72,14 @@ During a drag, keep the pointer at an edge to scroll rows or columns.
 Release the mouse button to finish the selection, including outside the table.
 The rectangle stays on the current page and excludes the row numbers.
 
-⌘C copies one cell as its value. It copies a rectangle as tab-separated text
-without column names, one line for each row, so it pastes into a spreadsheet as
-cells. A value that contains a tab, a line break, or a double quote is quoted,
-and its double quotes are doubled. A null copies as `NULL`.
+⌘C copies the selected cells as a pretty-formatted Markdown table with column
+names. It aligns the columns and escapes Markdown characters in cell values.
+The copy runs in the background. For Markdown over 40,000 characters, confirm
+the copy. Text above 10 MiB must be saved to a file.
 
-Right-click a cell for **Copy cell**, **Copy selection**, or **Copy row**. A
-right-click inside the selection keeps it. A right-click outside selects that
+Right-click a cell for **Copy cell**, **Copy selection**, or **Copy row**. These
+commands copy plain text, with tabs between columns. A right-click inside the
+selection keeps it. A right-click outside selects that
 cell. **Copy row** copies the whole row, even when the selection is narrower.
 
 Copy actions use full stored values from the displayed page. Long cells show
