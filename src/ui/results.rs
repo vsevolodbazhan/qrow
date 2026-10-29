@@ -1,14 +1,10 @@
-use crate::{
-    model::{Column as DataColumn, Row},
-    pagination::Pagination,
-    worker::Event,
-};
+use crate::{model::Column as DataColumn, pagination::Pagination, worker::Event};
 use gpui_kit::base::actions::{
     Cancel, SelectDown, SelectFirst, SelectLast, SelectNextColumn, SelectPageDown, SelectPageUp,
     SelectPrevColumn, SelectUp,
 };
 use gpui_kit::component::{
-    ActiveTheme, Sizable,
+    ActiveTheme, Sizable, WindowExt,
     input::{Copy, SelectAll},
     menu::{PopupMenu, PopupMenuItem},
     table::{Column, DataTable, TableDelegate, TableState},
@@ -76,8 +72,9 @@ impl Selection {
 
 pub struct Results {
     pub columns: Vec<DataColumn>,
-    pub rows: Vec<Row>,
+    pub rows: crate::export::Rows,
     pub pagination: Pagination,
+    pub csv: crate::export::csv::CsvOptions,
     pub empty_message: Option<&'static str>,
     headers: Vec<Column>,
     pub selection: Option<Selection>,
@@ -87,8 +84,9 @@ impl Default for Results {
     fn default() -> Self {
         Self {
             columns: vec![],
-            rows: vec![],
+            rows: crate::export::Rows::default(),
             pagination: Pagination::default(),
+            csv: crate::export::csv::CsvOptions::default(),
             empty_message: None,
             headers: vec![],
             selection: None,
@@ -161,6 +159,7 @@ impl Results {
     pub fn clear(&mut self) {
         *self = Self {
             ui_scale: self.ui_scale,
+            csv: self.csv,
             ..Self::default()
         };
     }
@@ -477,8 +476,8 @@ impl TableDelegate for Results {
         &mut self,
         row: usize,
         menu: PopupMenu,
-        _: &mut Window,
-        _: &mut Context<TableState<Self>>,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
     ) -> PopupMenu {
         let row = self.pagination.range(self.rows.len()).start + row;
         let label = match self.selection {
@@ -494,14 +493,50 @@ impl TableDelegate for Results {
             .map(|v| v.as_deref().unwrap_or("NULL"))
             .collect::<Vec<_>>()
             .join("\t");
+        let source =
+            crate::export::Snapshot::new(&self.columns, &self.rows).map(std::sync::Arc::new);
+        let range = self.selection.map(|selection| {
+            (
+                *selection.rows().start()..selection.rows().end() + 1,
+                selection.columns(),
+            )
+        });
+        let csv = self.csv;
+        let menu = if let Ok(source) = source {
+            let submenu = PopupMenu::build(window, cx, move |menu, _, _| {
+                [
+                    ("CSV", csv),
+                    ("TSV", crate::export::csv::Preset::Tsv.options()),
+                ]
+                .into_iter()
+                .fold(menu, |menu, (label, options)| {
+                    let source = source.clone();
+                    let range = range.clone();
+                    menu.item(PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                        super::export_dialog::copy_csv(
+                            source.clone(),
+                            range.clone(),
+                            options,
+                            window,
+                            cx,
+                        );
+                    }))
+                })
+            });
+            menu.item(PopupMenuItem::submenu("Copy as", submenu))
+        } else {
+            menu
+        };
         menu.when_some(selection, |menu, text| {
-            menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-            }))
+            menu.item(
+                PopupMenuItem::new(label)
+                    .on_click(move |_, _, cx| super::export_dialog::copy_text(text.clone(), cx)),
+            )
         })
-        .item(PopupMenuItem::new("Copy row").on_click(move |_, _, cx| {
-            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-        }))
+        .item(
+            PopupMenuItem::new("Copy row")
+                .on_click(move |_, _, cx| super::export_dialog::copy_text(text.clone(), cx)),
+        )
     }
     fn render_empty(
         &mut self,
@@ -515,7 +550,10 @@ impl TableDelegate for Results {
 /// Clear the cell selection after a click outside the results area.
 pub fn selection_boundary(table: &Entity<TableState<Results>>) -> Div {
     let table = table.clone();
-    div().on_mouse_down_out(move |_, _, cx| {
+    div().on_mouse_down_out(move |_, window, cx| {
+        if window.has_active_dialog(cx) || window.has_active_sheet(cx) {
+            return;
+        }
         table.update(cx, |state, cx| {
             if state.delegate().selection.is_some() || state.selected_row().is_some() {
                 state.delegate_mut().selection = None;
@@ -697,7 +735,7 @@ fn keyboard(table: &Entity<TableState<Results>>) -> Div {
                 return;
             }
             if let Some(text) = copy.read(cx).delegate().selection_text() {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
+                super::export_dialog::copy_text(text, cx);
             }
         })
         .on_action(move |_: &SelectAll, window, cx| {
@@ -742,7 +780,7 @@ mod tests {
         cx.update(|cx| {
             let mut results = Results::default();
             results.schema(vec![column("value", "STRING")], cx);
-            results.rows = vec![vec![Some("value".into())]; 1250];
+            results.rows = vec![vec![Some("value".into())]; 1250].into();
             assert!(results.pagination.select(1, results.rows.len()));
             results.selection = Some(super::Selection::cell(1000, 0));
             results.query_event(&Event::Cancelled, false);

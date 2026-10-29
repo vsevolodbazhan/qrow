@@ -39,6 +39,29 @@ fn workspace(sql: &str) -> (Workspace, MemoryCredentials) {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn csv_export_preserves_postgres_decimal_text_and_nulls(cx: &mut TestAppContext) {
+    let (workspace, credentials) = workspace(
+        "SELECT 'a,b' AS value, NULL::text AS absent, ''::text AS empty, 12345678901234567890.12345::numeric AS amount UNION ALL SELECT 'NULL', 'NULL', E'\\\\N', -0.01::numeric",
+    );
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_status(cx, "Complete");
+    app.click(cx, "export-results");
+    app.select(cx, "export-null", "NULL");
+    let text = super::export::copy_query(cx, &app);
+    super::export::assert_reader_rows(
+        &text,
+        "NULL",
+        serde_json::json!([
+            ["a,b", null, "", "12345678901234567890.12345"],
+            ["NULL", "NULL", "\\N", "-0.01"]
+        ]),
+    );
+    assert_eq!(app.logs(cx).matches("Submitted query:").count(), 1);
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn query_results_page_and_recover_after_a_sql_error(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
     let app = TestApp::launch_with(cx, workspace, credentials);

@@ -76,7 +76,68 @@ cell. **Copy row** copies the whole row, even when the selection is narrower.
 
 Copy actions use full stored values from the displayed page. Long cells show
 a shortened preview, but their stored and copied values are not shortened.
-File export is not implemented.
+Use **Copy as → CSV** to copy the selection with the saved CSV options.
+Use **Copy as → TSV** to copy it with tab separators and column names.
+These actions run in the background. Text above 10 MiB must be saved to a file.
+
+## Export CSV or TSV
+
+Click **Export results…** in the Results toolbar. The button is available
+when the result has columns. Choose **Selection** or **Downloaded rows**.
+The selection includes only the selected rows and columns. Downloaded rows
+includes all pages that the preview has stored.
+
+The dialog takes a snapshot when it opens. A later page fetch or query does
+not change this export. Export does not run SQL or fetch rows from the server.
+If the preview is incomplete, the dialog shows a message.
+
+Choose a preset, then adjust the separator, line ending, null marker,
+column names, quoting, byte-order mark, and formula escaping. A change to
+these options selects **Custom**. The preview shows up to five rows.
+
+| Preset | Separator | Line ending | UTF-8 byte-order mark | Formula escaping |
+| --- | --- | --- | --- | --- |
+| Standard | Comma | CRLF | No | No |
+| Excel | Comma | CRLF | Yes | Yes |
+| Excel (semicolon) | Semicolon | CRLF | Yes | Yes |
+| Tab-separated | Tab | LF | No | No |
+
+**Copy** puts up to 10 MiB of text on the clipboard. **Save…** opens the
+native save panel. Tab separators use the `.tsv` extension. Other separators
+use `.csv`. After a save, use **Reveal in Finder** to locate the file.
+A successful copy or save stores the options for the next export. A save
+also stores the last output directory.
+
+**Cancel**, Escape, and the dialog close button stop an active export.
+Qrow writes a temporary file next to the destination. It replaces the
+destination only after the write completes. A write error or cancellation
+leaves the destination unchanged. Failed writes keep the dialog open.
+
+### CSV values and limits
+
+CSV uses double quotes and doubles each quote inside a quoted value.
+Separators are comma, semicolon, tab, or pipe. Null markers are an empty
+field, `NULL`, or `\N`. A null marker is never quoted. An empty string
+is always quoted. A literal value that equals a non-empty null marker is
+also quoted. Set the CSV reader to treat only unquoted markers as null.
+Some readers ignore quotes when they detect null values.
+
+With one column and the empty null marker, a null row is an empty line.
+Some CSV readers skip that line. Choose a non-empty marker to preserve the
+row count. The dialog shows this warning for a one-column export.
+
+Formula escaping adds an apostrophe before text that starts with `=`, `+`,
+`-`, `@`, a tab, or a carriage return. It also applies to column names.
+Numeric and Boolean values keep their server text. CSV does not change
+decimal values to floating-point numbers.
+
+Exports share immutable preview batches. Concurrent exports can retain up
+to 512 MiB of source row storage. Shared batches count once. Encoding writes
+cell slices directly; it does not copy a wide cell into an escape buffer.
+The clipboard limit applies while text is written.
+
+Only CSV and TSV from downloaded rows are available. Markdown, JSON,
+Parquet, and export of all server rows are not available yet.
 
 ## Value representation
 
@@ -85,7 +146,7 @@ File export is not implemented.
 | Null | `NULL` |
 | Empty string | An empty cell |
 | Decimal or textual timestamp | The server's text representation |
-| Binary | Hexadecimal text |
+| Binary | Kyuubi hexadecimal text, Postgres server text, or Trino base64 text |
 | Nested value | The text returned by the server |
 
 Qrow preserves the distinction between null and an empty string. It does not
