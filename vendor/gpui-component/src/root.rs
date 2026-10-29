@@ -347,6 +347,45 @@ impl Root {
         cx.notify();
     }
 
+    /// Identify the current dialog for an asynchronous operation that owns it.
+    pub fn dialog_focus_handle(&self) -> Option<&FocusHandle> {
+        self.active_dialogs
+            .last()
+            .map(|dialog| &dialog.focus_handle)
+    }
+
+    /// Close the identified dialog without dismissing a newer modal or taking
+    /// its focus. Repair the newer modal's focus restoration when removing a
+    /// dialog below it. Like `close_dialog`, this does not invoke `on_close`.
+    pub fn close_dialog_for(
+        &mut self,
+        handle: &FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<'_, Root>,
+    ) {
+        let Some(index) = self
+            .active_dialogs
+            .iter()
+            .position(|dialog| &dialog.focus_handle == handle)
+        else {
+            return;
+        };
+        if index + 1 == self.active_dialogs.len() {
+            self.close_dialog(window, cx);
+        } else {
+            let removed = self.active_dialogs.remove(index);
+            self.active_dialogs[index].previous_focused_handle = removed.previous_focused_handle;
+            if self
+                .focused_input
+                .as_ref()
+                .is_some_and(|input| !input.focus_handle(cx).is_focused(window))
+            {
+                self.focused_input = None;
+            }
+            cx.notify();
+        }
+    }
+
     pub(crate) fn defer_close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
         if let Some(handle) = self.close_dialog_internal(cx) {
             let dialogs_count = self.active_dialogs.len();

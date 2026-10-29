@@ -81,7 +81,8 @@ cell. **Copy row** copies the whole row, even when the selection is narrower.
 
 Copy actions use full stored values from the displayed page. Long cells show
 a shortened preview, but their stored and copied values are not shortened.
-Use **Copy as → CSV** to copy the selection with the saved CSV options.
+Use **Copy as → CSV** to copy the selection with column names and the saved
+CSV options. A saved tab separator changes to a comma for this action.
 Use **Copy as → TSV** to copy it with tab separators and column names.
 These actions run in the background. Text above 10 MiB must be saved to a file.
 
@@ -114,15 +115,21 @@ A successful copy or save stores the options for the next export. A save
 also stores the last output directory.
 
 **Cancel**, Escape, and the dialog close button stop an active export.
+Quit asks for confirmation while an export runs. **Keep working** continues
+the export. **Quit anyway** cancels it and waits for cleanup within a deadline.
 Qrow writes a temporary file next to the destination. It replaces the
 destination only after the write completes. A write error or cancellation
 leaves the destination unchanged. Failed writes keep the dialog open.
+An application crash can leave a `.qrow-export-*.tmp` file next to the
+destination. You can delete that temporary file.
 
 ### CSV values and limits
 
 CSV uses double quotes and doubles each quote inside a quoted value.
 Separators are comma, semicolon, tab, or pipe. Null markers are an empty
-field, `NULL`, or `\N`. A null marker is never quoted. An empty string
+field, `NULL`, `\N`, or custom text. Choose **Custom** in **Null Values** to
+enter a marker. Exclude the selected separator, double quotes, and line breaks.
+Invalid markers disable Copy and Save. A null marker is never quoted. An empty string
 is always quoted. A literal value that equals a non-empty null marker is
 also quoted. Set the CSV reader to treat only unquoted markers as null.
 Some readers ignore quotes when they detect null values.

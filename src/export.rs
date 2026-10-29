@@ -2,7 +2,9 @@
 //! formats and the file handling, so they work without the UI.
 
 pub mod csv;
+mod jobs;
 mod rows;
+pub use jobs::{Jobs, Writer};
 pub use rows::Rows;
 
 use crate::model::Column;
