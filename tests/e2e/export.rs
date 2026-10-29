@@ -47,6 +47,34 @@ pub(super) fn copy_query(cx: &mut TestAppContext, app: &TestApp) -> String {
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run e2e"]
+fn custom_transfer_units_stay_visible_and_values_work(cx: &mut TestAppContext) {
+    use gpui_kit::test::TestWindowExt;
+    let (workspace, credentials) =
+        Kyuubi::get().workspace("SELECT id AS value FROM range(2123) ORDER BY id", PASSWORD);
+    let id = workspace.profiles[0].id;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.context_menu(cx, connection_row(id));
+    app.choose(cx, "popup-menu", "Edit");
+    app.connection_page(cx, "Export");
+    app.select(cx, "connection-transfer-preset", "Custom");
+    app.fill(cx, "connection-transfer-request", "7");
+    app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, _| {
+        assert!(window.find("connection-transfer-request-unit").visible());
+        assert!(window.find("connection-transfer-speed-unit").visible());
+    });
+    app.click(cx, "save-profile");
+    app.wait_gone(cx, "save-profile");
+    app.click(cx, "run");
+    app.wait_status(cx, "Preview: More rows available");
+    app.click(cx, "export-results");
+    let output = copy_query(cx, &app);
+    assert_eq!(output.lines().count(), 2124);
+    assert!(output.contains("2122"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run e2e"]
 fn copy_downloads_all_rows_and_reuses_the_spool(cx: &mut TestAppContext) {
     use gpui_kit::test::TestWindowExt;
     let sql = "SELECT id AS value FROM range(6000) ORDER BY id";

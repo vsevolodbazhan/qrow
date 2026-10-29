@@ -55,6 +55,10 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     app.wait_for(cx, "connection-transfer-preset");
     app.select(cx, "connection-transfer-preset", "Custom");
     app.wait_for(cx, "connection-transfer-request");
+    app.update(cx, |window, _| {
+        assert!(window.find("connection-transfer-request-unit").visible());
+        assert!(window.find("connection-transfer-speed-unit").visible());
+    });
     app.fill(cx, "connection-transfer-request", "33");
     app.click(cx, "save-profile");
     app.wait_until(
@@ -68,6 +72,10 @@ fn export_transfer_custom_values_validate_and_persist_from_connection_settings(
     );
     app.fill(cx, "connection-transfer-request", "7");
     app.fill(cx, "connection-transfer-speed", "12");
+    app.update(cx, |window, _| {
+        assert!(window.find("connection-transfer-request-unit").visible());
+        assert!(window.find("connection-transfer-speed-unit").visible());
+    });
     app.select(cx, "connection-transfer-incremental", "Off");
     app.select(cx, "connection-transfer-count", "2");
     app.click(cx, "save-profile");

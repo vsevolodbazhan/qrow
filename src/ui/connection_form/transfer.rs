@@ -172,8 +172,11 @@ fn input(
     form: &ProfileEditor,
     id: &'static str,
     label: &'static str,
+    unit: &'static str,
+    unit_id: &'static str,
 ) -> AnyElement {
     Input::new(input)
+        .suffix(div().id(unit_id).test_support().child(unit))
         .focus_ring(false)
         .id(id)
         .w_full()
@@ -255,6 +258,8 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
                         form,
                         "connection-transfer-request",
                         "Data per Request in MiB",
+                        "MiB",
+                        "connection-transfer-request-unit",
                     )
                 } else {
                     readonly(
@@ -279,6 +284,8 @@ pub(in crate::ui) fn page(form: &ProfileEditor, owner: &WeakEntity<Qrow>, cx: &A
                         form,
                         "connection-transfer-speed",
                         "Speed Limit in MB per Second",
+                        "MB/s",
+                        "connection-transfer-speed-unit",
                     )
                 } else {
                     readonly(

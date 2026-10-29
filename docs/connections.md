@@ -103,7 +103,8 @@ Transfer-policy changes do not reconnect an otherwise unchanged session.
 
 **Custom** can select incremental collect as **Inherit**, **On**, or **Off**.
 Its Kyuubi request estimate is from 1 to 32 MiB. Its speed limit is from 0 to
-1000 MB/s. Zero disables the speed limit. For Trino, select **Spooled Results**
+1000 MB/s. The fields show the units as you edit the values. Zero disables the
+speed limit. For Trino, select **Spooled Results**
 as **Off**, **Serial**, or **Parallel**. The export count is 1 or 2 for all
 connection types. The shared memory budget can admit fewer exports than
 this count. The count covers downloads, snapshot exports, retained-result
