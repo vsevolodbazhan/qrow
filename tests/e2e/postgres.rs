@@ -81,6 +81,36 @@ fn command_c_copies_postgres_selection_as_pretty_markdown(cx: &mut TestAppContex
 
 #[gpui_kit::test]
 #[ignore = "needs the server fixture: ./qtest run postgres"]
+fn menu_copy_commands_use_the_saved_copy_format(cx: &mut TestAppContext) {
+    use crate::support::{find_in, pointer_click_with};
+    use gpui_kit::{ClipboardItem, Modifiers, MouseButton};
+    let (mut workspace, credentials) =
+        workspace("SELECT i AS id, 'row ' || i AS name FROM generate_series(1,2) i");
+    workspace.settings.copy_format = qrow::model::CopyFormat::PlainText;
+    let app = TestApp::launch_with(cx, workspace, credentials);
+    app.click(cx, "run");
+    app.wait_cell(cx, 1, 2, "row 2");
+    let menu_copy = |cx: &mut TestAppContext, command: &str| {
+        app.update(cx, |window, cx| {
+            let cell = find_in(window, ("row", 1usize), ("cell", 2usize)).unwrap();
+            pointer_click_with(window, &cell, MouseButton::Right, Modifiers::default(), cx);
+        });
+        app.wait_for(cx, "popup-menu");
+        cx.write_to_clipboard(ClipboardItem::new_string("before".into()));
+        app.choose(cx, "popup-menu", command);
+        app.wait_until(cx, command, std::time::Duration::from_secs(10), |_, cx| {
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .is_some_and(|text| text != "before")
+        });
+        cx.read_from_clipboard().and_then(|item| item.text())
+    };
+    assert_eq!(menu_copy(cx, "Copy cell").as_deref(), Some("row 2"));
+    assert_eq!(menu_copy(cx, "Copy row").as_deref(), Some("2\trow 2"));
+}
+
+#[gpui_kit::test]
+#[ignore = "needs the server fixture: ./qtest run postgres"]
 fn postgres_export_uses_direct_concurrency_setting(cx: &mut TestAppContext) {
     let (workspace, credentials) = workspace("SELECT i AS value FROM generate_series(1,1001) i");
     let id = workspace.profiles[0].id;

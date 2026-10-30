@@ -8,6 +8,7 @@ use gpui_kit::{
     ClipboardItem, ElementId, InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, TestAppContext, point, px,
 };
+use qrow::ui::OpenSettings;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -68,9 +69,37 @@ fn click_header(app: &TestApp, cx: &mut TestAppContext, column: usize, modifiers
 fn copy_markdown(app: &TestApp, cx: &mut TestAppContext) -> String {
     cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
     app.press(cx, "cmd-c");
+    wait_clipboard(app, cx)
+}
+
+/// Right-click a cell, choose a menu command, and wait for the copy.
+fn menu_copy(
+    app: &TestApp,
+    cx: &mut TestAppContext,
+    row: usize,
+    column: usize,
+    command: &str,
+) -> String {
+    click_cell(
+        app,
+        cx,
+        row,
+        column,
+        MouseButton::Right,
+        Modifiers::default(),
+    );
+    app.wait_for(cx, "popup-menu");
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.choose(cx, "popup-menu", command);
+    wait_clipboard(app, cx)
+}
+
+/// Wait until a background copy replaces "unchanged", confirming large
+/// Markdown copies.
+fn wait_clipboard(app: &TestApp, cx: &mut TestAppContext) -> String {
     app.wait_until(
         cx,
-        "Markdown clipboard",
+        "the copied text",
         Duration::from_secs(15),
         |window, cx| {
             if window.try_find("markdown-copy-anyway").is_some() {
@@ -88,7 +117,12 @@ fn copy_markdown(app: &TestApp, cx: &mut TestAppContext) -> String {
 
 /// Read the table cells for selection assertions; separate tests check formatting.
 fn copy(app: &TestApp, cx: &mut TestAppContext) -> String {
-    copy_markdown(app, cx)
+    cells(&copy_markdown(app, cx))
+}
+
+/// The cells of a Markdown table, tab-separated, without the header.
+fn cells(markdown: &str) -> String {
+    markdown
         .lines()
         .skip(2)
         .map(|line| {
@@ -241,12 +275,18 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
     click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
     click_cell(&app, cx, 2, 2, MouseButton::Left, shift());
 
-    // A right-click inside the range keeps it.
-    click_cell(&app, cx, 2, 1, MouseButton::Right, Modifiers::default());
-    app.wait_for(cx, "popup-menu");
-    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
-    app.choose(cx, "popup-menu", "Copy selection");
-    app.settle(cx);
+    // A right-click inside the range keeps it. The menu copies a Markdown
+    // table, as ⌘C does.
+    let markdown = menu_copy(&app, cx, 2, 1, "Copy selection");
+    assert_eq!(
+        markdown,
+        concat!(
+            "| route     | carrier            |\n",
+            "| --------- | ------------------ |\n",
+            "| LHR → JFK | British Airways    |\n",
+            "| HEL → ARN | Singapore Airlines |\n",
+        )
+    );
     let expected: Vec<_> = (1..=2)
         .map(|i| {
             first_columns(i)
@@ -256,10 +296,7 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
                 .join("\t")
         })
         .collect();
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some(expected.join("\n"))
-    );
+    assert_eq!(cells(&markdown), expected.join("\n"));
 
     // The open menu keeps its own keys: Down moves within the menu, and
     // Escape closes the menu without clearing the selection.
@@ -272,14 +309,14 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
     assert_eq!(copy(&app, cx), expected.join("\n"));
 
     // A right-click outside selects that cell.
-    click_cell(&app, cx, 4, 3, MouseButton::Right, Modifiers::default());
-    app.wait_for(cx, "popup-menu");
-    app.choose(cx, "popup-menu", "Copy cell");
-    app.settle(cx);
-    assert_eq!(
-        cx.read_from_clipboard().and_then(|item| item.text()),
-        Some((3821 - 4).to_string())
-    );
+    let markdown = menu_copy(&app, cx, 4, 3, "Copy cell");
+    assert_eq!(cells(&markdown), (3821 - 4).to_string());
+
+    // Copy row copies all columns of the row, with their names.
+    let markdown = menu_copy(&app, cx, 4, 3, "Copy row");
+    assert!(markdown.starts_with("| route "), "{markdown}");
+    assert_eq!(cells(&markdown).split('\t').count(), 141);
+    assert!(cells(&markdown).starts_with(&first_columns(4)));
 
     // Another page clears the selection.
     click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
@@ -287,6 +324,56 @@ fn the_context_menu_copies_the_selection_and_a_page_change_clears_it(cx: &mut Te
     app.click(cx, "next-page");
     app.settle(cx);
     assert_eq!(copy_empty(&app, cx), "unchanged");
+}
+
+#[gpui_kit::test]
+fn the_copy_format_setting_applies_to_command_c_and_the_menu_but_not_copy_as(
+    cx: &mut TestAppContext,
+) {
+    let app = demo(cx);
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "setting-copy-format").as_deref(),
+            Some("Markdown")
+        );
+    });
+    app.select(cx, "setting-copy-format", "Plain text");
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+
+    // ⌘C and the menu commands copy tab-separated values without names.
+    click_cell(&app, cx, 1, 1, MouseButton::Left, Modifiers::default());
+    assert_eq!(copy_markdown(&app, cx), ROUTES[1]);
+    click_cell(&app, cx, 2, 2, MouseButton::Left, shift());
+    let expected: Vec<_> = (1..=2)
+        .map(|i| {
+            first_columns(i)
+                .split('\t')
+                .take(2)
+                .collect::<Vec<_>>()
+                .join("\t")
+        })
+        .collect();
+    assert_eq!(copy_markdown(&app, cx), expected.join("\n"));
+    assert_eq!(
+        menu_copy(&app, cx, 2, 1, "Copy selection"),
+        expected.join("\n")
+    );
+    let row = menu_copy(&app, cx, 2, 1, "Copy row");
+    assert_eq!(row.split('\t').count(), 141);
+    assert!(row.starts_with(&first_columns(2)));
+
+    // Copy as keeps its own format.
+    click_cell(&app, cx, 2, 1, MouseButton::Right, Modifiers::default());
+    app.wait_for(cx, "popup-menu");
+    cx.write_to_clipboard(ClipboardItem::new_string("unchanged".into()));
+    app.choose_in_submenu(cx, "Copy as", "Markdown");
+    let markdown = wait_clipboard(&app, cx);
+    assert!(markdown.starts_with("| route"), "{markdown}");
+    assert_eq!(cells(&markdown), expected.join("\n"));
 }
 
 #[gpui_kit::test]
@@ -537,11 +624,8 @@ fn changing_tabs_during_a_drag_releases_capture_and_stops_the_old_table(cx: &mut
     end_drag(&app, cx, target);
     app.click_labelled(cx, "Route overview");
     app.settle(cx);
-    click_cell(&app, cx, 2, 2, MouseButton::Right, Modifiers::default());
-    app.choose(cx, "popup-menu", "Copy selection");
-    app.settle(cx);
     assert_eq!(
-        cx.read_from_clipboard().unwrap().text().unwrap(),
+        cells(&menu_copy(&app, cx, 2, 2, "Copy selection")),
         (1..=3).map(first_columns).collect::<Vec<_>>().join("\n")
     );
 }

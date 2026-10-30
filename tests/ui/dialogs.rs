@@ -3,7 +3,7 @@ use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt;
 use qrow::{
     build_info,
-    model::Workspace,
+    model::{CopyFormat, Workspace},
     ui::{OpenAbout, OpenSettings},
 };
 use std::time::Duration;
@@ -83,6 +83,29 @@ fn export_replay_limit_is_saved_and_zero_disables_retention(cx: &mut TestAppCont
     app.click(cx, "save-settings");
     wait_saved(&app, cx, "replay retention", |workspace| {
         workspace.settings.export_replay_limit_mib == 256
+    });
+}
+
+#[gpui_kit::test]
+fn copy_format_is_saved(cx: &mut TestAppContext) {
+    let app = TestApp::launch(cx, Workspace::default());
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.select(cx, "setting-copy-format", "JSON");
+    app.click(cx, "save-settings");
+    app.wait_gone(cx, "save-settings");
+    wait_saved(&app, cx, "the copy format", |workspace| {
+        workspace.settings.copy_format == CopyFormat::Json
+    });
+    app.dispatch(cx, OpenSettings);
+    app.fill_labelled(cx, "Search...", "clipboard");
+    app.wait_for(cx, "setting-copy-format");
+    app.update(cx, |window, _| {
+        assert_eq!(
+            value(window, "setting-copy-format").as_deref(),
+            Some("JSON")
+        );
     });
 }
 

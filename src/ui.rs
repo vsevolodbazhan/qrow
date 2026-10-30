@@ -910,6 +910,7 @@ impl Qrow {
             let mut results = Results::default();
             results.set_ui_scale(scale, cx);
             results.export = self.settings.export.clone();
+            results.copy_format = self.settings.copy_format;
             if let Some(profile) = self
                 .profiles
                 .iter()

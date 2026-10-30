@@ -1,8 +1,8 @@
 use super::setting_row::Rows;
 use super::*;
 use crate::model::{
-    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, MAX_TAB_SIZE,
-    MIN_TAB_SIZE,
+    ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, CopyFormat,
+    MAX_TAB_SIZE, MIN_TAB_SIZE,
 };
 use crate::sql::KeywordCase;
 use crate::themes;
@@ -210,6 +210,7 @@ pub(super) struct SettingsForm {
     assistant_harness: SettingSelect,
     assistant_executable: Entity<InputState>,
     claude_executable: Entity<InputState>,
+    copy_format: SettingSelect,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -439,6 +440,34 @@ impl Qrow {
                 }
             },
         ));
+        let copy_format = cx.new(|cx| {
+            SelectState::new(
+                SearchableVec::new(
+                    CopyFormat::ALL
+                        .map(|format| format.label().to_owned())
+                        .to_vec(),
+                ),
+                CopyFormat::ALL
+                    .iter()
+                    .position(|format| *format == self.settings.copy_format)
+                    .map(|row| IndexPath::default().row(row)),
+                window,
+                cx,
+            )
+        });
+        subscriptions.push(cx.subscribe_in(
+            &copy_format,
+            window,
+            |this, _, event: &SelectEvent<SearchableVec<String>>, _, cx| {
+                if let SelectEvent::Confirm(Some(value)) = event
+                    && let Some(format) = CopyFormat::ALL
+                        .into_iter()
+                        .find(|format| format.label() == value)
+                {
+                    this.set_copy_format(format, cx);
+                }
+            },
+        ));
         self.settings_form = Some(SettingsForm {
             theme,
             numbers,
@@ -448,8 +477,22 @@ impl Qrow {
             assistant_harness: harness,
             assistant_executable: executable,
             claude_executable,
+            copy_format,
             _subscriptions: subscriptions,
         });
+    }
+
+    fn set_copy_format(&mut self, format: CopyFormat, cx: &mut Context<Self>) {
+        if self.settings.copy_format == format {
+            return;
+        }
+        self.settings.copy_format = format;
+        for tab in &self.tabs {
+            tab.table.update(cx, |table, _| {
+                table.delegate_mut().copy_format = format;
+            });
+        }
+        self.changed(cx);
     }
 
     fn commit_number_setting(
@@ -754,14 +797,22 @@ impl Qrow {
             .child(
                 settings_panel("settings", window, cx)
                     .page(appearance_page(form))
-                    .page(SettingPage::new("Export").resettable(false).group(
-                        SettingGroup::new().title("Replay").item(setting_item(
-                            "Replay Limit",
-                            "Keep completed downloads up to this size. Zero turns retention off.",
-                            &["export", "replay", "spool", "disk"],
-                            number_field(form, NumberSetting::ExportReplayLimit),
-                        )),
-                    ))
+                    .page(
+                        SettingPage::new("Export")
+                            .resettable(false)
+                            .group(SettingGroup::new().title("Copy").item(setting_item(
+                                "Copy Format",
+                                "Format of ⌘C and Copy cell, selection, or row in results.",
+                                &["copy", "clipboard", "markdown", "plain", "csv", "tsv", "json"],
+                                select_field(&form.copy_format, "Copy Format"),
+                            )))
+                            .group(SettingGroup::new().title("Replay").item(setting_item(
+                                "Replay Limit",
+                                "Keep completed downloads up to this size. Zero turns retention off.",
+                                &["export", "replay", "spool", "disk"],
+                                number_field(form, NumberSetting::ExportReplayLimit),
+                            ))),
+                    )
                     .page(assistant_page(
                         form,
                         cx.weak_entity(),

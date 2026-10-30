@@ -72,15 +72,23 @@ During a drag, keep the pointer at an edge to scroll rows or columns.
 Release the mouse button to finish the selection, including outside the table.
 The rectangle stays on the current page and excludes the row numbers.
 
-⌘C copies the selected cells as a pretty-formatted Markdown table with column
-names. It aligns the columns and escapes Markdown characters in cell values.
-The copy runs in the background. For Markdown over 40,000 characters, confirm
-the copy. Text above 10 MiB must be saved to a file.
+⌘C copies the selected cells in the copy format. Right-click a cell for
+**Copy cell**, **Copy selection**, or **Copy row**. These commands also use
+the copy format. A right-click inside the selection keeps it. A right-click
+outside selects that cell. **Copy row** copies the whole row, even when the
+selection is narrower.
 
-Right-click a cell for **Copy cell**, **Copy selection**, or **Copy row**. These
-commands copy plain text, with tabs between columns. A right-click inside the
-selection keeps it. A right-click outside selects that
-cell. **Copy row** copies the whole row, even when the selection is narrower.
+Select the copy format in **Settings → Export → Copy Format**:
+
+| Copy format | Copies |
+| --- | --- |
+| Markdown (default) | A Markdown table with column names. It aligns the columns and escapes Markdown characters in cell values. |
+| Plain text | Tab-separated values without column names. One cell copies its value. Values with a tab, a line break, or a quote are quoted. |
+| CSV, TSV, JSON | The same text as the **Copy as** command of that format. |
+
+Plain text copies immediately. The other formats copy in the background.
+For Markdown over 40,000 characters, confirm the copy. Text above 10 MiB
+must be saved to a file.
 
 Copy actions use full stored values from the displayed page. Long cells show
 a shortened preview, but their stored and copied values are not shortened.
@@ -88,7 +96,8 @@ Use **Copy as → CSV** to copy the selection with column names and the saved
 CSV options. A saved tab separator changes to a comma for this action.
 Use **Copy as → TSV** to copy it with tab separators and column names.
 Use **Copy as → Markdown** or **Copy as → JSON** for the other text formats.
-These actions run in the background. Text above 10 MiB must be saved to a file.
+**Copy as → Markdown** uses the saved Markdown options of the export. The copy
+format does not change **Copy as**. These actions run in the background. Text above 10 MiB must be saved to a file.
 
 ## Export results
 
