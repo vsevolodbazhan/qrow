@@ -207,11 +207,9 @@ fn settings_change_sizes_fonts_and_keyword_case_and_restore_defaults(cx: &mut Te
     });
     app.click(cx, "save-settings");
     app.wait_gone(cx, "save-settings");
-    // The workspace is written in the background after Save.
-    wait_saved(&app, cx, "the restored defaults", |workspace| {
-        let settings = &workspace.settings;
-        settings.editor_font_size == 13.
-            && settings.assistant_font_size == 14.
-            && settings.editor_font_family == "Menlo"
+    wait_saved(&app, cx, "the restored default fonts", |w| {
+        w.settings.editor_font_size == 13.
+            && w.settings.assistant_font_size == 14.
+            && w.settings.editor_font_family == "Menlo"
     });
 }
