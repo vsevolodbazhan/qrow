@@ -1,4 +1,5 @@
 use super::setting_row::Rows;
+use super::unit_input::unit_input;
 use super::*;
 use crate::model::{
     ASSISTANT_DATA_SHARING_NOTICE_VERSION, AssistantExecutionMode, AssistantHarness, MAX_TAB_SIZE,
@@ -30,9 +31,8 @@ const CONTROL_REMS: f32 = 16.;
 type SettingSelect = Entity<SelectState<SearchableVec<String>>>;
 const SYSTEM_FONT_LABEL: &str = "System Font";
 
-/// A setting the dialog edits with a stepper. The variants carry their own
-/// units, bounds, and formatting so that one control and one commit path serve
-/// all of them.
+/// A setting the dialog edits as a number. The variants carry their own
+/// units, bounds, and formatting so that one commit path serves all of them.
 #[derive(Clone, Copy, PartialEq)]
 enum NumberSetting {
     ExportReplayLimit,
@@ -78,7 +78,7 @@ impl NumberSetting {
     /// Minimum, maximum, and step, in the displayed unit.
     fn range(self) -> (f32, f32, f32) {
         match self {
-            Self::ExportReplayLimit => (0., 1024. * 1024., 256.),
+            Self::ExportReplayLimit => (0., 1024. * 1024., 1.),
             Self::Scale => (
                 MIN_UI_SCALE * 100.,
                 MAX_UI_SCALE * 100.,
@@ -108,6 +108,11 @@ impl NumberSetting {
         } else {
             format!("{value:.0}")
         }
+    }
+
+    /// Sizes span too wide a range for a stepper, so they use a text field.
+    fn stepped(self) -> bool {
+        self != Self::ExportReplayLimit
     }
 
     fn unit(self) -> &'static str {
@@ -199,7 +204,7 @@ fn font_family_for_selection(value: String) -> String {
 
 pub(super) struct SettingsForm {
     theme: SettingSelect,
-    /// Each stepper with the value it last displayed, so that a change made
+    /// Each number field with the value it last displayed, so that a change made
     /// outside the dialog can be pushed back into the input.
     numbers: Vec<(NumberSetting, Entity<InputState>, Cell<f32>)>,
     /// The last value sent from Qrow to each picker. Search and keyboard
@@ -1103,7 +1108,21 @@ fn number_field(
 ) -> impl Fn(&mut Window, &mut App) -> AnyElement + 'static {
     let input = form.number(setting).clone();
     move |window: &mut Window, cx: &mut App| {
-        setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        if setting.stepped() {
+            setting_stepper(&input, setting.unit(), setting.label(), window, cx).into_any_element()
+        } else {
+            let id = setting_id(setting.label());
+            let unit_id = SharedString::from(format!("{id}-unit"));
+            unit_input(
+                &input,
+                id,
+                setting.label(),
+                (setting.unit(), unit_id),
+                false,
+                window,
+                cx,
+            )
+        }
     }
 }
 

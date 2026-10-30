@@ -20,6 +20,7 @@ mod sign_in_view;
 mod status_dot;
 mod status_tooltip;
 mod tab_view;
+mod unit_input;
 mod workspace_view;
 pub use crate::assets::Assets;
 pub use assistant_view::CODEX_IDLE_TIMEOUT;
